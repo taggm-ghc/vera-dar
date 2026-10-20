@@ -209,7 +209,7 @@ def test_load_snapshot_parameterised_and_shape():
     doc_sql, doc_p = next(c for c in eng.calls if "DISTINCT ON" in c[0])
     assert "= ANY(:kinds)" in doc_sql and "IS NOT NULL" in doc_sql and doc_p == {"kinds": ["abstract_metadata"]}
     ch_sql, ch_p = next(c for c in eng.calls if "domain_chunks" in c[0])
-    assert ch_p == {"span_text": "whole abstract"} and "whole abstract" not in ch_sql and "abstract_metadata" not in doc_sql
+    assert ch_p == {"span_text": "whole abstract", "fd_kind": "fulldoc_chunks"} and "whole abstract" not in ch_sql and "abstract_metadata" not in doc_sql
     assert "s1.research_domains" in doc_sql or all("s1." in c[0] for c in eng.calls)
 
 
@@ -253,7 +253,7 @@ def test_promoted_resolved_with_fresh_ctx_via_reader():
             assert p == {"u": "k1"}
             return [(3,)]
         if "FROM s1.sources" in sql or "{S}.sources" in sql or "sources WHERE" in sql:
-            assert p == {"c": 3}
+            assert p == {"c": 3, "fd_kind": "fulldoc_chunks"}
             return [(7,)]
         if "evidence_spans" in sql:
             assert p["s"] == 7

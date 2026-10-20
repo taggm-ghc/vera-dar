@@ -1,11 +1,11 @@
 # VERA-DAR vera_vjay schema (M1-M7)
 
-*Annotated 2026-10-01 (R7a author, R11a records) and 2026-10-02 (R11a, facts checked against the migrations and code): the STATUS block below is the 2026-09-30 M1 record and is kept; later state is in the "Current state" block that follows it. Pre-edit copies (plain paths in the sibling repo's gitignored `p3m3/history/`): `2026-10-01-cleanup-archive-6/vera__db-README.md`, `2026-10-01-cleanup-archive-10/vera-repo-db-README.md`.*
+*Annotated 2026-10-01 (R7a author, R11a records) and 2026-10-02 (R11a, facts checked against the migrations and code): the STATUS block below is the 2026-09-30 M1 record and is kept; later state is in the "Current state" block that follows it. Pre-edit copies are kept privately.*
 
 STATUS (2026-09-30 22:05 PDT): DEPLOYED to production as an in-place upgrade (not a reset).
 `001u_vera_upgrade_in_place.sql` + `003_vera_m3_plus_tables.sql` applied; round-trip test 17/17 PASS in 5s.
 The 20 pre-existing candidates, 1 question and 1 run are intact (checksum identical before/after;
-JSON backup at ~/tmp/vera_vjay_pre_upgrade_backup_2026-09-30.json, mode 600).
+a local JSON backup (not published)).
 `001` + `002` are for FRESH installs only (001 refuses to drop a schema that holds data); on this
 database the upgrade replaced them. Differences on the upgraded DB: ids are BIGINT with serial-style
 defaults (not IDENTITY); legacy candidates have `gate_a_decision` NULL = "not recorded" and the
@@ -111,10 +111,8 @@ Identity sequences advance; that is not reversible and harmless.
 
 ## Credentials
 `db.get_admin_engine()` reads `week-1v2/.env.db-accounts` (DB_ADMIN_ROLE, DB_ADMIN_PASSWORD, host, DB_NAME).
-Accepted divergence: the admin login is Render's original `vera_vjay_user` (CREATEROLE/CREATEDB);
-`vera_vjay_dbadmin` does not exist and Render cannot rename roles. DDL uses it. The database is also
-named `vera_vjay`, and the schema is `vera_vjay`; AI-Internship objects live in schema `internship`
-and are untouched. Migration 001 creates NOLOGIN group roles `vera_vjay_rw` / `vera_vjay_ro` only (no
+Accepted divergence: the admin login is the one provided by the hosting platform (CREATEROLE/CREATEDB), which cannot be renamed. DDL uses it.
+The schema is `vera_vjay`. Migration 001 creates NOLOGIN group roles `vera_vjay_rw` / `vera_vjay_ro` only (no
 passwords). The login accounts the pipeline should use now exist (see "Accounts and password hashing"); the
 earlier plan to create a further `vera_api_rw` login is not to be carried out (no more accounts).
 
@@ -156,17 +154,15 @@ The runners are **not yet repointed** to these accounts (they still use the admi
 `vera/m2_runner.py` reads columns outside the granted key columns (`candidates.source_url`, `canonical_sources.canonical_url`, `sources.content_hash`), so `run_m2` probably cannot run under `vera_pipeline_wo` (static reading, not run live). Passwords live in
 the gitignored `.env` as `VERA_DB_PASSWORD_<role>`; `.env.example` documents the accounts without secrets.
 
-Best practice is SCRAM-SHA-256 (MD5 is deprecated). Status quo: the Render server's `password_encryption` is `md5` and can't be
-changed by us, so always run `SET password_encryption = 'scram-sha-256';` in the same session before `ALTER ROLE ... PASSWORD`
-(the three accounts were re-saved this way on 2026-10-01). Accepted divergence: the server default stays md5; the hash type is not
-catalog-verified because `pg_authid` is denied to the admin account.
+Best practice is SCRAM-SHA-256: run `SET password_encryption = 'scram-sha-256';` in the same session before `ALTER ROLE ... PASSWORD`.
+The stored hash type is not catalog-verified, because `pg_authid` is denied to the admin account.
 
-Verification facts (2026-10-01): applied via the admin `vera_vjay_user`; privilege matrix 9/9 as expected; all three logins tested. Only these 3 accounts were created (no more are to be created).
+Verification facts (2026-10-01): applied via the admin login; privilege matrix 9/9 as expected; all three logins tested. Only these 3 accounts were created (no more are to be created).
 
 Update 2026-10-07:
 - **Write-only grants exercised.** `/ask` corpus admission (`vera/corpus_admission.py`) ran as `vera_pipeline_wo` in a rolled-back transaction. INSERT ... RETURNING works on questions, runs, candidates, canonical_sources and sources, and UPDATE works on candidates. `ON CONFLICT` is refused (it needs SELECT on the conflict columns), so the code uses savepoints and treats a unique violation as "exists".
 - **Password rotated.** `vera_pipeline_wo`'s password was set by the admin as a SCRAM verifier.
-- **.env repointed.** VERA-DAR's `.env` now points `EXTERNAL_DB_URL`, `INTERNAL_DB_URL` and `VERA_DB_URL_RW` at `vera_claude_code_rw` and `VERA_DB_URL_WO` at `vera_pipeline_wo`. They previously used an AI-Internship account, which is refused on `vera_vjay`.
+- **.env repointed.** VERA-DAR's `.env` now points `EXTERNAL_DB_URL`, `INTERNAL_DB_URL` and `VERA_DB_URL_RW` at `vera_claude_code_rw` and `VERA_DB_URL_WO` at `vera_pipeline_wo`. They previously used an account that is refused on `vera_vjay`.
 - **Read-only URL added.** `VERA_DB_URL_RO` (`vera_eval_ro`) was added for the corpus description (`GET /corpus-summary`, item #83). The read-only SQL contract test now uses VERA-DAR's own `EXTERNAL_DB_URL` host, not another project's file.
 - **Still open.** `run_m2` under the write-only account (see above) is still unrun. Column grants of `vera_pipeline_wo` are UNTESTED against a live `m2_runner.py` run. Dev and prod share one schema (accepted divergence).
 
@@ -184,7 +180,7 @@ Update 2026-10-07:
 - **Migration 006** (`migrations/pending/006_vera_licence_observations.sql`, additive `licence_observations` table; destructive rollback in `migrations/rollback/`) was applied 2026-10-09 with the owner's approval (commit f1f044a). The file still sits in `pending/`. The loader is behind `licence_observations_enabled` (code default off; switched on in `config/ask-provider-chain.json` by R1 decision 2026-10-10). With 006, migrations 001u, 003, 004, 005 and 006 are applied.
 - **Memory rows** use the existing `claims`, `answers` and `evidence` tables under one fixed memory label; `claims.detailed_status` carries the D6 lifecycle: `memory:g1:pending` (written by `/ask`, not recalled) -> `memory:g1:confirmed` (owner-confirmed, the only recall-eligible state) or `memory:rejected`; `memory:tombstoned` marks forgotten rows and `memory:g1` marks legacy pre-D6 auto-written rows (not recalled, listed for review).
 - **Test count.** The 178-passed figure above is stale: `pytest tests` was 965 passed, 3 skipped on 2026-10-12.
-- **Hosting.** The Render Postgres was upgraded from the free to a paid plan on 2026-10-12; the earlier 2026-10-17 expiry no longer applies. The database remains the shared production instance.
+- **Hosting.** The hosting database plan was upgraded (2026-10-12); the earlier 2026-10-17 expiry no longer applies. The database remains the shared production instance.
 
 ## Migration 007 (domain registry, DRAFT) role order
 `pending/007-DRAFT-domain-registry.sql.draft` fails closed. Required order: (1) roles via `db/accounts/create_vera_accounts.sql`, (2) migrations 001-005, (3) 007. If `vera_vjay_wo` or `vera_vjay_ro` is missing, 007 raises in its first statement, before any DDL (run with `psql -1`), instead of skipping the grants and leaving later writes to fail with "permission denied for table research_domains". `vera_vjay_rw` stays optional (NOTICE, grant skipped). Grants: RO = SELECT; WO = INSERT plus SELECT (domain_id). Still a draft: not executed, pending owner Approval 1.

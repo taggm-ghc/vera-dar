@@ -63,6 +63,9 @@ def _state_of(status: str, cfg: dict) -> str | None:
 _WORD = re.compile(r"[A-Za-z0-9]{3,}")
 
 
+FULLDOC_CHUNKS_KIND = "fulldoc_chunks"  # stored_text_kind of chunk-stored full documents (empty sources.content)
+
+
 def _sql(sql: str) -> str:
     return sql.replace("{S}", SCHEMA)
 
@@ -154,7 +157,8 @@ class RoMemoryReader:
         rows = self._rows(
             "SELECT s.source_id, length(s.content) FROM {S}.sources s "
             "JOIN {S}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
-            "WHERE cs.canonical_url = :u ORDER BY s.version DESC LIMIT 1", {"u": canonical})
+            "WHERE cs.canonical_url = :u AND coalesce(s.provenance->>'stored_text_kind', '') <> :fd_kind "  # R5: an empty fulldoc_chunks row is never 'latest'
+            "ORDER BY s.version DESC LIMIT 1", {"u": canonical, "fd_kind": FULLDOC_CHUNKS_KIND})
         return (rows[0][0], rows[0][1]) if rows else None
 
     def span(self, source_id: int, end: int):

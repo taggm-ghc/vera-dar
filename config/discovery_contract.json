@@ -14,7 +14,8 @@
     "recalled_note_caption": "Earlier reading-list note. VERA-DAR has not read these documents; this is not evidence."
   },
   "acquisition": {
-    "non_document_text_kinds": ["abstract_metadata", "abstract", "snippet", "metadata", "index_record"]
+    "non_document_text_kinds": ["abstract_metadata", "abstract", "snippet", "metadata", "index_record", "fulldoc_chunks"],
+    "_note_fulldoc_chunks": "fulldoc_chunks is NOT a non-document text: it is a full document stored as evidence_spans chunks (sources.content empty). It is listed here only so the content-based acquisition paths (DarReader, answer_contract) do not treat the empty sources row as an acquired document."
   },
   "memory": {
     "evidence_recall_enabled": false

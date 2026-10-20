@@ -1,0 +1,347 @@
+"""AE-1020/DBC-1: DB-backed source for the full-document corpus (offline-built; nothing here opens a connection by itself).
+
+Owner D-4: the full texts stay local (not in git); their chunks go into the project's PostgreSQL chunk table
+(vera_vjay.evidence_spans). Storage model (vet R1): each document is ONE `sources` row (stored_text_kind
+"fulldoc_chunks", content = '') plus a NON-overlapping, CONTIGUOUS partition of its text in `evidence_spans`
+(start_index/end_index = offsets into the text). Rebuild = concatenation, so no gap list and no chunk-config coupling of
+the stored rows. (R4) content_hash is sha256 of the empty content, which keeps the invariant content_hash == sha256(content);
+the sha256 of the full text lives in provenance.text_sha256.
+
+Reader (R3): rebuilds each text, verifies its sha256 (provenance.text_sha256 == the conversion record's text_sha256 ==
+sha of the concatenation) and the bundle pins recorded with the run, then RE-APPLIES the fulltext_ingest filters through the
+same pure helpers prepare() uses (fulltext_loader.check_item_declared / prepare_from_parts), then builds the same
+FullDocCorpus the bundle path builds. The rebuilt text is checked as the configured full-document kind, never under the
+row's own marker kind (that marker is listed in discovery_contract non_document_text_kinds to keep the empty row out of the
+content-based legacy paths). Fail closed: any mismatch => the document (or the whole run, for pins) is UNUSABLE.
+
+DB access: injected `connect` factory (a DB-API connection; the runtime default is built from the env var NAMED by config,
+default VERA_DB_URL_RO, read-only account). Only two static SELECT statements are issued. Env var NAMES only; values are
+never logged or returned."""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import threading
+import time
+
+from vera import fulltext_loader
+from vera.corpus_admission import SCHEMA
+from vera.dar_corpus import DarCorpus
+from vera.dar_store import FULLDOC_CHUNKS_KIND
+from vera.fulldoc_corpus import (STATUS_OK, STATUS_UNUSABLE, FullDocCorpus, _evidence_ranges, _excluded_ranges,
+                                 _routing_cfg, _unusable, R_DUP, R_ERR, R_PIN)
+
+DEFAULT_RUN_ID_ENV = "VERA_FULLDOC_DB_RUN_ID"
+DEFAULT_URL_ENV = "VERA_DB_URL_RO"
+PART_TARGET_CHARS = 4000
+PART_EVIDENCE_TYPE = "fulldoc_partition"
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+R_DBROW, R_DBHASH, R_DBEMPTY, R_DBRUN, R_DBCHUNK, R_DBCONN, R_DBPARTIAL = (
+    "R-DBROW", "R-DBHASH", "R-DBEMPTY", "R-DBRUN", "R-DBCHUNK", "R-DBCONN", "R-DBPARTIAL")
+
+SQL_SOURCES = (f"SELECT s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+               f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
+               f"JOIN {SCHEMA}.candidates d ON d.candidate_id = s.candidate_id "
+               f"WHERE d.run_id = %(run_id)s AND s.provenance->>'stored_text_kind' = %(kind)s ORDER BY s.source_id")
+SQL_SPANS = (f"SELECT e.source_id, e.start_index, e.end_index, e.text FROM {SCHEMA}.evidence_spans e "
+             f"WHERE e.source_id = ANY(%(ids)s) ORDER BY e.source_id, e.start_index")
+
+
+# ------------------------------------------------------------------------------------------------ writer-side (pure)
+def chunking_params(routing_cfg: dict | None = None) -> dict:
+    """The live DarCorpus chunk settings (recorded at ingest, compared at read: CAL parity)."""
+    c = (routing_cfg or _routing_cfg()).get("corpus") or {}
+    return {k: int(c[k]) for k in ("chunk_chars", "chunk_overlap", "min_chunk_chars")}
+
+
+def partition(text: str, target: int = PART_TARGET_CHARS) -> list:
+    """Contiguous, non-overlapping [(start, end)] covering text exactly; cuts after whitespace when one is near the target."""
+    n, out, pos = len(text), [], 0
+    while pos < n:
+        end = pos + target
+        if end >= n:
+            end = n
+        else:
+            cut = next((i for i in range(end, max(pos + 1, end - 200), -1) if text[i - 1].isspace()), None)
+            end = cut if cut else end
+        out.append((pos, end))
+        pos = end
+    return out
+
+
+def build_rows(rec: dict, item: dict, meta: dict, seq: int, pins: dict, chunking: dict,
+               target: int = PART_TARGET_CHARS, n_documents: int | None = None) -> dict:
+    """The row plan for one prepared document: {"source": {...}, "spans": [...]}. No SQL, no ids (the DB assigns them)."""
+    text = rec["text"]
+    if "\x00" in text:
+        raise ValueError("text contains NUL (cannot be stored in PostgreSQL TEXT)")
+    parts = partition(text, target)
+    prov = dict(rec["provenance"])
+    prov.update({"stored_text_kind": FULLDOC_CHUNKS_KIND, "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                 "chars": len(text), "partition": {"kind": "contiguous", "n_parts": len(parts), "target_chars": target},
+                 "bundle": {"manifest_sha256": pins.get("manifest_sha256"), "sums_sha256": pins.get("sums_sha256")},
+                 "chunking": dict(chunking), "seq": int(seq), "n_documents": n_documents, "item": {k: v for k, v in item.items() if k != "domain_hint"},
+                 "meta": meta})
+    return {"document_id": rec["document_id"],
+            "source": {"canonical_url": rec["canonical_url"], "content": "", "content_hash": EMPTY_SHA256,
+                       "provenance": prov},
+            "spans": [{"start_index": s, "end_index": e, "text": text[s:e], "evidence_type": PART_EVIDENCE_TYPE,
+                       "relevance_score": None} for s, e in parts]}
+
+
+# ------------------------------------------------------------------------------------------------ reader (pure)
+def _prov(row) -> dict:
+    p = row.get("provenance")
+    if isinstance(p, (str, bytes)):
+        p = json.loads(p)
+    if not isinstance(p, dict):
+        raise fulltext_loader.Refused(R_DBROW, "provenance is not an object")
+    return p
+
+
+def _rebuild(src: dict, spans: list, prov: dict) -> str:
+    """Concatenate the partition; every structural property is checked, nothing is repaired."""
+    if src.get("content") != "" or src.get("content_hash") != EMPTY_SHA256:
+        raise fulltext_loader.Refused(R_DBROW, "source row is not an empty-content chunk-stored row")
+    if prov.get("stored_text_kind") != FULLDOC_CHUNKS_KIND:
+        raise fulltext_loader.Refused(R_DBROW, "source row is not the chunk-stored kind")
+    if not spans:
+        raise fulltext_loader.Refused(R_DBROW, "no partition rows")
+    pos, parts = 0, []
+    for sp in sorted(spans, key=lambda x: int(x["start_index"])):
+        s, e, t = int(sp["start_index"]), int(sp["end_index"]), sp["text"]
+        if s != pos or e <= s or not isinstance(t, str) or len(t) != e - s:
+            raise fulltext_loader.Refused(R_DBROW, "partition is not contiguous / lengths differ")
+        parts.append(t)
+        pos = e
+    n = (prov.get("partition") or {}).get("n_parts")
+    if prov.get("chars") != pos or n != len(parts):
+        raise fulltext_loader.Refused(R_DBROW, "partition size differs from the recorded size")
+    text = "".join(parts)
+    h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if h != prov.get("text_sha256") or h != (prov.get("meta") or {}).get("text_sha256"):
+        raise fulltext_loader.Refused(R_DBHASH, "rebuilt text sha256 differs from the recorded sha256")
+    return text
+
+
+def _unusable_corpus(cfg, items, code, reason) -> FullDocCorpus:
+    un = [_unusable(i, code, reason) for i in items] or [_unusable(None, code, reason)]
+    return FullDocCorpus(STATUS_UNUSABLE, [], un, {}, None, {}, cfg)
+
+
+def load_from_rows(sources: list, spans: list, cfg: dict, ingest_cfg: dict | None = None) -> FullDocCorpus:
+    """sources: dicts {source_id, canonical_url, content, content_hash, provenance}; spans: dicts {source_id, start_index,
+    end_index, text}. Never raises for bad input: any problem yields corpus_unusable / UNUSABLE entries."""
+    try:
+        return _load_rows(list(sources or ()), list(spans or ()), cfg, ingest_cfg)
+    except Exception as e:  # noqa: BLE001  fail closed
+        return _unusable_corpus(cfg, [], R_ERR, f"rows could not be loaded ({type(e).__name__})")
+
+
+def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
+    icfg = ingest_cfg if ingest_cfg is not None else fulltext_loader.load_config()
+    if not sources:
+        return _unusable_corpus(cfg, [], R_DBEMPTY, "no chunk-stored documents for the configured run")
+    by_src: dict = {}
+    for sp in spans:
+        by_src.setdefault(sp.get("source_id"), []).append(sp)
+    live_chunking = chunking_params()
+    recs = []
+    for row in sources:
+        try:
+            recs.append((row, _prov(row)))
+        except Exception:  # noqa: BLE001
+            return _unusable_corpus(cfg, [], R_DBROW, "a source row has unreadable provenance")
+    recs.sort(key=lambda rp: (int(rp[1].get("seq") or 0), int(rp[0].get("source_id") or 0)))
+    ids = [(p.get("document_id") if isinstance(p, dict) else None) for _, p in recs]
+    # pins recorded with the run: one set across all rows, equal to the configured pins when those are set
+    recorded = {json.dumps(p.get("bundle"), sort_keys=True) for _, p in recs}
+    pins = cfg.get("pins") or {}
+    if len(recorded) != 1:
+        return _unusable_corpus(cfg, ids, R_PIN, "rows record different bundle pins")
+    b = recs[0][1].get("bundle") or {}
+    if not (b.get("manifest_sha256") and b.get("sums_sha256")):
+        return _unusable_corpus(cfg, ids, R_PIN, "rows record no bundle pins")
+    for k in ("manifest_sha256", "sums_sha256"):
+        if pins.get(k) and b.get(k) != pins[k]:
+            return _unusable_corpus(cfg, ids, R_PIN, f"recorded {k} differs from the configured pin")
+
+    nds = {p.get("n_documents") for _, p in recs}
+    if len(nds) != 1 or not isinstance(next(iter(nds)), int) or next(iter(nds)) != len(recs):
+        return _unusable_corpus(cfg, ids, R_DBPARTIAL, "the run does not hold all of its recorded documents")
+    max_bytes = int(icfg["max_text_bytes"])
+
+    acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
+    seen_ids, seen_keys, seen_hashes = set(), set(), set()
+    for row, prov in recs:
+        did = prov.get("document_id")
+        try:
+            if not isinstance(did, str) or did in seen_ids:
+                raise fulltext_loader.Refused(R_DUP, f"document_id {did!r} missing or duplicated")
+            seen_ids.add(did)
+            if prov.get("chunking") != live_chunking:
+                raise fulltext_loader.Refused(R_DBCHUNK, "chunking settings at ingest differ from the live settings")
+            text = _rebuild(row, by_src.get(row.get("source_id"), []), prov)
+            if len(text.encode("utf-8")) > max_bytes:  # same limit as fulltext_loader.load_text
+                raise fulltext_loader.Refused(icfg["reason_codes"]["too_large"], "rebuilt text exceeds max_text_bytes")
+            item, meta = prov.get("item"), prov.get("meta")
+            if not isinstance(item, dict) or not isinstance(meta, dict):
+                raise fulltext_loader.Refused(R_DBROW, "recorded item / conversion record missing")
+            # R3: the ingest filters, re-applied to the rebuilt text as the configured full-document kind
+            rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"))
+            rec["document_id"] = did
+            if rec["canonical_url"] != row.get("canonical_url"):
+                raise fulltext_loader.Refused(R_DBROW, "canonical URL differs from the recorded item")
+            if rec["provenance"].get("licence_decision") != "allow":
+                raise fulltext_loader.Refused(R_ERR, "licence_decision is not allow")
+            base = {k: v for k, v in prov.items() if k not in _EXTRA_KEYS}
+            if base != {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}:
+                raise fulltext_loader.Refused(R_DBROW, "stored provenance differs from the re-derived record")
+            key = rec["canonical_url"]
+            if key in seen_keys:
+                raise fulltext_loader.Refused(R_DUP, f"canonical source {key} already acquired")
+            if rec["content_hash"] in seen_hashes:
+                raise fulltext_loader.Refused(R_DUP, "same full text already acquired under another canonical URL")
+        except fulltext_loader.Refused as e:
+            unusable.append(_unusable(did, e.code, e))
+            continue
+        except Exception as e:  # noqa: BLE001
+            unusable.append(_unusable(did, R_ERR, f"document could not be verified ({type(e).__name__})"))
+            continue
+        seen_keys.add(key)
+        seen_hashes.add(rec["content_hash"])
+        p = rec["provenance"]
+        lic = (p.get("licence") or {}).get("content") or {}
+        texts[did] = text
+        ex_ranges = _excluded_ranges(p.get("sections"), cfg, text)
+        key_to_doc[key] = did
+        docs.append(fulltext_loader.doc_for_dar(rec, None, None, icfg))
+        acquired.append({"document_id": did, "canonical_source_id": key, "title": rec["title"], "url": rec["url"],
+                         "doi": p["doi"], "published": p["published"], "authors": p["authors"],
+                         "licence": lic.get("id"), "licence_url": lic.get("url"),
+                         "licence_decision": p["licence_decision"], "attribution": p.get("attribution"),
+                         "fulltext_format": p.get("fulltext_format"),
+                         "text_sha256": rec["content_hash"], "chars": len(text),
+                         "evidence_ranges": _evidence_ranges(p.get("sections"), cfg, len(text), text, ex_ranges),
+                         "excluded_ranges": ex_ranges})
+    dar = None
+    if docs:
+        dar = DarCorpus(_routing_cfg())
+        for d in docs:
+            res = dar.ingest_document(d)
+            if res.get("status") != "indexed":
+                did = key_to_doc.pop(d["source_key"])
+                texts.pop(did, None)
+                acquired[:] = [a for a in acquired if a["document_id"] != did]
+                unusable.append(_unusable(did, R_ERR, f"retrieval index refused the document ({res.get('reason')})"))
+    return FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg,
+                         [d for d in docs if d["source_key"] in key_to_doc])
+
+
+_EXTRA_KEYS = {"stored_text_kind", "text_sha256", "chars", "partition", "bundle", "chunking", "seq", "n_documents", "item", "meta"}
+
+
+# ------------------------------------------------------------------------------------------------ reader (SQL, injected)
+def parse_run_id(raw) -> int | None:
+    s = str(raw or "").strip()
+    return int(s) if re.fullmatch(r"[0-9]{1,18}", s) else None
+
+
+def _select(cur, sql: str, params: dict) -> list:
+    if not sql.lstrip().upper().startswith("SELECT"):
+        raise RuntimeError("only SELECT is allowed")
+    cur.execute(sql, params)
+    return list(cur.fetchall())
+
+
+def fetch_rows(connect, run_id: int) -> tuple:
+    """One read-only round trip pair. `connect()` returns a DB-API connection (closed here)."""
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        try:
+            srows = _select(cur, SQL_SOURCES, {"run_id": int(run_id), "kind": FULLDOC_CHUNKS_KIND})
+            sources = [{"source_id": r[0], "canonical_url": r[1], "content": r[2], "content_hash": r[3],
+                        "provenance": r[4]} for r in srows]
+            ids = [s["source_id"] for s in sources]
+            prow = _select(cur, SQL_SPANS, {"ids": ids}) if ids else []
+            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3]} for r in prow]
+        finally:
+            try:
+                cur.close()
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return sources, spans
+
+
+def load_db(connect, run_id, cfg: dict, ingest_cfg: dict | None = None) -> FullDocCorpus:
+    """Never raises. A bad run id or any DB failure => corpus_unusable (class name only, never the URL or message)."""
+    rid = parse_run_id(run_id)
+    if rid is None:
+        return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
+    try:
+        sources, spans = fetch_rows(connect, rid)
+    except Exception as e:  # noqa: BLE001
+        return _unusable_corpus(cfg, [], R_DBCONN, f"rows could not be read ({type(e).__name__})")
+    return load_from_rows(sources, spans, cfg, ingest_cfg)
+
+
+def default_connect(cfg: dict, env):
+    """Factory from the env var NAMED by config (default VERA_DB_URL_RO, the read-only account) or None when unset.
+    Lazy sqlalchemy import; not exercised by the offline tests (they inject a fake)."""
+    url = (env.get(str(cfg.get("db_url_env") or DEFAULT_URL_ENV)) or "").strip()
+    if not url:
+        return None
+    ms = int(cfg.get("db_statement_timeout_ms") or 15000)
+
+    def connect():
+        from sqlalchemy import create_engine
+        eng = create_engine(url, connect_args={"connect_timeout": 5, "options": f"-c statement_timeout={ms}"},
+                            hide_parameters=True)
+        raw = eng.raw_connection()
+        orig = raw.close
+
+        def _close():
+            try:
+                orig()
+            finally:
+                eng.dispose()
+        raw.close = _close  # noqa: B010
+        return raw
+    return connect
+
+
+# short failure cache so a down DB is not hit on every /ask
+_FAIL: dict = {}
+_LOCK = threading.Lock()
+FAIL_TTL_S = 30.0
+
+
+def cached_load(connect, run_id, cfg, cache: dict, now=time.monotonic) -> FullDocCorpus:
+    key = ("db", str(run_id).strip(), json.dumps(cfg.get("pins") or {}, sort_keys=True))
+    with _LOCK:
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        f = _FAIL.get(key)
+        if f and now() < f[0]:
+            return f[1]
+    c = load_db(connect, run_id, cfg)
+    with _LOCK:
+        if c.status == STATUS_OK and c.acquired:
+            cache[key] = c
+        else:
+            _FAIL[key] = (now() + FAIL_TTL_S, c)
+    return c
+
+
+def reset_for_tests() -> None:
+    with _LOCK:
+        _FAIL.clear()

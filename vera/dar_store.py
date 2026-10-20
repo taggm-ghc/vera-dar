@@ -14,6 +14,7 @@ from contextlib import contextmanager
 logger = logging.getLogger(__name__)
 
 SCHEMA = "vera_vjay"
+FULLDOC_CHUNKS_KIND = "fulldoc_chunks"  # stored_text_kind of chunk-stored full documents (empty sources.content)
 
 
 def _sql(sql: str, schema: str) -> str:
@@ -124,7 +125,8 @@ class DarReader:
     def source_id_for(self, canonical_source_id: int):
         """Latest source_id (highest version) of a canonical source."""
         rows = self._rows("SELECT source_id FROM {S}.sources WHERE canonical_source_id = :c "
-                          "ORDER BY version DESC LIMIT 1", {"c": canonical_source_id})
+                          "AND coalesce(provenance->>'stored_text_kind', '') <> :fd_kind "  # R5: an empty fulldoc_chunks row is never 'latest'
+                          "ORDER BY version DESC LIMIT 1", {"c": canonical_source_id, "fd_kind": FULLDOC_CHUNKS_KIND})
         return rows[0][0] if rows else None
 
     def domains(self) -> list[dict]:
@@ -274,11 +276,12 @@ class DarReader:
             "JOIN {S}.evidence_spans es ON es.span_id = dk.span_id "
             "JOIN {S}.sources s ON s.source_id = es.source_id "
             "AND s.version = (SELECT max(v.version) FROM {S}.sources v "
-            "WHERE v.canonical_source_id = s.canonical_source_id) "
+            "WHERE v.canonical_source_id = s.canonical_source_id "
+            "AND coalesce(v.provenance->>'stored_text_kind', '') <> :fd_kind) "  # R5
             "JOIN {S}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
             "WHERE (CAST(:span_text AS text) IS NULL OR NOT (es.start_index = 0 AND es.text = CAST(:span_text AS text)))"
             + _win(ts_clause, "dk", "s.canonical_source_id", by_id)
-            + " ORDER BY d.domain_id, dk.span_id" + a_lim, {"span_text": span_text, **ts_params})
+            + " ORDER BY d.domain_id, dk.span_id" + a_lim, {"span_text": span_text, "fd_kind": FULLDOC_CHUNKS_KIND, **ts_params})
         chunks = [{"name_norm": r[0], "source_key": r[1], "start": r[2], "end": r[3], "asserted_by": r[4]}
                   for r in chunk_rows]
         if a_lim and (len(corpus_rows) > int(max_as) or len(chunk_rows) > int(max_as)):

@@ -39,6 +39,9 @@ def load_cfg(path: Path = CONFIG_PATH) -> dict | None:
     return c if c.get("enabled") else None
 
 
+FULLDOC_CHUNKS_KIND = "fulldoc_chunks"  # sources.provenance stored_text_kind of chunk-stored full documents
+
+
 def stamp_and_profile(engine, max_titles: int) -> tuple[dict, dict]:
     """(overview, profile) from vera_vjay.sources; read-only queries."""
     from sqlalchemy import text
@@ -48,7 +51,8 @@ def stamp_and_profile(engine, max_titles: int) -> tuple[dict, dict]:
             "SELECT coalesce(s.provenance->>'title', k.title) FROM vera_vjay.sources s "
             "JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id "
             "WHERE coalesce(s.provenance->>'title', k.title) IS NOT NULL "
-            "ORDER BY md5(s.source_id::text) LIMIT :n"), {"n": max_titles})]
+            "AND coalesce(s.provenance->>'stored_text_kind', '') <> :fd_kind "  # D-B: chunk-stored full documents never reach the model
+            "ORDER BY md5(s.source_id::text) LIMIT :n"), {"n": max_titles, "fd_kind": FULLDOC_CHUNKS_KIND})]
 
         def counts(expr):
             return {str(r[0]): int(r[1]) for r in c.execute(text(

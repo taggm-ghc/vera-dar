@@ -31,6 +31,8 @@ ROUTING_PATH = ROOT / "config" / "domain_routing.json"
 STATUS_OK, STATUS_UNUSABLE = "ok", "corpus_unusable"
 # own reason codes (loader codes come from Refused.code)
 R_BUNDLE, R_PIN, R_SUMS, R_DUP, R_ERR = "R-BUNDLE", "R-PIN", "R-SUMS", "R-DUP", "R-ERROR"
+R_SOURCE = "R-SOURCE"  # both corpus sources configured (bundle dir AND db run id): refused, never silently preferred
+DB_RUN_ID_ENV_DEFAULT = "VERA_FULLDOC_DB_RUN_ID"  # env var NAME (cfg["db_run_id_env"] overrides)
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -392,6 +394,12 @@ _CACHE: dict = {}
 
 def reset_for_tests() -> None:
     _CACHE.clear()
+    from vera import fulldoc_db
+    fulldoc_db.reset_for_tests()
+
+
+def _db_run_env(cfg: dict) -> str:
+    return str(cfg.get("db_run_id_env") or DB_RUN_ID_ENV_DEFAULT)
 
 
 def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
@@ -406,6 +414,15 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
     if en is not True and str(en).strip().lower() not in ("true", "1", "yes", "on"):  # strict allowlist: fail closed
         return None
     raw = (env.get(cfg["bundle_dir_env"]) or "").strip()
+    run_raw = (env.get(_db_run_env(cfg)) or "").strip()
+    if raw and run_raw:  # one source only: never pick silently
+        return _bundle_unusable(cfg, None, R_SOURCE, "both the bundle and the database corpus source are configured")
+    if run_raw:
+        from vera import fulldoc_db
+        connect = fulldoc_db.default_connect(cfg, env)
+        if connect is None:
+            return _bundle_unusable(cfg, None, fulldoc_db.R_DBCONN, "database corpus source has no read-only connection")
+        return fulldoc_db.cached_load(connect, run_raw, cfg, _CACHE)
     if not raw:
         return None
     base = Path(raw).resolve()
@@ -431,10 +448,16 @@ def readiness(cfg: dict | None = None, env=os.environ) -> dict:
         en = fd.get("enabled") if isinstance(fd, dict) else None
         out["enabled"] = en is True or str(en).strip().lower() in ("true", "1", "yes", "on")
         out["bundle_configured"] = bool((env.get(cfg["bundle_dir_env"]) or "").strip())
+        db_on = bool((env.get(_db_run_env(cfg)) or "").strip())  # a flag only: never the run id value
+        if db_on:  # the db keys appear only when the db source is configured (bundle shape unchanged)
+            out.update(db_configured=True, codes=[], source="db" if not out["bundle_configured"] else "bundle")
         if not out["enabled"]:
             out["status"] = "disabled"
             return out
-        if not out["bundle_configured"]:
+        if out["bundle_configured"] and db_on:
+            out.update(source="conflict", status="unusable", codes=[R_SOURCE])
+            return out
+        if not (out["bundle_configured"] or db_on):
             out["status"] = "not_configured"
             return out
         c = get_corpus(cfg, env)
@@ -442,9 +465,13 @@ def readiness(cfg: dict | None = None, env=os.environ) -> dict:
             out["status"] = "error"
             return out
         out["n_acquired"], out["n_unusable"] = len(c.acquired), len(c.unusable)
+        if db_on:
+            out["codes"] = sorted({str(u.get("code")) for u in c.unusable if u.get("code")})
         out["pins_ok"] = not any(u.get("code") == R_PIN for u in c.unusable) and c.status == STATUS_OK
         out["status"] = "ok" if c.status == STATUS_OK and c.acquired else "unusable"
         return out
     except Exception:  # noqa: BLE001  fail closed, never leak the message
         out.update(status="error", n_acquired=0, n_unusable=0, pins_ok=None)
+        if "codes" in out:
+            out["codes"] = []
         return out
