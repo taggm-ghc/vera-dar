@@ -27,7 +27,7 @@ The frontend may be given any service name; the name does not change its Docker 
 
 **UI service:** `VERA_API_BASE_URL` must point to the API base URL (without `/ask`), and `VERA_API_KEY` must match the API service's key. `VERA_DEMO_SOURCE=fixture` labels the demonstration report fixture, but does not turn `/ask` into an offline fixture.
 
-Leave `VERA_PUBLIC_MODE` and `VERA_TRUST_PROXY` unset, as in the provided environment templates. `RENDER` is set by the hosting platform and is not a secret to configure manually. The optional full-document path stays off unless both `fulldoc.enabled` is true and `VERA_FULLDOC_BUNDLE_DIR` is set.
+Leave `VERA_PUBLIC_MODE` and `VERA_TRUST_PROXY` unset, as in the provided environment templates. `RENDER` is set by the hosting platform and is not a secret to configure manually. The optional full-document path stays off unless both `fulldoc.enabled` is true and a corpus source is available. Today the only source is a local bundle (`VERA_FULLDOC_BUNDLE_DIR`), used for local runs. The Render deployment currently has no corpus source, so full-document answering is not available there. A database-backed source is planned but not implemented. To see the state, call `/health/dar` with the API key and read `fulldoc.status` (`disabled`, `not_configured`, `ok`, `unusable` or `error`).
 
 `start.sh` is the container entry point and refuses to start unless `RENDER=true` or `VERA_ENV_CONTEXT=production` is set. It listens on `PORT` (default 8000) and runs a single worker, because the public request caps are in-memory per process.
 
