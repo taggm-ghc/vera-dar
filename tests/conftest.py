@@ -219,3 +219,12 @@ def _vera_boundary_item(request, monkeypatch):
     _reset_singletons(monkeypatch)
     yield
     _reset_singletons(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _reset_dar_runtime_after_test():
+    """Teardown only: a cached dar_runtime corpus left by one test must not leak into later tests/selections."""
+    yield
+    mod = _sys.modules.get("vera.dar_runtime")
+    if mod is not None:
+        mod.reset_for_tests()

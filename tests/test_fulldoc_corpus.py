@@ -164,3 +164,80 @@ def test_text_file_outside_texts_dir_refused_by_sums_rule(tmp_path):
         (c0 / "other" / f"syn_epi{suf}").write_bytes((c0 / "texts" / f"syn_epi{suf}").read_bytes())
     c = fc.load_bundle(c0, synth_cfg())
     assert _unusable_ids(c).get("syn_epi") == "R-SUMS" and len(c.acquired) == 2
+
+
+def _cache_cfg(n=None):
+    cfg = synth_cfg()
+    cfg["fulldoc"] = {"enabled": True}
+    if n is not None:
+        cfg["cache_max_entries"] = n
+    return cfg
+
+
+def test_cache_evicts_at_bound(tmp_path):
+    fc.reset_for_tests()
+    cfg = _cache_cfg(2)
+    bundles = [write_bundle(tmp_path / f"b{i}") for i in range(3)]
+    for b in bundles:
+        c = fc.get_corpus(cfg, env={cfg["bundle_dir_env"]: str(b)})
+        assert c is not None
+    assert len(fc._CACHE) == 2
+    keys = list(fc._CACHE)
+    sig0 = [k for k in keys if k[0] == str(bundles[0].resolve())]
+    assert not sig0 and all(k[0] != str(bundles[0].resolve()) for k in keys)  # oldest evicted
+    assert {k[0] for k in keys} == {str(bundles[1].resolve()), str(bundles[2].resolve())}
+    # oldest evicted; hit behaviour unchanged for the newest
+    again = fc.get_corpus(cfg, env={cfg["bundle_dir_env"]: str(bundles[2])})
+    assert again is fc.get_corpus(cfg, env={cfg["bundle_dir_env"]: str(bundles[2])})
+    fc.reset_for_tests()
+
+
+def test_concurrent_get_corpus_loads_once(tmp_path, monkeypatch):
+    import threading
+    import time
+    fc.reset_for_tests()
+    cfg = _cache_cfg()
+    b = write_bundle(tmp_path / "b")
+    real, calls = fc.load_bundle, []
+
+    def counting(*a, **k):
+        calls.append(1)
+        time.sleep(0.05)
+        return real(*a, **k)
+
+    monkeypatch.setattr(fc, "load_bundle", counting)
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(fc.get_corpus(cfg, env={cfg["bundle_dir_env"]: str(b)})))
+          for _ in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(calls) == 1 and len(out) == 8 and all(o is out[0] for o in out)
+    fc.reset_for_tests()
+
+
+def test_cache_hit_not_blocked_by_slow_load(tmp_path, monkeypatch):
+    import threading
+    fc.reset_for_tests()
+    cfg = _cache_cfg()
+    a, b = write_bundle(tmp_path / "a"), write_bundle(tmp_path / "b")
+    env = lambda d: {cfg["bundle_dir_env"]: str(d)}  # noqa: E731
+    ca = fc.get_corpus(cfg, env=env(a))
+    real, started, release = fc.load_bundle, threading.Event(), threading.Event()
+
+    def slow(*x, **k):
+        started.set()
+        release.wait(10)
+        return real(*x, **k)
+
+    monkeypatch.setattr(fc, "load_bundle", slow)
+    t = threading.Thread(target=lambda: fc.get_corpus(cfg, env=env(b)))
+    t.start()
+    assert started.wait(5)
+    got = []
+    h = threading.Thread(target=lambda: got.append(fc.get_corpus(cfg, env=env(a))))
+    h.start()
+    h.join(2)
+    release.set()
+    t.join(10)
+    assert got and got[0] is ca
+    fc.reset_for_tests()

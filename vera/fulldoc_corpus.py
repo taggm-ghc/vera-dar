@@ -389,7 +389,35 @@ def _load(base: Path, cfg: dict, ingest_cfg: dict | None) -> FullDocCorpus:
                          [d for d in docs if d["source_key"] in key_to_doc])
 
 
-_CACHE: dict = {}
+CACHE_MAX_ENTRIES = 8  # S7 (AE-1020): bound on cached corpora; config key "cache_max_entries" (int >= 1) overrides
+
+
+class _BoundedCache(dict):
+    """dict with a size bound (oldest-inserted evicted first) and a lock around mutation. Hits do not reorder."""
+
+    def __init__(self, max_entries: int = CACHE_MAX_ENTRIES):
+        super().__init__()
+        self.max_entries = max_entries
+        self.lock = threading.RLock()
+
+    def __setitem__(self, key, value):
+        with self.lock:
+            super().__setitem__(key, value)
+            while len(self) > max(1, int(self.max_entries)):
+                del self[next(iter(self))]
+
+    def clear(self):
+        with self.lock:
+            super().clear()
+
+
+_CACHE: dict = _BoundedCache()
+_LOAD_LOCK = threading.Lock()  # serialises bundle loads so concurrent first calls do not double-load
+
+
+def _apply_cache_bound(cfg: dict) -> None:
+    n = cfg.get("cache_max_entries")
+    _CACHE.max_entries = n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else CACHE_MAX_ENTRIES
 
 
 def reset_for_tests() -> None:
@@ -422,6 +450,7 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
         connect = fulldoc_db.default_connect(cfg, env)
         if connect is None:
             return _bundle_unusable(cfg, None, fulldoc_db.R_DBCONN, "database corpus source has no read-only connection")
+        _apply_cache_bound(cfg)
         return fulldoc_db.cached_load(connect, run_raw, cfg, _CACHE)
     if not raw:
         return None
@@ -431,9 +460,15 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
                _sha_bytes((base / cfg["sums_name"]).read_bytes()))
     except OSError:
         return load_bundle(base, cfg)  # unusable; not cached so a later fix is seen
-    if sig not in _CACHE:
-        _CACHE[sig] = load_bundle(base, cfg)
-    return _CACHE[sig]
+    _apply_cache_bound(cfg)
+    hit = _CACHE.get(sig)  # lock-free hit: never waits on another bundle's slow load
+    if hit is not None:
+        return hit
+    with _LOAD_LOCK:
+        hit = _CACHE.get(sig)
+        if hit is None:
+            hit = _CACHE[sig] = load_bundle(base, cfg)
+        return hit
 
 
 def readiness(cfg: dict | None = None, env=os.environ) -> dict:
