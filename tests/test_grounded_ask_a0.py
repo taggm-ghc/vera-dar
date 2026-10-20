@@ -71,7 +71,7 @@ def test_partial_acquisition_uses_partial_line_and_labels_each_candidate():
     cands[0]["acquisition"] = "full_document_acquired"
     cands[0]["representation"] = answer_contract.representation("full_document_acquired")
     assert answer_contract.not_read_line(cands) == answer_contract.text("not_read_line_partial")
-    assert cands[0]["representation"] == "full document acquired" and "not acquired" in cands[1]["representation"]
+    assert cands[0]["representation"] == "full document stored (not inspected for this answer)" and "not acquired" in cands[1]["representation"]
 
 
 def test_no_sources_uses_cfg_text_and_reading_list_kind():
@@ -150,3 +150,14 @@ def test_d5_l0_path_does_not_import_l1_modules():
                     [(n.module or "") + "." + a.name for a in n.names] if isinstance(n, ast.ImportFrom) else [])
             assert not [m for m in mods if "vera.discovery" in m or "discovery_leak_check" in m
                         or m.startswith("vera.discovery")], (f, mods)
+
+
+def test_with_count_substitutes_count_only_and_tolerates_missing_placeholder():
+    from types import SimpleNamespace
+
+    from vera.ask_service import _with_count
+
+    ev = SimpleNamespace(examined_full_documents=[object(), object(), object()])
+    assert _with_count("Inspected {n_inspected} documents {x}.", ev) == "Inspected 3 documents {x}."
+    assert _with_count("No placeholder.", ev) == "No placeholder."
+    assert _with_count("N={n_inspected}", None) == "N=0"

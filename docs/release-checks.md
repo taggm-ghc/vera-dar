@@ -17,6 +17,7 @@ Read-only and offline: no database, no network, no file writes by the tool itsel
 | G3 | `release_gate.py --skip-tests` sub-checks: (b) frozen-file hashes, (c1) no env key in widgets, (c2) no unsafe HTML on model text, (c3) public-mode default | FAIL |
 | G4 | R-028 persistence config: `corpus.enabled` false and discovery `layers` equal `["L0"]` (static config, not proof of production behaviour) | FAIL |
 | G5 | `fulldoc.enabled` state in `config/fulldoc_answer.json` | OWNER-REQUIRED while false (the owner enables it) |
+| G5b | deploy-time owner check (not run by the script; `scripts/` is dockerignored): `fulldoc.enabled=true` and a corpus source is configured (local bundle via `VERA_FULLDOC_BUNDLE_DIR` for local runs; DB-backed chunks for the deployed API once implemented and authorized) and the API-key-protected `/health/dar` reports `fulldoc.status` = `ok` (codes and counts only; `not_configured` or `unusable` means the full-document path is inert or fails closed) | OWNER-REQUIRED |
 | G6 | candidate = `git rev-parse HEAD`, worktree clean | OWNER-REQUIRED if dirty (the owner commits the candidate) |
 | G7 | catalog evidence for the candidate passes the pinned freshness checker (see binding below) | OWNER-REQUIRED if missing or stale |
 | G8 | with `--with-tests` only: full `release_gate.py` (suite under OS network isolation, plus a2) with no `--live` | PASS, OWNER-REQUIRED if only (a2) fails, else FAIL; SKIPPED without the flag |

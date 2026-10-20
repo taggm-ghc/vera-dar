@@ -99,6 +99,28 @@ def result_kind_for(candidates) -> str:
     return "answer" if examined_full_documents(candidates) else "reading_list"
 
 
+_CORPUS_UNUSABLE_TOKEN = "full_document_corpus_unusable"
+
+
+def outcome_for(result_kind: str, fallback, n_candidates: int) -> str:
+    """Pure, public `outcome` of an /ask response (additive top-level AskResponse field; C-2).
+
+    NOT the same as claim_check.outcome (the checker's internal summary: checked / no_supported_claims / ...): this
+    one is the single response-level disposition. Values: answer | insufficient_evidence | corpus_unusable |
+    reading_list | no_sources | decline. "answer" iff result_kind == "answer". Fail closed: any other or unknown
+    fallback token (insufficient, no_valid_citations, checker_unavailable, claim_check_*, ...) is
+    insufficient_evidence. No partial_answer value (no structured signal exists; deferred)."""
+    if result_kind == "answer":
+        return "answer"
+    if result_kind == "decline":
+        return "decline"
+    if fallback:
+        return "corpus_unusable" if fallback == _CORPUS_UNUSABLE_TOKEN else "insufficient_evidence"
+    if result_kind == "reading_list":
+        return "reading_list" if n_candidates else "no_sources"
+    return "insufficient_evidence"
+
+
 def reading_list_result(candidates, tokens_used: int, cost_usd: float, *, sources: tuple = (), accepted: bool = True,
                         fallback=None, empty_text: str | None = None, path: Path = CONFIG_PATH):
     """L0 result: fixed non-empty `answer` text (so answer_via_chain does not treat it as empty), no claims, no claim

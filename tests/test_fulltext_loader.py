@@ -139,6 +139,25 @@ def test_non_document_kind_refused(tmp_path):
     assert code(e) == "R-KIND"
 
 
+def test_non_document_kind_refused_case_and_space_insensitive():
+    for v in ("Abstract ", " ABSTRACT_METADATA", "Snippet"):
+        with pytest.raises(fl.Refused) as e:
+            fl.check_declared_kind({"text_kind": v}, CFG, "item")
+        assert code(e) == "R-KIND"
+
+
+def test_declared_kind_is_an_allowlist():
+    for v in ("abstract_only", 5, ["full_text"], {"k": 1}, True, "full_text_x"):
+        for f in ("text_kind", "stored_text_kind"):
+            with pytest.raises(fl.Refused) as e:
+                fl.check_declared_kind({f: v}, CFG, "item")
+            assert code(e) == "R-KIND"
+    for v in (CFG["stored_text_kind"], CFG["stored_text_kind"].upper(), " " + CFG["stored_text_kind"].title() + " "):
+        fl.check_declared_kind({"text_kind": v, "stored_text_kind": v}, CFG, "item")
+    fl.check_declared_kind({"text_kind": None}, CFG, "item")
+    fl.check_declared_kind({}, CFG, "item")
+
+
 def test_routing_override_is_in_memory_only():
     path = ROOT / "config" / "domain_routing.json"
     before = path.read_bytes()

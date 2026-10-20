@@ -33,3 +33,11 @@ run.sh
 run_demo.sh
 Dockerfile
 .dockerignore
+
+# full-document bundles: never publish raw texts (security S2)
+**/bundle/
+**/bundles/
+**/texts/*.txt
+**/*.meta.json
+**/*.SHA256SUMS
+**/manifest-filled*

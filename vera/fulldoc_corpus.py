@@ -325,16 +325,19 @@ def _load(base: Path, cfg: dict, ingest_cfg: dict | None) -> FullDocCorpus:
             tf = item.get("text_file")
             if isinstance(tf, str):
                 tp = (base / tf).resolve()
-                if tp.parent == base / "texts":  # inside the bundle: sums must list and match both files
-                    for p in (tp, tp.with_suffix(".meta.json")):
-                        want = sums.get(p.name)
-                        if want is None:
-                            raise fulltext_loader.Refused(R_SUMS, f"{p.name} is not listed in the sums file")
-                        if not p.is_file() or _sha_bytes(p.read_bytes()) != want:
-                            raise fulltext_loader.Refused(R_SUMS, f"{p.name} does not match the sums file")
-                    want_text = sums[tp.name]
-                else:
-                    want_text = None  # prepare() refuses traversal / outside paths
+                # S6 (AE-1020): the sums check is mandatory. A symlink, or a path resolving outside <bundle>/texts,
+                # is refused here instead of skipping the check (fail closed).
+                if (base / tf).is_symlink() or tp.with_suffix(".meta.json").is_symlink():
+                    raise fulltext_loader.Refused(R_SUMS, "text_file or its meta file is a symlink")
+                if tp.parent != base / "texts":
+                    raise fulltext_loader.Refused(R_SUMS, "text_file is not directly under the bundle texts/ directory")
+                for p in (tp, tp.with_suffix(".meta.json")):  # sums must list and match both files
+                    want = sums.get(p.name)
+                    if want is None:
+                        raise fulltext_loader.Refused(R_SUMS, f"{p.name} is not listed in the sums file")
+                    if not p.is_file() or _sha_bytes(p.read_bytes()) != want:
+                        raise fulltext_loader.Refused(R_SUMS, f"{p.name} does not match the sums file")
+                want_text = sums[tp.name]
             else:
                 want_text = None
             rec = fulltext_loader.prepare(item, base, icfg)
@@ -414,3 +417,34 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
     if sig not in _CACHE:
         _CACHE[sig] = load_bundle(base, cfg)
     return _CACHE[sig]
+
+
+def readiness(cfg: dict | None = None, env=os.environ) -> dict:
+    """C-3/S8 (AE-1020): codes and counts only (no path, no titles). Never raises; any exception => status "error".
+    status: disabled (flag off) | not_configured (flag on, env unset) | ok | unusable | error.
+    `source` names the corpus backend so a later DB-backed source can report without a shape change."""
+    out = {"enabled": False, "bundle_configured": False, "status": "error", "n_acquired": 0, "n_unusable": 0,
+           "pins_ok": None, "source": "bundle"}
+    try:
+        cfg = cfg if cfg is not None else load_config()
+        fd = cfg.get("fulldoc")
+        en = fd.get("enabled") if isinstance(fd, dict) else None
+        out["enabled"] = en is True or str(en).strip().lower() in ("true", "1", "yes", "on")
+        out["bundle_configured"] = bool((env.get(cfg["bundle_dir_env"]) or "").strip())
+        if not out["enabled"]:
+            out["status"] = "disabled"
+            return out
+        if not out["bundle_configured"]:
+            out["status"] = "not_configured"
+            return out
+        c = get_corpus(cfg, env)
+        if c is None:
+            out["status"] = "error"
+            return out
+        out["n_acquired"], out["n_unusable"] = len(c.acquired), len(c.unusable)
+        out["pins_ok"] = not any(u.get("code") == R_PIN for u in c.unusable) and c.status == STATUS_OK
+        out["status"] = "ok" if c.status == STATUS_OK and c.acquired else "unusable"
+        return out
+    except Exception:  # noqa: BLE001  fail closed, never leak the message
+        out.update(status="error", n_acquired=0, n_unusable=0, pins_ok=None)
+        return out

@@ -24,7 +24,7 @@ GROUNDING_CFG = {"insufficient_text": "INSUFFICIENT", "removed_citation_note": "
                  "claim_check": {"enabled": True, "unavailable_text": "UNAVAILABLE"}}
 HEAD = {"answer", "model", "tokens_used", "cost_usd", "sources", "traced_sources", "recalled", "memory_written",
         "memory_submitted", "claim_check"}
-NEW = {"result_kind", "candidates", "contract", "recalled_discovery", "discovery_note_submitted"}
+NEW = {"result_kind", "candidates", "contract", "recalled_discovery", "discovery_note_submitted", "outcome"}  # outcome: additive, FDC-1020 2026-10-20
 
 
 class Mem:

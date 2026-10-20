@@ -1,4 +1,5 @@
 """P0-E: DAR readiness codes (fake engine; no real DB, no network). Overall /health stays independent of the DB."""
+import json
 import re
 
 import pytest
@@ -70,6 +71,8 @@ def _clean(monkeypatch):
 
 def test_ready_when_all_present_and_built():
     r = dar_health.dar_readiness(ENV, _factory())
+    fd = r.pop("fulldoc")  # C-3 additive key (AE-1020)
+    assert set(fd) == {"enabled", "bundle_configured", "status", "n_acquired", "n_unusable", "pins_ok", "source"}
     assert r == {"dar": "ready", "migrations": {"006": True, "007": True}, "stored_corpus": "ready", "routing": "on",
                  "corpus": {"documents": 3, "chunks": 40, "domains": 2}, "fallback": False, "reason_code": "ok"}
     assert _Engine.disposed
@@ -152,7 +155,7 @@ def test_health_endpoint_dar_fields_and_status_independent(monkeypatch):
     assert body["dar"] in {"degraded", "unavailable", "disabled", "unknown"}  # v3: coarse public enum only
     monkeypatch.setenv("VERA_API_KEY", "k" * 24)
     full = TestClient(main.app).get("/health/dar", headers={"X-API-Key": "k" * 24}).json()
-    assert set(full) == {"dar", "migrations", "stored_corpus", "routing", "corpus", "fallback", "reason_code"}
+    assert set(full) == {"dar", "migrations", "stored_corpus", "routing", "corpus", "fallback", "reason_code", "fulldoc"}
     assert full["dar"] != "ready"
     monkeypatch.setattr(dar_health, "cached_readiness", lambda *a, **k: 1 / 0)
     assert TestClient(main.app).get("/health").json()["status"] == "ok"
@@ -199,3 +202,53 @@ def test_health_error_state_is_unknown_not_unavailable(monkeypatch):
     r = dar_health.dar_readiness(ENV, None, force=True)
     assert r["reason_code"] == "health_error"
     assert r["dar"] is None and r["routing"] is None and r["fallback"] is None
+
+
+def test_fulldoc_readiness_codes_and_counts_only(monkeypatch, tmp_path):
+    """C-3/S8: disabled / not_configured / ok / unusable / error; no path or title ever appears."""
+    from vera import fulldoc_corpus as fc
+    from tests.fulldoc_bundle_synth import synth_cfg, write_bundle
+    fc.reset_for_tests()
+    cfg = synth_cfg()
+    cfg["fulldoc"]["enabled"] = False
+    r = fc.readiness(cfg, {})
+    assert r["status"] == "disabled" and r["enabled"] is False and r["source"] == "bundle"
+    cfg["fulldoc"]["enabled"] = True
+    assert fc.readiness(cfg, {})["status"] == "not_configured"
+    root = write_bundle(tmp_path / "b")
+    env = {cfg["bundle_dir_env"]: str(root)}
+    r = fc.readiness(cfg, env)
+    assert r["status"] == "ok" and r["n_acquired"] == 3 and r["n_unusable"] == 0 and r["pins_ok"] is True
+    assert r["bundle_configured"] is True
+    blob = json.dumps(r)
+    assert str(tmp_path) not in blob and "Synthetic" not in blob
+    (root / cfg["sums_name"]).unlink()
+    fc.reset_for_tests()
+    r = fc.readiness(cfg, env)
+    assert r["status"] == "unusable" and r["n_acquired"] == 0
+    assert fc.readiness({"fulldoc": {"enabled": True}}, env)["status"] == "error"  # missing key => error, no raise
+    fc.reset_for_tests()
+
+
+def test_dar_readiness_merges_fulldoc_key(monkeypatch):
+    from vera import fulldoc_corpus as fc
+    monkeypatch.setattr(fc, "readiness", lambda *a, **k: {"status": "ok", "source": "bundle"})
+    assert dar_health.dar_readiness(ENV, _factory())["fulldoc"] == {"status": "ok", "source": "bundle"}
+    monkeypatch.setattr(fc, "readiness", lambda *a, **k: 1 / 0)
+    assert dar_health.dar_readiness(ENV, _factory(), force=True)["fulldoc"]["status"] == "error"
+    assert "fulldoc" not in dar_health.cached_readiness()  # public /health path never carries it (amplification)
+    assert dar_health._fulldoc_status()["status"] == "error"  # attached only by the authenticated /health/dar handler
+
+
+def test_public_health_never_calls_fulldoc_readiness(monkeypatch):
+    import main
+    from fastapi.testclient import TestClient
+    from vera import fulldoc_corpus as fc
+
+    def boom(*a, **k):
+        raise AssertionError("fulldoc readiness called from public /health")
+    monkeypatch.setattr(fc, "readiness", boom)
+    monkeypatch.setattr(fc, "get_corpus", boom)
+    monkeypatch.setattr(dar_health, "_fulldoc_status", boom)
+    r = TestClient(main.app).get("/health")
+    assert r.status_code == 200 and set(r.json()) == {"status", "dar"}

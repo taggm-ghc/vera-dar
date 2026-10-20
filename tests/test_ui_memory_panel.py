@@ -291,7 +291,7 @@ def test_panel_renders_no_claim_text_or_ids_for_submitted_only():
 from fastapi.testclient import TestClient
 from vera.ask_service import AskResult
 
-HEAD_KEYS = {"answer", "model", "tokens_used", "cost_usd", "sources", "traced_sources", "recalled",
+HEAD_KEYS = {"outcome", "answer", "model", "tokens_used", "cost_usd", "sources", "traced_sources", "recalled",
              "memory_written", "claim_check", "result_kind", "candidates", "contract", "recalled_discovery",
              "discovery_note_submitted"}  # K2.I6 added the last five; memory_submitted is the K1 field
 

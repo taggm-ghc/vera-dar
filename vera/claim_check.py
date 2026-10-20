@@ -15,6 +15,7 @@ from contextvars import ContextVar
 from openai import OpenAI
 
 logger = logging.getLogger("vera")
+USAGE: ContextVar = ContextVar("claim_usage", default=None)  # S5: caller-set out-channel for checker usage rows
 RECORDS: ContextVar = ContextVar("claim_records", default=None)  # item #84: caller-set out-channel for records
 
 _CITE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
@@ -67,9 +68,28 @@ def _parse(text: str, claims: list[dict]) -> dict[int, dict] | None:
 def _client(checker: dict, timeout_s: float):
     if checker.get("base_url") is None:
         from vera.ask_service import _get_client
-        return _get_client()
+        c = _get_client()  # S4: the last-resort client honours this check's timeout and makes no SDK retries
+        wo = getattr(c, "with_options", None)
+        return wo(timeout=timeout_s, max_retries=0) if callable(wo) else c
     return OpenAI(base_url=checker["base_url"], api_key=os.environ[checker["api_key_env"]], max_retries=0,
                   timeout=timeout_s)
+
+
+def _record_usage(r, label: str, checker: dict) -> None:
+    """S5: append {checker, tokens, cost_usd} to the caller-set USAGE list (additive; callers that set none see no
+    change). cost_usd uses the checker's own input_per_1m/output_per_1m when configured, else is None (unpriced)."""
+    rows = USAGE.get()
+    u = getattr(r, "usage", None)
+    if rows is None or u is None:
+        return
+    try:
+        p, c = int(u.prompt_tokens), int(u.completion_tokens)
+    except (AttributeError, TypeError, ValueError):
+        return
+    cost = None
+    if checker.get("input_per_1m") is not None and checker.get("output_per_1m") is not None:
+        cost = round(p / 1e6 * float(checker["input_per_1m"]) + c / 1e6 * float(checker["output_per_1m"]), 6)
+    rows.append({"checker": label, "tokens": p + c, "cost_usd": cost})
 
 
 def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None) -> tuple[dict[int, dict] | None, str | None]:
@@ -87,6 +107,7 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None) -> tupl
                 r = _client(checker, cfg["timeout_s"]).chat.completions.create(
                     model=checker["model"], messages=msgs, temperature=0, response_format={"type": "json_object"}, **kw)
                 text = r.choices[0].message.content or ""
+                _record_usage(r, label, checker)
         except Exception as exc:  # noqa: BLE001  (next checker; logged by class only)
             logger.warning("/ask claim check %s failed (%s)", label, type(exc).__name__)
             continue

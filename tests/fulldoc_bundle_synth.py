@@ -25,9 +25,12 @@ def sec(title: str, paras=(), label: str = "", children: str = "") -> str:
 
 def write_bundle(root: Path, docs=fulltext_synth.DEFAULT_DOCS, items_over: dict | None = None,
                  tamper: dict | None = None, jats_over: dict | None = None,
-                 body_sections: dict | None = None) -> Path:
+                 body_sections: dict | None = None, text_kind: dict | str | None = None) -> Path:
     """items_over: {doc_id: manifest-item overrides}; jats_over: {doc_id: kwargs for fulltext_synth.jats};
     body_sections: {doc_id: JATS <sec> XML (see sec()) appended inside <body> after the standard sections};
+    text_kind: None (default, unchanged output) | str (all docs) | {doc_id: str}: declares a `text_kind` label in the
+    manifest item and the conversion record (e.g. "abstract"); it changes no text content (pair with jats_over
+    {with_body: False} for abstract-only content);
     tamper: {doc_id: bytes|str appended to the .txt AFTER the sums were computed} (sum mismatch)."""
     root = Path(root)
     ing = fl.load_config()
@@ -50,6 +53,11 @@ def write_bundle(root: Path, docs=fulltext_synth.DEFAULT_DOCS, items_over: dict 
         meta.update({"document_id": did, "raw_sha256": hashlib.sha256(raw).hexdigest(),
                      "text_sha256": hashlib.sha256(data).hexdigest(), "raw_file": f"{did}.xml"})
         out.with_suffix(".meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False), encoding="utf-8")
+        tk = text_kind.get(did) if isinstance(text_kind, dict) else text_kind
+        if tk:
+            item["text_kind"] = tk
+            meta["text_kind"] = tk
+            out.with_suffix(".meta.json").write_text(json.dumps(meta, indent=1, ensure_ascii=False), encoding="utf-8")
         items.append(item)
     (root / MANIFEST_NAME).write_text(json.dumps({"_doc": "SYNTHETIC bundle manifest", "schema_version": 1,
                                                   "sources": items}, indent=1), encoding="utf-8")

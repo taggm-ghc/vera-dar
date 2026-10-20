@@ -143,3 +143,24 @@ def test_same_text_under_another_canonical_url_is_a_duplicate(tmp_path):  # D-05
     c = fulldoc_corpus.load_bundle(root, synth_cfg())
     assert [d["document_id"] for d in c.acquired] == ["syn_epi"]
     assert [(u["document_id"], u["code"]) for u in c.unusable] == [("syn_twin", "R-DUP")]
+
+
+def test_symlinked_text_file_refused_by_sums_rule(tmp_path):
+    """S6: a symlink in texts/ is refused (R-SUMS), even though its target is inside the bundle."""
+    b = write_bundle(tmp_path / "b")
+    real = b / "texts" / "syn_clim.txt"
+    link = b / "texts" / "syn_epi.txt"
+    link.unlink()
+    link.symlink_to(real)
+    c = fc.load_bundle(b, synth_cfg())
+    assert _unusable_ids(c).get("syn_epi") == "R-SUMS" and len(c.acquired) == 2
+
+
+def test_text_file_outside_texts_dir_refused_by_sums_rule(tmp_path):
+    """S6: a manifest text_file that resolves elsewhere in the bundle skips no check: R-SUMS."""
+    c0 = write_bundle(tmp_path / "b2", items_over={"syn_epi": {"text_file": "other/syn_epi.txt"}})
+    (c0 / "other").mkdir()
+    for suf in (".txt", ".meta.json"):
+        (c0 / "other" / f"syn_epi{suf}").write_bytes((c0 / "texts" / f"syn_epi{suf}").read_bytes())
+    c = fc.load_bundle(c0, synth_cfg())
+    assert _unusable_ids(c).get("syn_epi") == "R-SUMS" and len(c.acquired) == 2

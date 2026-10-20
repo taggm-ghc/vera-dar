@@ -98,6 +98,25 @@ def check_item(item: dict, cfg: dict, contract_path: Path = answer_contract.CONF
         _refuse(cfg, "non_document_kind", f"stored_text_kind {kind!r} is a non-document kind in the answer contract")
 
 
+def _non_document_kinds(contract_path: Path = answer_contract.CONFIG_PATH) -> set:
+    acq = answer_contract.load_config(contract_path).get("acquisition") or {}
+    return {str(k) for k in (acq.get("non_document_text_kinds") or [])}
+
+
+def check_declared_kind(declared: dict, cfg: dict, where: str, contract_path: Path = answer_contract.CONFIG_PATH) -> None:
+    """Fail closed (FDC-1020 item 5), allowlist: a text_kind / stored_text_kind declared on the item or its
+    conversion record must be a string equal (case-insensitively) to the configured full-document kind; anything
+    else (non-string, a non-document kind, an unknown label such as 'abstract_only') is refused. Absent/None passes."""
+    non_doc = _non_document_kinds(contract_path)
+    allowed = str(cfg["stored_text_kind"]).strip().lower()
+    for f in ("text_kind", "stored_text_kind"):
+        v = declared.get(f)
+        if v is None:
+            continue
+        if not isinstance(v, str) or v.strip().lower() in non_doc or v.strip().lower() != allowed:
+            _refuse(cfg, "non_document_kind", f"{where} declares {f} {v!r}, not the full-document kind {allowed!r}")
+
+
 def load_text(item: dict, base_dir: Path, cfg: dict) -> tuple[str, dict]:
     """texts/<id>.txt and its conversion record texts/<id>.meta.json (written by `ingest_fulltext.py convert`)."""
     base = Path(base_dir).resolve()
@@ -177,7 +196,9 @@ def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
 def prepare(item: dict, base_dir: Path, cfg: dict, now: str | None = None) -> dict:
     """All filters; returns the record to store. Raises Refused. domain_hint is never copied."""
     check_item(item, cfg)
+    check_declared_kind(item, cfg, "manifest item")
     text, meta = load_text(item, base_dir, cfg)
+    check_declared_kind(meta, cfg, "conversion record")
     check_content(text, meta, cfg)
     lic = check_licence(item, meta, cfg)
     now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -12,6 +12,8 @@ from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera.public_mode import is_public_mode, post_ask, upstream_base_url
 from vera.sources_sidebar import render_nav, render_sources, render_sources_sidebar
+from vera.ui_evidence import (is_fulldoc, render_answer_scope_note, render_citations, render_evidence_scope,
+                              render_fallback_reason)
 from vera.ui_safety import safe_markdown
 from vera.version_info import UNKNOWN, deployed_commit, short_commit
 
@@ -76,7 +78,7 @@ st.subheader("Ask a Question")
 question = st.text_input(
     "Enter your research question:",
     placeholder="What is VERA-DAR?",
-    help="Ask anything. The service will return an answer with token usage and cost."
+    help="Ask anything. The service answers from the sources it holds, or says why it cannot."
 )
 
 # Ask button
@@ -93,29 +95,37 @@ if st.button("Ask", type="primary"):
 
                 if response.status_code == 200:
                     data = response.json()
+                    data = data if isinstance(data, dict) else {}
                     # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other
                     # value (missing, unknown, reading_list, decline, ...) renders the reading-list branch.
                     if data.get("result_kind") == "answer":
-                        if (data.get("claim_check") or {}).get("answer_completeness") == "partial":  # D8: never styled as complete
+                        if (data.get("claim_check") if isinstance(data.get("claim_check"), dict) else {}).get("answer_completeness") == "partial":  # D8: never styled as complete
                             st.markdown("### ⚠️ Partial answer")
-                            st.warning(safe_markdown(data["answer"]))
+                            st.warning(safe_markdown(data.get("answer")))
                         else:
                             st.markdown("### ✅ Answer")
-                            st.success(safe_markdown(data["answer"]))
-                        render_sources(st, data.get("sources") or [], data.get("traced_sources") or [], data.get("claim_check"))
+                            st.success(safe_markdown(data.get("answer")))
+                        full = is_fulldoc(data)
+                        render_evidence_scope(st, data)  # AE-1020 D3: N documents inspected, M passages admitted
+                        render_sources(st, data.get("sources") or [], data.get("traced_sources") or [],
+                                       data.get("claim_check"), fulldoc=full)
+                        render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
+                        if full:
+                            render_answer_scope_note(st)
 
                         # Display recalled findings from memory
                         render_memory_panel(st, data)
                     else:
+                        render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
                         render_discovery(st, data)
 
                     # Display metrics
                     st.markdown("### 💰 Metrics")
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric("Tokens Used", f"{data['tokens_used']:,}")
+                        st.metric("Tokens Used", f"{int(data.get('tokens_used') or 0):,}")
                     with col2:
-                        st.metric("Cost", f"${data['cost_usd']:.6f}")
+                        st.metric("Cost", f"${float(data.get('cost_usd') or 0):.6f}")
 
                     # K5.2.I: raw JSON is a dev-mode (owner debug) view only; public mode renders none.
                     if not PUBLIC:
@@ -123,7 +133,7 @@ if st.button("Ask", type="primary"):
                             st.json(data)
 
                     # Next question suggestion
-                    st.info("💡 Try asking about your capstone topic!")
+                    st.info("💡 Ask a follow-up question to explore further.")
 
                 elif response.status_code == 429:
                     st.error("Rate limit reached. Please try again later.")

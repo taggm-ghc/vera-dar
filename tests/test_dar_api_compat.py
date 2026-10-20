@@ -22,6 +22,7 @@ GROUNDED = ROOT / "vera" / "grounded_ask.py"
 FROZEN_FIELDS = {
     "answer", "model", "tokens_used", "cost_usd", "sources", "traced_sources", "recalled",
     "memory_written", "memory_submitted", "claim_check", "result_kind", "candidates",
+    "outcome",  # additive, FDC-1020 2026-10-20
     "contract", "recalled_discovery", "discovery_note_submitted",
     # D-055 Option C (owner-directed, additive): serialized only when full-document evidence exists, so the web-only
     # key set stays HEAD | NEW (tests/test_ask_response_contract.py:80-81 unchanged)

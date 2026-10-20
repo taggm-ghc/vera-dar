@@ -140,7 +140,7 @@
     "quote_max_chars": 200,
     "partial_marker": " (partly supported by the cited passage)",
     "removed_note": "Note: sentences the cited passages did not support were removed.",
-    "insufficient_text": "VERA-DAR inspected the full documents it holds but found no passage that answers this question well enough to ground an answer, so it has not answered from memory.",
+    "insufficient_text": "VERA-DAR inspected {n_inspected} full document(s) it holds but found no passage that answers this question well enough to ground an answer, so it has not answered from memory.",
     "corpus_unusable_text": "VERA-DAR's full-document collection could not be verified right now, so it has not answered from memory.",
     "unchecked_note": "Note: parts of the draft that did not cite a passage could not be checked and were left out.",
     "insufficient_marker": "INSUFFICIENT_EVIDENCE",

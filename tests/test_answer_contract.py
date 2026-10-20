@@ -33,7 +33,7 @@ def test_partial_variant_only_when_some_but_not_all_acquired():
     assert ac.not_read_line([a, a]) == FIXED  # all acquired is state A, which K2 does not produce
     partial = ac.not_read_line([a, n])
     assert partial == ac.text("not_read_line_partial") != FIXED
-    assert "except those marked 'full document acquired'" in partial
+    assert "except those marked 'full document stored (not inspected for this answer)'" in partial
 
 
 def test_layers_default_excludes_l1_and_always_has_l0(tmp_path):
@@ -71,7 +71,7 @@ def test_acquisition_never_from_fetch_status_or_abstract_kinds():
 
 def test_representation_text_per_state():
     assert ac.representation(ac.ACQ_NOT_ACQUIRED) == "index record or abstract; full document not acquired"
-    assert ac.representation(ac.ACQ_ACQUIRED) == "full document acquired"
+    assert ac.representation(ac.ACQ_ACQUIRED) == "full document stored (not inspected for this answer)"
 
 
 def test_no_sources_text_from_chain_config_never_empty(tmp_path):
@@ -131,3 +131,21 @@ def test_contract_imports_with_l1_modules_poisoned():
 def test_config_has_no_forbidden_public_terms():  # texts shown to visitors name no back-end component
     for k, v in json.loads(ac.CONFIG_PATH.read_text())["texts"].items():
         assert not re.search(r"gate|1,?500|PLACEHOLDER|owner key|D6", v), k
+
+
+@pytest.mark.parametrize("kind,fb,n,want", [
+    ("answer", None, 0, "answer"),
+    ("answer", "insufficient", 3, "answer"),
+    ("reading_list", "insufficient", 2, "insufficient_evidence"),
+    ("reading_list", "full_document_corpus_unusable", 2, "corpus_unusable"),
+    ("reading_list", "some_future_token", 2, "insufficient_evidence"),
+    ("reading_list", "checker_unavailable", 2, "insufficient_evidence"),
+    ("reading_list", "claim_check_insufficient", 0, "insufficient_evidence"),
+    ("reading_list", None, 2, "reading_list"),
+    ("reading_list", None, 0, "no_sources"),
+    ("decline", None, 0, "decline"),
+    ("unspecified", None, 0, "insufficient_evidence"),
+])
+def test_outcome_for(kind, fb, n, want):
+    assert ac.outcome_for(kind, fb, n) == want
+    assert want != "partial_answer"

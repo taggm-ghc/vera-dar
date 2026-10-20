@@ -165,25 +165,37 @@ def _link(title: str, url: str) -> str:
     return f"[{plain(title)}]({safe_url})"
 
 
-def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dict | None = None) -> None:
-    """Sources under an Ask answer: numbered (used) and traced originals without a free abstract (not used)."""
-    cap = grounding_cap()
+def _row_n(s: dict, i: int):
+    n = s.get("n")
+    return n if isinstance(n, int) and not isinstance(n, bool) else i
+
+
+def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dict | None = None,
+                   fulldoc: bool | None = None) -> None:
+    """Sources under an Ask answer (main answer area, not the sidebar): numbered (used) and traced originals without a
+    free abstract (not used). Abstract wording only for abstract-grounded rows; full-document rows say inspected passages."""
+    from vera import ui_evidence
+    sources = [s for s in (sources if isinstance(sources, list) else []) if isinstance(s, dict)]
+    traced = [t for t in (traced if isinstance(traced, list) else []) if isinstance(t, dict)]
+    if fulldoc is None:
+        fulldoc = ui_evidence.is_fulldoc(None, sources)
+    cap = None if fulldoc else grounding_cap()
     if sources:
-        st.markdown("**Sources** (published records whose abstracts"
-                    f"{f', up to {cap:,} characters each,' if cap else ''} the answer was grounded in)")
-        for s in sources:
+        if fulldoc:
+            st.markdown("**Sources** (documents whose inspected passages the answer was grounded in)")
+        else:
+            st.markdown("**Sources** (published records whose abstracts"
+                        f"{f', up to {cap:,} characters each,' if cap else ''} the answer was grounded in)")
+        for i, s in enumerate(sources, 1):
             date = f" ({plain(s['published'])})" if s.get("published") else ""
-            st.markdown(f"[{int(s['n'])}] {_link(s.get('title') or s.get('url'), s.get('url'))}{date}")
+            st.markdown(f"[{_row_n(s, i)}] {_link(s.get('title') or s.get('url') or 'source', s.get('url'))}{date}")
             # K3.I (RF2): provider, retrieved_at and licence_decision are not shown publicly (owner-gated view later).
-            meta = " · ".join(plain(str(s[k])) for k in ("identifier",) if s.get(k))
+            meta = " · ".join(plain(str(s[k])) for k in ("identifier", "span") if s.get(k))
             if meta:
                 st.caption(meta)
         if any(s.get("licence_decision") for s in sources):
             st.caption(LICENCE_UNDER_ANSWER)
-    if claim_check and claim_check.get("outcome") == "checked":
-        st.caption(f"Claim check: {claim_check['checked']} cited claims checked by a model against the cited abstract text"
-                   f"{f' (first {cap:,} characters)' if cap else ''}; {claim_check['supported']} supported, "
-                   f"{claim_check['partial']} partly supported, {claim_check['removed']} removed.")
+    ui_evidence.render_claim_check(st, claim_check, cap, fulldoc)
     if traced:
         st.caption("Also found and matched to a published record, but no abstract was available for it, so not used: "
-                   + "; ".join(_link(t.get("title") or t.get("url"), t.get("url")) for t in traced))
+                   + "; ".join(_link(t.get("title") or t.get("url") or "source", t.get("url")) for t in traced))

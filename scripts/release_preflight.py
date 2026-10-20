@@ -186,7 +186,7 @@ def g5_fulldoc(root: Path) -> tuple[str, str]:
         return FAIL, f"config unreadable ({type(exc).__name__})"
     en = (cfg.get("fulldoc") or {}).get("enabled")
     if en is True:
-        return PASS, "fulldoc.enabled=true"
+        return PASS, "fulldoc.enabled=true; full-document answering also requires a configured corpus source (local bundle via VERA_FULLDOC_BUNDLE_DIR for local runs; DB-backed chunks for the deployed API once implemented and authorized); check /health/dar fulldoc.status"
     if en is False:
         return OWNER, "fulldoc.enabled=false (owner decides when to enable the full-document path)"
     return FAIL, "fulldoc.enabled missing or not a boolean"

@@ -88,7 +88,9 @@ class Harness:
         mp.setattr(ask_service, "complete", complete)
         mp.setattr(claim_check, "check_answer", check_answer)
         mp.setattr(main, "GROUNDING", grounding)
-        mp.setattr(main, "retrieve_all", lambda q, cfg: ([dict(s) for s in WEB] if web else [], []))
+        from vera import dar_runtime
+        mp.setattr(dar_runtime, "get_corpus", lambda *a, **k: None)  # isolation: never a real DAR corpus
+        mp.setattr(main, "retrieve_all", lambda q, cfg, **kw: ([dict(s) for s in WEB] if web else [], []))
         mp.setattr(main, "answer_via_chain", lambda q, entries, g: (ask_service.answer_in_scope(q, "m", PRICING, grounding=g), "groq:m"))
         mp.setattr(main, "store_from_env", lambda cfg: None)  # never a real corpus engine
         mp.setattr(main, "admit_to_corpus", lambda *a: None)

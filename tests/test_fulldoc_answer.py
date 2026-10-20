@@ -79,7 +79,9 @@ def test_success_path_and_citation_binding():
     assert out.fallback is None and r.accepted and r.result_kind == "answer" and r.contract is None
     assert r.tokens_used == 105 and r.cost_usd == pytest.approx(0.51) and out.tokens_used == 105
     assert len(r.sources) == 2 and r.evidence.status == "admitted" and r.claim_check["outcome"] == "checked"
-    assert "Beta caching" in stub.messages[0]["content"] and "[2] T2 (published 2024)" in stub.messages[0]["content"]
+    passages = json.loads(stub.messages[1]["content"])["passages"]
+    assert "Beta caching" in passages[0]["text"] and passages[1]["title"] == "T2"
+    assert "Beta caching" not in stub.messages[0]["content"]  # S3: passage text never in the system message
     c = r.citations[0]
     assert set(c) == {"claim_id", "n", "span_id", "document_id", "canonical_source_id", "licence", "span", "verdict", "quote",
                       "quote_span", "attribution"}

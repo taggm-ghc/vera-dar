@@ -3,9 +3,9 @@
   "layers": ["L0"],
   "texts": {
     "not_read_line": "VERA-DAR has not acquired or read these full documents. This is a discovery result, not an evidence-grounded answer.",
-    "not_read_line_partial": "VERA-DAR has not acquired or read these full documents, except those marked 'full document acquired'. This is a discovery result, not an evidence-grounded answer.",
+    "not_read_line_partial": "VERA-DAR has not acquired or read these full documents, except those marked 'full document stored (not inspected for this answer)'. This is a discovery result, not an evidence-grounded answer.",
     "representation_not_acquired": "index record or abstract; full document not acquired",
-    "representation_acquired": "full document acquired",
+    "representation_acquired": "full document stored (not inspected for this answer)",
     "no_sources_fallback": "VERA-DAR could not find published sources for this question right now, so it has not answered from memory. Please try again shortly or rephrase the question.",
     "note_prefix": "Discovery note (not evidence). ",
     "note_template": "For topic {topic}, VERA-DAR identified candidates {candidates} as discovery material. Their full contents were not verified.",

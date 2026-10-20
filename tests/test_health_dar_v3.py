@@ -68,7 +68,8 @@ def test_health_dar_full_dict_with_key(client, monkeypatch):
     c, main = client
     _set(monkeypatch, main, FULL)
     r = c.get("/health/dar", headers={"X-API-Key": KEY})
-    assert r.status_code == 200 and r.json() == FULL
+    body = r.json()
+    assert r.status_code == 200 and body.pop("fulldoc") is not None and body == FULL  # fulldoc: /health/dar only (AE-1020 WP-H)
 
 
 def test_health_dar_failure_does_not_raise(client, monkeypatch):

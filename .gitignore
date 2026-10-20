@@ -57,6 +57,14 @@ tmp/scope_eval/
 tmp/
 temp/
 
+# full-document bundles: never publish raw texts (security S2)
+bundle/
+bundles/
+**/texts/*.txt
+*.meta.json
+*.SHA256SUMS
+manifest-filled*
+
 # ===== Added for the public taggm-ghc/vera-dar repository (ON-1020-P1 export) =====
 # Secrets and local configuration
 *.local

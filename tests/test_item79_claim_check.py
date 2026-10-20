@@ -115,3 +115,63 @@ def test_grounded_path_runs_claim_check_and_fails_closed(monkeypatch):
     _assert_fallback(r, "checker_unavailable")
     monkeypatch.setattr(claim_check, "check_answer", lambda text, s, c: ("Faster [1].", {"outcome": "checked", "checked": 1}))
     assert ask_service.answer_in_scope("q", "m", PRICING, grounding=(lambda: SRC, CFG)).claim_check["outcome"] == "checked"
+
+
+def test_s4_last_resort_clients_honour_timeout_and_no_retries(monkeypatch):
+    from vera import ask_service
+
+    seen = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    ask_service._get_client.cache_clear()
+    monkeypatch.setattr(ask_service, "OpenAI", FakeOpenAI)
+    monkeypatch.setattr(ask_service, "_chain_timeout_s", lambda: 20.0)
+    try:
+        ask_service._get_client()
+    finally:
+        ask_service._get_client.cache_clear()
+    assert seen == {"max_retries": 0, "timeout": 20.0}
+
+    opts = {}
+
+    class Base:
+        def with_options(self, **kw):
+            opts.update(kw)
+            return "bounded"
+
+    monkeypatch.setattr(ask_service, "_get_client", lambda: Base())
+    assert cc._client({"base_url": None}, 7.5) == "bounded"
+    assert opts == {"timeout": 7.5, "max_retries": 0}
+
+
+def test_s5_usage_out_channel_is_additive(monkeypatch):
+    monkeypatch.setenv("KEY_A", "k")
+
+    class U:
+        prompt_tokens, completion_tokens = 1000, 500
+
+    class R:
+        usage = U()
+        choices = [type("C", (), {"message": type("M", (), {"content": json.dumps(
+            {"claims": [{"id": 0, "verdict": "supported"}]})})()})()]
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    return R()
+
+    monkeypatch.setattr(cc, "_client", lambda checker, t: Client())
+    cfg = {**CC, "checkers": [{**CC["checkers"][0], "input_per_1m": 1.0, "output_per_1m": 2.0}]}
+    rows = []
+    tok = cc.USAGE.set(rows)
+    try:
+        text, _ = cc.check_answer("Faster [1].", SRC, cfg)
+    finally:
+        cc.USAGE.reset(tok)
+    assert text == "Faster [1]." and rows == [{"checker": rows[0]["checker"], "tokens": 1500, "cost_usd": 0.002}]
+    assert cc.check_answer("Faster [1].", SRC, cfg)[0] == "Faster [1]."  # no channel set: unchanged

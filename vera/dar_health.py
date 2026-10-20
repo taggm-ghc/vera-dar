@@ -156,21 +156,36 @@ def _compute(env, engine_factory) -> tuple[dict, float]:
     return _result("ready", routing, mig, stored, counts, False, "ok"), ttl
 
 
-def dar_readiness(env=None, engine_factory=None, now=None, force: bool = False) -> dict:
+def _fulldoc_status() -> dict:
+    """C-3/S8: codes and counts only (fulldoc_corpus.readiness never raises). Evaluated per call, not cached here.
+    Attached only by the authenticated /health/dar handler (never by public /health: amplification)."""
+    try:
+        from vera import fulldoc_corpus  # lazy
+        return fulldoc_corpus.readiness()
+    except Exception:  # noqa: BLE001
+        return {"enabled": False, "bundle_configured": False, "status": "error", "n_acquired": 0, "n_unusable": 0,
+                "pins_ok": None, "source": "bundle"}
+
+
+def _with_fd(value: dict, include: bool) -> dict:
+    return {**value, "fulldoc": _fulldoc_status()} if include else dict(value)
+
+
+def dar_readiness(env=None, engine_factory=None, now=None, force: bool = False, include_fulldoc: bool = True) -> dict:
     """Readiness dict (codes and counts only). Cached for the configured TTL; never raises."""
     clock = now or time.monotonic
     try:
         with _LOCK:
             hit = _CACHE.get("value")
             if hit is not None and not force and clock() - _CACHE["at"] < _CACHE["ttl"]:
-                return dict(hit)
+                return _with_fd(hit, include_fulldoc)
         value, ttl = _compute(env, engine_factory)
         with _LOCK:
             _CACHE.update(value=value, at=clock(), ttl=ttl)
-        return dict(value)
+        return _with_fd(value, include_fulldoc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("DAR health error (%s)", type(exc).__name__)
-        return _unknown("health_error")
+        return _with_fd(_unknown("health_error"), include_fulldoc)
 
 
 def cached_readiness(env=None, engine_factory=None) -> dict:
@@ -185,7 +200,7 @@ def cached_readiness(env=None, engine_factory=None) -> dict:
 
                 def _run():
                     try:
-                        dar_readiness(env, engine_factory, force=True)
+                        dar_readiness(env, engine_factory, force=True, include_fulldoc=False)
                     finally:
                         _REFRESHING.clear()
                 threading.Thread(target=_run, daemon=True).start()
@@ -199,7 +214,7 @@ def cached_readiness(env=None, engine_factory=None) -> dict:
 def startup_line(env=None, engine_factory=None) -> str:
     """Log one codes-only line at startup and return it. Never raises."""
     try:
-        r = dar_readiness(env, engine_factory, force=True)
+        r = dar_readiness(env, engine_factory, force=True, include_fulldoc=False)
         c = r["corpus"] or {}
         m = r["migrations"]
         missing = ",".join(k for k in ("007", "006") if m.get(k) is False) or "none"

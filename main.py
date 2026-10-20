@@ -246,6 +246,10 @@ class AskResponse(BaseModel):
     memory_submitted: int = 0  # K1-M1: upper bound of candidates handed to the background writer for this response; not stored rows
     claim_check: dict | None = None  # item #79: how many cited claims were checked, kept, marked or removed
     result_kind: str = "unspecified"  # K2: only "answer" is an evidentiary answer
+    # C-2: response-level disposition (answer | insufficient_evidence | corpus_unusable | reading_list | no_sources |
+    # decline), derived by answer_contract.outcome_for. Differs from claim_check.outcome (the checker's internal
+    # summary). Always serialized; additive.
+    outcome: str = "insufficient_evidence"
     candidates: list[AskCandidate] = []  # K2: reading-list candidates (non-answer kinds only)
     contract: dict | None = None  # K2: {"layers": [...], "fallback": None | token}
     recalled_discovery: list[RecalledNote] = []  # K2 L2: earlier discovery notes (never evidence)
@@ -421,7 +425,7 @@ def health():
 def health_dar():
     """Full DAR readiness (migrations, codes, corpus counts). Behind the same API key as /corpus-summary."""
     try:
-        return dar_health.cached_readiness()
+        return {**dar_health.cached_readiness(), "fulldoc": dar_health._fulldoc_status()}
     except Exception:  # noqa: BLE001
         return {"dar": None, "reason_code": "health_error"}
 
@@ -613,6 +617,8 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         traced_sources=[{"n": i, **{k: t.get(k) for k in ("title", "url", "published")}, "source_type": "traced"}
                         for i, t in enumerate(cache.get("unused") or [], 1)] if is_answer else [],
         result_kind=result.result_kind,
+        outcome=answer_contract.outcome_for(result.result_kind, (result.contract or {}).get("fallback"),
+                                     len(result.candidates or ())),
         candidates=[] if is_answer else list(result.candidates),
         contract=result.contract,
         recalled_discovery=recalled_discovery,
