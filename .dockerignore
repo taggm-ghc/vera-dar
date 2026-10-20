@@ -1,0 +1,35 @@
+# Keep secrets, private notes and dev-only material out of the image (p3m3 item #73).
+.env
+.env.*
+!.env.example
+*-prv
+*-prv.*
+*-prv/
+.git/
+.gitignore
+.venv/
+.venv.*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+.vera-local-url
+.vera-runs/
+*:Zone.Identifier
+
+# Dev, test and offline-pipeline material, not used by main.py or the Streamlit pages.
+requirements-dev.txt
+tests/
+scripts/
+docs/
+db/
+sql/
+tmp/
+anti-pattern/
+opencode.cli/
+deprecated/
+run.sh
+run_demo.sh
+Dockerfile
+.dockerignore

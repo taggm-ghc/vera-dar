@@ -1,0 +1,3 @@
+[client]
+# K3.I: the default page list shows file-derived labels ("streamlit app"); render_nav draws plain ones.
+showSidebarNavigation = false

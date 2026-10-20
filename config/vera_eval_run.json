@@ -1,0 +1,400 @@
+{
+  "status": "VERSIONED",
+  "schema_version": 1,
+  "run_config_version": "3",
+  "created_at": "2026-10-02",
+  "created_by": "goal #2 implementation (plan p3m3/vera-plan-config-single-source.md; D1 option 2, D2 pool, decided by R1 2026-10-02)",
+  "notes": "Versioned companion to the IMMUTABLE config/vera_eval_freeze.json. Every change here is a new run_config_version and a new run fingerprint. success_criteria are read from the freeze file and are never copied here. v2 (2026-10-02): adds the search block (M2 redo, keyless arXiv first route, disclosed seed fallback). v3 (2026-10-04, item #71): search.mode fan_out, search.query_terms (query translation), search.rrf_k, search.openalex (keyless scholarly index); arXiv query shape changes. v3 also adds search.duckduckgo_lite (keyless DISCOVERY-only link finder, item #71 section 7a) and search.max_share. v3 also adds search.doaj (keyless DOAJ article search, item #71 section 10) and a DuckDuckGo per-question cache with daily cap 8 (section 11, R11-b).",
+  "freeze_pin": {
+    "path": "config/vera_eval_freeze.json",
+    "file_sha256": "661400d265e2c17b1f68700f1ae36fd15e2bf4d007947ebdf3eb00f4d8027b49",
+    "line_endings": "sha256 is computed over the file bytes with CRLF normalised to LF and a UTF-8 BOM removed",
+    "requirements_hash16": "637d247a50217128"
+  },
+  "scoring": {
+    "grounding_max_fabricated": 0
+  },
+  "budget": {
+    "cost_usd": 1.0,
+    "latency_s": 600.0,
+    "decided_by": "R1 A4 2026-10-01: $1.00 and 600 s per run"
+  },
+  "generator": {
+    "model": "gpt-4.1-nano"
+  },
+  "judge": {
+    "pool": {
+      "providers": [
+        "groq"
+      ]
+    },
+    "selection": {
+      "rule": "preference-order-v1",
+      "family_preference": [
+        "qwen",
+        "meta-llama",
+        "moonshot",
+        "deepseek",
+        "google",
+        "mistral"
+      ],
+      "max_canary_attempts": 3,
+      "canary_max_tokens": 256,
+      "listing_timeout_s": 15
+    },
+    "family_patterns": {
+      "refuse_openai": [
+        "gpt",
+        "openai"
+      ],
+      "non_chat": [
+        "guard",
+        "whisper",
+        "tts",
+        "embed",
+        "compound",
+        "distill"
+      ],
+      "generic": [
+        [
+          "qwen",
+          "qwen"
+        ],
+        [
+          "llama",
+          "meta-llama"
+        ],
+        [
+          "kimi",
+          "moonshot"
+        ],
+        [
+          "deepseek",
+          "deepseek"
+        ],
+        [
+          "gemma",
+          "google"
+        ],
+        [
+          "mistral",
+          "mistral"
+        ],
+        [
+          "mixtral",
+          "mistral"
+        ]
+      ]
+    },
+    "forbidden_env_overrides": [
+      "VERA_JUDGE_ALLOW_SAME_FAMILY",
+      "VERA_JUDGE_GROQ_MODEL",
+      "VERA_JUDGE_PRICE_IN",
+      "VERA_JUDGE_PRICE_OUT"
+    ]
+  },
+  "model_families": {
+    "gpt-4.1-nano": {
+      "family": "openai",
+      "source": "https://platform.openai.com/docs/models (OpenAI-published model; also config/model-selection.json)"
+    },
+    "openai/gpt-oss-20b": {
+      "family": "openai",
+      "source": "https://console.groq.com/docs/models (OpenAI-published open-weight model hosted on Groq; refused as the generator's family)"
+    },
+    "openai/gpt-oss-120b": {
+      "family": "openai",
+      "source": "https://console.groq.com/docs/models (OpenAI-published open-weight model hosted on Groq; refused as the generator's family)"
+    }
+  },
+  "pipeline": {},
+  "search": {
+    "providers": [
+      "arxiv",
+      "openalex",
+      "doaj",
+      "duckduckgo_lite"
+    ],
+    "mode": "fan_out",
+    "rrf_k": 60,
+    "min_candidates": 5,
+    "fallback_seed": {
+      "path": null,
+      "sha256": null
+    },
+    "arxiv": {
+      "endpoint": "https://export.arxiv.org/api/query",
+      "min_interval_s": 3.0,
+      "max_concurrency": 1,
+      "max_response_bytes": 2097152,
+      "terms_source": "https://info.arxiv.org/help/api/tou.html (read via research summary 2026-10-02, NOT verbatim; the one-request-per-3s limit is labelled for legacy APIs, re-check at L1)",
+      "query": {
+        "max_terms": 8,
+        "min_term_chars": 2,
+        "operator": "OR",
+        "submitted_from": "2023-01-01",
+        "submitted_to": "2026-12-31"
+      }
+    },
+    "query_terms": {
+      "relax_on_zero": false,
+      "min_term_chars": 2,
+      "max_extra_terms": 8,
+      "stopwords": [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "but",
+        "by",
+        "can",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "has",
+        "have",
+        "how",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "their",
+        "them",
+        "these",
+        "this",
+        "those",
+        "to",
+        "was",
+        "were",
+        "what",
+        "when",
+        "which",
+        "who",
+        "why",
+        "with",
+        "would",
+        "your",
+        "you",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "not",
+        "no",
+        "than",
+        "then",
+        "there",
+        "here",
+        "if",
+        "so",
+        "any",
+        "all",
+        "each",
+        "both",
+        "more",
+        "most",
+        "other",
+        "some",
+        "own",
+        "same",
+        "too",
+        "very",
+        "just",
+        "only",
+        "also",
+        "should",
+        "could",
+        "may",
+        "might",
+        "will",
+        "shall",
+        "over",
+        "under",
+        "between",
+        "among",
+        "across",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "up",
+        "down",
+        "out",
+        "off",
+        "again",
+        "further",
+        "once"
+      ],
+      "meta_words": [
+        "about",
+        "according",
+        "both",
+        "consensus",
+        "differ",
+        "differs",
+        "evidence",
+        "exist",
+        "exists",
+        "explain",
+        "explains",
+        "find",
+        "finding",
+        "findings",
+        "finds",
+        "found",
+        "given",
+        "literature",
+        "particular",
+        "published",
+        "report",
+        "reported",
+        "reports",
+        "research",
+        "researcher",
+        "researchers",
+        "result",
+        "results",
+        "say",
+        "says",
+        "separately",
+        "settled",
+        "show",
+        "showed",
+        "shown",
+        "shows",
+        "specific",
+        "studies",
+        "study",
+        "such",
+        "summarise",
+        "summarize",
+        "use",
+        "used",
+        "using",
+        "what",
+        "whether",
+        "which",
+        "why"
+      ],
+      "core_phrases": [
+        "ai coding assistant",
+        "ai coding tool",
+        "ai assistant",
+        "coding assistant",
+        "ai pair programmer",
+        "github copilot",
+        "copilot",
+        "developer productivity",
+        "code review",
+        "code security",
+        "code quality",
+        "code maintainability",
+        "software vulnerability",
+        "experienced developer",
+        "junior developer",
+        "senior developer",
+        "randomized controlled trial",
+        "controlled experiment",
+        "field study"
+      ]
+    },
+    "openalex": {
+      "endpoint": "https://api.openalex.org/works",
+      "min_interval_s": 1.0,
+      "max_concurrency": 1,
+      "max_response_bytes": 2097152,
+      "daily_search_budget": 90,
+      "snippet_max_chars": 1500,
+      "from_publication_date": "2023-01-01",
+      "to_publication_date": "2026-12-31",
+      "terms_source": "https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication (item #71 plan section 6, R1-a; keyless daily allowance guarded at 90 searches per process-day)"
+    },
+    "doaj": {
+      "enabled": false,
+      "endpoint": "https://doaj.org/api/v4/search/articles",
+      "min_interval_s": 0.6,
+      "max_response_bytes": 2097152,
+      "daily_search_budget": 200,
+      "snippet_max_chars": 1500,
+      "year_from": 2023,
+      "year_to": 2026,
+      "terms_source": "https://doaj.org/api/v4/docs (two requests per second; read by the orchestrator 2026-10-04) and DOAJ terms (article metadata under a CC0 waiver); item #71 plan section 10, R10-a. Keyless; plain terms only (a quoted phrase with AND returned 0 hits in the probe)."
+    },
+    "max_share": {
+      "duckduckgo_lite": 2,
+      "doaj": 1
+    },
+    "duckduckgo_lite": {
+      "enabled": true,
+      "endpoint": "https://lite.duckduckgo.com/lite/",
+      "region": "us-en",
+      "user_agent": "VERA-research-prototype/0.1 (educational; discovery only)",
+      "min_interval_s": 5.0,
+      "max_concurrency": 1,
+      "daily_query_cap": 8,
+      "cache_ttl_hours": 72,
+      "cache_dir": null,
+      "max_response_bytes": 1048576,
+      "max_query_chars": 480,
+      "max_queries_per_question": 2,
+      "site_groups": {
+        "news": [
+          "the-decoder.com",
+          "venturebeat.com",
+          "infoq.com",
+          "thenewstack.io",
+          "axios.com",
+          "theinformation.com",
+          "spectrum.ieee.org",
+          "technologyreview.com",
+          "arstechnica.com",
+          "wired.com",
+          "techcrunch.com",
+          "theverge.com",
+          "reuters.com",
+          "apnews.com"
+        ],
+        "portals": [
+          "papers.ssrn.com",
+          "researchgate.net",
+          "sciencedirect.com",
+          "onlinelibrary.wiley.com",
+          "journals.sagepub.com",
+          "nature.com",
+          "academic.oup.com",
+          "cambridge.org",
+          "aisel.aisnet.org",
+          "pubsonline.informs.org",
+          "aclanthology.org",
+          "eurekalert.org",
+          "sciencedaily.com",
+          "nist.gov",
+          "metr.org"
+        ]
+      },
+      "source_class_by_domain": {
+        "metr.org": "independent_research",
+        "github.blog": "vendor_claim",
+        "stackoverflow.blog": "vendor_claim",
+        "research.google": "vendor_claim",
+        "microsoft.com": "vendor_claim"
+      },
+      "terms_source": "https://duckduckgo.com/duckduckgo-help-pages/settings/params and https://duckduckgo.com/acceptable-use (read verbatim by the orchestrator 2026-10-04; item #71 plan section 7a). DISCOVERY ONLY: DuckDuckGo results are used to find source URLs; VERA never displays DuckDuckGo snippets, pages or ranking. Params page says the parameters are intended for individual use; low volume (5 s gate, daily cap); a 202 or challenge page is a failure and is never evaded. Switch off with enabled=false."
+    }
+  }
+}

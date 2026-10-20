@@ -1,0 +1,20 @@
+{
+  "schema": "vera-support-labels-v1",
+  "labeller": "opus subagent, blind to heuristic output",
+  "items": [
+    {"trace": "q01", "idx": 0, "label": "supported", "reason": "Each topic description matches its cited abstract: AI predictions/decisions, OpenAI ethics, GenIR, private assistants, decision support."},
+    {"trace": "q02", "idx": 0, "label": "supported", "reason": "RCT abstract states AI increased completion time by 19%, contradicting forecasts, for experienced developers."},
+    {"trace": "q02", "idx": 1, "label": "supported", "reason": "Abstract: productivity increases after Copilot, primarily driven by less-experienced (peripheral) developers."},
+    {"trace": "q02", "idx": 2, "label": "supported", "reason": "[2] shows slowdown in mature projects; [1] shows 19% drop in core developers' original output."},
+    {"trace": "q04", "idx": 0, "label": "supported", "reason": "Review reports benefits (accelerated development, automation) and unresolved, context-dependent code-quality outcomes."},
+    {"trace": "q04", "idx": 1, "label": "supported", "reason": "[2] studies LLM self-reported versus behavioural altruism, not developer productivity; description accurate."},
+    {"trace": "q14", "idx": 0, "label": "supported", "reason": "Review: majority report benefits; gains include accelerated development, minimized code search, automating trivial tasks."},
+    {"trace": "q15", "idx": 0, "label": "supported", "reason": "Abstract: novices struggle between over-reliance and avoidance; seniors steer via instincts, keep control, mentor."},
+    {"trace": "q15", "idx": 1, "label": "partially", "reason": "Policies constrain agency is supported; 'especially novices' and seniors integrating AI more effectively are added."},
+    {"trace": "q15", "idx": 2, "label": "partially", "reason": "Teacher versus colleague/generator roles supported; learning-goal and productivity-leveraging motives are not in abstract."},
+    {"trace": "q15", "idx": 3, "label": "partially", "reason": "Sources study agency and perceptions, not benefit; [4] says experience does not predict adoption."},
+    {"trace": "q20", "idx": 0, "label": "supported", "reason": "Abstract reports notable EEG versus self-report discrepancies and effort not captured by self-report."},
+    {"trace": "q27", "idx": 0, "label": "supported", "reason": "Abstract: neural data can modestly improve performance and robustness, benefit depending on alignment and sample size."},
+    {"trace": "q28", "idx": 0, "label": "supported", "reason": "Topic descriptions match each abstract: decision-making, OpenAI ethics/governance, GenIR, governance gaps, research ethics."}
+  ]
+}

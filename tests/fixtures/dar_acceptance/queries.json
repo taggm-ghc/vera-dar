@@ -1,0 +1,50 @@
+[
+ {
+  "query_id": "q_D1",
+  "query": "How well do ensemble forecasts and nowcasts handle reporting delays when estimating Rt for hospital admissions?",
+  "expect_doc_ids": [
+   "D1-1",
+   "D1-2",
+   "D1-3",
+   "D3-1",
+   "D2-2"
+  ],
+  "purpose": "single-domain retrieval for epidemiology forecasting"
+ },
+ {
+  "query_id": "q_D4",
+  "query": "Do phenology-informed species distribution forecasts predict range shifts better than static habitat suitability models?",
+  "expect_doc_ids": [
+   "E-1",
+   "D2-3",
+   "D2-1",
+   "D1-2",
+   "D3-3"
+  ],
+  "purpose": "answerable only after eco1.json is ingested; tests a domain forming/updating from a late document"
+ },
+ {
+  "query_id": "q_cross_D1_D3",
+  "query": "How should epidemic forecasting code and surveillance data versions be recorded so a forecast can be reproduced?",
+  "expect_doc_ids": [
+   "D3-1",
+   "D1-1",
+   "D1-3",
+   "D3-2",
+   "D1-2"
+  ],
+  "purpose": "cross-domain D1 and D3 via the reproducible epidemic forecasting code paragraph"
+ },
+ {
+  "query_id": "q_cross_D2_D4",
+  "query": "How do climate projections and downscaled temperature drive forecasts of species habitat and phenology under uncertainty?",
+  "expect_doc_ids": [
+   "E-1",
+   "D2-1",
+   "D2-3",
+   "D2-2",
+   "D1-2"
+  ],
+  "purpose": "cross-domain D2 and D4; requires eco1.json ingested"
+ }
+]

@@ -1,0 +1,12 @@
+{
+  "_doc": "R1 licence rule (2026-10-03, approved 2026-10-04; item 72 W4). Reject ONLY: ND, no-educational-use, fee-only. Plain NC is accepted. Missing/unknown licence is held (defer). Detection is by the DECLARED licence id/url and the known markers below only; text inside a page is not scanned. Matching is case-insensitive on tokens split at non-alphanumerics; multi-word markers match as contiguous token runs.",
+  "nd_tokens": ["nd", "noderivs", "noderivatives", "noderivative"],
+  "no_educational_use_markers": [
+    "no educational use", "not for educational use", "educational use prohibited",
+    "educational use not permitted", "educational use not allowed", "no teaching use"
+  ],
+  "fee_only_markers": [
+    "fee only", "paid only", "paywalled", "subscription required", "subscribers only",
+    "purchase required", "pay per view", "for fee only", "strictly for fee"
+  ]
+}

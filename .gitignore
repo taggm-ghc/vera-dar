@@ -1,0 +1,107 @@
+# Python virtual environment
+.venv/
+.venv.*/
+venv/
+
+# Environment files: never commit real ones; only blank templates (*.example, *.template, *.sample, *.dist).
+.env*
+!.env*.example
+!.env*.template
+!.env*.sample
+!.env*.dist
+
+# anti-pattern
+anti-pattern/
+
+# Syllabus / documentation (track but no secrets)
+syllabus/
+
+# Opencode CLI notes
+opencode.cli/
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Local server logs / scratch
+*.log
+.vera-local-url
+
+# Windows "mark of the web" alternate-data-stream cruft (WSL)
+*:Zone.Identifier
+
+# Private / non-published material (anything marked *-prv)
+*-prv.*
+*-prv/
+
+# Deprecated code kept for reference only — never shipped
+deprecated/
+
+# VERA-DAR slim live MVP runner: per-run reports and the register (never commit)
+.vera-runs/
+
+# Item #70 raw trace captures hold full arXiv abstracts; never committed.
+tmp/trace_eval/
+tmp/search_eval/
+tmp/search_cache/
+# Item #72 W1 scope-router measurements (per-item decisions); never committed.
+tmp/scope_eval/
+
+# Personal social posts (LinkedIn etc.), drafts or final, are never committed (R1, 2026-10-05).
+*linkedin-post*
+*linkedin*post*.md
+*build-in-public-post*.md
+*maven-post*.md
+
+# Local scratch folders: never commit (R1 2026-10-07)
+tmp/
+temp/
+
+# ===== Added for the public taggm-ghc/vera-dar repository (ON-1020-P1 export) =====
+# Secrets and local configuration
+*.local
+secrets.toml
+*.pem
+*.key
+settings.local.json
+mcp-registry.json
+# Agent tool settings and private workspace material: never in this repo
+.claude/
+records/
+work/
+archive/
+RELAUNCH.md
+*todo-digest*
+*TODO-DIGEST*
+*maven-post*
+*post-draft*
+*research-findings*
+# Evaluation material withheld from the public repo (held-out split and its traces, calibration, probes)
+*held-out*
+*heldout*
+*held_out*
+*sealed*
+*calset*
+config/trace_questions_v1.json
+eval_results/trace_eval_v1.json
+eval_results/grounded_ask_v1.json
+docs/trace_eval/open_coding_*.md
+docs/trace_eval/retrieval_diagnosis_*.md
+# Data and binary artefacts, tool caches
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+*.fossil
+*.bundle
+search_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+scratchpad/
+*.bak
+*.bak-*
+*.orig
+*.rej

@@ -1,0 +1,14 @@
+[
+ {
+  "doc_id": "X-1",
+  "title": "Climate-Driven Epidemic Forecasting: Projections, Nowcasts and Reproducible Code",
+  "url": "https://fixtures.invalid/x-1",
+  "doi": "10.0000/demo.11",
+  "year": 2026,
+  "source_type": "journal_article",
+  "stored_text_kind": "full_text",
+  "admission_passed": true,
+  "content": "Seasonal respiratory epidemics are forecast with ensembles of nowcasts and short-term models, and the effective reproduction number Rt is estimated from reported hospital admissions that arrive with delays. This synthetic study asks how a changing climate alters the inputs of such epidemic forecasting systems, and how the forecasts can be documented so that others can reproduce them.\n\nEnsemble forecasts of weekly hospital admissions were produced with a renewal equation for Rt and a nowcast that corrects for reporting delays. Forecast skill declined as the horizon lengthened, and the epidemic forecast ensemble outperformed the baseline at the two-week horizon. Surveillance data on influenza-like illness were revised several times after first release, and every revision changed the nowcast and the estimate of Rt.\n\nClimate projections from a CMIP ensemble were downscaled and bias corrected with quantile mapping to obtain regional temperature and humidity scenarios for the coming decades. The spread of the projection ensemble remained large after downscaling, and scenario uncertainty dominated the climate projection at long horizons. Bias correction of temperature and precipitation changed the projected seasonal humidity that drives transmission of respiratory infection.\n\nReproducible forecasting code is essential for climate-driven disease forecasting because the forecast depends on versions of surveillance data, downscaled climate projection files and the exact code commit. We recorded the container image, the surveillance data version, the climate projection scenario and the random seed for every epidemic forecast, and we archived this provenance with the weekly forecast so that a reader can reproduce it.\n\nCommunicating forecast uncertainty to decision makers matters for both the epidemic forecast and the climate projection. Ranges from the ensemble should be shown together with the scenario and the provenance of the code and data, and users should be told that a climate projection of humidity is conditional on emissions scenarios while a hospital admissions forecast is conditional on reporting delays and nowcast revisions.",
+  "fixture_domain": "D1+D2 (cross-subject, synthetic; written for the owner acceptance test)"
+ }
+]

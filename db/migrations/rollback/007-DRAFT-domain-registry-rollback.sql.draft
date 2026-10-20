@@ -1,0 +1,10 @@
+-- 007_vera_domain_registry ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the domain registry and every association in it.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (N-1); rename only at Approval 1 with an owner-approved applier fix.
+-- Requires R1's separate, same-turn approval and an admin account, on an isolated DB only. Run only after an export of the three tables.
+-- Never run via db/apply_migrations.py (its --dry-run executes on production; HZ-DAR-1).
+-- Non-destructive rollback is: set the domain-retrieval flag off, then REVOKE INSERT from the writer roles.
+-- Junction tables are dropped first because their FKs are ON DELETE RESTRICT.
+
+DROP TABLE IF EXISTS vera_vjay.domain_chunks;
+DROP TABLE IF EXISTS vera_vjay.domain_corpus;
+DROP TABLE IF EXISTS vera_vjay.research_domains;

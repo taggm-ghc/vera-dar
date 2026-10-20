@@ -1,0 +1,29 @@
+{
+  "note": "K2 answer contract (plan-K2-contract.md r2). Run-time switches and texts for the reading-list / discovery result. L1 (generated synthesis) is STRETCH and stays off unless its calibration note exists. discovery_memory.write_on_l0 follows owner rulings OD-K15d: a non-evidentiary discovery note on qualifying reading-list results, subject to validation and owner confirmation.",
+  "layers": ["L0"],
+  "texts": {
+    "not_read_line": "VERA-DAR has not acquired or read these full documents. This is a discovery result, not an evidence-grounded answer.",
+    "not_read_line_partial": "VERA-DAR has not acquired or read these full documents, except those marked 'full document acquired'. This is a discovery result, not an evidence-grounded answer.",
+    "representation_not_acquired": "index record or abstract; full document not acquired",
+    "representation_acquired": "full document acquired",
+    "no_sources_fallback": "VERA-DAR could not find published sources for this question right now, so it has not answered from memory. Please try again shortly or rephrase the question.",
+    "note_prefix": "Discovery note (not evidence). ",
+    "note_template": "For topic {topic}, VERA-DAR identified candidates {candidates} as discovery material. Their full contents were not verified.",
+    "discovery_note_submitted": "Discovery notes are submitted, and those that pass wait for owner review.",
+    "evidence_findings_submitted": "Findings are submitted, and those that pass wait for owner review.",
+    "recalled_note_caption": "Earlier reading-list note. VERA-DAR has not read these documents; this is not evidence."
+  },
+  "acquisition": {
+    "non_document_text_kinds": ["abstract_metadata", "abstract", "snippet", "metadata", "index_record"]
+  },
+  "memory": {
+    "evidence_recall_enabled": false
+  },
+  "discovery_memory": {
+    "write_on_l0": true,
+    "max_per_answer": 1,
+    "max_candidates": 3,
+    "max_note_chars": 600,
+    "note": "write_on_l0 is a note, not a finding: OD-K15d, owner confirmation required; 5.A-2 stays PARTIAL/UNVERIFIED (OD-K15a)."
+  }
+}

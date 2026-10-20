@@ -1,0 +1,10 @@
+# Dev-only tooling — not needed by the deployed app (main.py/streamlit_app.py).
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+#
+# Required by scripts/capture_openai_pricing.py (human-verification
+# screenshot capture for the pricing page). Also run scripts/chromium-deps.sh
+# and `playwright install chromium` after installing this.
+playwright==1.62.0
+
+# Test runner (tests are dev-only; the deployed image does not need it)
+pytest==9.1.1

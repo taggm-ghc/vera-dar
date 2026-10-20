@@ -1,0 +1,20 @@
+{
+  "enable_env": "VERA_UI_AUTOSTART_API",
+  "health_path": "/health",
+  "argv_tail": ["-m", "uvicorn", "main:app"],
+  "bind_host": "127.0.0.1",
+  "env_allowlist": ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "VERA_PUBLIC_MODE", "VERA_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "VERA_COST_LOG", "VERA_ENV_CONTEXT", "CLAUDECODE", "AI_AGENT"],
+  "max_polls": 10,
+  "max_wait_s": 20.0,
+  "backoff_initial_s": 0.5,
+  "backoff_factor": 2.0,
+  "backoff_max_s": 4.0,
+  "health_timeout_s": 2.0,
+  "run_dir": "tmp",
+  "lock_file": "api_kickstart.lock",
+  "pid_file": "api_kickstart.pid",
+  "log_file": "api_kickstart.log",
+  "failed_file": "api_kickstart.failed",
+  "autostart_allowed_contexts": ["local_dev", "agent"],
+  "_autostart_allowed_contexts_note": "List of env_precedence contexts allowed to auto-start the API, or null = not enforced. Set to [local_dev, agent] per owner decision OD-DARINT-AGENTDEV (2026-10-18; hold under OD-DARINT-ENVWIRE lifted): agent-started children load .env under agent_explicit, which never yields VERA_OWNER_KEY or DB URLs. An unresolvable context still refuses."
+}

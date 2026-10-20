@@ -1,0 +1,32 @@
+{
+  "status": "FROZEN",
+  "frozen_at": "2026-10-01T06:25:41Z",
+  "frozen_by": "263735823+taggm-ghc@users.noreply.github.com",
+  "question": "What does published evidence (2023–2026) show about AI coding assistants' effect on developer productivity, and why do the findings disagree?",
+  "success_criteria": {
+    "relevance_threshold": 0.60,
+    "relevance_improvement_pp": 15,
+    "grounding_threshold": 0.90,
+    "reasoning_threshold": 4,
+    "reasoning_objections_improvement": 2,
+    "auditability_threshold": 4,
+    "cost_latency_threshold": 3
+  },
+  "requirements": [
+    {"id": "req_rct", "text": "Reports controlled-experiment (RCT) evidence on task speed or output with AI coding assistants, with direction and size of effect."},
+    {"id": "req_slowdown", "text": "Includes evidence that experienced developers working on familiar, mature codebases were NOT sped up or were slowed down."},
+    {"id": "req_field", "text": "Reports field, telemetry, or organisation-level observational evidence from real development settings."},
+    {"id": "req_quality", "text": "Addresses effects on code quality, defects, security, or maintainability, not only speed."},
+    {"id": "req_perception", "text": "Distinguishes perceived/self-reported productivity from measured productivity."},
+    {"id": "req_moderators", "text": "Identifies moderators of the effect (developer experience, task type, codebase familiarity/size)."},
+    {"id": "req_measurement", "text": "Explains how differences in outcome measures and study design (task completion time, PR throughput, surveys) drive disagreement."},
+    {"id": "req_limits", "text": "States limitations or uncertainty of the evidence (sample size, short duration, rapid tool change, vendor funding)."}
+  ],
+  "objections": [
+    {"id": "obj_vendor", "text": "Many favourable results come from vendor-affiliated or vendor-funded studies."},
+    {"id": "obj_generalise", "text": "Results from small or synthetic tasks do not generalise to large real-world codebases."},
+    {"id": "obj_perception", "text": "Self-reported speedups are unreliable; developers can feel faster while being measurably slower."},
+    {"id": "obj_tool_drift", "text": "Findings about older tools/models may not apply to current ones because capability changes quickly."},
+    {"id": "obj_quality_cost", "text": "Speed gains may be offset by downstream costs in review, defects, or maintenance."}
+  ]
+}

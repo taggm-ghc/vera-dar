@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "_doc": "PRB-DARINT-002 deterministic .env* precedence, read by vera/env_precedence.py. Paths are relative to ENV_DIR (R/config/env). There is no upward search. PLAN-ENV v2.1 1.3 (C3/OR-3): in local_dev the inherited STRIP names are removed first and the file wins over the inherited env; overrides are logged by NAME only. Decision tree: kraken-DARINT/problems/PRB-DARINT-002-env-precedence.md.",
+  "parser_version": "1.2.2",
+  "context_var": "VERA_ENV_CONTEXT",
+  "render_signal": {"var": "RENDER", "value": "true", "context": "production"},
+  "test_markers": ["VERA_TEST_RUNNER", "VERA_TEST_BOUNDARY_CHILD"],
+  "test_modules": ["tests.vera_test_boundary"],
+  "test_context": "test",
+  "agent_markers": ["CLAUDECODE", "AI_AGENT"],
+  "agent_context": "agent",
+  "agent_may_select": ["agent", "test", "production", "local_dev"],
+  "agent_explicit": {
+    "_doc": "OD-DARINT-AGENTDEV (2026-10-18): an agent may select local_dev explicitly (selected_by=agent_explicit). Only these files load, and these names are skipped by name: never the owner key, never DB URLs from files.",
+    "files": [".env-vera"],
+    "excluded_names": ["VERA_OWNER_KEY", "EXTERNAL_DB_URL", "INTERNAL_DB_URL", "VERA_DB_URL_*", "DATABASE_URL", "PG*", "*DB_URL*"]
+  },
+  "agent_process_env": {
+    "_doc": "D-DARINT-036 (2026-10-18): when an agent marker is present, these inherited process-env names are REMOVED by load_env (audited by name). keep = the owner's standing agent DB capabilities (RO/WO), never stripped.",
+    "strip": ["VERA_OWNER_KEY", "*DB_URL*", "DATABASE_URL", "PG*"],
+    "keep": ["VERA_DB_URL_RO", "VERA_DB_URL_WO"]
+  },
+  "default_context": "local_dev",
+  "contexts": {
+    "production": {"files": []},
+    "test": {"files": []},
+    "agent": {"files": []},
+    "local_dev": {"files": [{"path": ".env-vera", "required": true}]}
+  },
+  "precedence": {
+    "cross_file_conflict": "first_wins",
+    "duplicate_key_in_file": "error",
+    "interpolate": false
+  },
+  "file_limits": {"max_bytes": 65536, "deny_group_other_write": true, "require_owner_euid": true},
+  "file_denied_names": ["RENDER*", "VERA_ENV_CONTEXT", "VERA_TEST_*", "CLAUDECODE", "CLAUDE_*", "AI_AGENT", "PATH", "HOME", "PYTHON*", "LD_*", "VIRTUAL_ENV",
+                        "SSL_CERT_*", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "HTTP*_PROXY", "ALL_PROXY", "NO_PROXY",
+                        "PG*", "KRB5*", "GSS*", "DB_ADMIN_*", "*_DBADMIN*", "VERA_DB_URL_ADMIN", "VERA_MIGRATE_PRODUCTION"],
+  "restricted_keys": {
+    "patterns": ["*DB_URL*", "DATABASE_URL", "PG*"],
+    "require_explicit_context": true,
+    "allowed": {
+      "local_dev": {".env-vera": ["EXTERNAL_DB_URL", "VERA_DB_URL_RO", "VERA_DB_URL_WO", "VERA_DB_URL_RW"]}
+    }
+  }
+}

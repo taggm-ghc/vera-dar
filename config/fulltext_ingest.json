@@ -1,0 +1,362 @@
+{
+  "_doc": "DARINT G1/G2/G5 full-text ingest (vera/fulltext_loader.py, vera/jats_text.py, scripts/ingest_fulltext.py). Every kind, filter and limit used by the loader lives here; nothing is hard-coded. Env var NAMES only (values are never read except to build engines, and never printed). domain_hint in a manifest is informational and is never read by the loader.",
+  "_calibration_note": "min_fulltext_chars and min_body_to_abstract_ratio are uncalibrated placeholders chosen to separate an abstract (typically 1-3k chars) from a full article (typically 20k+ chars); calibrate on the nine fetched demo texts before the production run (threshold calibration rule).",
+  "stored_text_kind": "full_text",
+  "accepted_formats": [
+    "jats-xml",
+    "html"
+  ],
+  "min_fulltext_chars": 8000,
+  "min_body_chars": 4000,
+  "min_body_to_abstract_ratio": 2.0,
+  "max_docs_default": 9,
+  "max_docs_ceiling": 50,
+  "max_text_bytes": 5000000,
+  "required_item_fields": [
+    "document_id",
+    "title",
+    "doi",
+    "landing_url",
+    "fulltext_url",
+    "fulltext_format",
+    "text_file",
+    "licence",
+    "licence_url",
+    "authors",
+    "published_year",
+    "fetched_at",
+    "verifier_status",
+    "read_status"
+  ],
+  "placeholder_pattern": "(?i)\\(.*\\bto confirm\\b.*\\)|^\\s*$|\\bTBD\\b|\\bplaceholder\\b",
+  "doi_pattern": "^10\\.\\d{4,9}/[^\\s]+$",
+  "verified_status": "VERIFIED",
+  "verbatim_read_statuses": [
+    "VERBATIM"
+  ],
+  "admitted_by": "demo-corpus manifest (DARINT G1)",
+  "question_text": "VERA stored corpus: curated full-text demo documents (DARINT)",
+  "db_url_env_wo": "VERA_DB_URL_WO",
+  "db_url_env_ro": "VERA_DB_URL_RO",
+  "candidate": {
+    "gate_a_decision": null,
+    "fetch_status": "fetched",
+    "rationale_prefix": "Curated full-text manifest item (DARINT G1). Gate A not applied: query fit is an /ask-time gate and does not apply to a curated list (accepted divergence, INGEST-PLAN s4); gate_a_decision left NULL."
+  },
+  "reason_codes": {
+    "missing_field": "R-FIELD",
+    "placeholder": "R-PLACEHOLDER",
+    "bad_doi": "R-DOI",
+    "not_verified": "R-VERIFIER",
+    "not_verbatim": "R-READ",
+    "bad_format": "R-FORMAT",
+    "non_document_kind": "R-KIND",
+    "text_missing": "R-TEXT",
+    "text_hash": "R-HASH",
+    "too_short": "R-SHORT",
+    "abstract_only": "R-ABSTRACT",
+    "licence_reject": "R-LIC-REJECT",
+    "licence_hold": "R-LIC-HOLD",
+    "licence_mismatch": "R-LIC-MISMATCH",
+    "conversion": "R-CONVERT",
+    "too_large": "R-LARGE",
+    "bad_url": "R-URL"
+  },
+  "dar": {
+    "enable_for_ingest": true,
+    "required_tables": [
+      "research_domains",
+      "domain_corpus",
+      "domain_chunks"
+    ],
+    "_note": "DarCorpus.ingest_document is a no-op unless the routing config's `enabled` is true. The loader deep-copies config/domain_routing.json and sets enabled=true on that copy, in the ingest CLI process only; the file, admission_hook_enabled and stored_branch_enabled are never changed. Domain thresholds are uncalibrated: the production write of domain rows is an owner-gated step after a real-data dry run (OWNER-RUNBOOK).",
+    "write_tables": [
+      "evidence_spans",
+      "research_domains",
+      "domain_corpus",
+      "domain_chunks"
+    ]
+  },
+  "converter": {
+    "max_raw_bytes": 20000000,
+    "prolog_scan_chars": 65536,
+    "min_expat_version": [
+      2,
+      4,
+      1
+    ],
+    "formula_placeholder": "[formula]",
+    "table_cell_separator": "|",
+    "licence_statement_chars": 400,
+    "reference_text_chars": 400,
+    "jats_drop": [
+      "ref-list",
+      "graphic",
+      "inline-graphic",
+      "media",
+      "alternatives-graphic",
+      "object-id",
+      "tex-math",
+      "processing-meta",
+      "script",
+      "style",
+      "ref-html"
+    ],
+    "jats_block": [
+      "p",
+      "title",
+      "list",
+      "list-item",
+      "def-list",
+      "def-item",
+      "fig",
+      "table-wrap",
+      "caption",
+      "disp-quote",
+      "boxed-text",
+      "statement",
+      "table",
+      "thead",
+      "tbody",
+      "verse-group",
+      "fn",
+      "label",
+      "supplementary-material"
+    ],
+    "jats_citation_ref_types": [
+      "bibr"
+    ],
+    "abstract_titles": {
+      "": "Abstract",
+      "summary": "Author summary",
+      "author-summary": "Author summary",
+      "executive-summary": "Executive summary"
+    },
+    "back_keep": [
+      "ack",
+      "app-group",
+      "app",
+      "sec"
+    ],
+    "back_titles": {
+      "ack": "Acknowledgments",
+      "app-group": "Appendix",
+      "app": "Appendix"
+    },
+    "html_skip": [
+      "script",
+      "style",
+      "nav",
+      "header",
+      "footer",
+      "noscript",
+      "form",
+      "aside",
+      "button",
+      "svg",
+      "template",
+      "iframe",
+      "head"
+    ],
+    "html_block": [
+      "p",
+      "div",
+      "li",
+      "ul",
+      "ol",
+      "table",
+      "tr",
+      "blockquote",
+      "figure",
+      "figcaption",
+      "section",
+      "article",
+      "pre",
+      "dd",
+      "dt"
+    ],
+    "references_headings": [
+      "references",
+      "bibliography",
+      "literature cited",
+      "works cited",
+      "reference list"
+    ],
+    "abstract_headings": [
+      "abstract",
+      "author summary",
+      "summary"
+    ],
+    "max_element_depth": 200,
+    "jats_elements": {
+      "_note": "JATS tag names given special handling. Structural names used for metadata lookup (article, front, article-meta, journal-meta, body, back, ref-list, ref, label, title, contrib, name parts, pub-date, license) stay in code: they are fixed by the JATS standard (proposed accepted divergence, DARINT-FT-AD1).",
+      "formula": [
+        "inline-formula",
+        "disp-formula"
+      ],
+      "display_formula": [
+        "disp-formula"
+      ],
+      "citation": "xref",
+      "section": "sec",
+      "table_row": [
+        "tr"
+      ]
+    },
+    "html_void": [
+      "br",
+      "img",
+      "hr",
+      "input",
+      "meta",
+      "link",
+      "wbr",
+      "source",
+      "area",
+      "col",
+      "embed",
+      "param",
+      "track",
+      "base"
+    ],
+    "html_line_break": [
+      "br"
+    ],
+    "html_body_containers": [
+      "body",
+      "article",
+      "main"
+    ],
+    "html_licence_rel": "license",
+    "html_meta_names": {
+      "title": [
+        "citation_title"
+      ],
+      "authors": [
+        "citation_author"
+      ],
+      "doi": [
+        "citation_doi"
+      ],
+      "journal": [
+        "citation_journal_title"
+      ],
+      "year": [
+        "citation_publication_date",
+        "citation_date"
+      ],
+      "licence": [
+        "dc.rights",
+        "dcterms.rights",
+        "dc.license",
+        "citation_license"
+      ]
+    },
+    "html_implicit_close": {
+      "_note": "open tag on the stack top -> start tags that close it implicitly (HTML parsing rules, subset)",
+      "p": [
+        "p",
+        "div",
+        "ul",
+        "ol",
+        "dl",
+        "table",
+        "section",
+        "article",
+        "aside",
+        "blockquote",
+        "figure",
+        "form",
+        "header",
+        "footer",
+        "nav",
+        "main",
+        "pre",
+        "hr",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "address",
+        "fieldset",
+        "details",
+        "menu"
+      ],
+      "li": [
+        "li"
+      ],
+      "dt": [
+        "dt",
+        "dd"
+      ],
+      "dd": [
+        "dt",
+        "dd"
+      ],
+      "td": [
+        "td",
+        "th",
+        "tr"
+      ],
+      "th": [
+        "td",
+        "th",
+        "tr"
+      ],
+      "tr": [
+        "tr"
+      ],
+      "option": [
+        "option",
+        "optgroup"
+      ],
+      "thead": [
+        "tbody",
+        "tfoot"
+      ],
+      "tbody": [
+        "tbody",
+        "tfoot"
+      ]
+    },
+    "author_year_citations": {
+      "_note": "used only when a JATS document has no xref citations (Copernicus marks none); a match needs exactly one reference with that first-author surname and year",
+      "enabled": true,
+      "pattern": "(?P<surname>[^\\W\\d_][^\\W\\d_'\\u2019\\-]*)(?:\\s+et\\s+al\\.?|\\s+(?:and|&)\\s+[^\\W\\d_][^\\W\\d_'\\u2019\\-]*)?(?:,\\s*|\\s+\\(\\s*|\\s+)(?P<year>(?:19|20)\\d\\d[a-z]?)\\b",
+      "reference_year_pattern": "(?:19|20)\\d\\d[a-z]?"
+    },
+    "jats_wrapper_roots": [
+      "pmc-articleset"
+    ],
+    "reference_elements": [
+      "ref"
+    ]
+  },
+  "source_type": "journal_article",
+  "format_extensions": {
+    "jats-xml": ".xml",
+    "html": ".html"
+  },
+  "url_pattern": "^https://[A-Za-z0-9.-]+\\.[A-Za-z]{2,}(/[^\\s]*)?$",
+  "url_fields": [
+    "landing_url",
+    "fulltext_url",
+    "licence_url"
+  ],
+  "cc_licence_patterns": {
+    "url": "licenses/([a-z\\-]+)/(\\d(?:\\.\\d)?)",
+    "id": "\\bcc[\\s\\-]+([a-z][a-z\\-\\s]*?)[\\s\\-]+(\\d(?:\\.\\d)?)\\b"
+  },
+  "write_tables": [
+    "questions",
+    "runs",
+    "candidates",
+    "canonical_sources",
+    "sources"
+  ],
+  "licence_observations_enabled": true,
+  "licence_observation_table": "licence_observations",
+  "_licence_observations_note": "item #97 parity with /ask admission: two append-only rows per stored document (metadata, content) in the document's transaction; needs migration 006 in production (checked before any write)."
+}

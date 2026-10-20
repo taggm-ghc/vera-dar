@@ -1,0 +1,20 @@
+{
+  "_comment": "Item #91 per-document semantic-space model (R1 decision 11, 2026-10-10: per-document, mixed config = per-document space blended with the status-quo recall by a support weight). Every numeric value is a STARTING value, not a calibrated one.",
+  "enabled": false,
+  "calibration_status": "UNCALIBRATED",
+  "calibration_note": "none yet: M2 offline measurement on the real corpus (p3m3 item #91 section 2b) has not run as of 2026-10-10. The loader refuses enabled=true until calibration_status is CALIBRATED and calibration_note names the data and spread seen.",
+  "min_chunks_per_doc": 5,
+  "default_chunk_chars": 400,
+  "min_chunk_chars": 80,
+  "max_components": 3,
+  "covariance_shrinkage": 0.3,
+  "fence_multiplier": 1.5,
+  "bootstrap_refits": 20,
+  "bootstrap_fraction": 0.8,
+  "bootstrap_seed": 91,
+  "stability_floor": 0.5,
+  "fusion": "linear",
+  "rrf_k": 60,
+  "grade_scores": {"inside": 1.0, "bordering": 0.5, "outside": 0.0, "undefined": 0.0},
+  "question_aggregate": "best"
+}

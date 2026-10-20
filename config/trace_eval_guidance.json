@@ -1,0 +1,11 @@
+{
+  "description": "Thresholds for the Trace Eval page's decision guidance (vera/trace_eval/guidance.py). Every statement on the page is computed from the results and validation files with these values; none is a fixed conclusion.",
+  "baseline_variant": "baseline",
+  "alpha": 0.05,
+  "small_n": 6,
+  "trust": {
+    "reliable_min_tpr": 0.9,
+    "reliable_min_tnr": 0.9,
+    "unusable_max_tpr": 0.5
+  }
+}

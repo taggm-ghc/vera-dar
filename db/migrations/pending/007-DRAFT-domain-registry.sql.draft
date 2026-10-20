@@ -1,0 +1,92 @@
+-- 007_vera_domain_registry.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (N-1); rename only at Approval 1 with an owner-approved applier fix.
+-- VERA-DAR pre-stage DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- Pending owner Approval 1 (same-turn, R1) and an ISOLATED DB (none exists yet, OD-K17bu). Never run via
+-- db/apply_migrations.py in any mode: its --dry-run executes DDL on the production admin engine, then rolls back (HZ-DAR-1).
+-- Requires owner Approval 1 and an isolated DB (none exists: OD-K17bu); never run against the production database.
+-- Additive and idempotent; ADMIN-RUN ONLY. Domain labels are routing metadata only; they never admit a source (OD-K17bw, packet section 9).
+-- Writers get INSERT only; readers get SELECT only. UPDATE/DELETE/TRUNCATE are not granted.
+-- Rollback (destructive, separate approval): db/migrations/rollback/007-DRAFT-domain-registry-rollback.sql.draft
+-- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file (007).
+-- FAIL CLOSED: if vera_vjay_wo or vera_vjay_ro is missing, the preflight below raises before any DDL; run with psql -1 (single
+-- transaction) or ON_ERROR_STOP so nothing is created. vera_vjay_rw is optional: a NOTICE is emitted and its grant is skipped.
+
+\set ON_ERROR_STOP on
+-- psql meta-command: a plain `psql -f` stops at the first error (so a failed preflight cannot be followed by DDL). Not valid for non-psql drivers.
+
+-- Preflight (fail closed): required roles must exist BEFORE any DDL, else later writes fail with "permission denied".
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_wo')
+     OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_ro') THEN
+    RAISE EXCEPTION '007 requires roles vera_vjay_wo and vera_vjay_ro. Required order: db/accounts/create_vera_accounts.sql, then migrations 001-005, then 007.';
+  END IF;
+  IF to_regclass('vera_vjay.canonical_sources') IS NULL OR to_regclass('vera_vjay.evidence_spans') IS NULL THEN
+    RAISE EXCEPTION '007 requires tables vera_vjay.canonical_sources and vera_vjay.evidence_spans (FK targets). Required order: db/accounts/create_vera_accounts.sql, then migrations 001-005, then 007.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE NOTICE '007: role vera_vjay_rw not found; its grants will be skipped.';
+  END IF;
+END $$;
+
+CREATE SCHEMA IF NOT EXISTS vera_vjay;
+
+CREATE TABLE IF NOT EXISTS vera_vjay.research_domains (
+    domain_id  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name       TEXT NOT NULL CONSTRAINT research_domains_name_chk CHECK (length(btrim(name)) > 0),
+    -- name_norm is written by the Python registry (vera/domain_registry.py normalize_domain_name:
+    -- NFKC, casefold, whitespace collapse). One row per normalized name; the UNIQUE constraint enforces it (RC-5).
+    name_norm  TEXT NOT NULL CONSTRAINT research_domains_name_norm_key UNIQUE
+        CONSTRAINT research_domains_name_norm_chk CHECK (name_norm <> ''),
+    description TEXT NOT NULL DEFAULT '',
+    -- origin mirrors the registry's Domain.origin (vera/domain_registry.py); the set is fixed by the plan (section 0.4.2).
+    origin     TEXT NOT NULL DEFAULT 'manual' CONSTRAINT research_domains_origin_chk
+        CHECK (origin IN ('config','manual','fixture','derived')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Many-to-many: domain <-> canonical source. Global canonical sources are never copied.
+CREATE TABLE IF NOT EXISTS vera_vjay.domain_corpus (
+    domain_id           BIGINT NOT NULL CONSTRAINT domain_corpus_domain_fk
+        REFERENCES vera_vjay.research_domains (domain_id) ON DELETE RESTRICT,
+    canonical_source_id BIGINT NOT NULL CONSTRAINT domain_corpus_canonical_source_fk
+        REFERENCES vera_vjay.canonical_sources (canonical_source_id) ON DELETE RESTRICT,
+    asserted_by         TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, canonical_source_id)   -- composite PK: rejects duplicate associations
+);
+
+-- Reverse lookup: which domains does this canonical source belong to.
+CREATE INDEX IF NOT EXISTS domain_corpus_canonical_source_idx
+    ON vera_vjay.domain_corpus (canonical_source_id, domain_id);
+
+-- Many-to-many: domain <-> evidence span (chunk).
+-- MEMORY PLACEHOLDER SPANS (RC-6; memory_store.py:244-248). WoMemoryStore inserts placeholder whole-source anchors into the
+-- shared evidence_spans table with start_index = 0 and text = the configured memory.store.span_text ("whole abstract",
+-- config/ask-provider-chain.json). These are NOT evidence. Documented exclusion predicate, to be applied by the
+-- writer and by every chunk-branch read (no trigger, no CHECK; HD-DAR-2 decides whether they are labelled at all):
+--     NOT (es.start_index = 0 AND es.text = :span_text)      -- :span_text bound from config, never hard-coded
+CREATE TABLE IF NOT EXISTS vera_vjay.domain_chunks (
+    domain_id  BIGINT NOT NULL CONSTRAINT domain_chunks_domain_fk
+        REFERENCES vera_vjay.research_domains (domain_id) ON DELETE RESTRICT,
+    span_id    BIGINT NOT NULL CONSTRAINT domain_chunks_span_fk
+        REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    asserted_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, span_id)               -- composite PK: rejects duplicate associations
+);
+
+-- Reverse lookup: which domains does this span belong to.
+CREATE INDEX IF NOT EXISTS domain_chunks_span_idx
+    ON vera_vjay.domain_chunks (span_id, domain_id);
+
+-- Grants (pattern of pending/006): writers INSERT, readers SELECT. No UPDATE/DELETE/TRUNCATE granted.
+-- wo and ro are guaranteed to exist by the preflight above; rw stays conditional.
+GRANT INSERT ON vera_vjay.research_domains, vera_vjay.domain_corpus, vera_vjay.domain_chunks TO vera_vjay_wo;
+-- INSERT ... RETURNING domain_id needs a column SELECT (R3; same key-column pattern as db/accounts/create_vera_accounts.sql). No other column readable.
+GRANT SELECT (domain_id) ON vera_vjay.research_domains TO vera_vjay_wo;
+GRANT SELECT ON vera_vjay.research_domains, vera_vjay.domain_corpus, vera_vjay.domain_chunks TO vera_vjay_ro;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    GRANT SELECT, INSERT ON vera_vjay.research_domains, vera_vjay.domain_corpus, vera_vjay.domain_chunks TO vera_vjay_rw;
+  END IF;
+END $$;

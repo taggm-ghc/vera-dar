@@ -1,0 +1,103 @@
+{
+  "schema": "vera-trace-check-validation-v1",
+  "positive_class": "FAIL",
+  "checks_version": "trace-checks-v1",
+  "labeller": "opus subagent, blind to automated verdicts; support: opus subagent, blind to heuristic output",
+  "split": "dev",
+  "skipped_label_cells": 1,
+  "per_check": {
+    "A1_citation_present": {
+      "n": 28,
+      "tp": 19,
+      "tn": 6,
+      "fp": 2,
+      "fn": 1,
+      "tpr": 0.95,
+      "tnr": 0.75,
+      "note": ""
+    },
+    "A2_citations_resolve": {
+      "n": 28,
+      "tp": 3,
+      "tn": 25,
+      "fp": 0,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 1.0,
+      "note": ""
+    },
+    "A3_numbers_grounded": {
+      "n": 28,
+      "tp": 3,
+      "tn": 25,
+      "fp": 0,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 1.0,
+      "note": ""
+    },
+    "A4_phantom_evidence": {
+      "n": 28,
+      "tp": 12,
+      "tn": 12,
+      "fp": 4,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 0.75,
+      "note": ""
+    },
+    "A5_window": {
+      "n": 28,
+      "tp": 4,
+      "tn": 24,
+      "fp": 0,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 1.0,
+      "note": ""
+    },
+    "A7_premise_corrected": {
+      "n": 6,
+      "tp": 3,
+      "tn": 2,
+      "fp": 1,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 0.6667,
+      "note": ""
+    },
+    "A8_scope_decline": {
+      "n": 6,
+      "tp": 4,
+      "tn": 1,
+      "fp": 1,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 0.5,
+      "note": ""
+    },
+    "A9_clarify_or_assume": {
+      "n": 5,
+      "tp": 4,
+      "tn": 1,
+      "fp": 0,
+      "fn": 0,
+      "tpr": 1.0,
+      "tnr": 1.0,
+      "note": ""
+    }
+  },
+  "support": {
+    "n": 14,
+    "supported": 11,
+    "partially": 3,
+    "unsupported": 0,
+    "heuristic_tpr": 0.0,
+    "heuristic_tnr": 1.0,
+    "tp": 0,
+    "tn": 11,
+    "fp": 0,
+    "fn": 3,
+    "note": "partially counted as unsupported (strict)"
+  }
+}

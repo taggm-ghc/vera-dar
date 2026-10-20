@@ -1,0 +1,11 @@
+{
+  "_note": "DAR readiness probe (read-only). Timeouts and cache TTL are uncalibrated.",
+  "schema": "vera_vjay",
+  "default_db_url_env": "VERA_DB_URL_RO",
+  "connect_timeout_s": 3,
+  "statement_timeout_ms": 3000,
+  "cache_ttl_s": 60,
+  "failure_cache_ttl_s": 30,
+  "migration_tables": {"006": ["licence_observations"], "007": ["research_domains", "domain_corpus", "domain_chunks"]},
+  "count_tables": {"documents": "domain_corpus", "chunks": "domain_chunks", "domains": "research_domains"}
+}
