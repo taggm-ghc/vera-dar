@@ -93,9 +93,55 @@ def check_caps(rows: list, expect_spans: int | None) -> None:
         raise fl.IngestError(f"{n_sp} spans exceed the cap {cap}")
 
 
+class WriteFailed(Exception):
+    """The single write transaction failed and was rolled back (nothing persisted). Carries NO text: the run id (None if the
+    run row was never inserted; it is not persisted either way), the source/span counts attempted inside the transaction before
+    the failure, and the index of the failing document (None when the failure was not inside a document)."""
+
+    def __init__(self, rid, attempted_sources: int, attempted_spans: int, doc_index, cause_name: str):
+        self.rid, self.attempted_sources, self.attempted_spans = rid, attempted_sources, attempted_spans
+        self.doc_index, self.cause_name = doc_index, cause_name
+        super().__init__(f"write failed and rolled back (cause {cause_name}, document index {doc_index})")
+
+
+# Bounded waits on both engines (statement, lock, idle-in-transaction); parameters are never echoed in errors.
+ENGINE_KW = {"connect_args": {"connect_timeout": 10,
+                              "options": "-c statement_timeout=30000 -c lock_timeout=5000 "
+                                         "-c idle_in_transaction_session_timeout=60000"},
+             "hide_parameters": True}
+
+SQL_DUP_URL = "SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url = :u LIMIT 1"
+SQL_DUP_HASH = ("SELECT source_id FROM {S}.sources WHERE content_hash = :h UNION ALL "
+                "SELECT source_id FROM {S}.sources WHERE provenance->>'text_sha256' = :h LIMIT 1")
+SQL_ADVISORY_LOCK = "SELECT pg_advisory_xact_lock(hashtext(:h))"  # PostgreSQL only; serialises concurrent writers per text hash
+SQL_RUN_COUNTS = ("SELECT (SELECT count(*) FROM {S}.sources s JOIN {S}.candidates k ON k.candidate_id = s.candidate_id "
+                  "WHERE k.run_id = :r), (SELECT count(*) FROM {S}.evidence_spans e JOIN {S}.sources s ON "
+                  "s.source_id = e.source_id JOIN {S}.candidates k ON k.candidate_id = s.candidate_id WHERE k.run_id = :r)")
+
+
+def _dup_refusal(first, r: dict):
+    """first(sql, params) -> first row or None. Returns a refusal message, or None when the document is new."""
+    src = r["source"]
+    h = src["provenance"]["text_sha256"]
+    if h == fulldoc_db.EMPTY_SHA256:
+        return f"{r['document_id']}: text sha256 is the empty-string hash (refused)"
+    if first(SQL_DUP_URL, {"u": src["canonical_url"]}) is not None:
+        return f"{r['document_id']}: canonical URL already exists (stop and escalate: version shadowing)"
+    if first(SQL_DUP_HASH, {"h": h}) is not None:
+        return f"{r['document_id']}: same text already stored (stop and escalate)"
+    return None
+
+
+def _run_counts(c, S, rid) -> tuple:
+    row = c.execute(S(SQL_RUN_COUNTS), {"r": rid}).fetchone()
+    return int(row[0]), int(row[1])
+
+
 def write_rows(engine_wo, engine_ro, rows: list, icfg: dict, expect_spans: int | None = None) -> dict:
-    """INSERT-only, one transaction per document, stops at the first error. NEW RUN only; a canonical URL or content hash that
-    already exists is a stop-and-escalate condition (vet R5). Never called by the dry-run and never run in DBC-1."""
+    """INSERT-only, ONE transaction for the whole run (question, run, and per document candidate, canonical source, source,
+    spans): all or nothing; any exception rolls everything back and raises WriteFailed. NEW RUN only; a canonical URL or text
+    hash that already exists is a stop-and-escalate condition (vet R5), checked on the read-only engine first and again inside
+    the write transaction. Never called by the dry-run and never run in DBC-1."""
     from sqlalchemy import text as T
     from vera.corpus_admission import SCHEMA
 
@@ -104,39 +150,55 @@ def write_rows(engine_wo, engine_ro, rows: list, icfg: dict, expect_spans: int |
     check_caps(rows, expect_spans)
     cc = icfg["candidate"]
     lookup = fl.RoLookup(engine_ro)
+
+    def ro_first(sql, params):
+        r = lookup.rows(sql, params)
+        return r[0] if r else None
     for r in rows:  # preflight (ro SELECTs) before any write
-        src = r["source"]
-        if lookup.canonical(src["canonical_url"]) is not None:
-            raise fl.IngestError(f"{r['document_id']}: canonical URL already exists (stop and escalate: version shadowing)")
-        if lookup.hash_any_canonical(src["provenance"]["text_sha256"]) is not None:
-            raise fl.IngestError(f"{r['document_id']}: same text already stored (stop and escalate)")
-    rid, done = None, {"sources": 0, "spans": 0}
-    for r in rows:
-        src, prov = r["source"], r["source"]["provenance"]
-        with engine_wo.begin() as c:
-            if rid is None:
-                qid = c.execute(S("INSERT INTO {S}.questions (research_question) VALUES (:q) RETURNING question_id"),
-                                {"q": QUESTION}).scalar()
-                rid = c.execute(S("INSERT INTO {S}.runs (question_id, question) VALUES (:q, :t) RETURNING run_id"),
-                                {"q": qid, "t": QUESTION}).scalar()
-            cid = c.execute(S("INSERT INTO {S}.candidates (run_id, source_url, title, snippet, gate_a_decision, "
-                              "gate_a_rationale, fetch_status) VALUES (:r,:u,:t,NULL,:d,:ra,:fs) RETURNING candidate_id"),
-                            {"r": rid, "u": prov["url"], "t": prov["title"], "d": cc["gate_a_decision"],
-                             "ra": "AE-1020 chunk-stored full document", "fs": cc["fetch_status"]}).scalar()
-            csid = c.execute(S("INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) RETURNING canonical_source_id"),
-                             {"u": src["canonical_url"]}).scalar()
-            sid = c.execute(S("INSERT INTO {S}.sources (canonical_source_id, candidate_id, version, content, content_hash, "
-                              "provenance) VALUES (:cs,:cid,1,'',:h,CAST(:p AS jsonb)) RETURNING source_id"),
-                            {"cs": csid, "cid": cid, "h": src["content_hash"], "p": json.dumps(prov)}).scalar()
-            for sp in r["spans"]:
-                c.execute(S("INSERT INTO {S}.evidence_spans (source_id, text, start_index, end_index, relevance_score, "
-                            "evidence_type) VALUES (:s,:t,:a,:b,NULL,:k)"),
-                          {"s": sid, "t": sp["text"], "a": sp["start_index"], "b": sp["end_index"],
-                           "k": sp["evidence_type"]})
-        done["sources"] += 1
-        done["spans"] += len(r["spans"])
-    done["run_id"] = rid
-    return done
+        why = _dup_refusal(ro_first, r)
+        if why:
+            raise fl.IngestError(why)
+    n_src_plan, n_sp_plan = len(rows), sum(len(r["spans"]) for r in rows)
+    rid, att_src, att_sp, idx = None, 0, 0, None
+    try:
+        with engine_wo.begin() as c:  # single transaction; leaving it by an exception rolls back, never commits
+            def wo_first(sql, params):
+                return c.execute(S(sql), params).fetchone()
+            for idx, r in enumerate(rows):
+                src, prov = r["source"], r["source"]["provenance"]
+                if c.dialect.name == "postgresql":  # held to commit/rollback; SQLite (tests) has no advisory locks
+                    c.execute(S(SQL_ADVISORY_LOCK), {"h": prov["text_sha256"]})
+                why = _dup_refusal(wo_first, r)  # repeated inside the write transaction
+                if why:
+                    raise fl.IngestError(why)
+                if rid is None:
+                    qid = c.execute(S("INSERT INTO {S}.questions (research_question) VALUES (:q) RETURNING question_id"),
+                                    {"q": QUESTION}).scalar()
+                    rid = c.execute(S("INSERT INTO {S}.runs (question_id, question) VALUES (:q, :t) RETURNING run_id"),
+                                    {"q": qid, "t": QUESTION}).scalar()
+                cid = c.execute(S("INSERT INTO {S}.candidates (run_id, source_url, title, snippet, gate_a_decision, "
+                                  "gate_a_rationale, fetch_status) VALUES (:r,:u,:t,NULL,:d,:ra,:fs) RETURNING candidate_id"),
+                                {"r": rid, "u": prov["url"], "t": prov["title"], "d": cc["gate_a_decision"],
+                                 "ra": "AE-1020 chunk-stored full document", "fs": cc["fetch_status"]}).scalar()
+                csid = c.execute(S("INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) RETURNING "
+                                   "canonical_source_id"), {"u": src["canonical_url"]}).scalar()
+                sid = c.execute(S("INSERT INTO {S}.sources (canonical_source_id, candidate_id, version, content, "
+                                  "content_hash, provenance) VALUES (:cs,:cid,1,'',:h,CAST(:p AS jsonb)) RETURNING source_id"),
+                                {"cs": csid, "cid": cid, "h": src["content_hash"], "p": json.dumps(prov)}).scalar()
+                att_src += 1
+                for sp in r["spans"]:
+                    c.execute(S("INSERT INTO {S}.evidence_spans (source_id, text, start_index, end_index, relevance_score, "
+                                "evidence_type) VALUES (:s,:t,:a,:b,NULL,:k)"),
+                              {"s": sid, "t": sp["text"], "a": sp["start_index"], "b": sp["end_index"],
+                               "k": sp["evidence_type"]})
+                    att_sp += 1
+            idx = None
+            got = _run_counts(c, S, rid)  # pre-commit re-check on the write connection
+            if got != (n_src_plan, n_sp_plan):
+                raise RuntimeError("pre-commit count check: run rows differ from the plan")
+    except Exception as e:  # noqa: BLE001  rolled back by the context manager; never commit after an exception
+        raise WriteFailed(rid, att_src, att_sp, idx, type(e).__name__) from e
+    return {"sources": att_src, "spans": att_sp, "run_id": rid}
 
 
 def main(argv=None, env=os.environ, engine_factory=None, cfg=None, guard=None) -> int:
@@ -182,9 +244,14 @@ def main(argv=None, env=os.environ, engine_factory=None, cfg=None, guard=None) -
         return EXIT_REFUSED
     from sqlalchemy import create_engine  # lazy; only reached with authorization + env present
     factory = engine_factory or create_engine
-    eng_wo, eng_ro = factory(env[a.db_url_env]), factory(env[a.ro_url_env])
+    eng_wo, eng_ro = factory(env[a.db_url_env], **ENGINE_KW), factory(env[a.ro_url_env], **ENGINE_KW)
     try:
         done = write_rows(eng_wo, eng_ro, rows, fl.load_config(), a.expect_spans)
+    except WriteFailed as e:  # whole run rolled back; no text, no connection data
+        print(f"FAILED rolled_back run_id={e.rid if e.rid is not None else 'none'} (not persisted) "
+              f"doc_index={e.doc_index if e.doc_index is not None else 'none'} attempted "
+              f"sources={e.attempted_sources} spans={e.attempted_spans} committed sources=0 spans=0 cause={e.cause_name}")
+        return EXIT_ERROR
     except Exception as e:  # noqa: BLE001
         print(f"ERROR {type(e).__name__} (details withheld: may contain connection data)")
         return EXIT_ERROR

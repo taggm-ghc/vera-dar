@@ -175,3 +175,23 @@ def test_s5_usage_out_channel_is_additive(monkeypatch):
         cc.USAGE.reset(tok)
     assert text == "Faster [1]." and rows == [{"checker": rows[0]["checker"], "tokens": 1500, "cost_usd": 0.002}]
     assert cc.check_answer("Faster [1].", SRC, cfg)[0] == "Faster [1]."  # no channel set: unchanged
+
+
+def _ok(text, monkeypatch, n=1):
+    monkeypatch.setenv("KEY_A", "k")
+    return cc.check_answer(text, SRC, CC, call=_verdicts({i: "supported" for i in range(n)}))[0]
+
+
+def test_out_of_range_citation_removed_before_check(monkeypatch):
+    assert "[9]" not in _ok("Faster [1]. Claim X [9].", monkeypatch)
+    assert _ok("Faster [1, 9].", monkeypatch) == "Faster [1]."
+
+
+def test_out_of_range_range_cleaned_like_grounded_ask(monkeypatch):
+    out = _ok("Faster [1-9].", monkeypatch)
+    expected = ga.fix_citations("Faster [1-9].", len(SRC), "")[0].rstrip()
+    assert out == expected == "Faster [1, 2]."
+
+
+def test_clean_input_output_is_byte_identical(monkeypatch):
+    assert _ok("Faster [1]. Quality [2].", monkeypatch, 2) == "Faster [1]. Quality [2]."

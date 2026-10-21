@@ -138,16 +138,31 @@ def render_corpus(st, data: dict | None) -> None:
                    "refreshed when the corpus changes.")
 
 
+_HOW_LIST = ("**How VERA-DAR answers:** for each in-scope question the Ask page searches published scholarly sources "
+             "and the web live and lists the ones that may be relevant, with links. VERA-DAR has not read the full "
+             "documents, so it does not use abstracts or snippets as evidence and does not write an answer from "
+             "them. If no usable source is found it says so instead of answering from memory. Open the sources "
+             "and read them yourself before relying on any claim.")
+_HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of "
+                "full documents that the operator selected and licence-checked in advance. If passages in them address "
+                "the question, it writes a short answer from up to six passages, cites them with brief quotes, and has "
+                "an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches "
+                "published scholarly sources and the web and lists documents it has not read. Open the sources and "
+                "read them yourself before relying on any claim.")
+
+
+def how_answers_text() -> str:
+    """Chosen by the runtime fulldoc flag (S1), never static."""
+    from vera.disclosure import fulldoc_enabled
+    return _HOW_FULLDOC if fulldoc_enabled() else _HOW_LIST
+
+
 def render_sources_sidebar(st) -> None:
     with st.sidebar.expander("📚 What VERA-DAR draws on", expanded=False):
         render_corpus(st, _corpus(st))
         scope = scope_text()
         st.caption(f"**Scope:** {plain(scope)}" if scope else "**Scope:** not available")
-        st.caption("**How VERA-DAR answers:** for each in-scope question the Ask page searches published scholarly sources "
-                   "and the web live and lists the ones that may be relevant, with links. VERA-DAR has not read the full "
-                   "documents, so it does not use abstracts or snippets as evidence and does not write an answer from "
-                   "them. If no usable source is found it says so instead of answering from memory. Open the sources "
-                   "and read them yourself before relying on any claim. " + MODEL_LINE)
+        st.caption(how_answers_text() + " " + MODEL_LINE)
         snap = snapshot_summary()
         if not snap or not snap["count"]:
             st.caption("**Trace Eval sources:** not available")

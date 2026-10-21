@@ -44,12 +44,41 @@ def _chain_timeout_s() -> float | None:
         return None
 
 
-@lru_cache(maxsize=1)
+class OpenAIFallbackDisabled(RuntimeError):
+    """The default (OpenAI) client was requested while the OpenAI fallback is switched off for this process."""
+
+
+_DEFAULT_CLIENT_FORBIDDEN = False  # process latch; set only by the API process (main.py) when the fallback is off
+
+
+def forbid_default_client() -> None:
+    global _DEFAULT_CLIENT_FORBIDDEN
+    _DEFAULT_CLIENT_FORBIDDEN = True
+
+
+def reset_default_client_latch() -> None:
+    """Clear the latch (tests only; production sets it once at startup and never clears it)."""
+    global _DEFAULT_CLIENT_FORBIDDEN
+    _DEFAULT_CLIENT_FORBIDDEN = False
+
+
 def _get_client() -> OpenAI:
+    """Latch check first (never reaches the constructor, so it cannot be bypassed by the cache), then the cached
+    constructor."""
+    if _DEFAULT_CLIENT_FORBIDDEN:
+        raise OpenAIFallbackDisabled("the OpenAI fallback is disabled (config/ask-provider-chain.json)")
+    return _build_client()
+
+
+@lru_cache(maxsize=1)
+def _build_client() -> OpenAI:
     """Construct the OpenAI client on first use, not at module import time. S4: the last-resort client honours the
     chain timeout and makes no SDK-internal retries (the SDK default would be 600 s and 2 retries)."""
     t = _chain_timeout_s()
     return OpenAI(max_retries=0, **({"timeout": t} if t else {}))
+
+
+_get_client.cache_clear = _build_client.cache_clear  # existing callers/tests clear the cache through the wrapper
 
 
 def answer_question(question: str, model: str, pricing: PricingRecord, client: OpenAI | None = None,

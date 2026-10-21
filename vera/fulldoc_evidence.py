@@ -21,6 +21,7 @@ class EvidenceBundle:
     rejected: tuple = ()  # dicts: span_id, document_id, reason (candidates evaluated and not admitted)
     status: str = "insufficient"  # admitted | insufficient | corpus_unusable
     trace: dict = field(default_factory=dict)  # counts only
+    corpus_source: str | None = None  # "db" | "bundle" | None (unlabelled = never db); set only when the corpus loaded ok
 
     @property
     def grounded(self) -> bool:

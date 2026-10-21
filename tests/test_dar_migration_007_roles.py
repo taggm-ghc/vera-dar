@@ -26,3 +26,9 @@ def test_readme_documents_order():
     text = README.read_text(encoding="utf-8")
     assert re.search(r"create_vera_accounts\.sql.*001-005.*007", text, re.S)
     assert "fail" in text.lower() and "007" in text
+
+
+def test_accounts_grant_connect_to_all_three_groups():
+    text = ACCOUNTS.read_text()
+    for grp in ("rw", "ro", "wo"):
+        assert re.search(rf"GRANT CONNECT ON DATABASE \w+ TO vera_vjay_{grp};", text)

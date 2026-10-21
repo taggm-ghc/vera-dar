@@ -1,6 +1,7 @@
 """Item #74 M2 / K2.I2: the one public no-profiling / limits disclosure. The text is composed here, at call time, from
 the answer contract (vera.answer_contract), so tests can pin it and it cannot drift from the enabled layers."""
 import json
+from pathlib import Path
 
 from vera import answer_contract
 from vera.memory_gate import CONFIG_KEY, CONFIG_PATH
@@ -11,6 +12,22 @@ _BASE = ("VERA-DAR is an AI system. For each in-scope question it searches publi
          "The list is not neutral or complete and may be wrong. Check the sources and read them yourself before "
          "relying on any claim. Licence terms are as reported by the indexing services for the listed records and were "
          "not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you.")
+# S1 / DISC-E2 (owner direction 2026-10-21; wording needs owner approval before public activation): used instead of
+# _BASE when the full-document path is enabled (fulldoc.enabled in config/fulldoc_answer.json).
+_BASE_FULLDOC = (
+    "VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that "
+    "its operator selected and licence-checked in advance. If passages in them address the question, it writes a short "
+    "answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence "
+    "against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the "
+    "web and lists documents that may be relevant, with links. It has not read those listed documents and does not use "
+    "their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the "
+    "sources and read them yourself before relying on any claim. Licences for documents in its own collection were "
+    "checked against the licence recorded in each document and VERA-DAR's licence rules, not with the publisher. "
+    "Licence terms for listed records are as reported by the indexing services and were not verified with the "
+    "publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own "
+    "collection, your question, the selected passages with their titles and links, and the draft answer sentences are "
+    "sent to third-party AI services.")
+FULLDOC_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "fulldoc_answer.json"
 # Owner decision 2026-10-19 (Option C), exact wording. The first two sentences are about third parties; the last two
 # are VERA-DAR's own storage claims and are emitted only while the shipped configuration backs them (_demo_no_storage).
 _THIRD_PARTY = (" Your question is sent to third-party AI and search services to generate a response. These services "
@@ -39,11 +56,36 @@ def corpus_admission_enabled(chain_path=answer_contract.CHAIN_CONFIG_PATH) -> bo
         return True
 
 
+def fulldoc_enabled(path=FULLDOC_CONFIG_PATH) -> bool:
+    """Runtime state for the wording. True only for an explicit true-like fulldoc.enabled (same allowlist as
+    fulldoc_corpus.get_corpus). An unreadable or malformed config returns True: the text then over-discloses
+    (passages may be sent) rather than under-discloses. A readable config without the key means off (path disabled)."""
+    try:
+        fd = json.loads(Path(path).read_text(encoding="utf-8")).get("fulldoc")
+    except (OSError, ValueError, AttributeError):
+        return True
+    if not isinstance(fd, dict) or "enabled" not in fd:
+        return False
+    en = fd["enabled"]
+    return en is True or str(en).strip().lower() in ("true", "1", "yes", "on")
+
+
+_HELP_LIST = ("Ask a question. VERA-DAR lists sources that may be relevant, with links. It has not read them and does "
+              "not write an answer.")
+_HELP_FULLDOC = ("Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says "
+                 "why it cannot; otherwise it lists sources it has not read.")
+
+
+def ask_help_text(fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
+    """Help text of the question box, chosen by the runtime fulldoc flag (S1)."""
+    return _HELP_FULLDOC if fulldoc_enabled(fulldoc_path) else _HELP_LIST
+
+
 def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
-                    chain_path=answer_contract.CHAIN_CONFIG_PATH) -> str:
-    """Base text (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
+                    chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
+    """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
     (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
-    out = _BASE + _THIRD_PARTY + _NO_SAVE
+    out = (_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + _THIRD_PARTY + _NO_SAVE
     corpus_on = corpus_admission_enabled(chain_path)
     if not corpus_on and "L2" not in answer_contract.layers(contract_path):
         out += _DEMO_NO_STORAGE

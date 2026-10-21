@@ -1,8 +1,9 @@
 """Item #77: free-tier-first provider chain for /ask (scope router + answer) only.
 
 Entries come from config/ask-provider-chain.json and are tried in order; an entry whose key env var is unset
-is skipped. The selected OpenAI model is always the last resort, so with no free keys set /ask behaves as
-before. Any OpenAI-SDK error (rate limit, timeout, auth, 5xx, and 400s such as model_decommissioned) or an
+is skipped. The selected OpenAI model is the last resort ONLY when `openai_fallback.enabled` is true in that file
+(shipped false; missing, non-bool or unreadable means off). With it off the chain holds free entries only and
+the API process never makes an OpenAI call. Any OpenAI-SDK error (rate limit, timeout, auth, 5xx, and 400s such as model_decommissioned) or an
 empty answer moves the request to the next entry; the last entry's error propagates to main.py's existing
 HTTP mapping. Logs name the provider, model and error class only, never message text or keys.
 """
@@ -47,14 +48,28 @@ class ChainEntry:
                       timeout=self.timeout_s)
 
 
+def openai_fallback_enabled(path: Path = CONFIG_PATH) -> bool:
+    """The one reader of the OpenAI-fallback switch (`openai_fallback.enabled`). Anything but a literal JSON true
+    (missing block or key, non-bool, unreadable or malformed file) is OFF. No environment override."""
+    try:
+        raw = json.loads(Path(path).read_text())
+        return raw["openai_fallback"]["enabled"] is True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def load_chain(openai_model: str, openai_pricing: PricingRecord | None, path: Path = CONFIG_PATH,
-               env=os.environ) -> list[ChainEntry]:
-    """Free entries that have a key, then OpenAI (when priced). A missing or unreadable file means OpenAI only."""
+               env=os.environ, openai_enabled: bool | None = None) -> list[ChainEntry]:
+    """Free entries that have a key, then OpenAI (only when the fallback is enabled and the model is priced).
+    openai_enabled=None reads the switch from the `path` file being loaded (not CONFIG_PATH); pass True/False to
+    override. An unreadable file gives an empty chain (no free entries, no OpenAI unless explicitly enabled)."""
     entries: list[ChainEntry] = []
+    if openai_enabled is None:
+        openai_enabled = openai_fallback_enabled(path)
     try:
         raw = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Provider chain config unreadable (%s); /ask uses OpenAI only", type(exc).__name__)
+        logger.warning("Provider chain config unreadable (%s); /ask has no free providers", type(exc).__name__)
         raw = {}
     timeout = float(raw.get("timeout_s", 20))
     checked = str(raw.get("checked_at", "unknown"))
@@ -66,7 +81,7 @@ def load_chain(openai_model: str, openai_pricing: PricingRecord | None, path: Pa
                                 retrieved_at=checked, effective_from=checked)
         entries.append(ChainEntry(p["provider"], p["model"], pricing, p["base_url"], p["api_key_env"],
                                   dict(p.get("extra_body") or {}), timeout))
-    if openai_pricing is not None:
+    if openai_enabled and openai_pricing is not None:
         entries.append(ChainEntry("openai", openai_model, openai_pricing))
     return entries
 
@@ -87,6 +102,6 @@ def answer_via_chain(question: str, entries: list[ChainEntry], grounding=None) -
         except OpenAIError as exc:
             if last:
                 raise
-            logger.warning("/ask provider %s failed (%s, status %s); trying next", e.label, type(exc).__name__,
-                           getattr(exc, "status_code", "-"))
+            logger.warning("/ask provider %s failed (%s, status %s, code %s); trying next", e.label,
+                           type(exc).__name__, getattr(exc, "status_code", "-"), getattr(exc, "code", "-"))
     raise AssertionError("unreachable")

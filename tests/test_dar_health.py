@@ -252,3 +252,52 @@ def test_public_health_never_calls_fulldoc_readiness(monkeypatch):
     monkeypatch.setattr(dar_health, "_fulldoc_status", boom)
     r = TestClient(main.app).get("/health")
     assert r.status_code == 200 and set(r.json()) == {"status", "dar"}
+
+
+def _slow_fd(monkeypatch, behaviour):
+    import time as _t
+    from vera import fulldoc_corpus as fc
+    calls = {"n": 0}
+
+    def fake(*a, **k):
+        calls["n"] += 1
+        _t.sleep(0.3)
+        return behaviour(calls["n"])
+    monkeypatch.setattr(fc, "readiness", fake)
+    return calls
+
+
+def _run_threads(n=8):
+    import threading
+    barrier, out = threading.Barrier(n, timeout=5), []
+
+    def w():
+        barrier.wait()
+        out.append(dar_health._fulldoc_status())
+    ts = [threading.Thread(target=w, daemon=True) for _ in range(n)]
+    [t.start() for t in ts]
+    for t in ts:
+        t.join(10)
+        assert not t.is_alive(), "fulldoc status thread stuck (possible wedge)"
+    return out
+
+
+def test_fulldoc_status_single_flight(monkeypatch):
+    calls = _slow_fd(monkeypatch, lambda n: {"status": "ok", "call": n})
+    out = _run_threads(8)
+    assert calls["n"] == 1 and len(out) == 8 and all(o == {"status": "ok", "call": 1} for o in out)
+    assert dar_health._fulldoc_status() == {"status": "ok", "call": 2}  # no caching beyond the in-flight call
+    assert calls["n"] == 2
+
+
+def test_fulldoc_status_exception_shared_and_not_wedged(monkeypatch):
+    def beh(n):
+        if n == 1:
+            raise RuntimeError("boom")
+        return {"status": "ok", "call": n}
+    calls = _slow_fd(monkeypatch, beh)
+    out = _run_threads(8)
+    assert calls["n"] == 1 and len(out) == 8 and all(o["status"] == "error" for o in out)
+    assert all(o == dar_health._fulldoc_error() for o in out)
+    assert dar_health._fulldoc_status() == {"status": "ok", "call": 2}
+    assert dar_health._FD_INFLIGHT == []

@@ -11,7 +11,7 @@ import pytest
 from vera import answer_contract as ac
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXED = "VERA-DAR has not acquired or read these full documents. This is a discovery result, not an evidence-grounded answer."
+FIXED = "VERA-DAR has not acquired or read the documents in this list. This is a discovery result, not an evidence-grounded answer."
 
 
 def _cfg(tmp_path, **over):

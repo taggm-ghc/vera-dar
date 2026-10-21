@@ -36,7 +36,7 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 - `contract`: the enabled result layers and any fallback reason.
 - `sources` and `traced_sources`: source records, and records traced from links but not used.
 - `claim_check`: a summary of the claim check, present when an answer was checked.
-- Evidence fields for the full-document path (`evidence_status`, `examined_full_documents`, `admitted_evidence`, `citations`), omitted otherwise.
+- Evidence fields for the full-document path (`evidence_status`, `corpus_source`, `examined_full_documents`, `admitted_evidence`, `citations`), omitted otherwise. `corpus_source` is `{"kind": "db"}` or `{"kind": "bundle"}` and is present only when the full-document corpus loaded successfully (it says where the corpus was loaded from); it is omitted on failure and on web-only responses.
 
 ### The `outcome` field
 
@@ -69,7 +69,7 @@ Recorded licence decisions are based on licence information attributed to indexi
 
 ## Data handling
 
-Questions are transmitted to third-party AI and search services, each with its own data-handling practices. The demonstration configuration disables newly persisted corpus additions, discovery notes, memory writes, and the DuckDuckGo query cache. That does not establish the retention behaviour of external providers or the hosting platform. Records written by earlier configurations are not automatically erased by switching to demonstration mode. The disclosure text shown to visitors is quoted in the [README](../README.md#privacy-and-disclosure).
+Questions are transmitted to third-party AI and search services, each with its own data-handling practices. When the optional full-document path is enabled, up to six selected passages (text, title, link) and the draft answer sentences are transmitted too. The demonstration configuration disables newly persisted corpus additions, discovery notes, memory writes, and the DuckDuckGo query cache. That does not establish the retention behaviour of external providers or the hosting platform. Records written by earlier configurations are not automatically erased by switching to demonstration mode. The disclosure text shown to visitors is quoted in the [README](../README.md#privacy-and-disclosure).
 
 ## Usage safeguards
 

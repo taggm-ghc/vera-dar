@@ -54,7 +54,7 @@ def test_synthetic_on_corpus_control_is_admitted(synth):  # the tightening does 
     assert ev.grounded and all(a["attribution"]["licence_url"] for a in ev.admitted)
 
 
-_REAL = os.environ.get("VERA_FULLDOC_PROBE_BUNDLE")
+_REAL = os.environ.get("VERA_FULLDOC_PROBE_BUNDLE") or os.environ.get("VERA_REAL_DAR9_BUNDLE")  # runner sets the latter
 
 
 @lru_cache(maxsize=1)

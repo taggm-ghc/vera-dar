@@ -67,7 +67,8 @@
     ]
   },
   "layer2": {
-    "max_tokens": 60,
+    "note": "max_tokens 60 -> 512 (A1, 2026-10-21; Groq 400 hypothesis H1: with response_format json_object a reasoning model can spend the whole 60-token cap before the JSON closes, giving json_validate_failed). 512 is a headroom choice, NOT measured: the Groq 400 bodies and the reasoning-token spread were never recorded (~22% of past calls were 400s per work/wed-p18/notes.md; root cause unconfirmed). Spend is $0 on the free tier; with the OpenAI fallback on, this is also OpenAI's cap (a higher ceiling on a few-word reply). Change it when the live 400 rate and completion-token spread are measured in G7. qwen3 checkers with json_mode false may emit <think> text, costing one extra claim-check call before gpt-oss.",
+    "max_tokens": 512,
     "temperature": 0,
     "timeout_s": 20,
     "max_question_chars": 2000,

@@ -5,7 +5,7 @@ claim_check, contract.fallback). Every accessor is defensive: malformed or missi
 Visitor text comes from config/fulldoc_answer.json only for the fallback reasons insufficient_text and
 corpus_unusable_text ({n_inspected} is filled from the examined-document count); the remaining fallback sentences are module constants below
 (recorded divergence: no config key exists yet for them; config is owned by another workstream).
-No internal token, gate name or model name is ever printed. Quotes are shown exactly as the API sent them (already capped)."""
+No internal token, gate name or model name is ever printed. Quotes are trimmed to quote_max_chars from config/fulldoc_answer.json (200 if absent) before display."""
 import json
 import re
 from pathlib import Path
@@ -99,10 +99,23 @@ def evidence_scope_line(data: dict | None) -> str | None:
             f"{m} passage{'s' if m != 1 else ''} admitted as evidence.")
 
 
+_SOURCE_LABEL = {"db": "stored database", "bundle": "local files"}
+
+
+def evidence_source_line(data: dict | None) -> str | None:
+    """'Evidence source: stored database / local files' from the response's corpus_source.kind; None otherwise."""
+    cs = data.get("corpus_source") if isinstance(data, dict) else None
+    label = _SOURCE_LABEL.get(cs.get("kind")) if isinstance(cs, dict) and isinstance(cs.get("kind"), str) else None
+    return f"Evidence source: {label}." if label else None
+
+
 def render_evidence_scope(st, data) -> None:
     line = evidence_scope_line(data)
     if line:
         st.caption(line)
+        src = evidence_source_line(data)
+        if src:
+            st.caption(src)
 
 
 def render_fallback_reason(st, data) -> None:
@@ -166,7 +179,7 @@ def claim_check_text(cc, cap: int | None = None, fulldoc: bool = False) -> str |
         return NOT_CHECKED_NOTE if cc else None
     checked, supported, partial, removed = (_count(cc.get(k)) for k in ("checked", "supported", "partial", "removed"))
     if fulldoc:
-        head = f"Claim check: {checked} cited claims checked by a model against the cited passages shown"
+        head = f"Claim check: {checked} cited claims checked by a model against the cited passages (full span text; excerpts shown may be abridged)"
     else:
         head = (f"Claim check: {checked} cited claims checked by a model against the cited abstract text"
                 f"{f' (first {cap:,} characters)' if cap else ''}")

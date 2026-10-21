@@ -41,3 +41,8 @@ Dockerfile
 **/*.meta.json
 **/*.SHA256SUMS
 **/manifest-filled*
+
+# agent/tool instructions and settings: not used at runtime (checked 2026-10-21)
+.claude/
+AGENTS.md
+CLAUDE.md

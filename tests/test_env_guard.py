@@ -745,14 +745,17 @@ def test_non_loopback_resolution_and_connect_are_refused_and_recorded():
 
 
 @pytest.mark.vera_sockets      # K18W OA-2: local sockets only on explicit request
-def test_loopback_and_unix_sockets_still_work(loopback_server, tmp_path):
+def test_loopback_and_unix_sockets_still_work(loopback_server, tmp_path, monkeypatch):
     host, port = loopback_server.getsockname()
     c = socket.create_connection((host, port), timeout=2)
     c.close()
     assert socket.getaddrinfo("localhost", port)
     a, b = socket.socketpair()
     a.close(); b.close()
-    sp = str(tmp_path / "u.sock")
+    # The runner's temp dir path can exceed the ~107-byte AF_UNIX limit; chdir into it and use a relative
+    # name (same technique as _unix_server below) so the socket file still lives inside the allowed temp area.
+    monkeypatch.chdir(tmp_path)
+    sp = "u.sock"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(sp); srv.listen(1)
     cli = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

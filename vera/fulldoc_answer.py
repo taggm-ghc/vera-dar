@@ -552,7 +552,9 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
 
 def public_evidence(ev, citations=()) -> dict:
     """Response projection: allowlisted fields only; no span text beyond the capped quotes inside citations."""
+    src = getattr(ev, "corpus_source", None)
     return {"evidence_status": ev.status,
+            "corpus_source": {"kind": src} if src in ("db", "bundle") and ev.status != "corpus_unusable" else None,
             "examined_full_documents": [{k: d.get(k) for k in _DOC_FIELDS} for d in ev.examined_full_documents],
             "admitted_evidence": [dict({k: a.get(k) for k in _ADM_FIELDS}, span=f"chars={a['start']}-{a['end']}")
                                   for a in ev.admitted],

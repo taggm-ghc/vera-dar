@@ -87,6 +87,7 @@ class FullDocCorpus:
         self._ev_dar = None  # evidence-only index (C1), built lazily on the first evidence_only retrieve
         self._ev_lock = threading.Lock()
         self._chunk_counts: dict = {}
+        self.source_kind: str | None = None  # set by get_corpus from the branch actually taken ("db" | "bundle")
         if dar is not None:
             for c in dar._chunks:
                 did = key_to_doc.get(c["source_key"])
@@ -430,6 +431,12 @@ def _db_run_env(cfg: dict) -> str:
     return str(cfg.get("db_run_id_env") or DB_RUN_ID_ENV_DEFAULT)
 
 
+def _label_bundle(c):
+    if isinstance(c, FullDocCorpus):
+        c.source_kind = "bundle"
+    return c
+
+
 def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
     """None when the path is disabled (fulldoc.enabled is false, or the env var is unset/empty): /ask then behaves exactly
     as before. An absent `fulldoc` / `enabled` key counts as DISABLED (fail closed, ON-1020-FIX-1); only an explicit
@@ -451,7 +458,9 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
         if connect is None:
             return _bundle_unusable(cfg, None, fulldoc_db.R_DBCONN, "database corpus source has no read-only connection")
         _apply_cache_bound(cfg)
-        return fulldoc_db.cached_load(connect, run_raw, cfg, _CACHE)
+        c = fulldoc_db.cached_load(connect, run_raw, cfg, _CACHE)
+        c.source_kind = "db"
+        return c
     if not raw:
         return None
     base = Path(raw).resolve()
@@ -459,16 +468,16 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
         sig = (str(base), _sha_bytes((base / cfg["manifest_name"]).read_bytes()),
                _sha_bytes((base / cfg["sums_name"]).read_bytes()))
     except OSError:
-        return load_bundle(base, cfg)  # unusable; not cached so a later fix is seen
+        return _label_bundle(load_bundle(base, cfg))  # unusable; not cached so a later fix is seen
     _apply_cache_bound(cfg)
     hit = _CACHE.get(sig)  # lock-free hit: never waits on another bundle's slow load
     if hit is not None:
-        return hit
+        return _label_bundle(hit)
     with _LOAD_LOCK:
         hit = _CACHE.get(sig)
         if hit is None:
             hit = _CACHE[sig] = load_bundle(base, cfg)
-        return hit
+        return _label_bundle(hit)
 
 
 def readiness(cfg: dict | None = None, env=os.environ) -> dict:
@@ -502,7 +511,8 @@ def readiness(cfg: dict | None = None, env=os.environ) -> dict:
         out["n_acquired"], out["n_unusable"] = len(c.acquired), len(c.unusable)
         if db_on:
             out["codes"] = sorted({str(u.get("code")) for u in c.unusable if u.get("code")})
-        out["pins_ok"] = not any(u.get("code") == R_PIN for u in c.unusable) and c.status == STATUS_OK
+        from vera import fulldoc_db  # local import: fulldoc_db imports this module
+        out["pins_ok"] = not any(u.get("code") in (R_PIN, fulldoc_db.R_DBDOCPIN) for u in c.unusable) and c.status == STATUS_OK
         out["status"] = "ok" if c.status == STATUS_OK and c.acquired else "unusable"
         return out
     except Exception:  # noqa: BLE001  fail closed, never leak the message

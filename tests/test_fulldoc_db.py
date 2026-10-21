@@ -119,7 +119,13 @@ def test_reader_issues_only_the_two_selects(world):
 def test_recorded_pins_checked_against_config(world):
     root, cfg, rows, report = world
     cfg2 = copy.deepcopy(cfg)
-    cfg2["pins"] = dict(report["pins"])
+    sources, _ = _db(rows)
+    docs = {}
+    for s in sources:
+        p = s["provenance"]
+        docs[p["document_id"]] = {"text_sha256": p["text_sha256"], "licence_id": p["item"]["licence"],
+                                  "licence_decision": "allow"}
+    cfg2["pins"] = {**report["pins"], "documents": docs}
     assert fulldoc_db.load_db(_factory(*_db(rows)), RUN, cfg2).status == "ok"
     cfg2["pins"]["sums_sha256"] = "0" * 64
     bad = fulldoc_db.load_db(_factory(*_db(rows)), RUN, cfg2)

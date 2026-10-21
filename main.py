@@ -14,7 +14,8 @@ from vera.grounded_ask import load_corpus_cfg, load_grounding, public_sources, r
 from vera.memory_gate import VERDICT_SUPPORTED
 from vera.memory_store import CONFIRMED, NOT_FOUND, REJECTED, MemoryUnavailable, load_memory_block, memory_from_env
 from vera.memory_operator import make_verify_owner_key
-from vera.inference_chain import answer_via_chain, load_chain
+from vera.ask_service import OpenAIFallbackDisabled, forbid_default_client
+from vera.inference_chain import answer_via_chain, load_chain, openai_fallback_enabled
 from vera.auth import (
     OPENAI_KEY_ERROR_DETAIL,
     classify_openai_api_key,
@@ -76,14 +77,15 @@ _model_pricing = load_model_pricing()
 
 MODEL = _model_selection.selected_model if _model_selection else "gpt-4o-mini"
 CURRENT_PRICING = latest_pricing_for(MODEL, _model_pricing)
-ASK_CHAIN = load_chain(MODEL, CURRENT_PRICING)  # item #77: free-tier providers first, OpenAI last
+OPENAI_FALLBACK = openai_fallback_enabled()  # config/ask-provider-chain.json openai_fallback.enabled (shipped false)
+ASK_CHAIN = load_chain(MODEL, CURRENT_PRICING, openai_enabled=OPENAI_FALLBACK)  # item #77: free providers first; OpenAI last only when enabled
 GROUNDING = load_grounding()  # item #79: live scholarly retrieval for /ask (None = ungrounded)
 CORPUS = load_corpus_cfg()  # item #79 phase C: corpus admission settings (None = disabled)
 _DESC_CFG = load_corpus_description_cfg()  # item #83
 MEMORY_BLOCK = load_memory_block()  # item #84
 CORPUS_DESCRIBER = CorpusDescriber(_DESC_CFG) if _DESC_CFG else None
 
-if CURRENT_PRICING is None:
+if OPENAI_FALLBACK and CURRENT_PRICING is None:
     logger.warning(
         "No usable pricing record for model %s at startup — /ask will reject requests "
         "until config/model-pricing.json has a record for this model", MODEL,
@@ -94,12 +96,28 @@ if CURRENT_PRICING is None:
 # Classification policy lives in vera/auth.py. main.py coordinates startup
 # checks so configuration problems surface before the affected request path.
 
-for _status, _var in (
-    (classify_openai_api_key(os.getenv("OPENAI_API_KEY")), "OPENAI_API_KEY"),
-    (classify_vera_api_key(os.getenv("VERA_API_KEY")), "VERA_API_KEY"),
-):
-    if _status != "ok":
-        logger.warning("%s looks %s at startup — requests that need it will be rejected until it's fixed in .env", _var, _status)
+def startup_checks() -> None:
+    """Key checks and the active-provider log line; called once at startup (below) and directly by tests. With the
+    OpenAI fallback off, OPENAI_API_KEY is not classified or required, and the default-client latch is set so no
+    code path in this process can construct an OpenAI client with no base_url."""
+    checks = [(classify_vera_api_key(os.getenv("VERA_API_KEY")), "VERA_API_KEY")]
+    if OPENAI_FALLBACK:
+        checks.insert(0, (classify_openai_api_key(os.getenv("OPENAI_API_KEY")), "OPENAI_API_KEY"))
+    else:
+        forbid_default_client()
+    for _status, _var in checks:
+        if _status != "ok":
+            logger.warning("%s looks %s at startup — requests that need it will be rejected until it's fixed in .env", _var, _status)
+    checkers = [f"{c['provider']}:{c['model']}" for c in ((GROUNDING or {}).get("claim_check") or {}).get("checkers", [])
+                if OPENAI_FALLBACK or c.get("base_url") is not None]
+    logger.info("providers: answer=%s, checkers=%s, openai_fallback=%s, OPENAI_API_KEY=%s", [e.label for e in ASK_CHAIN],
+                checkers, "on" if OPENAI_FALLBACK else "off",
+                "set" if (os.getenv("OPENAI_API_KEY") or "").strip() else "unset" + ("" if OPENAI_FALLBACK else " (ignored)"))
+    if not OPENAI_FALLBACK and (os.getenv("OPENAI_API_KEY") or "").strip():
+        logger.info("OPENAI_API_KEY is set but ignored: openai_fallback is off")
+
+
+startup_checks()
 
 # DAR readiness (codes only, read-only; the probe is bounded by config/dar_health.json timeouts). The startup line is
 # logged from a daemon thread so import/startup is never delayed by the DB probe. Never raises.
@@ -257,6 +275,7 @@ class AskResponse(BaseModel):
     # D-055 Option C (additive; absent from web-only behaviour): examined full documents are distinct from the admitted
     # passages that entered reasoning context; citations bind each kept claim to an admitted span.
     evidence_status: str | None = None
+    corpus_source: dict | None = None  # {"kind": "db"|"bundle"}; only when the corpus loaded OK; code only
     examined_full_documents: list[ExaminedDocument] = []
     admitted_evidence: list[AdmittedEvidence] = []
     citations: list[EvidenceCitation] = []
@@ -267,6 +286,8 @@ class AskResponse(BaseModel):
         if d.get("evidence_status") is None:
             for k in ("evidence_status", "examined_full_documents", "admitted_evidence", "citations"):
                 d.pop(k, None)
+        if d.get("corpus_source") is None:
+            d.pop("corpus_source", None)
         return d
 
 
@@ -516,12 +537,12 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
                 detail="Guardrail demo: synthetic malformed output was rejected by schema validation.",
             ) from exc
 
-    key_status = classify_openai_api_key(os.getenv("OPENAI_API_KEY"))
+    key_status = classify_openai_api_key(os.getenv("OPENAI_API_KEY")) if OPENAI_FALLBACK else "ok"
     if key_status != "ok":
         logger.error("Rejected /ask: OPENAI_API_KEY is %s", key_status)
         raise HTTPException(status_code=500, detail=OPENAI_KEY_ERROR_DETAIL[key_status])
 
-    if CURRENT_PRICING is None:
+    if OPENAI_FALLBACK and CURRENT_PRICING is None:
         logger.error("Rejected /ask: no pricing record for model %s", MODEL)
         raise HTTPException(
             status_code=500,
@@ -544,7 +565,16 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
 
             grounding = (sources_fn, GROUNDING)
         result, answered_by = answer_via_chain(req.question, ASK_CHAIN, grounding)
+    except RuntimeError as exc:
+        # empty chain (no free provider key) or the default-client latch: provider-neutral, never a paid call
+        if not (isinstance(exc, OpenAIFallbackDisabled) or str(exc).startswith("no provider available")):
+            raise
+        logger.error("/ask has no usable answering provider (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="No answering provider is configured.") from exc
     except AuthenticationError as exc:
+        if not OPENAI_FALLBACK:
+            logger.error("Answering provider rejected its key (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="The answering provider is misconfigured on the server.") from exc
         raise HTTPException(
             status_code=401,
             detail=(
@@ -553,6 +583,8 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
             ),
         ) from exc
     except RateLimitError as exc:
+        if not OPENAI_FALLBACK:
+            raise HTTPException(status_code=429, detail="The free answering provider is rate-limited; retry shortly.") from exc
         quota_markers = {"insufficient_quota", "credit_balance_exhausted"}
         if getattr(exc, "code", None) in quota_markers or getattr(exc, "type", None) in quota_markers:
             raise HTTPException(
@@ -568,7 +600,10 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
             detail="OpenAI rate limit hit (too many requests). Wait a few seconds and retry.",
         ) from exc
     except OpenAIError as exc:
-        logger.error("OpenAI request failed (%s, status %s)", type(exc).__name__, getattr(exc, "status_code", None))  # never the raw provider text
+        logger.error("Answering provider request failed (%s, status %s, code %s)", type(exc).__name__,
+                     getattr(exc, "status_code", None), getattr(exc, "code", None))  # never the raw provider text
+        if not OPENAI_FALLBACK:
+            raise HTTPException(status_code=502, detail="The answering provider failed; please retry.") from exc
         raise HTTPException(status_code=502, detail="OpenAI request failed. Please try again.") from exc
 
     record_request_cost(request, result.cost_usd)
@@ -594,8 +629,9 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
                                       if isinstance(n, dict) and isinstance(n.get("note"), str)]
         except Exception as exc:  # noqa: BLE001
             logger.warning("discovery recall failed (%s)", type(exc).__name__)
-    admit_args = (req.question, list(result.sources), llm_call_for(ASK_CHAIN[0]), CORPUS, store) \
-        if store is not None and ASK_CHAIN else None
+    # an empty chain cannot have answered (it 503s above); the guard stays only for a stubbed answer_via_chain
+    admit_args = (req.question, list(result.sources), llm_call_for(ASK_CHAIN[0] if ASK_CHAIN else None), CORPUS, store) \
+        if store is not None else None
     if admit_args or (memory is not None and ((result.claims and is_answer and not fulldoc) or discovery)):
         # item #79 phase C + item #84: after the response, never delaying it. Memory writes run AFTER corpus
         # admission so first-time sources are already in the corpus when their claims are saved.

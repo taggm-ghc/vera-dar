@@ -5,7 +5,7 @@ from pathlib import Path
 import requests
 import streamlit as st
 
-from vera.disclosure import render_disclosure
+from vera.disclosure import ask_help_text, render_disclosure
 from vera.env_files import load_vera_env
 from vera.discovery_panel import render_discovery
 from vera.memory_panel import render_memory_panel
@@ -78,7 +78,7 @@ st.subheader("Ask a Question")
 question = st.text_input(
     "Enter your research question:",
     placeholder="What is VERA-DAR?",
-    help="Ask anything. The service answers from the sources it holds, or says why it cannot."
+    help=ask_help_text()
 )
 
 # Ask button

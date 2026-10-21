@@ -27,6 +27,7 @@ $r$;
 GRANT vera_vjay_rw TO vera_claude_code_rw;
 GRANT vera_vjay_wo TO vera_pipeline_wo;
 GRANT vera_vjay_ro TO vera_eval_ro;
+GRANT CONNECT ON DATABASE vera_vjay TO vera_vjay_rw;
 GRANT CONNECT ON DATABASE vera_vjay TO vera_vjay_ro;
 GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_ro;
 GRANT SELECT ON ALL TABLES IN SCHEMA vera_vjay TO vera_vjay_ro;

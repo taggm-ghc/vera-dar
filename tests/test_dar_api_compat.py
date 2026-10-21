@@ -26,7 +26,7 @@ FROZEN_FIELDS = {
     "contract", "recalled_discovery", "discovery_note_submitted",
     # D-055 Option C (owner-directed, additive): serialized only when full-document evidence exists, so the web-only
     # key set stays HEAD | NEW (tests/test_ask_response_contract.py:80-81 unchanged)
-    "evidence_status", "examined_full_documents", "admitted_evidence", "citations",
+    "evidence_status", "corpus_source", "examined_full_documents", "admitted_evidence", "citations",
 }
 
 

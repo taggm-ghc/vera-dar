@@ -1,7 +1,11 @@
 {
-  "description": "Item #77 (2026-10-07): free-tier-first providers for /ask only (scope router + answer). Tried in order; an entry whose api_key_env is unset is skipped; OpenAI (config/model-selection.json, priced from config/model-pricing.json) is always the last resort. Evaluation paths (TRACE capture, M6 baseline and judge, Gate A, pipeline) never read this file and stay on the selected OpenAI model.",
+  "description": "Item #77 (2026-10-07): free-tier-first providers for /ask only (scope router + answer). Tried in order; an entry whose api_key_env is unset is skipped; OpenAI (config/model-selection.json, priced from config/model-pricing.json) is the last resort ONLY when openai_fallback.enabled is true (shipped false). Evaluation paths (TRACE capture, M6 baseline and judge, Gate A, pipeline) never read this file and stay on the selected OpenAI model.",
   "checked_at": "2026-10-07",
   "timeout_s": 20,
+  "openai_fallback": {
+    "enabled": false,
+    "note": "G7 option (b), 2026-10-21: false = the /ask API process never makes an OpenAI call and does not need OPENAI_API_KEY (chain and claim checkers are Groq-only; the default OpenAI client is blocked at runtime). true restores the OpenAI last-resort entry and checker, needs a valid key, and is a reviewed config change plus deploy. Missing block, missing key, non-boolean or unreadable file means off. No env override. Eval and script paths do not read this file."
+  },
   "providers": [
     {
       "provider": "groq",
@@ -93,6 +97,8 @@
           "model": "qwen/qwen3.8-27b",
           "api_key_env": "GROQ_API_KEY",
           "extra_body": {},
+          "json_mode": false,
+          "json_mode_note": "A2 (2026-10-21, Groq 400 hypothesis H2, unconfirmed): no response_format for this checker; the fail-closed _parse rejects a non-JSON reply and the next checker runs. qwen3 may emit <think> text here, so expect an extra check call before gpt-oss; uncalibrated, to be measured in G7.",
           "family": "qwen"
         },
         {

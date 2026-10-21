@@ -100,7 +100,11 @@ Every page of the demonstration shows one shared data-use disclosure. Its closin
 
 The final sentence applies only while corpus admission and discovery notes are off; if either is enabled, the disclosure text changes accordingly.
 
+When the full-document path is enabled, the disclosure opens differently: it says answers are written from up to six passages of a small, operator-supplied, licence-checked collection of full documents, and that the question, the selected passages with their titles and links, and draft answer sentences are sent to third-party AI services. The closing text quoted above is unchanged.
+
 External provider retention is outside VERA-DAR's control. See [API and data use](docs/api.md).
+
+**OpenAI fallback switch.** `openai_fallback.enabled` in `config/ask-provider-chain.json` is `false` by default. While it is false, the API never calls OpenAI and does not need `OPENAI_API_KEY`; answering and claim checking use Groq only. When it is true, OpenAI is the last fallback after the other providers fail, it needs a valid key, and it is a paid route.
 
 ## Important limitations
 

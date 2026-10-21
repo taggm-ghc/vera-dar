@@ -156,15 +156,47 @@ def _compute(env, engine_factory) -> tuple[dict, float]:
     return _result("ready", routing, mig, stored, counts, False, "ok"), ttl
 
 
-def _fulldoc_status() -> dict:
-    """C-3/S8: codes and counts only (fulldoc_corpus.readiness never raises). Evaluated per call, not cached here.
-    Attached only by the authenticated /health/dar handler (never by public /health: amplification)."""
+_FD_LOCK = threading.Lock()
+_FD_INFLIGHT: list = []  # at most one slot: {"done": Event, "result": dict | None}
+
+
+def _fulldoc_compute() -> dict:
     try:
         from vera import fulldoc_corpus  # lazy
         return fulldoc_corpus.readiness()
     except Exception:  # noqa: BLE001
-        return {"enabled": False, "bundle_configured": False, "status": "error", "n_acquired": 0, "n_unusable": 0,
-                "pins_ok": None, "source": "bundle"}
+        return _fulldoc_error()
+
+
+def _fulldoc_status() -> dict:
+    """C-3/S8: codes and counts only (fulldoc_corpus.readiness never raises). Not cached: concurrent callers share ONE
+    in-flight computation (single-flight); the next call after it finishes recomputes. No TTL.
+    Attached only by the authenticated /health/dar handler (never by public /health: amplification)."""
+    with _FD_LOCK:
+        if _FD_INFLIGHT:
+            flight, leader = _FD_INFLIGHT[0], False
+        else:
+            flight, leader = {"done": threading.Event(), "result": None}, True
+            _FD_INFLIGHT.append(flight)
+    if not leader:
+        flight["done"].wait()
+        res = flight["result"]
+        if res is None:  # leader died on a non-Exception BaseException
+            return dict(_fulldoc_error())
+        return dict(res)
+    try:
+        flight["result"] = _fulldoc_compute()
+        return dict(flight["result"])
+    finally:
+        with _FD_LOCK:
+            if _FD_INFLIGHT and _FD_INFLIGHT[0] is flight:
+                _FD_INFLIGHT.clear()
+        flight["done"].set()
+
+
+def _fulldoc_error() -> dict:
+    return {"enabled": False, "bundle_configured": False, "status": "error", "n_acquired": 0, "n_unusable": 0,
+            "pins_ok": None, "source": "bundle"}
 
 
 def _with_fd(value: dict, include: bool) -> dict:

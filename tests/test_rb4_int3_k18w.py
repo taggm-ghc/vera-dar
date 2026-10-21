@@ -205,6 +205,7 @@ def test_int3_runner_session_sees_no_socket_file():
     /var/crash) are skipped: sockets there were created by this session itself (tmp_path binds, multiprocessing).
     lstat only; nothing is opened. Reports counts per top-level directory, never a full path."""
     fresh = ("/tmp", "/run", "/dev/shm", "/var/tmp", "/var/crash")
+    fresh += (os.path.realpath(os.environ["TMPDIR"]),)   # the runner's own per-run temp dir (R/work/test-tmp/r<hex>), created by this session
     found = {}
     for d, dirs, files in os.walk("/"):
         if d == "/":

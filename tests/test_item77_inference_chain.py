@@ -36,15 +36,19 @@ ROUTER = dict(GROQ, provider="openrouter", base_url="https://openrouter.ai/api/v
 
 def test_load_chain_skips_entries_without_key_and_appends_openai(tmp_path):
     path = _chain_file(tmp_path, [GROQ, ROUTER])
-    labels = [e.label for e in ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, path, env={"GROQ_API_KEY": SECRET})]
+    labels = [e.label for e in ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, path, env={"GROQ_API_KEY": SECRET},
+                                             openai_enabled=True)]
     assert labels == ["groq:openai/gpt-oss-20b", "gpt-4.1-nano"]
-    labels = [e.label for e in ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, path, env={})]
+    labels = [e.label for e in ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, path, env={}, openai_enabled=True)]
     assert labels == ["gpt-4.1-nano"]  # no free keys: identical to the pre-#77 behaviour
 
 
-def test_load_chain_unreadable_file_means_openai_only(tmp_path):
+def test_load_chain_unreadable_file_means_empty_chain(tmp_path):
+    # behaviour change (WED-OAI-OPT, T9): previously "OpenAI only"; the fallback is now off unless explicitly enabled
     entries = ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, tmp_path / "missing.json", env={"GROQ_API_KEY": SECRET})
-    assert [e.provider for e in entries] == ["openai"]
+    assert entries == []
+    on = ic.load_chain("gpt-4.1-nano", OPENAI_PRICING, tmp_path / "missing.json", env={}, openai_enabled=True)
+    assert [e.provider for e in on] == ["openai"]
 
 
 def test_free_entries_cost_zero_and_carry_extra_body(tmp_path):

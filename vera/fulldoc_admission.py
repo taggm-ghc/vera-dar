@@ -181,6 +181,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     acquired = list(getattr(corpus, "acquired", None) or []) if corpus is not None else []
     acquired = [d for d in acquired if isinstance(d, dict) and d.get("document_id") is not None]
     unusable = _unusable(question, corpus) if corpus is not None else ()
+    src = getattr(corpus, "source_kind", None)
+    src = src if src in ("db", "bundle") else None
     if corpus is None or getattr(corpus, "status", None) != "ok" or not acquired:
         return EvidenceBundle(question=question, unusable=unusable, status="corpus_unusable",
                               trace={"candidates": 0, "admitted": 0, "rejected_by_reason": {}, "examined": 0,
@@ -376,6 +378,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     return EvidenceBundle(
         question=question, examined_full_documents=tuple(examined), admitted=tuple(admitted), unusable=unusable,
         rejected=tuple(rejected), status="admitted" if admitted else "insufficient",
+        corpus_source=src,
         trace={"candidates": len(cands), "admitted": len(admitted), "rejected_by_reason": by_reason,
                "examined": len(examined), "unusable": len(unusable),
                **({"signal": "idf_weighted", "selector_documents": sorted(selector_docs), "et_al": et_al,

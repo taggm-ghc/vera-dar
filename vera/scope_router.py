@@ -8,6 +8,8 @@ UNSURE. Layer 2 (config `layer2_mode`) resolves UNSURE: "llm" asks the selected 
 Declines always return the fixed `decline_template`; no model-generated text is ever shown for a decline. The
 classifier prompt holds no secrets, keys, hosts or internal names (OWASP LLM07; enforced by a test). A malformed
 classifier reply fails closed (decline). OpenAI SDK errors propagate to the routing layer like the answer call's.
+The default OpenAI client (default_chat with client=None) raises OpenAIFallbackDisabled in the API process unless
+`openai_fallback.enabled` is true (ask_service latch); chain entries supply their own client.
 """
 from __future__ import annotations
 

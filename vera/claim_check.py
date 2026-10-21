@@ -95,7 +95,16 @@ def _record_usage(r, label: str, checker: dict) -> None:
 def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None) -> tuple[dict[int, dict] | None, str | None]:
     """(verdicts by claim id, checker label) or (None, None) when no checker produced a complete judgement."""
     msgs = _messages(claims, sources)
+    openai_on = None
     for checker in cfg["checkers"]:
+        if call is None and checker.get("base_url") is None:
+            # the built-in OpenAI last-resort checker: only when the fallback switch is on. An injected `call` (tests,
+            # fulldoc stubs) owns its own transport, so it is not filtered here.
+            if openai_on is None:
+                from vera.inference_chain import openai_fallback_enabled
+                openai_on = openai_fallback_enabled()
+            if not openai_on:
+                continue
         if not (os.getenv(checker["api_key_env"]) or "").strip():
             continue
         label = f"{checker['provider']}:{checker['model']}"
@@ -104,8 +113,10 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None) -> tupl
                 text = call(checker, msgs)
             else:
                 kw = {"extra_body": checker["extra_body"]} if checker.get("extra_body") else {}
+                if checker.get("json_mode", True):  # A2: reasoning models may emit <think> text; _parse stays fail-closed
+                    kw["response_format"] = {"type": "json_object"}
                 r = _client(checker, cfg["timeout_s"]).chat.completions.create(
-                    model=checker["model"], messages=msgs, temperature=0, response_format={"type": "json_object"}, **kw)
+                    model=checker["model"], messages=msgs, temperature=0, **kw)
                 text = r.choices[0].message.content or ""
                 _record_usage(r, label, checker)
         except Exception as exc:  # noqa: BLE001  (next checker; logged by class only)
@@ -141,6 +152,10 @@ def apply(answer: str, claims: list[dict], verdicts: dict[int, dict], cfg: dict)
 def check_answer(answer: str, sources: list[dict], cfg: dict, call=None,
                  records: list | None = None) -> tuple[str | None, dict]:
     """(checked text, summary). Text None means fail closed (no claim survived, or no checker could judge)."""
+    from vera.grounded_ask import fix_citations  # lazy: grounded_ask does not import claim_check (no cycle)
+    cleaned, removed = fix_citations(answer, len(sources), "")
+    if removed:  # out-of-range numbers dropped; clean input is left byte-identical
+        answer = cleaned.rstrip()
     claims = split_claims(answer, len(sources), int(cfg["max_claims"]))
     if not claims:
         return None, {"checked": 0, "outcome": "no_cited_claims"}

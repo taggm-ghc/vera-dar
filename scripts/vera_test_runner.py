@@ -31,8 +31,11 @@ import fnmatch
 import os
 import re
 import shlex
+import shutil
 import stat
+import subprocess
 import sys
+import secrets
 
 FIXED_PATH = "/usr/bin:/bin"
 UNSHARE, SH, MOUNT, IP, MKDIR, ENV = "/usr/bin/unshare", "/bin/sh", "/usr/bin/mount", "/usr/bin/ip", "/usr/bin/mkdir", \
@@ -95,6 +98,74 @@ NAMED_REFUSALS = {"-c": "the runner pins it", "--config-file": "the runner pins 
                   "-W": "a warning filter can import a module", "--pythonwarnings": "a warning filter can import a module",
                   "-o": "it overrides the pinned ini", "--override-ini": "it overrides the pinned ini"}
 _HEX32 = re.compile(r"[0-9a-f]{32}")
+# Optional read-only real-document bundle (DEV-A). The caller sets VERA_TEST_RO_BUNDLE=1 as a SELECTOR only: it never
+# names a path. The one path ever bound is R/work/fd-1020/bundle (R = the checkout's parent), read-only, at the same
+# absolute path inside the namespace, and VERA_REAL_DAR9_BUNDLE is set to it for the tests.
+RO_BUNDLE_ENV = "VERA_TEST_RO_BUNDLE"
+RO_BUNDLE_REL = ("work", "fd-1020", "bundle")
+
+
+# Runner-owned temp area (DA-A1, IFV-S). pytest's tmp_path used to resolve under the sandbox's /tmp; the runner now
+# points --basetemp, TMPDIR, TEMP and TMP at ONE per-run directory R/work/test-tmp/r<hex> (short: AF_UNIX path limit) (mode 0700, created by
+# the runner, removed by it afterwards). Only that run directory is bound read-write (never R/work or test-tmp itself).
+TEST_TMP_REL = ("work", "test-tmp")
+
+
+def test_tmp_base(root):
+    return os.path.join(os.path.dirname(os.path.realpath(root)), *TEST_TMP_REL)
+
+
+def make_run_tmp(root):
+    """Create R/work/test-tmp (0700) and a fresh 0700 run directory in it; return the run directory path."""
+    base = test_tmp_base(root)
+    if os.path.islink(base) or os.path.islink(os.path.dirname(base)):
+        raise OSError("test-tmp area is reached through a symlink")
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    # short names on purpose: AF_UNIX paths are limited to 107 characters and tests bind sockets under tmp_path
+    for _ in range(100):
+        run = os.path.join(base, "r" + secrets.token_hex(2))
+        try:
+            os.mkdir(run, 0o700)
+            return os.path.realpath(run)
+        except FileExistsError:
+            continue
+    raise OSError("cannot create a unique run directory")
+
+
+def remove_run_tmp(root, run):
+    """Remove only this run's directory (must be a real, non-symlink direct child of test-tmp)."""
+    base = os.path.realpath(test_tmp_base(root))
+    if run and not os.path.islink(run) and os.path.dirname(os.path.realpath(run)) == base \
+            and os.path.basename(run).startswith("r"):
+        def _fix(func, path, _exc):                      # a test may have chmod-ed a directory: relax it and retry once
+            try:
+                os.chmod(os.path.dirname(path), 0o700)
+                os.chmod(path, 0o700)
+                func(path)
+            except OSError:
+                pass
+        shutil.rmtree(run, onerror=_fix)
+
+
+def ro_bundle(environ, root, walk=os.walk):
+    """(path_or_None, reasons). None + [] when the selector is unset. Refuses (never falls back) when the selector is not
+    exactly "1", the bundle is absent, any path component or entry is a symlink, or a credential-type file is inside."""
+    sel = environ.get(RO_BUNDLE_ENV)
+    if sel is None:
+        return None, []
+    if sel != "1":
+        return None, [f"{RO_BUNDLE_ENV} must be exactly 1 (it selects the fixed bundle; it is never a path)"]
+    root = os.path.realpath(root)
+    want = os.path.join(os.path.dirname(root), *RO_BUNDLE_REL)
+    if os.path.realpath(want) != want or not os.path.isdir(want):
+        return None, [f"{RO_BUNDLE_ENV}: the bundle directory is absent or reached through a symlink"]
+    out = []
+    for d, dirs, files in walk(want):
+        out += [f"{RO_BUNDLE_ENV}: symlink inside the bundle: {os.path.relpath(os.path.join(d, n), want)}"
+                for n in dirs + files if os.path.islink(os.path.join(d, n))]
+        out += [f"{RO_BUNDLE_ENV}: credential-type file inside the bundle: {os.path.relpath(os.path.join(d, f), want)}"
+                for f in files if any(fnmatch.fnmatchcase(f, g) for g in CRED_MASK_GLOBS)]
+    return (None, sorted(out)) if out else (want, [])
 
 
 def _under(p, base):
@@ -317,10 +388,14 @@ def rg1_findings(root, walk=os.walk, venv=None):
 
 
 # ---- B-5: environment -----------------------------------------------------------------------------------------
-def sandbox_env(environ):
+def sandbox_env(environ, bundle=None, tmp_run=None):
     env = {"PATH": FIXED_PATH, "HOME": SANDBOX_HOME, "LANG": "C.UTF-8", "TMPDIR": "/tmp",  # nosec B108 - in-namespace tmpfs
            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONDONTWRITEBYTECODE": "1",
            "PYTHONPYCACHEPREFIX": PYCACHE, RUNNER_MARKER: "1"}
+    if bundle:
+        env["VERA_REAL_DAR9_BUNDLE"] = bundle
+    if tmp_run:
+        env.update(TMPDIR=tmp_run, TEMP=tmp_run, TMP=tmp_run)
     nonce = environ.get("VERA_GATE_NONCE") or ""
     if _HEX32.fullmatch(nonce):
         env["VERA_GATE_NONCE"] = nonce
@@ -369,14 +444,14 @@ def git_dirs(root):
 
 # ---- B-3/B-4: the namespace script ------------------------------------------------------------------------------
 def sandbox_script(root, venv, gitdirs, cred_files, uid, gid, py, pytest_args, env, path_exists=os.path.exists,
-                   realpath=os.path.realpath, foreign=()):
+                   realpath=os.path.realpath, foreign=(), ro_extra=(), rw_extra=()):
     """Shell text for `/bin/sh -c` (every path shlex-quoted, every tool absolute). Stages the binds on a tmpfs /mnt
     BEFORE /home is hidden, masks, moves the binds back (shallowest first), then drops to the real uid in a nested
     user namespace and execs pytest with env -i."""
     if not (isinstance(uid, int) and uid > 0 and isinstance(gid, int) and gid >= 0):
         raise ValueError("uid/gid: run as a non-root user")
     q = shlex.quote
-    binds = [(root, True)] + list(gitdirs) + [(venv, False)]
+    binds = [(root, True)] + list(gitdirs) + [(venv, False)] + [(p, False) for p in ro_extra] + [(p, True) for p in rw_extra]
     binds = sorted(dict(binds).items(), key=lambda kv: kv[0].count("/"))
     for p, _rw in binds:
         if not os.path.isabs(p) or "\n" in p or any(_under(p, t) for t in TMPFS_TARGETS + ("/mnt",)):
@@ -395,6 +470,13 @@ def sandbox_script(root, venv, gitdirs, cred_files, uid, gid, py, pytest_args, e
               f"{MOUNT} -n --move {q(STAGE + str(n))} {q(dst)} || fail move"]
         if not rw:
             L.append(f"{MOUNT} -n -o remount,bind,ro {q(dst)} || fail ro")
+    for p in ro_extra:                        # in-namespace re-check of each read-only extra bind (symlink, hard link, credential name)
+        names = " -o ".join(f"-name {q(g)}" for g in CRED_MASK_GLOBS)
+        excl = " ".join(f"! -name {q(g)}" for g in CRED_MASK_EXCLUDE)
+        L += [f"n=$({FIND} {q(p)} \\( -type l -o -type f -links +1 \\) -print -quit 2>&1) || fail bundle-recheck-find",
+              f'[ -z "$n" ] || fail bundle-recheck-link',
+              f"n=$({FIND} {q(p)} -type f \\( {names} \\) {excl} -print -quit 2>&1) || fail bundle-recheck-find",
+              f'[ -z "$n" ] || fail bundle-recheck-credential']
     L.append(f"{MOUNT} -n -t tmpfs -o mode=0755 tmpfs /mnt || fail mnt")
     for t in TMPFS_TARGETS:
         if path_exists(t):
@@ -477,7 +559,7 @@ def unshare_argv(script):
             "--mount-proc", "--", SH, "-c", script, "sh"]
 
 
-def plan(argv, environ, root=None, isolated=None, uid=None, gid=None):
+def plan(argv, environ, root=None, isolated=None, uid=None, gid=None, tmp_run=None):
     """Pure-ish: ('run', argv_for_execve) or ('refuse', [reasons]). Reads the checkout (configs, credential names)."""
     root = os.path.realpath(root or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     isolated = bool(sys.flags.isolated) if isolated is None else isolated
@@ -489,6 +571,8 @@ def plan(argv, environ, root=None, isolated=None, uid=None, gid=None):
     reasons += bad
     reasons += [f"planted or unexpected config: {p}" for p in planted_configs(root, venv=_pinned_venv())]
     reasons += rg1_findings(root, venv=_pinned_venv())
+    bundle, why = ro_bundle(environ, root)
+    reasons += why
     for b in LAUNCH_BINARIES:
         reasons += trusted_binary(b)
     if reasons:
@@ -500,27 +584,45 @@ def plan(argv, environ, root=None, isolated=None, uid=None, gid=None):
     gd = git_dirs(root)
     try:
         with open("/proc/self/mountinfo", encoding="utf-8") as fh:
-            masks, bad = foreign_masks(foreign_mounts(fh.read()), [root, venv] + [p for p, _rw in gd])
+            masks, bad = foreign_masks(foreign_mounts(fh.read()), [root, venv] + [p for p, _rw in gd] + ([bundle] if bundle else []) + ([tmp_run] if tmp_run else []))
     except OSError:
         return "refuse", ["cannot read /proc/self/mountinfo (foreign-mount check)"]
     if bad:
         return "refuse", bad
+    if tmp_run:
+        # Safe to bind read-write: exactly one fresh 0700 directory this runner just created (a direct child of
+        # R/work/test-tmp, outside the checkout, git and credentials); nothing else of R/work is exposed, the /tmp, /run,
+        # /home and socket masks stay untouched, and the runner deletes it when the run ends.
+        if not any(a == "--basetemp" or a.startswith("--basetemp=") for a in pyargs):
+            pyargs += ["--basetemp", os.path.join(tmp_run, "p")]
     script = sandbox_script(root, venv, gd, credential_files(root, venv=venv), os.getuid() if uid is None else uid,
-                            os.getgid() if gid is None else gid, py, pyargs, sandbox_env(environ), foreign=masks)
+                            os.getgid() if gid is None else gid, py, pyargs, sandbox_env(environ, bundle, tmp_run), foreign=masks,
+                            ro_extra=[bundle] if bundle else [], rw_extra=[tmp_run] if tmp_run else [])
     return "run", unshare_argv(script)
 
 
 def main(argv=None):
-    kind, val = plan(sys.argv[1:] if argv is None else argv, os.environ)
-    if kind == "refuse":
-        for r in val:
-            os.write(2, ("vera_test_runner: refused: " + r + "\n").encode())
-        return EXIT_REFUSED
+    args = sys.argv[1:] if argv is None else argv
+    root = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     try:
-        os.execve(UNSHARE, val, {"PATH": FIXED_PATH})            # env -i: nothing of the caller's env crosses
+        run = make_run_tmp(root)
     except OSError as e:
-        os.write(2, f"vera_test_runner: cannot start the sandbox ({type(e).__name__})\n".encode())
+        os.write(2, f"vera_test_runner: cannot create the runner temp directory ({type(e).__name__})\n".encode())
         return EXIT_ISOLATION
+    try:
+        kind, val = plan(args, os.environ, root=root, tmp_run=run)
+        if kind == "refuse":
+            for r in val:
+                os.write(2, ("vera_test_runner: refused: " + r + "\n").encode())
+            return EXIT_REFUSED
+        try:
+            # a child process (not execve) so the runner can remove its run directory afterwards
+            return subprocess.run(val, env={"PATH": FIXED_PATH}, check=False).returncode  # env -i: nothing of the caller's env crosses
+        except OSError as e:
+            os.write(2, f"vera_test_runner: cannot start the sandbox ({type(e).__name__})\n".encode())
+            return EXIT_ISOLATION
+    finally:
+        remove_run_tmp(root, run)
 
 
 if __name__ == "__main__":

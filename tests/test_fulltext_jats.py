@@ -194,3 +194,23 @@ def test_supplementary_caption_kept_media_dropped():
                   b'</supplementary-material></sec><ack>')
     t = conv(raw)["text"]
     assert "S1 Fig" in t and "SYNTHETIC supplementary caption." in t and "f.tif" not in t
+
+
+# H1-C (FDC-1020): truncated and mis-declared JATS must be refused, never half-converted.
+def test_jats_truncated_at_half_length_refused():
+    raw = fs.jats("d14", "epi", "10.9999/x")
+    with pytest.raises(jt.ConversionError, match="XML parse error"):
+        conv(raw[: len(raw) // 2])
+
+
+def test_jats_truncated_inside_tag_refused():
+    raw = fs.jats("d15", "epi", "10.9999/x")
+    cut = raw.index(b"<article-title") + len(b"<article-ti")  # stop mid-tag name
+    with pytest.raises(jt.ConversionError, match="XML parse error"):
+        conv(raw[:cut])
+
+
+def test_jats_bytes_declared_html_refused():
+    raw = fs.jats("d16", "epi", "10.9999/x")
+    with pytest.raises(jt.ConversionError, match="no headed sections"):
+        conv(raw, fmt="html")

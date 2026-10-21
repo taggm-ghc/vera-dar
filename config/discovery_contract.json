@@ -2,7 +2,7 @@
   "note": "K2 answer contract (plan-K2-contract.md r2). Run-time switches and texts for the reading-list / discovery result. L1 (generated synthesis) is STRETCH and stays off unless its calibration note exists. discovery_memory.write_on_l0 follows owner rulings OD-K15d: a non-evidentiary discovery note on qualifying reading-list results, subject to validation and owner confirmation.",
   "layers": ["L0"],
   "texts": {
-    "not_read_line": "VERA-DAR has not acquired or read these full documents. This is a discovery result, not an evidence-grounded answer.",
+    "not_read_line": "VERA-DAR has not acquired or read the documents in this list. This is a discovery result, not an evidence-grounded answer.",
     "not_read_line_partial": "VERA-DAR has not acquired or read these full documents, except those marked 'full document stored (not inspected for this answer)'. This is a discovery result, not an evidence-grounded answer.",
     "representation_not_acquired": "index record or abstract; full document not acquired",
     "representation_acquired": "full document stored (not inspected for this answer)",

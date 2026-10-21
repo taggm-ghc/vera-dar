@@ -146,7 +146,7 @@ def test_fallback_text_has_no_unfilled_placeholder(monkeypatch, token):
          "admitted_evidence": [], "contract": {"layers": [], "fallback": token}, "candidates": []}
     at = _render(monkeypatch, b)
     infos = " ".join(i.value for i in at.info)
-    assert "{" not in infos and "}" not in infos and "inspected 2 full document" in infos
+    assert "{" not in infos and "}" not in infos and "searched 2 full document" in infos
 
 
 def test_long_quote_trimmed_to_config_cap(monkeypatch):
@@ -154,3 +154,22 @@ def test_long_quote_trimmed_to_config_cap(monkeypatch):
     b["citations"][0]["quote"] = "w" * 900
     t = _main_text(_render(monkeypatch, b))
     assert "w" * ue._quote_cap() in t and "w" * (ue._quote_cap() + 1) not in t
+
+
+def test_db_source_answer_renders_answer_sources_and_evidence(monkeypatch):
+    """A full-document answer whose corpus came from the DB reader (source=db) renders like any other (UI is source-agnostic)."""
+    at = _render(monkeypatch, _body(source="db", corpus_source={"kind": "db"}))
+    t = _main_text(at)
+    assert "Partial answer" in t and TITLE in t  # answer heading (completeness is partial in _body) and the Sources block
+    assert QUOTE in t and "2 documents inspected, 1 passage admitted" in t
+    assert any(c.value == "Evidence source: stored database." for c in at.caption)
+    assert "A\\. Author" in t and "CC BY 4\\.0" in t
+    assert not any("abstract" in c.value.lower() for c in at.caption if c.value.startswith("Claim check"))
+
+
+@pytest.mark.parametrize("cs,expect", [({"kind": "bundle"}, "Evidence source: local files."), ({"kind": "x"}, None),
+                                       (None, None), ("db", None)])
+def test_evidence_source_caption(monkeypatch, cs, expect):
+    at = _render(monkeypatch, _body(corpus_source=cs))
+    caps = [c.value for c in at.caption if c.value.startswith("Evidence source")]
+    assert caps == ([expect] if expect else [])

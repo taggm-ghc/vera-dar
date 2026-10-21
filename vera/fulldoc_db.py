@@ -40,6 +40,11 @@ EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 R_DBROW, R_DBHASH, R_DBEMPTY, R_DBRUN, R_DBCHUNK, R_DBCONN, R_DBPARTIAL = (
     "R-DBROW", "R-DBHASH", "R-DBEMPTY", "R-DBRUN", "R-DBCHUNK", "R-DBCONN", "R-DBPARTIAL")
+R_DBDOCPIN = "R-DBDOCPIN"  # per-document identity pin (text sha256, licence id, licence decision) missing or mismatched
+
+
+class _DocPinFail(Exception):
+    """A per-document pin mismatch: the WHOLE run is unusable (fail closed), not just the one document."""
 
 SQL_SOURCES = (f"SELECT s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
                f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
@@ -167,6 +172,13 @@ def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
     for k in ("manifest_sha256", "sums_sha256"):
         if pins.get(k) and b.get(k) != pins[k]:
             return _unusable_corpus(cfg, ids, R_PIN, f"recorded {k} differs from the configured pin")
+    # E3: with the bundle pinned, every document's identity is pinned too; the recorded sha256s alone are self-consistent
+    # under a coordinated tamper (rows + provenance rewritten together). Fully unpinned configs (tests only) skip this.
+    doc_pins = None
+    if pins.get("manifest_sha256") or pins.get("sums_sha256"):
+        doc_pins = pins.get("documents")
+        if not isinstance(doc_pins, dict) or not doc_pins or set(doc_pins) != set(ids):
+            return _unusable_corpus(cfg, ids, R_DBDOCPIN, "per-document pins are missing or differ from the run's documents")
 
     nds = {p.get("n_documents") for _, p in recs}
     if len(nds) != 1 or not isinstance(next(iter(nds)), int) or next(iter(nds)) != len(recs):
@@ -196,6 +208,13 @@ def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
                 raise fulltext_loader.Refused(R_DBROW, "canonical URL differs from the recorded item")
             if rec["provenance"].get("licence_decision") != "allow":
                 raise fulltext_loader.Refused(R_ERR, "licence_decision is not allow")
+            if doc_pins is not None:
+                dp = doc_pins.get(did)
+                got = {"text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                       "licence_id": ((rec["provenance"].get("licence") or {}).get("content") or {}).get("id"),
+                       "licence_decision": rec["provenance"].get("licence_decision")}
+                if not isinstance(dp, dict) or any(got[k] is None or got[k] != dp.get(k) for k in got):
+                    raise _DocPinFail(f"document {did!r} differs from its configured pin")
             base = {k: v for k, v in prov.items() if k not in _EXTRA_KEYS}
             if base != {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}:
                 raise fulltext_loader.Refused(R_DBROW, "stored provenance differs from the re-derived record")
@@ -204,10 +223,17 @@ def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
                 raise fulltext_loader.Refused(R_DUP, f"canonical source {key} already acquired")
             if rec["content_hash"] in seen_hashes:
                 raise fulltext_loader.Refused(R_DUP, "same full text already acquired under another canonical URL")
+        except _DocPinFail as e:
+            return _unusable_corpus(cfg, ids, R_DBDOCPIN, str(e))
         except fulltext_loader.Refused as e:
+            if doc_pins is not None:  # pinned run: any per-document failure makes the whole run unusable
+                return _unusable_corpus(cfg, ids, R_DBDOCPIN, f"pinned document {did!r} failed verification ({e.code})")
             unusable.append(_unusable(did, e.code, e))
             continue
         except Exception as e:  # noqa: BLE001
+            if doc_pins is not None:
+                return _unusable_corpus(cfg, ids, R_DBDOCPIN,
+                                        f"pinned document {did!r} could not be verified ({type(e).__name__})")
             unusable.append(_unusable(did, R_ERR, f"document could not be verified ({type(e).__name__})"))
             continue
         seen_keys.add(key)
@@ -232,6 +258,9 @@ def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
         for d in docs:
             res = dar.ingest_document(d)
             if res.get("status") != "indexed":
+                if doc_pins is not None:  # pinned run: a retrieval-index refusal makes the whole run unusable
+                    return _unusable_corpus(cfg, ids, R_DBDOCPIN,
+                                            f"pinned document {key_to_doc.get(d['source_key'])!r} refused by the retrieval index ({res.get('reason')})")
                 did = key_to_doc.pop(d["source_key"])
                 texts.pop(did, None)
                 acquired[:] = [a for a in acquired if a["document_id"] != did]

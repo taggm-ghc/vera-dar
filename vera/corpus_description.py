@@ -218,7 +218,9 @@ def generate_with_chain(entries):
         last = None
         for e in entries:
             try:
-                client = e.client() or _get_client()
+                client = e.client()
+                if client is None:  # OpenAI entry: only reachable when the fallback is on (the latch raises otherwise)
+                    client = _get_client()
                 kw = {"extra_body": e.extra_body} if e.extra_body else {}
                 r = client.chat.completions.create(model=e.model, messages=messages, temperature=0,
                                                    response_format={"type": "json_object"}, **kw)

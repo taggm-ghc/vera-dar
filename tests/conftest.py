@@ -228,3 +228,12 @@ def _reset_dar_runtime_after_test():
     mod = _sys.modules.get("vera.dar_runtime")
     if mod is not None:
         mod.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _reset_openai_default_client_latch():
+    """The API-process latch (main.py sets it at import when the OpenAI fallback is off) must not leak between tests."""
+    from vera import ask_service
+    ask_service.reset_default_client_latch()
+    yield
+    ask_service.reset_default_client_latch()

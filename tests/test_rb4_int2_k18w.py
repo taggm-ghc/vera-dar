@@ -227,8 +227,12 @@ def test_runner_session_attestation():
     prefix are active, no Postgres socket and no credential file of the host is visible."""
     raw = Path("/proc/self/environ").read_bytes().split(b"\0")
     names = {e.split(b"=", 1)[0].decode() for e in raw if e}
-    assert names <= {"PATH", "HOME", "LANG", "TMPDIR", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTHONDONTWRITEBYTECODE",
-                     "PYTHONPYCACHEPREFIX", "VERA_TEST_RUNNER", "VERA_GATE_NONCE", "USER"}, sorted(names)
+    extra = set()  # DEV-A: allowed only when the runner bound the fixed read-only bundle (VERA_TEST_RO_BUNDLE=1 at launch)
+    if "VERA_REAL_DAR9_BUNDLE" in names:
+        assert os.environ["VERA_REAL_DAR9_BUNDLE"] == str(REPO.parent / "work" / "fd-1020" / "bundle")
+        extra = {"VERA_REAL_DAR9_BUNDLE"}
+    assert names <= {"PATH", "HOME", "LANG", "TMPDIR", "TEMP", "TMP", "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTHONDONTWRITEBYTECODE",
+                     "PYTHONPYCACHEPREFIX", "VERA_TEST_RUNNER", "VERA_GATE_NONCE", "USER"} | extra, sorted(names)
     assert sys.flags.isolated and sys.pycache_prefix == "/tmp/vera-pycache"
     assert not os.path.exists("/var/run/postgresql/.s.PGSQL.5432") and not os.path.exists("/run/postgresql")
     assert not any(n.startswith(".s.PGSQL.") for n in os.listdir("/tmp"))
@@ -468,7 +472,7 @@ def test_runner_does_not_live_in_a_collected_or_imported_package():
     tree = ast.parse(src)
     imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     imported |= {n.module.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
-    assert imported <= {"__future__", "fnmatch", "os", "re", "shlex", "stat", "sys"}
+    assert imported <= {"__future__", "fnmatch", "os", "re", "secrets", "shlex", "shutil", "stat", "subprocess", "sys"}
 
 
 MOUNTINFO = (

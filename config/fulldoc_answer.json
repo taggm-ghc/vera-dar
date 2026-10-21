@@ -7,7 +7,55 @@
   "pins": {
     "_note": "sha256 of the DAR-9 canonical bundle files (manifest 92c4eeda, sums 4e8c497a); null = unpinned (tests only). A mismatch makes the whole bundle UNUSABLE.",
     "manifest_sha256": "92c4eeda8b67b0cafdd3a78b87ffd1884c74613eb5699ee38c99560ea3637b93",
-    "sums_sha256": "4e8c497a2527854e8c264389e37ca6ea1fc4e746d6d1dc485700942ff9901004"
+    "sums_sha256": "4e8c497a2527854e8c264389e37ca6ea1fc4e746d6d1dc485700942ff9901004",
+    "documents": {
+      "bracher2021": {
+        "text_sha256": "61f42342154173ac638d3ce67d82755be4ca09d26c7e285e39ebf8b3fe81a8a2",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      },
+      "gostic2020": {
+        "text_sha256": "3a20285e254f948d0787c9c567574e868ab3c70171c1ed7b8a84c373c59c77e0",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      },
+      "ioannidis2005": {
+        "text_sha256": "0bb48a8ef16dbee3f99976da13b27142b2e2663232e5ff99c377b0335ebfe66e",
+        "licence_id": "CC BY (version not stated in article record)",
+        "licence_decision": "allow"
+      },
+      "lehner2020": {
+        "text_sha256": "a7011bfa3177319b4792fa900106af75a7bcbdf5d29aa8f657e5c23e92dfea6c",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      },
+      "eyring2016": {
+        "text_sha256": "3faaa694a219e62577428dce3544ea715254107ec8babf3dff53fafcdd66f939",
+        "licence_id": "CC BY 3.0",
+        "licence_decision": "allow"
+      },
+      "sandve2013": {
+        "text_sha256": "8b8c624c8b57ce3a81c738de734336f50caf2f8a762c8beb0f4858a4b506094d",
+        "licence_id": "CC BY (version not stated in article record)",
+        "licence_decision": "allow"
+      },
+      "wilson2017": {
+        "text_sha256": "0ef542442b84dc0535110eb0ca7d10ad3cff78f641a3c74adb3a42dd8da5b624",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      },
+      "fair_pmc4792175": {
+        "text_sha256": "346ff05ceb5ed3abbe029e116d0dd8ff0f01f6788ecc09428e05f549053e764a",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      },
+      "petchey2015": {
+        "text_sha256": "dbc991b40b353bbde7a3315f4162d4dd7ecffee72dc3f2456326600c16a26be4",
+        "licence_id": "CC BY 4.0",
+        "licence_decision": "allow"
+      }
+    },
+    "_documents_note": "identity pins, not decision thresholds; derived 2026-10-20 from work/fd-1020/bundle manifest-filled.https.json (sha 92c4eeda8b67b0cafdd3a78b87ffd1884c74613eb5699ee38c99560ea3637b93) and texts.SHA256SUMS (sha 4e8c497a2527854e8c264389e37ca6ea1fc4e746d6d1dc485700942ff9901004), cross-checked against ingest-plan.json; update only together with the bundle pins"
   },
   "retrieval": {
     "candidate_k": 12,
@@ -140,7 +188,7 @@
     "quote_max_chars": 200,
     "partial_marker": " (partly supported by the cited passage)",
     "removed_note": "Note: sentences the cited passages did not support were removed.",
-    "insufficient_text": "VERA-DAR inspected {n_inspected} full document(s) it holds but found no passage that answers this question well enough to ground an answer, so it has not answered from memory.",
+    "insufficient_text": "VERA-DAR searched {n_inspected} full document(s) it holds but found no passage that answers this question well enough, so it has not written an answer or answered from memory.",
     "corpus_unusable_text": "VERA-DAR's full-document collection could not be verified right now, so it has not answered from memory.",
     "unchecked_note": "Note: parts of the draft that did not cite a passage could not be checked and were left out.",
     "insufficient_marker": "INSUFFICIENT_EVIDENCE",
