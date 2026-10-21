@@ -4,6 +4,7 @@ import random
 import re
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from vera import sources_sidebar as sb
@@ -39,13 +40,19 @@ def _page():
     render_sources_sidebar(st)
 
 
-def test_sidebar_renders_honest_answer_source_without_hosts_or_dates_in_code():
+@pytest.mark.parametrize("fulldoc", [False, True])
+def test_sidebar_renders_honest_answer_source_without_hosts_or_dates_in_code(monkeypatch, fulldoc):
+    from vera import disclosure
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: fulldoc)
     at = AppTest.from_function(_page)
     at.run(timeout=30)
     assert not at.exception
     text = " ".join(c.value for c in at.sidebar.caption)
-    assert "searches published scholarly sources and the web live" in text and "does not use abstracts or snippets as evidence" in text
-    assert "instead of answering from memory" in text
+    if fulldoc:  # state 2 (shipped after P1.6)
+        assert sb._HOW_FULLDOC in text and "lists documents it has not read" in text
+    else:
+        assert "searches published scholarly sources and the web live" in text and "does not use abstracts or snippets as evidence" in text
+        assert "instead of answering from memory" in text
     assert "onrender.com" not in text and "127.0.0.1" not in text
     src = (ROOT / "vera" / "sources_sidebar.py").read_text()
     assert not re.search(r"20\d\d-\d\d-\d\d", src)
@@ -384,11 +391,20 @@ EXPECTED_CAPTION = (
     "A third-party hosted language model may be used to decide whether a question is in scope.")
 
 
-def test_sidebar_caption_exact_a0():
+def test_sidebar_caption_exact_a0(monkeypatch):
+    from vera import disclosure
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: False)  # state 1
     at = AppTest.from_function(_page)
     at.run(timeout=30)
     assert not at.exception
     assert EXPECTED_CAPTION in [c.value for c in at.sidebar.caption]
+
+
+def test_sidebar_caption_exact_shipped_state():
+    at = AppTest.from_function(_page)  # shipped config = state 2 (P1.6)
+    at.run(timeout=30)
+    assert not at.exception
+    assert sb._HOW_FULLDOC + " " + sb.MODEL_LINE in [c.value for c in at.sidebar.caption]
 
 
 def test_sidebar_has_no_abstract_grounding_claims(monkeypatch):
@@ -412,10 +428,17 @@ def test_licence_sidebar_a0_exact():
     assert "abstract" not in sb.LICENCE_SIDEBAR and sb.LICENCE_UNDER_ANSWER == sb.LICENCE_SIDEBAR
 
 
-def test_sidebar_and_disclosure_share_a0_sentences():
+def test_sidebar_and_disclosure_share_a0_sentences(tmp_path):
     from vera import disclosure
-    t = disclosure.disclosure_text()
+    fd = tmp_path / "fd.json"
+    fd.write_text(json.dumps({"fulldoc": {"enabled": False}}))
+    t = disclosure.disclosure_text(fulldoc_path=fd)  # state 1 shares the A0 sentences
     for sentence in (sb.LICENCE_SIDEBAR, "does not use abstracts or snippets as evidence"):
         assert sentence in t, sentence
+    on = disclosure.disclosure_text()  # shipped = state 2 (P1.6): same statements, state-2 wording
+    for phrase in ("as reported by the indexing services and were not verified with the publisher",
+                   "does not use their abstracts or snippets as evidence"):
+        assert phrase in on, phrase
     # R-028 (2026-10-19): the disclosure replaced the scope-model sentence with the owner-approved third-party sentence
-    assert "sent to third-party AI and search services" in t and sb.MODEL_LINE not in t
+    for x in (t, on):
+        assert "sent to third-party AI and search services" in x and sb.MODEL_LINE not in x

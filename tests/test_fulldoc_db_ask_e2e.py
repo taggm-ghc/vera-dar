@@ -113,7 +113,10 @@ def test_db_backed_ask_answers_from_persisted_chunks(dbw):
         m = SPAN.match(a["span"])
         assert m and SID.match(a["span_id"]).group(1) == a["document_id"]
         passage = _text(persisted, a["document_id"])[int(m.group(1)):int(m.group(2))]
-        assert passage.strip() and json.dumps(passage.strip(), ensure_ascii=False)[1:-1] in prompt
+        # WED-P16-RET: compare against the decoded passages (a passage holding a newline or quote is escaped twice
+        # in the json.dumps of the whole message list, so a single-encoded substring test misses it)
+        texts = [p["text"] for p in json.loads(h.answer_calls[0][-1]["content"])["passages"]]
+        assert passage.strip() and any(passage.strip() in t for t in texts)
     # citations map to persisted evidence_spans rows (integer span_id) whose text holds the verbatim quote
     adm_ids = {a["span_id"] for a in adm}
     assert body["citations"]

@@ -105,6 +105,82 @@ def test_caps_and_overlap():
     assert len(b.admitted) == 1 and b.rejected[0]["reason"] == "cap_total"
 
 
+def test_admitted_character_budget():
+    """WED-P16-RET: admission.max_admitted_chars bounds the total admitted text (reason cap_total); absent = no budget."""
+    p2 = 10 + len(GOOD) + 1 + 20
+    cands = [span("d1", "a", 10, GOOD, 3), span("d1", "c", p2, GOOD, 2)]
+    assert [a["span_id"] for a in admit(Q, corp(cands), CFG).admitted] == ["a", "c"]
+    for budget, want in ((2 * len(GOOD), ["a", "c"]), (2 * len(GOOD) - 1, ["a"]), (len(GOOD) - 1, [])):
+        cfg = {**CFG, "admission": {**CFG["admission"], "max_admitted_chars": budget}}
+        b = admit(Q, corp(cands), cfg)
+        assert [a["span_id"] for a in b.admitted] == want
+        assert sum(len(a["text"]) for a in b.admitted) <= budget
+        assert all(r["reason"] == "cap_total" for r in b.rejected if r["span_id"] in {"a", "c"})
+
+
+MERGE = {"enabled": True, "max_gap_chars": 0, "max_passage_chars": 200}
+
+
+def _mcfg(**kw):
+    return {**CFG, "admission": {**CFG["admission"], "max_spans_per_doc": 3, "merge_adjacent": {**MERGE, **kw}}}
+
+
+def _merge_corpus(cands, ranges=None):
+    t = "x" * 10 + GOOD + " " + GOOD + " " + GOOD + " " + "y" * 40 + GOOD
+    f = Fake({"d1": t, "d2": "unrelated text here"}, cands)
+    if ranges is not None:
+        f.acquired[0]["evidence_ranges"] = ranges
+    return f, t
+
+
+def test_merge_overlapping_spans_exact_slice_and_rank():
+    """WED-P16-RET: overlapping/abutting candidates of one document become ONE exact document slice at the rank of the
+    best member; counts once; claim-check input == prompt passage [n] (both are the source snippet)."""
+    import json as _json
+    from vera import claim_check, fulldoc_answer
+    L = len(GOOD)
+    f, t = _merge_corpus([])
+    s1, s2 = 10, 10 + L + 1
+    far = len(t) - L
+    cands = [span("d1", "b", s2 - 5, t[s2 - 5:s2 + L], 3),  # overlaps a by 5 chars
+             span("d1", "a", s1, t[s1:s1 + L], 2), span("d1", "z", far, t[far:], 1)]
+    f.cands = cands
+    b = admit(Q, f, _mcfg())
+    assert [a["span_id"] for a in b.admitted] == [f"d1:{s1}-{s2 + L}", "z"]
+    m = b.admitted[0]
+    assert m["text"] == t[m["start"]:m["end"]] and m["merged_span_ids"] == ("b", "a")
+    assert m["text_sha256"] == __import__("hashlib").sha256(m["text"].encode()).hexdigest()
+    assert m["relevance"] == 1.0 and not [r for r in b.rejected if r["span_id"] in {"a", "b"}]
+    assert b.trace["merged"] == 1 and len(b.admitted) <= CFG["admission"]["max_spans_total"]
+    srcs = fulldoc_answer.sources_from(b)
+    user = _json.loads(fulldoc_answer.messages_for(Q, srcs, {"answer": {"system_prompt": "{sources}{insufficient_marker}",
+                                                                         "insufficient_marker": "X"}})[1]["content"])
+    chk = _json.loads(claim_check._messages([{"id": 1, "text": "c", "cites": [1, 2]}], srcs)[1]["content"])
+    for s in srcs:
+        assert user["passages"][s["n"] - 1]["text"] == chk["sources"][str(s["n"])] == s["snippet"]
+    off = admit(Q, f, {**CFG, "admission": {**CFG["admission"], "max_spans_per_doc": 3}})  # merge absent = old rule
+    assert {r["span_id"]: r["reason"] for r in off.rejected}.get("a") == "overlap"
+
+
+def test_merge_respects_passage_cap_range_and_budget():
+    L = len(GOOD)
+    f, t = _merge_corpus([])
+    s1, s2 = 10, 10 + L + 1
+    f.cands = [span("d1", "a", s1, t[s1:s1 + L], 3), span("d1", "b", s2 - 5, t[s2 - 5:s2 + L], 2)]
+    for cfg in (_mcfg(max_passage_chars=2 * L), _mcfg(enabled=False)):
+        b = admit(Q, f, cfg)
+        assert [a["span_id"] for a in b.admitted] == ["a"] and b.rejected[0]["reason"] == "overlap"
+    cfg = _mcfg()
+    cfg["admission"]["max_admitted_chars"] = L + 3  # merge would exceed the admitted-character budget
+    assert [a["span_id"] for a in admit(Q, f, cfg).admitted] == ["a"]
+    ac = [span("d1", "a", s1, t[s1:s1 + L], 3), span("d1", "c", s2, t[s2:s2 + L], 2)]
+    f3, _ = _merge_corpus(ac)
+    assert len(admit(Q, f3, _mcfg()).admitted) == 2  # gap 1 > max_gap_chars 0: separate passages
+    assert len(admit(Q, f3, _mcfg(max_gap_chars=1)).admitted) == 1
+    f4, _ = _merge_corpus(ac, ranges=[[0, s1 + L], [s1 + L, 10 ** 9]])  # the union would cross two body ranges
+    assert [a["span_id"] for a in admit(Q, f4, _mcfg(max_gap_chars=1)).admitted] == ["a", "c"]
+
+
 def test_corpus_unusable():
     un = [{"document_id": "u", "code": "sha", "reason": "bad"}]
     for c in (None, Fake({"d1": "t"}, [], status="corpus_unusable", unusable=un), Fake({}, [], unusable=un)):

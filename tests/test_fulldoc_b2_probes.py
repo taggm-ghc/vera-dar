@@ -21,6 +21,10 @@ SYNTH_OFF = [
     "What serial interval should my podcast episodes follow?",
     "Which software version should my bakery workflow use?",
 ]
+# Owner approval 2026-10-21 (WED-P16-RET, "i fully approve"): at admission.min_question_coverage 0.5 this synthetic
+# off-corpus probe is ADMITTED (at least 3 of its 5 content stems occur in one synthetic document). Accepted as a known false admit;
+# every other probe keeps the insufficient expectation.
+ACCEPTED_FALSE_ADMITS = {"Which software version should my bakery workflow use?"}
 REAL_OFF = [
     "How do I evaluate my startup's sales forecasts?",
     "How should I version control my wedding photos?",
@@ -44,7 +48,10 @@ def synth(tmp_path_factory):
 def test_synthetic_off_corpus_probe_is_insufficient(synth, q):
     corpus, cfg = synth
     ev = fulldoc_admission.admit(q, corpus, cfg)
-    assert ev.status == "insufficient" and not ev.grounded and ev.admitted == ()
+    if q in ACCEPTED_FALSE_ADMITS:  # owner-accepted residual risk; the claim check and "insufficient" are the backstop
+        assert ev.status == "admitted" and ev.admitted
+    else:
+        assert ev.status == "insufficient" and not ev.grounded and ev.admitted == ()
     assert len(ev.examined_full_documents) == 3  # inspected, recorded, and still not grounded
 
 

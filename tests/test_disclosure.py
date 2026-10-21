@@ -30,12 +30,21 @@ def test_text_exists_and_states_core_claims():
         assert phrase in t
 
 
-def test_disclosure_states_no_abstract_evidence():
-    t = disclosure.DISCLOSURE_TEXT
-    assert "does not use abstracts or snippets as evidence" in t
-    for bad in ("grounded only on index records and abstracts", "findings that passed",
-                "checked against the abstract they cite", "1,500", "1500"):
-        assert bad not in t
+def _fd(tmp_path, enabled):
+    p = tmp_path / "fd.json"
+    p.write_text(json.dumps({"fulldoc": {"enabled": enabled}}))
+    return p
+
+
+def test_disclosure_states_no_abstract_evidence(tmp_path):
+    off = disclosure.disclosure_text(fulldoc_path=_fd(tmp_path, False))  # state 1
+    on = disclosure.DISCLOSURE_TEXT  # shipped = state 2 (P1.6)
+    assert "does not use abstracts or snippets as evidence" in off
+    assert "does not use their abstracts or snippets as evidence" in on
+    for t in (off, on):
+        for bad in ("grounded only on index records and abstracts", "findings that passed",
+                    "checked against the abstract they cite", "1,500", "1500"):
+            assert bad not in t
     src = (ROOT / "vera" / "disclosure.py").read_text()
     assert "1,500" not in src and "1500" not in src and "abstracts (up to" not in src
 
@@ -52,9 +61,13 @@ def test_memory_sentence_follows_layers(tmp_path):
     assert l2.endswith(shipped)
 
 
-def test_licence_sentence_a0_exact():
+def test_licence_sentence_a0_exact(tmp_path):
     assert ("Licence terms are as reported by the indexing services for the listed records and were not verified "
-            "with the publisher.") in disclosure.DISCLOSURE_TEXT
+            "with the publisher.") in disclosure.disclosure_text(fulldoc_path=_fd(tmp_path, False))  # state 1
+    on = disclosure.DISCLOSURE_TEXT  # shipped = state 2 (P1.6): its own exact licence sentences
+    assert ("Licences for documents in its own collection were checked against the licence recorded in each document "
+            "and VERA-DAR's licence rules, not with the publisher. Licence terms for listed records are as reported by "
+            "the indexing services and were not verified with the publisher.") in on
 
 
 def test_no_l1_wording_when_l1_off(tmp_path):

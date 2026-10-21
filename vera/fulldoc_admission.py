@@ -175,6 +175,43 @@ def _unusable(question, corpus):
     return tuple(out)
 
 
+def _in_one_range(d: dict, start: int, end: int) -> bool:
+    ranges = d.get("evidence_ranges")
+    return isinstance(ranges, (list, tuple)) and any(
+        isinstance(r, (list, tuple)) and len(r) == 2 and r[0] <= start and end <= r[1] for r in ranges)
+
+
+def _try_merge(c: dict, admitted: list, corpus, d: dict, mcfg: dict, n_chars: int, max_chars):
+    """WED-P16-RET read-time merge: a candidate that overlaps or abuts (gap <= max_gap_chars) admitted passages of the
+    SAME document becomes one contiguous passage = the exact document slice [min start, max end). Allowed only when the
+    result is <= max_passage_chars, lies inside ONE body evidence range and keeps the admitted-character budget. The
+    merged passage keeps the position (rank) of its best-ranked member and the highest member relevance.
+    Returns (members, start, end, text) or None (no merge: the caller applies the ordinary overlap/cap rules)."""
+    gap = max(int(mcfg.get("max_gap_chars", 0)), 0)
+    cap = int(mcfg.get("max_passage_chars", 0))
+    members = [a for a in admitted if a["document_id"] == c["document_id"]
+               and c["start"] <= a["end"] + gap and a["start"] <= c["end"] + gap]
+    if not members or cap <= 0:
+        return None
+    start = min([c["start"]] + [a["start"] for a in members])
+    end = max([c["end"]] + [a["end"] for a in members])
+    if end - start > cap or not _in_one_range(d, start, end):
+        return None
+    if any(a["document_id"] == c["document_id"] and a not in members and start < a["end"] + gap and a["start"] < end + gap
+           for a in admitted):
+        return None
+    try:
+        full = corpus.text(c["document_id"])
+    except Exception:
+        return None
+    if not isinstance(full, str) or not 0 <= start < end <= len(full):
+        return None
+    extra = (end - start) - sum(a["end"] - a["start"] for a in members)
+    if max_chars is not None and n_chars + extra > max_chars:
+        return None
+    return members, start, end, full[start:end]
+
+
 def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     question = str(question or "")
     cfg = cfg if isinstance(cfg, dict) else {}
@@ -193,6 +230,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     min_hits = int(adm.get("min_matched_stems", 2))  # absolute floor: one shared word never grounds an answer
     max_doc = int(adm.get("max_spans_per_doc", 2))
     max_total = int(adm.get("max_spans_total", 6))
+    max_chars = adm.get("max_admitted_chars")  # WED-P16-RET: total admitted characters (absent = no character budget)
+    max_chars = None if max_chars is None else int(max_chars)
     k = int((cfg.get("retrieval") or {}).get("candidate_k", 12))
     weighted = str(adm.get("signal", "legacy")) == "idf_weighted"
     wcfg = adm.get("idf_signal") or {}
@@ -305,19 +344,34 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         scored.append((-rel, -score, str(sid), c, dict(d, _attribution=attr), rel))
     scored.sort(key=lambda t: t[:3])
 
-    admitted, per_doc = [], {}
+    mcfg = adm.get("merge_adjacent") or {}
+    merge_on = bool(mcfg.get("enabled", False))  # absent/false = no merging (pre-P16R behaviour)
+    admitted, per_doc, n_chars, n_merged = [], {}, 0, 0
     for _, _, _, c, d, rel in scored:
         did_s = str(c["document_id"])
         sid = c.get("span_id")
-        if any(a["document_id"] == c["document_id"] and c["start"] < a["end"] and a["start"] < c["end"]
+        m = _try_merge(c, admitted, corpus, d, mcfg, n_chars, max_chars) if merge_on else None
+        if m is not None:
+            members, start, end, text = m
+            keep = members[0]  # best-ranked member: admitted is in rank order
+            n_chars += len(text) - sum(len(a["text"]) for a in members)
+            ids = [x for a in members for x in a.get("merged_span_ids", (a["span_id"],))] + [sid]
+            keep.update({"span_id": f"{c['document_id']}:{start}-{end}", "start": start, "end": end, "text": text,
+                         "text_sha256": _sha(text), "relevance": max([rel] + [a["relevance"] for a in members]),
+                         "merged_span_ids": tuple(ids)})
+            admitted[:] = [a for a in admitted if a is keep or all(a is not x for x in members)]
+            per_doc[did_s] = sum(1 for a in admitted if str(a["document_id"]) == did_s)
+            n_merged += 1
+        elif any(a["document_id"] == c["document_id"] and c["start"] < a["end"] and a["start"] < c["end"]
                for a in admitted):
             rejected.append({"span_id": sid, "document_id": c["document_id"], "reason": "overlap"})
         elif per_doc.get(did_s, 0) >= max_doc:
             rejected.append({"span_id": sid, "document_id": c["document_id"], "reason": "cap_doc"})
-        elif len(admitted) >= max_total:
+        elif len(admitted) >= max_total or (max_chars is not None and n_chars + len(c["text"]) > max_chars):
             rejected.append({"span_id": sid, "document_id": c["document_id"], "reason": "cap_total"})
         else:
             per_doc[did_s] = per_doc.get(did_s, 0) + 1
+            n_chars += len(c["text"])
             admitted.append({
                 "span_id": sid, "document_id": c["document_id"], "canonical_source_id": d.get("canonical_source_id"),
                 "title": d.get("title"), "url": d.get("url"), "published": d.get("published"),
@@ -381,5 +435,6 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         corpus_source=src,
         trace={"candidates": len(cands), "admitted": len(admitted), "rejected_by_reason": by_reason,
                "examined": len(examined), "unusable": len(unusable),
+               **({"merged": n_merged} if n_merged else {}),
                **({"signal": "idf_weighted", "selector_documents": sorted(selector_docs), "et_al": et_al,
                    "non_selector_stems": len(q_ns)} if weighted else {})})

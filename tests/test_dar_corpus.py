@@ -117,6 +117,18 @@ def test_two_chunks_of_one_doc_survive_fusion():
     assert len({x["span_id"] for x in res["candidates"]}) == len(res["candidates"])
 
 
+def test_retrieve_max_per_doc_override():
+    """WED-P16-RET: an explicit per-call max_per_doc replaces corpus.max_chunks_per_doc; None keeps the config value."""
+    c = DarCorpus(make_cfg())
+    c.ingest_document(doc("a", "reef", 0, text=body("reef", 0, 60)))
+    cap = int(c.ccfg["max_chunks_per_doc"])
+    base = c.retrieve(q("reef", 3), k=12)["candidates"]
+    assert base == c.retrieve(q("reef", 3), k=12, max_per_doc=None)["candidates"] and len(base) <= cap
+    more = c.retrieve(q("reef", 3), k=12, max_per_doc=cap + 3)["candidates"]
+    assert cap < len(more) <= cap + 3 and [x["span_id"] for x in more[:len(base)]] == [x["span_id"] for x in base]
+    assert len(c.retrieve(q("reef", 3), k=12, max_per_doc=1)["candidates"]) == 1
+
+
 def test_unrestricted_branch_includes_unclassified_chunks():
     c, _ = build()
     odd = "zebra quokka narwhal pangolin ocelot " * 20

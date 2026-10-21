@@ -121,16 +121,22 @@ def test_sidebar_has_no_titles_quotes_or_urls(monkeypatch):
     assert not ue._TOKEN_DEFAULT.keys() & set(side.split())
 
 
+@pytest.mark.parametrize("fulldoc", [False, True])
 @pytest.mark.parametrize("page", ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py"])
-def test_disclosure_on_every_page(monkeypatch, page):
-    from vera.disclosure import _BASE
+def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
+    from vera import disclosure
+    from vera.disclosure import _BASE, _BASE_FULLDOC
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: fulldoc)  # off / P1.6 on
     monkeypatch.setenv("VERA_PUBLIC_MODE", "1")
     import requests
     monkeypatch.setattr(sb, "_corpus", lambda st: None)
     monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(json=lambda: {"commit": "abcdef1234"}))
     at = AppTest.from_file(str(ROOT / page), default_timeout=30).run()
     assert not at.exception
-    assert any(_BASE[:60] in c.value for c in at.caption)
+    if not fulldoc:
+        assert any(_BASE[:60] in c.value for c in at.caption)
+    else:  # state 2: the full state-2 base text, including the passage-transmission sentence
+        assert any(_BASE_FULLDOC in c.value for c in at.caption)
 
 
 def test_static_guard_references():

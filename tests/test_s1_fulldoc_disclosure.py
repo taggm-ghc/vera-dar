@@ -39,12 +39,14 @@ def test_flag_parsing_fails_closed_for_text_selection(tmp_path):
     for v in (True, "true", "1", "on"):
         assert disclosure.fulldoc_enabled(_cfg(tmp_path, v)) is True
     assert disclosure.fulldoc_enabled(tmp_path / "missing.json") is True  # unreadable -> over-disclose
-    assert disclosure.fulldoc_enabled(ROOT / "config" / "fulldoc_answer.json") is False  # shipped = off (not flipped)
+    assert disclosure.fulldoc_enabled(ROOT / "config" / "fulldoc_answer.json") is True  # shipped = on (P1.6)
 
 
 def test_state1_off_keeps_todays_text(tmp_path):
     t = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, False))
-    assert t.startswith(STATE1_DISCLOSURE_START) and t == disclosure.DISCLOSURE_TEXT
+    assert t.startswith(STATE1_DISCLOSURE_START) and t == (disclosure._BASE + disclosure._THIRD_PARTY + disclosure._NO_SAVE
+                                                         + disclosure._DEMO_NO_STORAGE)  # full state-1 text
+    assert disclosure.DISCLOSURE_TEXT.startswith(STATE23_DISCLOSURE_START)  # shipped = state 2/3 (P1.6)
     assert "has not acquired or read these full documents, so it does not use abstracts or snippets as evidence" in t
     assert PASSAGES_SENTENCE not in t and "passages" not in t
     assert disclosure._THIRD_PARTY.strip() in t  # question-only transmission is true only while off
@@ -103,3 +105,16 @@ def test_docs_carry_the_passage_transmission_statement():
     assert "When the optional full-document path is enabled, up to six selected passages (text, title, link) and the draft answer sentences are transmitted too." in api
     rd = (ROOT / "README.md").read_text()
     assert "the question, the selected passages with their titles and links, and draft answer sentences are sent to third-party AI services" in rd
+
+
+def test_disclosed_passage_count_equals_admission_cap():
+    """WED-P16-RET AC-6: the S1 wording "up to six passages" (page disclosure and sidebar) must equal the effective
+    admission.max_spans_total; the admitted-character budget never exceeds max_spans_total x the stored chunk size."""
+    cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text(encoding="utf-8"))
+    words = {6: "six"}
+    n = int(cfg["admission"]["max_spans_total"])
+    assert n in words, "max_spans_total changed: the S1 disclosure wording needs owner review"
+    assert f"up to {words[n]} passages" in disclosure._BASE_FULLDOC and f"up to {words[n]} passages" in sb._HOW_FULLDOC
+    chunk = int(json.loads((ROOT / "config" / "domain_routing.json").read_text(encoding="utf-8"))["corpus"]["chunk_chars"])
+    assert int(cfg["admission"]["max_admitted_chars"]) <= 3 * n * chunk  # plan AC-5: <= 3x the 6 x 400 baseline
+    assert int(cfg["admission"]["merge_adjacent"]["max_passage_chars"]) <= 3 * chunk

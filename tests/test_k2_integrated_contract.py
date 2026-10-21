@@ -145,8 +145,11 @@ def _texts(at, *names):
 ALL = ("markdown", "caption", "info", "warning", "success", "error")
 
 
+@pytest.mark.parametrize("fulldoc", [False, True])
 @pytest.mark.parametrize("case", CASES)
-def test_ask_body_into_page(monkeypatch, case):
+def test_ask_body_into_page(monkeypatch, case, fulldoc):
+    from vera import disclosure
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: fulldoc)  # page wording state (off / P1.6 on)
     raw, body, reader = _post(monkeypatch, case)
     at = _page(monkeypatch, body)
     page = "\n".join(_texts(at, *ALL))
@@ -158,7 +161,11 @@ def test_ask_body_into_page(monkeypatch, case):
     assert find_terms(page) == [], find_terms(page)
     # R-T 4 (I5c): sidebar is truthful
     side = _texts(at.sidebar, "caption")
-    assert any("does not use abstracts or snippets as evidence" in t for t in side)
+    if not fulldoc:
+        assert any("does not use abstracts or snippets as evidence" in t for t in side)
+    else:  # state 2: the exact state-2 sidebar text; the disclosure keeps the no-abstract-evidence statement
+        assert any(sb._HOW_FULLDOC in t for t in side)
+        assert "does not use their abstracts or snippets as evidence" in page
     assert not any("characters each" in t for t in side)
     if case == "answer":  # (f) the gate is a kind check, not a deletion
         assert body["result_kind"] == "answer" and body["candidates"] == []

@@ -27,14 +27,18 @@ Q = "How was the transmission of the pathogen related to incidence during an out
 
 def test_shipped_config_state():
     cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
-    assert cfg["fulldoc"]["enabled"] is False  # pending acceptance; INT-final sets true
+    assert cfg["fulldoc"]["enabled"] is True  # P1.6: enabled after acceptance (was false on RC2)
     adm = cfg["admission"]
     assert adm["excluded_section_headings"] == ["How to cite", "Code availability", "Supporting information"]
     assert adm["excluded_paragraph_labels"] == ["How to cite this article:", "How to cite:"]
     assert adm.get("signal", "legacy") == "legacy" and adm["pointer_filter"]["enabled"] is False
     assert "PENDING CAL" in cfg["_calibration_note"] and cfg["_calibration_note"].startswith("admission thresholds: probed")
     assert cfg["answer"]["per_part"]["enabled"] is True and cfg["fallback_tokens"]["model_insufficient"] == "model_insufficient"
-    assert cfg["retrieval"]["candidate_k"] == 12 and adm["max_spans_per_doc"] == 2  # priors stay inactive
+    assert adm["max_spans_per_doc_prior_uncalibrated"] == 3 and cfg["retrieval"]["candidate_k_prior_uncalibrated"] == 20
+    # WED-P16-RET capacity (owner directive 2026-10-21): several passages from one dominant source, bounded
+    assert cfg["retrieval"]["candidate_k"] == 16 and cfg["retrieval"]["max_chunks_per_doc"] == 8
+    assert adm["max_spans_per_doc"] == 6 and adm["max_spans_total"] == 6 and adm["max_admitted_chars"] == 4800
+    assert adm["merge_adjacent"]["enabled"] is True and adm["merge_adjacent"]["max_passage_chars"] == 1200
 
 
 def test_v0_is_the_p0_config_byte_copy():
@@ -74,15 +78,15 @@ def _fields(r):
 def test_disabled_equals_pre_fda_path_and_makes_no_writes(monkeypatch, tmp_path):
     _no_store(monkeypatch)
     root = synth.write_bundle(tmp_path / "b")
-    # pre-FDA: the bundle variable is unset
+    cfg = synth.synth_cfg()
+    cfg["fulldoc"]["enabled"] = False  # explicit: synth_cfg() enables the flag on its own copy
+    # P1.6: the shipped file is now true, so the flag-off state comes from this explicit copy for both calls
+    monkeypatch.setattr(fulldoc_corpus, "load_config", lambda *a, **k: cfg)
+    # pre-FDA: flag off and the bundle variable is unset
     monkeypatch.delenv("VERA_FULLDOC_BUNDLE_DIR", raising=False)
     base_calls: list = []
     base = _ask(monkeypatch, base_calls)
     # flag off, bundle variable SET: must be identical to the pre-FDA result
-    cfg = synth.synth_cfg()
-    cfg["fulldoc"]["enabled"] = False  # explicit: synth_cfg() enables the flag on its own copy
-    assert json.loads(CONFIG.read_text(encoding="utf-8"))["fulldoc"]["enabled"] is False  # the SHIPPED file is false
-    monkeypatch.setattr(fulldoc_corpus, "load_config", lambda *a, **k: cfg)
     monkeypatch.setenv("VERA_FULLDOC_BUNDLE_DIR", str(root))
     off_calls: list = []
     off = _ask(monkeypatch, off_calls)

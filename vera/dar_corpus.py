@@ -564,7 +564,7 @@ class DarCorpus:
                 "domains": sorted(x.domain_id for x in self.registry.domains_for_chunk(c["span_id"])),
                 "branches": list(branches), "status": "proposed"}
 
-    def retrieve(self, question: str, k: int | None = None) -> dict:
+    def retrieve(self, question: str, k: int | None = None, max_per_doc: int | None = None) -> dict:
         trace = {"routing": "off", "question_domains": [], "branch_counts": {}, "reserved": 0, "fallback_only": 0,
                  "limitation": LIMITATION}
         if not self._enabled():
@@ -594,9 +594,10 @@ class DarCorpus:
         rid = {id(g) for g in reserved}
         rest = sorted((g for g in groups if id(g) not in rid), key=lambda g: (-g["score"], g["best"]))
         per_doc, picked = Counter(), []
+        cap = int(self.ccfg["max_chunks_per_doc"]) if max_per_doc is None else max(int(max_per_doc), 1)
         for g in reserved + rest:  # a document may fill at most max_chunks_per_doc slots, so one long document cannot
             sk = g["rep"]["source_key"]  # monopolise the candidates (cross-domain questions need several documents)
-            if per_doc[sk] < int(self.ccfg["max_chunks_per_doc"]):
+            if per_doc[sk] < cap:
                 per_doc[sk] += 1
                 picked.append(g)
         out = [self._candidate(g["rep"], g["branches"]) for g in picked[:k]]

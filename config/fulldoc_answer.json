@@ -58,7 +58,9 @@
     "_documents_note": "identity pins, not decision thresholds; derived 2026-10-20 from work/fd-1020/bundle manifest-filled.https.json (sha 92c4eeda8b67b0cafdd3a78b87ffd1884c74613eb5699ee38c99560ea3637b93) and texts.SHA256SUMS (sha 4e8c497a2527854e8c264389e37ca6ea1fc4e746d6d1dc485700942ff9901004), cross-checked against ingest-plan.json; update only together with the bundle pins"
   },
   "retrieval": {
-    "candidate_k": 12,
+    "candidate_k": 16,
+    "max_chunks_per_doc": 8,
+    "_capacity_note": "WED-P16-RET (2026-10-21, owner directive: full-document answers need several passages from one dominant source). candidate_k 12->16; max_chunks_per_doc = per-document candidate cap for THIS path only (absent = config/domain_routing.json corpus.max_chunks_per_doc, 2). Stored span size is fixed by the G4 ingestion (chunk_chars 400); only read-time counts and the admission character budget changed.",
     "_evidence_only_note": "C1 provides retrieve(question, k, evidence_only). CAL-impl reads this key (admission passes it to corpus.retrieve). PRIOR value true per plan template; CAL confirms. Default when absent: false.",
     "evidence_only": true,
     "candidate_k_prior_uncalibrated": 20
@@ -67,7 +69,15 @@
     "min_relevance": 0.4,
     "min_matched_stems": 2,
     "max_spans_total": 6,
-    "max_spans_per_doc": 2,
+    "max_spans_per_doc": 6,
+    "max_admitted_chars": 4800,
+    "merge_adjacent": {
+      "_note": "WED-P16-RET read-time merge (no re-chunking): a candidate overlapping or abutting (gap <= max_gap_chars) an admitted passage of the same document joins it as one exact document slice, if the result is <= max_passage_chars and inside one body evidence range. A merged passage counts once toward max_spans_total/max_spans_per_doc and keeps its best member's rank; span_id = '<document_id>:<start>-<end>', merged_span_ids lists the members. enabled=false restores the overlap rejection.",
+      "enabled": true,
+      "max_gap_chars": 0,
+      "max_passage_chars": 1200
+    },
+    "_capacity_note": "WED-P16-RET: max_spans_per_doc 2->6 (one dominant source may fill every slot); max_spans_total stays 6 (the S1 disclosure says 'up to six passages'; tests/test_s1_fulldoc_disclosure.py ties the two); max_admitted_chars (new) = hard bound on admitted passage characters sent to the answering model = 2 x the pre-change worst case (6 x 400); over it => reject reason cap_total. Ranking, every gate and the stored chunk size unchanged.",
     "relevance": {
       "_note": "Admission scoring settings, deliberately independent of config/domain_routing.json (routing is a retrieval aid and must never steer a gate; tests/test_dar_routing.py isolation rule). Values copied 2026-10-19 from domain_routing.json identification/corpus so admission relevance equals DarCorpus.relevance.",
       "token_pattern": "[^\\W\\d_]+",
@@ -147,7 +157,7 @@
     ],
     "section_gap_chars": 2,
     "_note": "A passage is admissible only if it lies wholly inside a body section of the converted full text (conversion record sections): title, abstract and back matter are never evidence. min_matched_stems has no relaxation, so a one-content-word question is never grounded. The admitted passages together must also cover at least min_question_coverage of the question's content stems (review B2: incidental overlap on a subset of terms is not evidence); otherwise nothing is admitted.",
-    "min_question_coverage": 0.8,
+    "min_question_coverage": 0.5,
     "excluded_section_headings": [
       "How to cite",
       "Code availability",
@@ -166,7 +176,7 @@
       "enabled": false
     },
     "signal": "legacy",
-    "_signal_note": "idf_weighted replaces min_question_coverage (0.8 raw stem coverage); 'legacy' keeps the old rule. min_question_coverage is ignored in idf_weighted mode.",
+    "_signal_note": "idf_weighted replaces min_question_coverage (0.5 raw stem coverage; 0.8 until OWN-1021 approval of 0.5); 'legacy' keeps the old rule. min_question_coverage is ignored in idf_weighted mode.",
     "idf_signal": {
       "_note": "PRIOR / UNCALIBRATED. min_weighted_coverage = V2 IDF-weighted per-document coverage (idf = ln((N+1)/(df+1))+1 over body evidence chunks; unseen question stems get the max smoothed IDF and stay in the denominator). salient_k = V3: the k highest-IDF non-selector question stems must all occur in the document's admitted spans (0 disables). min_relevance = weighted per-span relevance (replaces admission.min_relevance in this mode).",
       "min_weighted_coverage": 0.6,
@@ -271,6 +281,6 @@
   },
   "fulldoc": {
     "_note": "F13 flag. false = FDA path off, /ask behaves as before (pending acceptance; INT sets true after acceptance).",
-    "enabled": false
+    "enabled": true
   }
 }

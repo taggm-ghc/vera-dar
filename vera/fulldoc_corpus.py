@@ -132,10 +132,12 @@ class FullDocCorpus:
         sections) BEFORE the top-k cut; the default keeps today's behaviour. Each span carries `in_evidence`."""
         if self.status != STATUS_OK or self._dar is None or not self._texts:
             return []
-        k = int(k if k is not None else (self._cfg.get("retrieval") or {}).get("candidate_k", 12))
+        rcfg = self._cfg.get("retrieval") or {}
+        k = int(k if k is not None else rcfg.get("candidate_k", 12))
+        mpd = rcfg.get("max_chunks_per_doc")  # WED-P16-RET: absent = the routing config's value (unchanged behaviour)
         dar = self._evidence_dar() if evidence_only else self._dar
         out = []
-        for c in dar.retrieve(str(question or ""), k)["candidates"]:
+        for c in dar.retrieve(str(question or ""), k, max_per_doc=None if mpd is None else int(mpd))["candidates"]:
             did = self._key_to_doc.get(c["source_key"])
             if did is None:
                 continue

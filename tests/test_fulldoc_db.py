@@ -266,8 +266,8 @@ def test_readiness_db_shape_codes_and_counts_only(world, monkeypatch):
     assert r2["status"] == "unusable" and r2["pins_ok"] is False and r2["codes"] == [fc.R_PIN]
 
 
-def test_shipped_flag_still_false():
-    assert json.loads(Path(fc.CONFIG_PATH).read_text(encoding="utf-8"))["fulldoc"]["enabled"] is False
+def test_shipped_flag_true_after_p16():
+    assert json.loads(Path(fc.CONFIG_PATH).read_text(encoding="utf-8"))["fulldoc"]["enabled"] is True  # P1.6
 
 
 # ----------------------------------------------------------------------------------------------- ingest script
