@@ -111,9 +111,15 @@ class FullDocCorpus:
         chunker; df / length statistics are recomputed over the kept chunks."""
         with self._ev_lock:
             if self._ev_dar is None:
-                ev = DarCorpus(_routing_cfg())
-                for d in self._docs_for_dar:
-                    ev.ingest_document(d)
+                if self._dar is not None:
+                    # ACQ-REBUILD-PERF-1021: a fresh index over the same documents, order and config reaches exactly the
+                    # main index's state, so reuse it (shallow copy: shared docs, registry and identifier, read-only at
+                    # retrieve) instead of re-running domain identification; only the chunk list and BM25 stats differ.
+                    ev = copy.copy(self._dar)
+                else:
+                    ev = DarCorpus(_routing_cfg())
+                    for d in self._docs_for_dar:
+                        ev.ingest_document(d)
                 kept = []
                 for c in ev._chunks:
                     did = self._key_to_doc.get(c["source_key"])

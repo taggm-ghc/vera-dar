@@ -52,6 +52,8 @@ class DomainIdentifier:
         self._clusters: list[dict] = []  # pending: {"docs": [keys], "centroid": {term: w}}
         self._pending: list[str] = []  # pending documents (no domain yet); re-clustered from scratch on each park
         self._aliases: dict[int, int] = {}  # alias domain_id -> canonical domain_id (consolidation; rows are never deleted)
+        self._pver = 0  # ACQ-REBUILD-PERF-1021: bumped at EVERY _profiles/_aliases mutation; keys the classify memo
+        self._dmemo = None
 
     # ---- consolidation aliases ----
     @property
@@ -77,6 +79,7 @@ class DomainIdentifier:
         if alias_id in self._aliases:
             return False  # already aliased elsewhere
         self._sync_profiles()
+        self._pver += 1
         prof = self._profiles.setdefault(canonical_id, {})
         for t, w in self._profiles.get(alias_id, {}).items():
             prof[t] = prof.get(t, 0.0) + w
@@ -104,21 +107,36 @@ class DomainIdentifier:
             va, vb = vb, va
         return sum(x * vb.get(t, 0.0) for t, x in va.items()) / (na * nb)
 
-    def _dcos(self, a: dict[str, float], b: dict[str, float]) -> float:
+    def _dcos(self, a: dict[str, float], b: dict[str, float], ctx: dict | None = None) -> float:
         """Class-based TF-IDF cosine (domain-level idf): once two or more domains exist, a term's weight is
         log(1 + D / number_of_domain_profiles_containing_it), so boilerplate present in every domain profile weighs
         little and topical terms concentrated in one domain weigh a lot. With fewer than two domains it is the plain
         document-level cosine."""
-        profs = list(self._active().values())
+        # ACQ-REBUILD-PERF-1021: `ctx` is a memo for the READ-ONLY classify(), valid while _pver is unchanged (profiles
+        # and aliases unchanged): the per-term domain factor and each profile's vector are computed once per
+        # call instead of once per (text, profile) pair. Same expressions in the same order => bit-identical scores.
+        profs = list(self._active().values()) if ctx is None else ctx["profs"]
         if len(profs) < 2:
             return self._cos(a, b)
         D = len(profs)
+        fac = {} if ctx is None else ctx["fac"]
+        def f(t):
+            r = fac.get(t)
+            if r is None:
+                r = fac[t] = math.log(1.0 + D / max(1, sum(1 for pr in profs if t in pr)))
+            return r
         def vec(w):
-            v = {t: x * math.log(1.0 + D / max(1, sum(1 for pr in profs if t in pr))) for t, x in w.items()}
+            v = {t: x * f(t) for t, x in w.items()}
             n = math.sqrt(sum(x * x for x in v.values()))
             return v, n
         va, na = vec(a)
-        vb, nb = vec(b)
+        if ctx is None:
+            vb, nb = vec(b)
+        else:
+            pv = ctx["pv"].get(id(b))
+            if pv is None or pv[0] is not b:
+                pv = ctx["pv"][id(b)] = (b, *vec(b))
+            _, vb, nb = pv
         if not na or not nb:
             return 0.0
         if len(va) > len(vb):
@@ -191,6 +209,7 @@ class DomainIdentifier:
                 # config/manual domains are seeded from their name tokens; a DERIVED domain starts empty (its profile is
                 # exactly the sum of its member documents, the same definition live and after restore())
                 self._profiles[d.domain_id] = {} if d.origin == "derived" else _tf(tokenize(d.name, self.icfg))
+                self._pver += 1
 
     def _scores(self, tf: dict[str, float]) -> list[tuple[int, float]]:
         self._sync_profiles()
@@ -198,6 +217,7 @@ class DomainIdentifier:
         return sorted(sc, key=lambda x: (-x[1], x[0]))
 
     def _add_to_profile(self, did: int, tf: dict[str, float]) -> None:
+        self._pver += 1
         prof = self._profiles.setdefault(self._canon(did), {})
         for t, w in tf.items():
             prof[t] = prof.get(t, 0.0) + w
@@ -229,7 +249,11 @@ class DomainIdentifier:
         if not tf:
             return []
         self._sync_profiles()
-        sc = sorted(((did, self._dcos(tf, prof)) for did, prof in self._active().items() if did not in exclude), key=lambda x: (-x[1], x[0]))
+        act = self._active()
+        ctx = self._dmemo
+        if ctx is None or ctx["ver"] != self._pver:  # memo valid until the next profile/alias mutation (see _dcos)
+            ctx = self._dmemo = {"ver": self._pver, "profs": list(act.values()), "fac": {}, "pv": {}}
+        sc = sorted(((did, self._dcos(tf, prof, ctx)) for did, prof in act.items() if did not in exclude), key=lambda x: (-x[1], x[0]))
         out = [{"domain_id": d, "score": s} for d, s in sc if s >= floor and s > 0]
         ratio = float(self.icfg["chunk_secondary_ratio" if kind == "chunk" else "question_secondary_ratio"])
         if out and ratio > 0:  # secondary labels must be comparable to the best one (boilerplate scores cannot qualify)
@@ -391,6 +415,7 @@ class DomainIdentifier:
             n += 1
         did = dom.domain_id
         self._sync_profiles()
+        self._pver += 1
         if created:
             self._profiles[did] = {}
         for key in cluster["docs"]:

@@ -26,6 +26,15 @@
     "override_layer2_declines": true,
     "layer2_categories_allowed": ["off_topic"],
     "_dar1021_note": "DAR-1021: a layer-2 decline starts acquisition (and, only when override_layer2_declines is true, may later be answered from acquired documents alone through the unchanged full-document admission, claim check and citation path) ONLY when the classifier's category is in layer2_categories_allowed (closed enum; missing or unknown = no). Layer-1 declines, malformed replies, other categories and layer2_none never acquire or answer. UNCALIBRATED: the classifier's category accuracy has not been measured on live traffic.",
+    "inline_answer_note": "VERA-DAR found and added these documents while answering this question.",
+    "inline_answer_note_stored": "VERA-DAR answered from open-access documents it had already added to its collection for an earlier question.",
+    "inline_answer_note_answer_only": "VERA-DAR found these documents while answering this question and used them for this answer only; they had too few relevant passages to be added to its collection.",
+    "inline_answer_note_mixed": "VERA-DAR answered from documents it found or already held; some of the documents it found while answering this question had too few relevant passages to be added to its collection and were used for this answer only.",
+    "inline_answer_note_unsaved": "VERA-DAR found these documents while answering this question; they could not be saved to its collection.",
+    "inline_notice_none": "VERA-DAR searched for open-access full-text documents on this question while answering, but none passed its licence, content and relevance checks.",
+    "inline_notice_deadline": "VERA-DAR searched for open-access full-text documents on this question while answering, but could not finish checking them within its time limit.",
+    "inline_notice_search_failed": "VERA-DAR tried to search for open-access full-text documents on this question while answering, but the search did not complete.",
+    "inline_notice_unanswered": "VERA-DAR searched for and checked open-access full-text documents on this question while answering, but could not produce a checked answer from them.",
     "override_answer_prefix": "This question is outside VERA-DAR's curated scope. The answer below comes only from open-access documents VERA-DAR added to its collection automatically after licence, content and relevance checks; it may be wrong. For medical, legal, financial or safety matters, please consult a qualified professional or an appropriate official source.",
     "reading_list_notice_answering": "VERA-DAR has started a background search for open-access full-text sources on this question. If any pass its licence, content and relevance checks, asking the same question again in about ten minutes may give an answer drawn only from those documents.",
     "reading_list_notice_listing": "VERA-DAR has started a background search for open-access full-text sources on this question. Documents that pass its licence, content and relevance checks may be added to its collection; they are not used to answer questions outside its scope.",
@@ -63,9 +72,28 @@
     "question_max_age_s": 600,
     "sync_wait_s": 0,
     "served_acquired_max_bytes": 50000000,
-    "min_admitted_spans": 2,
-    "_min_admitted_spans_note": "calibration 2026-10-21 (work/wed-acq2/measure/measure-out.json): single-document admission over the 9 real DAR-9 texts. calset-v2 on-topic (question, source doc) pairs: 17, of which >=1 span 7, >=2 5, >=3 4. Off-topic pairs (calset question vs other doc): 230, >=1 6 (2.6%), >=2 5 (2.2%), >=3 2 (0.9%). B2 off-corpus probes x 9 docs: 54, >=1 8 (14.8%), >=2 4 (7.4%), >=3 3 (5.6%). Value 2: halves the probe false-pass rate of 1 at a cost of 2 of 7 on-topic passes; 3 loses another on-topic pass for a small further gain. The gate is conservative (most on-topic pairs admit 0 spans) and not clean (2-7% false passes): residual R-7/FM-13. Change it when live R-ACQ-FEWSPANS/IRRELEVANT counts and stored-document reviews show a different trade-off.",
+    "answer_min_admitted_spans": 1,
+    "_answer_min_admitted_spans_note": "ONE-SPAN-1021 (owner approval 2026-10-21, DAR single-passage answer eligibility): on the inline answer path a fetched document with >= this many qualifying passages (after the unchanged licence, integrity, injection, harmful-content and relevance checks) supplies evidence to the EPHEMERAL answer corpus of this request only. Every sentence is still claim-checked against its cited passage and removed when unsupported; a partly covered question is answered as partial (claim_check.answer_completeness). Code floor 1 (0 qualifying passages never answers: reading list). Calibration: same data as _min_admitted_spans_note (work/wed-acq2/measure/measure-out.json, 9 real DAR-9 texts): at >= 1 span on-topic passes 7 of 17 (vs 5 at >= 2), off-topic false passes 2.6% (vs 2.2%), off-corpus probes 14.8% (vs 7.4%). Value 1 is the owner decision; the higher probe false-pass rate is bounded by the per-claim check (unsupported sentences removed) and by not persisting such documents. Change it when live ACQ-ANSWER-ONLY counts and reviewed single-passage answers show the per-claim check does not contain the false passes.",
+    "persist_min_admitted_spans": 2,
+    "_persist_min_admitted_spans_note": "ONE-SPAN-1021: persistent-corpus admission, unchanged value (was min_admitted_spans; the calibration note below applies). A document below it may answer the request (answer_min_admitted_spans) but is NOT written (telemetry persisted=false, reason below_persist_min). The background job persists only at >= this value. Code floor 2 (owner).",
+    "_min_admitted_spans_note": "(applies to persist_min_admitted_spans) calibration 2026-10-21 (work/wed-acq2/measure/measure-out.json): single-document admission over the 9 real DAR-9 texts. calset-v2 on-topic (question, source doc) pairs: 17, of which >=1 span 7, >=2 5, >=3 4. Off-topic pairs (calset question vs other doc): 230, >=1 6 (2.6%), >=2 5 (2.2%), >=3 2 (0.9%). B2 off-corpus probes x 9 docs: 54, >=1 8 (14.8%), >=2 4 (7.4%), >=3 3 (5.6%). Value 2: halves the probe false-pass rate of 1 at a cost of 2 of 7 on-topic passes; 3 loses another on-topic pass for a small further gain. The gate is conservative (most on-topic pairs admit 0 spans) and not clean (2-7% false passes): residual R-7/FM-13. Change it when live R-ACQ-FEWSPANS/IRRELEVANT counts and stored-document reviews show a different trade-off.",
     "_served_acquired_max_note": "measured 2026-10-21 (work/wed-acq2/measure/measure-out.json, measure2-out.json; dev machine, CPU only): acquired-corpus rebuild = verify + DarCorpus index 20 docs 64.5 s + evidence index 63.3 s; 30 docs 75.9 s + 77.5 s; 50 docs 141 s; 100 docs 230 s (index only). For scale, the existing 9-document base corpus costs 45.6 s + 45.9 s. 30 keeps one background rebuild at about the base corpus's own cost; more needs incremental indexing (plan OM-4). Rebuilds run off the request path and at most once per refresh_ttl_s."
+  },
+  "inline": {
+    "_doc": "DAR-INLINE-1021: inline acquisition inside the /ask request, off-topic override path only (vera/inline_acquire.py). Counts against bounds.jobs_per_hour, jobs_per_day and docs_per_day; uses max_candidates_resolved, max_docs_per_job and fetch_timeout_s unchanged; answers at bounds.answer_min_admitted_spans and persists at bounds.persist_min_admitted_spans (ONE-SPAN-1021). enabled=false restores the background-only behaviour.",
+    "enabled": true,
+    "in_scope": true,
+    "_in_scope_note": "DAR-INLINE-1021-R2 must-have 1: an IN-SCOPE question whose full-document result is insufficient or corpus_unusable (including while the base warm-up runs, must-have 2) also acquires inline, through the same gates, caps, kill switch and claim check; the answer uses the normal in-scope wording (no off-topic prefix). Layer-1 denies and injection hits never acquire. false = in-scope keeps the background trigger only.",
+    "deadline_s": 45,
+    "per_doc_timeout_s": 25,
+    "fetch_workers": 4,
+    "max_concurrent": 2,
+    "max_waiters": 4,
+    "waiter_wait_s": 45,
+    "result_ttl_s": 600,
+    "result_cache_max": 8,
+    "_reuse_note": "DAR-INLINE-1021-R2: ranked candidates already stored as acquired documents (and not tried by the stored-corpus attempt) are answered from their stored rows, read-only, re-verified at read (marker, every JATS licence element, injection re-scan, hashes) and never re-fetched or re-stored; they fill max_docs_per_job first and are not capped by docs_per_day (nothing new is acquired). Accepted divergence: reused rows do NOT re-run the per-document relevance gate (answer_/persist_min_admitted_spans); they are chosen by search rank only, then the unchanged admission and claim check apply.",
+    "_calibration_note": "UNCALIBRATED against live. deadline_s 45 covers search through the parallel fetch and gates; persist (measured 0.06 s; statement_timeout 15 s per statement) and the ephemeral corpus build (0.08-0.3 s) run after it. Budget against the UI's 180 s timeout with a 15 s margin (165 s): classifier <= 20 s (ask-provider-chain timeout_s) + inline <= 45 s + answer writer <= 20 s + claim check <= 20 s per call + reading-list fallback <= 2 x 10 s (grounding deadline_s, rl3 AND then OR) = 125 s worst single-call path, leaving 40 s for a second claim-check call. Measured locally 2026-10-21 (work/dar-inline-1021/e2e/logs/stage_inline_run1.json, run2.json; isolated PG16, real OpenAlex + Europe PMC, classifier/answer/claim-check LLM stubbed; boxing/MMA question): inline total 5.3 s and 6.3 s (search 1.5/1.2 s, parallel fetch+gates 3.5/4.8 s, write 0.06 s, ephemeral corpus 0.15/0.08 s). So 45 s is about 7x the measured cold path; lower it when live 'autoacq inline' ms_total lines show the spread, raise it only with the budget above. per_doc_timeout_s 25 (>= fetch_timeout_s 20 plus resolve), fetch_workers 4 (evaluate up to max_candidates_resolved 6 at once, admit at most max_docs_per_job), max_concurrent 2 (server-wide inline acquisitions; CPU-light, network-bound; planner prior), max_waiters 4 and waiter_wait_s 45 (identical in-flight questions; = deadline), result_ttl_s 600 (outcome reuse for provider-chain retries and repeats until the background refresh serves the stored documents): planner priors, not decision gates."
   },
   "serve": {
     "refresh_ttl_s": 300,
@@ -158,6 +186,7 @@
     "irrelevant": "R-ACQ-IRRELEVANT",
     "write_failed": "R-ACQ-WRITE",
     "stored": "ACQ-STORED",
-    "few_spans": "R-ACQ-FEWSPANS"
+    "few_spans": "R-ACQ-FEWSPANS",
+    "below_persist_min": "ACQ-ANSWER-ONLY"
   }
 }

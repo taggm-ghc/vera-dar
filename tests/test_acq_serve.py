@@ -24,8 +24,16 @@ def h(monkeypatch, tmp_path):
     monkeypatch.setattr(acq_config, "db_configured", lambda cfg, env: True)
     calls = []
     monkeypatch.setattr(auto_acquire, "enqueue", lambda q, t, **k: calls.append((q, t)) or "ACQ-QUEUED")
+    # DAR-INLINE-1021: these tests cover the stored-corpus / background path; the inline path (which would open
+    # network and DB connections) is stubbed to "not run" here and tested in tests/test_dar_inline_acquire.py
+    from vera import inline_acquire
+    inline_acquire.reset_for_tests()
+    harness_inline = []
+    monkeypatch.setattr(inline_acquire, "acquire",
+                        lambda q, a, **k: harness_inline.append(q) or inline_acquire.Outcome("off"))
     harness = e2e.Harness(monkeypatch, tmp_path)
     harness.enqueued = calls
+    harness.inline_calls = harness_inline
     yield harness
     fulldoc_corpus.reset_for_tests()
     auto_acquire.reset_for_tests()

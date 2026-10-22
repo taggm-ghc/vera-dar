@@ -209,7 +209,7 @@ def test_acquisition_is_restricted_to_oa_scholarly_sources():
         return []
     s = auto_acquire.make_search(c, chain_fn=lambda: [P("arxiv"), P("openalex"), P("duckduckgo_lite"), P("news")],
                                  search_fn=search_fn)
-    assert s(OFF_Q, 10, 5) == [] and seen == ["openalex"]
+    assert s(OFF_Q, 10, 5) == [] and seen == ["openalex", "openalex"]  # R2: AND empty -> ONE OR retry, same provider
 
 
 # ------------------------------------------------------------------------------------------------ SEC review fixes

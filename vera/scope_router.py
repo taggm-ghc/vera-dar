@@ -235,6 +235,15 @@ def offtopic_providers(cfg: RouterConfig | None = None) -> list[str]:
     return list(provs)
 
 
+def offtopic_openalex_profile(cfg: RouterConfig | None = None) -> dict | None:
+    """RL-REL-1021: the OpenAlex term-AND profile for the off-topic reading list, or None (previous OR query) when the
+    key is missing or malformed."""
+    p = (cfg or load_config()).raw.get("offtopic_openalex_profile")
+    if not isinstance(p, dict) or not isinstance(p.get("and_extra_max"), int) or p["and_extra_max"] < 1:
+        return None
+    return {"and_extra_max": p["and_extra_max"], "generic_terms": list(p.get("generic_terms") or ())}
+
+
 def offtopic_notice(cfg: RouterConfig | None = None) -> str:
     cfg = cfg or load_config()
     t = cfg.raw.get("offtopic_notice")

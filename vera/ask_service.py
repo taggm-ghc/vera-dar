@@ -128,17 +128,24 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     if not decision.accepted:
         trig = None
+        inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
         if acq is not None:
             from vera import acq_config
             if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
                     and acq_config.layer2_category_ok(acq, decision)):  # DAR-1021 category gate (fails closed)
                 trig = "decline"
                 if decision.layer != "layer1" and acq_config.override_layer2_declines(acq):  # ships OFF (plan V1)
-                    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True)
+                    used: dict = {}  # R2: the served acquired corpus this attempt actually tried (None = not loaded yet)
+                    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, used=used)
                     if isinstance(out, AskResult):  # DAR-1021 SEC M1: scope notice first; no memory (accepted=False)
                         pre = acq_config.override_answer_prefix(acq)
                         return replace(out, answer=f"{pre} {out.answer}" if pre else out.answer, accepted=False,
                                        contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
+                    inl = _inline(question, model, pricing, decision, chained, grounding, acq,
+                                  tried=_doc_keys(used.get("acq")))
+                    if isinstance(inl, AskResult):
+                        return inl
+                    inline_note = inl
         # DAR-1021 (FIX1 + P1.7): a qualifying layer-2 out-of-scope verdict shows the FIX1 notice + scholarly reading
         # list AND keeps P1.7's background acquisition trigger (same trig as the refusal would carry). The list itself
         # never admits anything (sources=()); acquired documents never answer a declined question unless
@@ -148,22 +155,77 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             if not trig:
                 return off
             from vera import acq_config
-            note = acq_config.reading_list_notice(acq)
-            return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, acquire_trigger=trig)
+            note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
+            return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer,
+                           acquire_trigger=trig if inline_note is None else None)  # inline searched: no 2nd job
         return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
-                         result_kind="decline", acquire_trigger=trig)
+                         result_kind="decline", acquire_trigger=trig if inline_note is None else None)
     from vera import answer_contract as contract
 
-    fd = _fulldoc(question, model, pricing, decision, chained, grounding)  # D-055; None = path not configured
+    used_in: dict = {}
+    fd = _fulldoc(question, model, pricing, decision, chained, grounding, used=used_in)  # D-055; None = not configured
     if isinstance(fd, AskResult):  # grounded in admitted passages of inspected, verified full documents
         return fd
     if fd is None:
         return _reading_list(question, model, pricing, decision, chained, grounding, contract)
     ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
+    inline_note = None
+    if acq is not None and _layer1_clean(question):  # DAR-INLINE-1021-R2 must-have 1: in-scope, nothing answered
+        from vera import inline_acquire
+        from vera import fulldoc_corpus
+        ft = fulldoc_corpus.load_config()["fallback_tokens"]
+        if inline_acquire.icfg_of(acq).get("in_scope") is True and token in (ft["insufficient"], ft["corpus_unusable"]):
+            inl = _inline(question, model, pricing, decision, chained, grounding, acq, tried=_doc_keys(used_in.get("acq")),
+                          in_scope=True)
+            if isinstance(inl, AskResult):
+                return inl
+            inline_note = inl
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
-    return replace(res, answer=text, evidence=ev,
-                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token},
-                   **({"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) else {}))
+    trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
+    return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
+                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token}, **trig)
+
+
+def _doc_keys(corpus) -> set:
+    """doc_key_set keys of a served corpus (empty for None): what the stored-corpus attempt already tried."""
+    try:
+        dar = getattr(corpus, "_dar", None)
+        return set(dar.doc_keys()) if dar is not None and hasattr(dar, "doc_keys") else set()
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _inline(question, model, pricing, decision, chained, grounding, acq, tried=None, in_scope=False):
+    """DAR-INLINE-1021: acquire inline (vera.inline_acquire) and answer from an EPHEMERAL corpus of exactly the
+    just-admitted documents through the unchanged admission, answer writer and claim check. Returns an AskResult (an
+    answer), else the honest reading-list notice (str) when a search was made, else None (no search: today's path)."""
+    from vera import acq_config, fulldoc_corpus, inline_acquire
+
+    if not fulldoc_corpus.flag_enabled(fulldoc_corpus.load_config()):  # VER L6: no answer path -> never acquire inline
+        return None
+    o = inline_acquire.acquire(question, acq, served=tried)  # R2: only documents actually tried are skipped
+    if o.corpus is None:
+        return inline_acquire.notice(acq, o.status)
+    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
+    if not isinstance(out, AskResult):
+        return inline_acquire.notice(acq, "unanswered")
+    if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer
+        note = inline_acquire.answer_note(acq, o)
+        return replace(out, answer=f"{note} {out.answer}" if note else out.answer,
+                       contract={**(out.contract or {}), "acquired_only": True, "inline_acquisition": o.public()})
+    lead = " ".join(t for t in (acq_config.override_answer_prefix(acq), inline_acquire.answer_note(acq, o)) if t)
+    return replace(out, answer=f"{lead} {out.answer}" if lead else out.answer, accepted=False,
+                   contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
+                             "inline_acquisition": o.public()})
+
+
+def _base_warming() -> bool:
+    """True while the base-corpus startup warm-up is still running (never raises; False when unknown)."""
+    try:
+        from vera import fulldoc_warm
+        return fulldoc_warm.warming()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _acq_cfg_if_on():
@@ -210,15 +272,26 @@ def _offtopic_reading_list(decision, grounding):
         return None
     sources_fn, _cfg = grounding
     cands = ()
+    tok = None
     try:
+        from vera import search_providers
         from vera.grounded_ask import public_candidates
 
+        profile = sr.offtopic_openalex_profile()
+        tok = search_providers.OPENALEX_PROFILE.set(profile)  # RL-REL-1021 (None = unchanged)
         cands = public_candidates(sources_fn(restricted=True) or [])
+        if not cands and profile is not None:  # RL-REL-1021-B: AND query empty -> ONE more call, old OR query, off-topic only
+            search_providers.OPENALEX_PROFILE.reset(tok)
+            tok = search_providers.OPENALEX_PROFILE.set(None)
+            cands = public_candidates(sources_fn(restricted=True) or [])
     except Exception as exc:  # noqa: BLE001  (fail closed: the fixed refusal; class only in the log)
         import logging
 
         logging.getLogger("vera").warning("off-topic reading list unavailable (%s)", type(exc).__name__)
         return None
+    finally:
+        if tok is not None:
+            search_providers.OPENALEX_PROFILE.reset(tok)
     notice = sr.offtopic_notice()
     res = contract.reading_list_result(cands, decision.tokens_used, decision.cost_usd, accepted=False)
     return replace(res, answer=notice if cands else f"{notice} {res.answer}", sources=(),
@@ -266,7 +339,8 @@ def _log_acquisition_counts(candidates) -> None:
         pass
 
 
-def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only: bool = False):
+def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only: bool = False, ephemeral=None,
+             used: dict | None = None):
     """D-055 Option C: full-document acquisition/verification -> span retrieval -> admission -> generation -> claim
     check. None when the path is not configured (today's behaviour exactly); an AskResult (result_kind "answer") when
     grounded; else (evidence, fallback token, tokens, cost, text) for an explicit insufficient-evidence result.
@@ -280,15 +354,26 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
         cfg = fulldoc_corpus.load_config()
         # DAR-1021-ASKDIAG: the acquired-only branch never reads the base corpus, so it must not wait on its load
         # (startup warm-up follower wait up to db_bounds.single_flight_wait_s, or a synchronous DB read + CPU build).
-        corpus = None if acquired_only else fulldoc_corpus.get_corpus(cfg)
-        if (not fulldoc_corpus.flag_enabled(cfg)) if acquired_only else corpus is None:
+        # DAR-INLINE-1021-R2 must-have 2: while the base warm-up is still running, never wait on it either: the stored
+        # acquired documents answer, else the caller tries inline acquisition.
+        warming = not acquired_only and _base_warming()
+        corpus = None if (acquired_only or warming) else fulldoc_corpus.get_corpus(cfg)
+        if (not fulldoc_corpus.flag_enabled(cfg)) if (acquired_only or warming) else corpus is None:
             return None
+        if warming:
+            acquired_only = True  # answer only from acquired documents (their own claim-check reference)
         from vera.fulldoc_admission import admit
 
         if acquired_only:  # WED-ACQ2 scope override (ships off): only acquired documents may answer a declined question
-            acq_corpus = fulldoc_corpus.get_acquired_corpus(cfg)
+            # DAR-INLINE-1021: `ephemeral` = the in-memory corpus of the documents admitted inline for this request
+            acq_corpus = ephemeral if ephemeral is not None else fulldoc_corpus.get_acquired_corpus(cfg)
+            if used is not None:
+                used["acq"] = acq_corpus
             ev = admit(question, acq_corpus, cfg) if acq_corpus is not None else None
             if ev is None or contract.result_kind_for((ev,)) != "answer":
+                if warming:  # in-scope while warming: an explicit insufficient result (the caller may go inline)
+                    return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
+                            _with_count(cfg["answer"]["insufficient_text"], ev))
                 return None
         else:
             ev = admit(question, corpus, cfg)
@@ -296,6 +381,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                 # WED-ACQ2 (plan V6): base corpus first, exactly as before; the separate acquired corpus is consulted
                 # only when the base corpus cannot answer, so base answers never change.
                 acq_corpus = fulldoc_corpus.get_acquired_corpus(cfg)
+                if used is not None:
+                    used["acq"] = acq_corpus
                 if acq_corpus is not None:
                     ev2 = admit(question, acq_corpus, cfg)
                     if contract.result_kind_for((ev2,)) == "answer":

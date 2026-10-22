@@ -571,12 +571,18 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
 
             def sources_fn(restricted=False):  # one search per request, reused if the provider chain falls through
                 if restricted:  # FIX1-1021: off-topic reading list: scholarly providers only, no link following, no stored branch
-                    if "r" not in cache:
+                    import json as _json
+
+                    from vera.search_providers import OPENALEX_PROFILE
+
+                    prof = OPENALEX_PROFILE.get()  # RL-REL-1021-C: keyed by the active profile (AND vs OR never share)
+                    key = ("r", None if prof is None else _json.dumps(prof, sort_keys=True, default=str))
+                    if key not in cache:
                         from vera.scope_router import offtopic_providers
 
                         rcfg = {**GROUNDING, "providers": offtopic_providers(), "resolve": {"enabled": False}}
-                        cache["r"] = retrieve_all(req.question, rcfg)[0]
-                    return cache["r"]
+                        cache[key] = retrieve_all(req.question, rcfg)[0]
+                    return cache[key]
                 if "s" not in cache:
                     from vera.dar_runtime import get_corpus  # lazy; flag-gated, returns None when DAR is off
 
@@ -631,6 +637,9 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
     record_request_cost(request, result.cost_usd)
     if getattr(result, "acquire_trigger", None):  # WED-ACQ2: once per request, only after the chain succeeded
         _acquire(req.question, result.acquire_trigger)
+    if ((result.contract or {}).get("inline_acquisition") or {}).get("stored"):  # DAR-INLINE-1021: after the response
+        from vera.inline_acquire import refresh_after_response
+        background_tasks.add_task(refresh_after_response)  # stored documents join the served acquired corpus
     fulldoc = result.evidence is not None and result.result_kind == "answer"  # D-055: sources are admitted passages
     store = store_from_env(CORPUS) if result.sources and not fulldoc else None  # never re-admitted as web candidates
     memory = None

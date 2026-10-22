@@ -67,6 +67,24 @@ def bound(cfg: dict, key: str, default=None):
     return v
 
 
+def answer_min_spans(cfg: dict) -> int:
+    """ONE-SPAN-1021 (owner approval): qualifying, provenance-verified passages a fetched document needs to supply
+    evidence to THIS request's ephemeral answer corpus. Floor 1: a document with no qualifying passage never answers."""
+    b = (cfg or {}).get("bounds") or {}
+    return max(1, int(b.get("answer_min_admitted_spans", persist_min_spans(cfg))))
+
+
+def persist_min_spans(cfg: dict) -> int:
+    """ONE-SPAN-1021: qualifying passages a document needs to be written to the persistent corpus. Floor 2 (owner:
+    persistent ingestion keeps a minimum of TWO qualifying passages per document); legacy key min_admitted_spans read
+    when the new key is absent."""
+    b = (cfg or {}).get("bounds") or {}
+    v = b.get("persist_min_admitted_spans", b.get("min_admitted_spans"))
+    if v is None:
+        raise KeyError("auto_acquire bound 'persist_min_admitted_spans' missing")
+    return max(2, int(v))
+
+
 def reason(cfg: dict, key: str) -> str:
     return str(((cfg or {}).get("reason_codes") or {}).get(key) or f"R-ACQ-{key.upper()}")
 

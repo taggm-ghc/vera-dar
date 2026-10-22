@@ -137,16 +137,16 @@ def _unusable_corpus(cfg, items, code, reason) -> FullDocCorpus:
 
 
 def load_from_rows(sources: list, spans: list, cfg: dict, ingest_cfg: dict | None = None,
-                   extra_keys: frozenset | set | None = None) -> FullDocCorpus:
+                   extra_keys: frozenset | set | None = None, build_index: bool = True) -> FullDocCorpus:
     """sources: dicts {source_id, canonical_url, content, content_hash, provenance}; spans: dicts {source_id, start_index,
     end_index, text}. Never raises for bad input: any problem yields corpus_unusable / UNUSABLE entries."""
     try:
-        return _load_rows(list(sources or ()), list(spans or ()), cfg, ingest_cfg, extra_keys)
+        return _load_rows(list(sources or ()), list(spans or ()), cfg, ingest_cfg, extra_keys, build_index)
     except Exception as e:  # noqa: BLE001  fail closed
         return _unusable_corpus(cfg, [], R_ERR, f"rows could not be loaded ({type(e).__name__})")
 
 
-def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None) -> FullDocCorpus:
+def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=True) -> FullDocCorpus:
     icfg = ingest_cfg if ingest_cfg is not None else fulltext_loader.load_config()
     ek = _EXTRA_KEYS if extra_keys is None else frozenset(extra_keys)  # WED-ACQ2: wider ONLY on the acquired path
     if not sources:
@@ -255,6 +255,10 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None) -> FullDocCorpu
                          "evidence_ranges": _evidence_ranges(p.get("sections"), cfg, len(text), text, ex_ranges),
                          "excluded_ranges": ex_ranges})
     dar = None
+    if docs and not build_index:
+        # ACQ-REBUILD-PERF-1021 (acquired path only): verification without the throwaway per-run index. The caller
+        # (_load_acquired) indexes the kept documents once and applies the same index-refusal rule there.
+        return FullDocCorpus(STATUS_OK, acquired, unusable, texts, None, key_to_doc, cfg, docs)
     if docs:
         dar = DarCorpus(_routing_cfg())
         for d in docs:
@@ -448,6 +452,9 @@ SQL_ACQ_FILTER = (f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs O
 SQL_ACQ_SOURCES = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
                    f"{SQL_ACQ_FILTER} ORDER BY s.source_id DESC LIMIT %(lim)s")
 SQL_ACQ_MAX = f"SELECT max(s.source_id), count(*) {SQL_ACQ_FILTER}"
+# DAR-INLINE-1021-R2: the same acquired-row filter, restricted to given canonical URLs (inline reuse of stored documents)
+SQL_ACQ_SOURCES_FOR = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+                       f"{SQL_ACQ_FILTER} AND cs.canonical_url = ANY(%(cus)s) ORDER BY s.source_id DESC LIMIT %(lim)s")
 
 
 def acquired_signature(connect, base_run_id, marker: str) -> tuple:
@@ -471,13 +478,18 @@ def acquired_signature(connect, base_run_id, marker: str) -> tuple:
     return (row[0], int(row[1] or 0))
 
 
-def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int) -> tuple:
+def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical_urls=None) -> tuple:
+    """Read-only. canonical_urls (DAR-INLINE-1021-R2): only the acquired rows of those canonical URLs (inline reuse)."""
+    if canonical_urls is not None and not canonical_urls:
+        return [], []
     conn = connect()
     try:
         cur = conn.cursor()
         try:
-            srows = _select(cur, SQL_ACQ_SOURCES, {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker),
-                                                   "base": int(base_run_id), "lim": int(limit)})
+            params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(base_run_id), "lim": int(limit)}
+            if canonical_urls is not None:
+                params["cus"] = [str(u) for u in canonical_urls]
+            srows = _select(cur, SQL_ACQ_SOURCES if canonical_urls is None else SQL_ACQ_SOURCES_FOR, params)
             sources = [{"run_id": r[0], "source_id": r[1], "canonical_url": r[2], "content": r[3], "content_hash": r[4],
                         "provenance": r[5]} for r in srows]
             ids = [x["source_id"] for x in sources]
@@ -528,7 +540,7 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
             break
         rspans = [sp for r in rows for sp in by_src.get(r.get("source_id"), [])]
         bare = [{k: v for k, v in r.items() if k != "run_id"} for r in rows]
-        c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS)
+        c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS, build_index=False)
         unusable.extend(c.unusable)
         provs = {}
         for r in rows:
@@ -584,8 +596,22 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
         out.source_kind = "db"
         return out
     dar = DarCorpus(_routing_cfg())
-    for d in docs:
-        dar.ingest_document(d)
+    kept_docs = []
+    for d in docs:  # the index-refusal rule the per-run load applied before (ACQ-REBUILD-PERF-1021): refused => UNUSABLE
+        res = dar.ingest_document(d)
+        if res.get("status") != "indexed":
+            did = key_to_doc.pop(d["source_key"], None)
+            texts.pop(did, None)
+            acquired[:] = [a for a in acquired if a["document_id"] != did]
+            unusable.append(_unusable(did, R_ERR, f"retrieval index refused the document ({res.get('reason')})"))
+            continue
+        kept_docs.append(d)
+    docs = kept_docs
+    if not acquired:
+        out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
+                            {}, None, {}, cfg)
+        out.source_kind = "db"
+        return out
     out = FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs)
     out.source_kind = "db"
     return out

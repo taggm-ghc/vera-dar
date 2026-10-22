@@ -59,6 +59,7 @@ class _State:
         self.jobs_hour: deque = deque()
         self.jobs_day: deque = deque()
         self.docs_day: deque = deque()
+        self.docs_reserved = 0  # DAR-INLINE-1021-R2 (VER L5): documents reserved by in-progress inline jobs
         self.recent: dict = {}  # salted HMAC of the normalised question -> monotonic time (memory only)
         self.salt = os.urandom(32)
 
@@ -181,6 +182,7 @@ class Deps:
     url_check: object = None  # SSRF guard (selective_fetch.is_public_url by default)
     refresh: object = None    # () -> None, after a commit
     close: object = None      # () -> None, after the job (disposes the engines)
+    stored_rows: object = None  # DAR-INLINE-1021-R2 (inline only): (canonical_urls) -> (sources, spans) already stored
 
 
 def make_search(cfg: dict, chain_fn=None, search_fn=None):
@@ -197,9 +199,17 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None):
             return []
         # ACQ-SEARCH-1021: acquisition-only OpenAlex profile (config search.openalex_profile); /ask never sets it.
         from vera import search_providers
-        tok = search_providers.OPENALEX_PROFILE.set((cfg.get("search") or {}).get("openalex_profile") or None)
+        profile = (cfg.get("search") or {}).get("openalex_profile") or None
+        fn = search_fn or search_and_fetch.search_question
+        tok = search_providers.OPENALEX_PROFILE.set(profile)
         try:
-            return search_and_clear(search_fn or search_and_fetch.search_question, provs, question, n, timeout_s)
+            out = search_and_clear(fn, provs, question, n, timeout_s)
+            if out or profile is None:
+                return out
+            # DAR-INLINE-1021-R2: the AND profile found nothing -> retry ONCE with the plain OR query (profile None).
+            search_providers.OPENALEX_PROFILE.reset(tok)
+            tok = search_providers.OPENALEX_PROFILE.set(None)
+            return search_and_clear(fn, provs, question, n, timeout_s)
         finally:
             search_providers.OPENALEX_PROFILE.reset(tok)
     return search
@@ -229,6 +239,27 @@ def search_and_clear(search_fn, provs, question, n, timeout_s) -> list:
                     pass
 
 
+def served_doc_keys(fulldoc_corpus, warm_state=None) -> set:
+    """Document keys already served (base + acquired), WITHOUT waiting on the base corpus load. LIVE-DIAG-1021: while
+    the startup warm-up (or any first load) is in flight, get_corpus() makes this job a single-flight follower that
+    waits up to db_bounds.single_flight_wait_s (60 s) inside the job's 120 s deadline. The base keys are read only
+    once the warm-up is DONE (a cache hit); otherwise they are skipped, which is safe because RoLookup.known() checks
+    every stored full-document row (base and acquired) before any fetch or write."""
+    if warm_state is None:
+        from vera import fulldoc_warm
+        warm_state = fulldoc_warm.state
+    out = set()
+    try:
+        base_ready = warm_state() == "done"
+    except Exception:  # noqa: BLE001
+        base_ready = False
+    for get in ((fulldoc_corpus.get_corpus,) if base_ready else ()) + (fulldoc_corpus.get_acquired_corpus,):
+        dar = getattr(get(), "_dar", None)
+        if dar is not None and hasattr(dar, "doc_keys"):
+            out |= set(dar.doc_keys())
+    return out
+
+
 def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by tests/test_acq_wiring.py
     import requests
 
@@ -244,12 +275,7 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
     search = make_search(cfg)
 
     def keys():
-        out = set()
-        for c in (fulldoc_corpus.get_corpus(), fulldoc_corpus.get_acquired_corpus()):
-            dar = getattr(c, "_dar", None)
-            if dar is not None and hasattr(dar, "doc_keys"):
-                out |= set(dar.doc_keys())
-        return out
+        return served_doc_keys(fulldoc_corpus)
 
     def refresh():
         fulldoc_corpus.invalidate_acquired()
@@ -303,9 +329,10 @@ def _doi(c: dict) -> str | None:
 
 # ------------------------------------------------------------------------------------------------ resolve + fetch
 class _Stop(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str, n_adm: int = 0):
         super().__init__(code)
         self.code = code
+        self.n_adm = n_adm  # ONE-SPAN-1021: qualifying passages counted by the relevance gate (0 before it ran)
 
 
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
@@ -578,6 +605,129 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
     return len(ev.admitted or ())
 
 
+def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count) -> list:
+    """Stage (shared by the background job and DAR-INLINE-1021): DOI required, not already served (DOI/URL/ISBN),
+    deduplicated by DOI, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
+    from vera.dar_corpus import doc_key_set
+    ranked, seen = [], set()
+    for c in cands or ():
+        if not isinstance(c, dict):
+            continue
+        doi = _doi(c)
+        if not doi:
+            count(acq_config.reason(cfg, "no_doi"))
+            continue
+        isbn = candidate_isbn(c)
+        keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
+        if doi in seen or keys & served:
+            count(acq_config.reason(cfg, "in_corpus"))
+            continue
+        seen.add(doi)
+        ranked.append((prerank_score(question, c, fdcfg), doi, c, isbn))
+    ranked.sort(key=lambda x: (-x[0], x[1]))
+    return ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
+
+
+def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: dict, deps: Deps, icfg: dict,
+                       fdcfg: dict, clock=time.monotonic, deadline: float | None = None, dur: dict | None = None,
+                       min_spans: int | None = None):
+    """Stage: known check -> resolve OA -> fetch JATS -> convert + every loader filter + licence rule -> injection scan
+    -> row plan -> relevance gate (min_spans; default acq_config.persist_min_spans, the persistent-corpus value; the
+    inline answer path passes acq_config.answer_min_spans). Returns (plan, isbn) with plan["admitted_spans"] = the
+    gate's count; raises _Stop (n_adm set by the gate) / fl.Refused. Writes nothing."""
+    dur = {} if dur is None else dur
+    if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
+        raise _Stop(acq_config.reason(cfg, "in_corpus"))
+    t = clock()
+    res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline)
+    if isbn is None and res.get("is_book"):
+        isbn = acq_config.first_isbn(res.get("isbn_values"))
+        if isbn and deps.lookup.known(doi, None, isbn["isbn"]):
+            raise _Stop(acq_config.reason(cfg, "in_corpus"))
+    url = cfg["resolve"]["fulltext_url_template"].format(pmcid=res["pmcid"])
+    raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
+                              float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
+                              deadline=deadline)
+    dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
+    t = clock()
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso)
+    if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
+        raise _Stop(acq_config.reason(cfg, "inject"))
+    value = {"open_access": True, "licence_family": _family(res["licence"]) or "",
+             "pub_types_n": len(res.get("pub_types") or [])}
+    plan = build_plan(rec, item, meta, cfg, job, score, value, isbn, now_iso)
+    n_adm = relevance_gate(job.question, plan, cfg, icfg, fdcfg)
+    dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
+    need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
+    if n_adm < need:
+        raise _Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"), n_adm)
+    plan["admitted_spans"] = n_adm  # ONE-SPAN-1021: read by the caller's persist decision; never written to the DB
+    return plan, isbn
+
+
+def persist_eligible(plan: dict, cfg: dict) -> bool:
+    """ONE-SPAN-1021: True when the plan's gate count meets the persistent-corpus minimum (>= 2)."""
+    return int(plan.get("admitted_spans") or 0) >= acq_config.persist_min_spans(cfg)
+
+
+def error_code(cfg: dict, e: Exception) -> str:
+    return (acq_config.reason(cfg, "write_failed") if type(e).__name__ in ("WriteFailed", "IntegrityError",
+                                                                          "OperationalError", "ProgrammingError")
+            else f"R-ACQ-ERR-{type(e).__name__}"[:40])
+
+
+def reserve_job(cfg: dict, question: str, clock=time.monotonic) -> str | None:
+    """DAR-INLINE-1021: count one inline acquisition against the SAME jobs_per_hour / jobs_per_day caps as enqueue.
+    None = reserved; else the refusal reason code. Also marks the question as recently acquired (no duplicate
+    background job for it)."""
+    now = clock()
+    with _S.lock:
+        _prune(_S.jobs_hour, now, 3600.0)
+        _prune(_S.jobs_day, now, 86400.0)
+        if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
+                len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
+            return acq_config.reason(cfg, "rate")
+        _S.jobs_hour.append(now)
+        _S.jobs_day.append(now)
+        _S.recent[_qkey(question)] = now
+    return None
+
+
+def docs_budget(cfg: dict, deps: Deps, clock=time.monotonic, reserve: bool = False) -> int:
+    """Documents this job may still store: min(docs_per_day remaining (local and DB count, minus documents other
+    in-progress inline jobs reserved), max_docs_per_job). Fails closed (0) when the DB count is unavailable.
+    VER L5: reserve=True reserves the returned number under the same lock (release it with settle_docs), so two
+    concurrent inline jobs can no longer both spend the same remaining daily budget."""
+    try:
+        db_day = int(deps.lookup.docs_last_24h())
+    except Exception:  # noqa: BLE001
+        return 0
+    cap = int(acq_config.bound(cfg, "docs_per_day"))
+    now = clock()
+    with _S.lock:
+        _prune(_S.docs_day, now, 86400.0)
+        local_day = len(_S.docs_day)
+        n = max(0, min(cap - max(local_day, db_day) - _S.docs_reserved, int(acq_config.bound(cfg, "max_docs_per_job"))))
+        if reserve:
+            _S.docs_reserved += n
+    return n
+
+
+def settle_docs(reserved: int, used: int, clock=time.monotonic) -> None:
+    """Release a docs_budget(reserve=True) reservation and count the `used` documents against docs_per_day."""
+    with _S.lock:
+        _S.docs_reserved = max(0, _S.docs_reserved - int(reserved))
+        for _ in range(int(used)):
+            _S.docs_day.append(clock())
+
+
+def note_docs(n: int, clock=time.monotonic) -> None:
+    with _S.lock:
+        for _ in range(int(n)):
+            _S.docs_day.append(clock())
+
+
 def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> dict:
     """Never raises. Returns {"codes": {code: n}, "stored": n, "durations_ms": {...}} (also logged, counts only)."""
     from vera import fulltext_loader as fl
@@ -585,31 +735,35 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
     codes: dict = {}
     dur: dict = {}
     stored = 0
+    tel = {"answer_eligible": 0}  # ONE-SPAN-1021: documents meeting answer_min_admitted_spans (none answer here)
 
     def count(code):
         codes[code] = codes.get(code, 0) + 1
 
+    def done():
+        return _done(job, codes, stored, dur, t0, clock, tel)
+
     try:
         if not acq_config.enabled(cfg, os.environ if env is None else env):  # kill switch re-checked per job
             count(acq_config.reason(cfg, "disabled"))
-            return _done(job, codes, stored, dur, t0, clock)
+            return done()
         if clock() - job.created > float(acq_config.bound(cfg, "question_max_age_s")):
             count(acq_config.reason(cfg, "expired"))
-            return _done(job, codes, stored, dur, t0, clock)
+            return done()
         deadline = t0 + float(acq_config.bound(cfg, "job_deadline_s"))
         now = clock()
         with _S.lock:
             _prune(_S.docs_day, now, 86400.0)
-            local_day = len(_S.docs_day)
+            local_day = len(_S.docs_day) + _S.docs_reserved  # VER L5: inline reservations count too
         cap = int(acq_config.bound(cfg, "docs_per_day"))
         try:
             db_day = int(deps.lookup.docs_last_24h())
         except Exception:  # noqa: BLE001  fail closed: no count, no acquisition
             count(acq_config.reason(cfg, "daily_cap"))
-            return _done(job, codes, stored, dur, t0, clock)
+            return done()
         if max(local_day, db_day) >= cap:
             count(acq_config.reason(cfg, "daily_cap"))
-            return _done(job, codes, stored, dur, t0, clock)
+            return done()
         budget = min(cap - max(local_day, db_day), int(acq_config.bound(cfg, "max_docs_per_job")))
         # max_groq_tokens_per_job: this job makes NO model call (deterministic evaluation; lowest-cost default). The
         # bound is kept in config so a future model-assisted evaluation must stay within it (0 = none allowed).
@@ -621,29 +775,13 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                                      float(s.get("timeout_s", 20))) or []) if n_calls > 0 else []
         except Exception:  # noqa: BLE001
             count(acq_config.reason(cfg, "search_failed"))
-            return _done(job, codes, stored, dur, t0, clock)
+            return done()
         dur["search"] = int((clock() - t) * 1000)
         fdcfg = _fd_cfg()
         icfg = acq_config.ingest_cfg(fl.load_config(), cfg)
         served = set(deps.corpus_keys() or ())
         from vera.dar_corpus import doc_key_set
-        ranked, seen = [], set()
-        for c in cands:
-            if not isinstance(c, dict):
-                continue
-            doi = _doi(c)
-            if not doi:
-                count(acq_config.reason(cfg, "no_doi"))
-                continue
-            isbn = candidate_isbn(c)
-            keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
-            if doi in seen or keys & served:
-                count(acq_config.reason(cfg, "in_corpus"))
-                continue
-            seen.add(doi)
-            ranked.append((prerank_score(job.question, c, fdcfg), doi, c, isbn))
-        ranked.sort(key=lambda x: (-x[0], x[1]))
-        ranked = ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
+        ranked = rank_candidates(job.question, cands, cfg, served, fdcfg, count)
         for score, doi, cand, isbn in ranked:
             if stored >= budget:
                 break
@@ -651,31 +789,8 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 count(acq_config.reason(cfg, "deadline"))
                 break
             try:
-                if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
-                    raise _Stop(acq_config.reason(cfg, "in_corpus"))
-                t = clock()
-                res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline)
-                if isbn is None and res.get("is_book"):
-                    isbn = acq_config.first_isbn(res.get("isbn_values"))
-                    if isbn and deps.lookup.known(doi, None, isbn["isbn"]):
-                        raise _Stop(acq_config.reason(cfg, "in_corpus"))
-                url = cfg["resolve"]["fulltext_url_template"].format(pmcid=res["pmcid"])
-                raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
-                                          float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
-                                          deadline=deadline)
-                dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
-                t = clock()
-                now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-                rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso)
-                if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
-                    raise _Stop(acq_config.reason(cfg, "inject"))
-                value = {"open_access": True, "licence_family": _family(res["licence"]) or "",
-                         "pub_types_n": len(res.get("pub_types") or [])}
-                plan = build_plan(rec, item, meta, cfg, job, score, value, isbn, now_iso)
-                n_adm = relevance_gate(job.question, plan, cfg, icfg, fdcfg)
-                dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
-                if n_adm < int(acq_config.bound(cfg, "min_admitted_spans")):
-                    raise _Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"))
+                plan, isbn = evaluate_candidate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur)
+                tel["answer_eligible"] += 1
                 t = clock()
                 out = deps.store.write(plan)
                 dur["write"] = dur.get("write", 0) + int((clock() - t) * 1000)
@@ -688,13 +803,12 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 count(acq_config.reason(cfg, "stored"))
             except _Stop as e:
                 count(e.code)
+                if e.n_adm >= acq_config.answer_min_spans(cfg):  # would answer inline; below persist min: not stored
+                    tel["answer_eligible"] += 1
             except fl.Refused as e:
                 count(str(e.code))
             except Exception as e:  # noqa: BLE001
-                count(acq_config.reason(cfg, "write_failed") if type(e).__name__ in ("WriteFailed", "IntegrityError",
-                                                                                      "OperationalError",
-                                                                                      "ProgrammingError")
-                      else f"R-ACQ-ERR-{type(e).__name__}"[:40])
+                count(error_code(cfg, e))
         if stored and deps.refresh is not None:
             try:
                 deps.refresh()
@@ -702,14 +816,16 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 logger.warning("autoacq refresh failed (%s)", type(e).__name__)
     except Exception as e:  # noqa: BLE001
         count(f"R-ACQ-ERR-{type(e).__name__}"[:40])
-    return _done(job, codes, stored, dur, t0, clock)
+    return done()
 
 
-def _done(job, codes, stored, dur, t0, clock) -> dict:
+def _done(job, codes, stored, dur, t0, clock, tel=None) -> dict:
     dur["total"] = int((clock() - t0) * 1000)
-    out = {"codes": dict(sorted(codes.items())), "stored": stored, "durations_ms": dur, "trigger": job.trigger}
-    _log("job", stored=stored, trigger=job.trigger, **{f"n_{k}": v for k, v in out["codes"].items()},
-         **{f"ms_{k}": v for k, v in dur.items()})
+    n_elig = int((tel or {}).get("answer_eligible", 0))
+    out = {"codes": dict(sorted(codes.items())), "stored": stored, "durations_ms": dur, "trigger": job.trigger,
+           "n_answer_eligible": n_elig, "n_persisted": stored}
+    _log("job", stored=stored, trigger=job.trigger, n_answer_eligible=n_elig, n_persisted=stored,
+         **{f"n_{k}": v for k, v in out["codes"].items()}, **{f"ms_{k}": v for k, v in dur.items()})
     return out
 
 
