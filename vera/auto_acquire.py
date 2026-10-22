@@ -98,6 +98,9 @@ def enqueue(question: str, trigger: str, *, cfg: dict | None = None, env=os.envi
             return acq_config.reason(cfg or {}, "disabled")
         if trigger not in ("decline", "insufficient") or not str(question or "").strip():
             return acq_config.reason(cfg, "disabled")
+        from vera import scope_router  # SCOPE-1022: the shared intent rule also guards the queue (belt and braces)
+        if not scope_router.intent_clean(str(question)):
+            return acq_config.reason(cfg, "intent_denied")
         now = clock()
         with _S.lock:
             win = float(acq_config.bound(cfg, "dedupe_window_s"))

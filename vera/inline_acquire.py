@@ -154,6 +154,9 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     try:
         if not inline_enabled(acq, env) or not str(question or "").strip():
             return Outcome("off")
+        from vera import scope_router  # SCOPE-1022: the shared intent rule also guards inline acquisition
+        if not scope_router.intent_clean(str(question)):
+            return Outcome("off")
         key = _cache_key(question, served)
         now = clock()
         with _I.lock:

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import requests  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from vera import public_mode  # noqa: E402
+from vera import public_mode, ui_wake  # noqa: E402
 from vera.disclosure import ask_help_text, render_disclosure  # noqa: E402
 from vera.env_files import load_vera_env  # noqa: E402
 from vera.m7 import live_report as lr  # noqa: E402
@@ -46,36 +46,43 @@ else:
     recent = st.session_state.get(lr.RECENT_KEY, [])
     question = st.text_input("Research question for a live report:", placeholder="What is VERA-DAR?",
                              help=ask_help_text())
+    # UIWAKE-1022: queue the question, wake the API (GET /health with backoff), then send it.
     if st.button("Run report", type="primary"):
         if not question:
             st.warning("Please enter a question.")
         elif not api_key:
             st.warning("The service is not configured." if PUBLIC else "No API key set. Type one in the sidebar.")
         else:
-            with st.spinner("Running VERA-DAR..."):
-                t0 = time.monotonic()
+            ui_wake.queue_question(st.session_state, {"question": question})
+    pending = ui_wake.take_ready_question(st, base_url, allow_restart_hook=PUBLIC)
+    if pending:
+        question = pending["question"]  # the queued text, sent after the wake-up
+        with st.spinner("Running VERA-DAR..."):
+            t0 = time.monotonic()
+            try:
+                resp = public_mode.post_ask(base_url, question, "normal", api_key)
+            except requests.exceptions.RequestException as e:
+                resp = None
+                st.error("The service is unavailable. Please try again later." if PUBLIC
+                         else f"Request failed: {type(e).__name__}")
+            latency = time.monotonic() - t0
+        if resp is not None:
+            if resp.status_code == 200:
                 try:
-                    resp = public_mode.post_ask(base_url, question, "normal", api_key)
-                except requests.exceptions.RequestException as e:
-                    resp = None
-                    st.error("The service is unavailable. Please try again later." if PUBLIC
-                             else f"Request failed: {type(e).__name__}")
-                latency = time.monotonic() - t0
-            if resp is not None:
-                if resp.status_code == 200:
-                    try:
-                        body = resp.json()
-                    except ValueError:
-                        body = None
-                    if isinstance(body, dict):
-                        recent = lr.remember(st.session_state, lr.build_live_report(body, question, latency))
-                    else:
-                        st.error("The service returned a response this page cannot read.")
-                elif resp.status_code == 429:
-                    st.error("Rate limit reached. Please try again later.")
+                    body = resp.json()
+                except ValueError:
+                    body = None
+                if isinstance(body, dict):
+                    recent = lr.remember(st.session_state, lr.build_live_report(body, question, latency))
                 else:
-                    st.error("The service could not produce a report. Please try again later."
-                             + ("" if PUBLIC else f" (HTTP {int(resp.status_code)})"))
+                    st.error("The service returned a response this page cannot read.")
+            elif resp.status_code == 429:
+                st.error("Rate limit reached. Please try again later.")
+            else:
+                st.error("The service could not produce a report. Please try again later."
+                         + ("" if PUBLIC else f" (HTTP {int(resp.status_code)})"))
+    else:
+        ui_wake.page_load_check(st, base_url, allow_restart_hook=PUBLIC)  # at most once a minute per session
     if recent:
         pick = st.selectbox("Reports from this session (newest first)", range(len(recent)),
                             format_func=lambda i: r(recent[i].get("question"))[:120])

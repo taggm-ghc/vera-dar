@@ -300,17 +300,19 @@ def _acq_on_insufficient(acq: dict) -> bool:
 
 
 def _layer1_clean(question: str) -> bool:
-    """plan s11 V1: re-run the layer-1 injection and deny patterns before any acquisition (never trigger on a hit)."""
+    """plan s11 V1: re-run the layer-1 injection and deny patterns before any acquisition (never trigger on a hit).
+    SCOPE-1022: the shared intent rule (scope_router.intent_clean), so routing, discovery and acquisition agree."""
     try:
         from vera import scope_router as sr
-        cfg = sr.load_config()
-        verdict, why = sr.layer1(question, cfg)
-        return not (verdict == sr.DECLINE)
+        return sr.intent_clean(question)
     except Exception:  # noqa: BLE001  fail closed: no acquisition
         return False
 
 
-_NO_LIST_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})
+try:  # SCOPE-1022: one closed set of refusal categories (scope_router.REFUSE_CATEGORIES)
+    from vera.scope_router import REFUSE_CATEGORIES as _NO_LIST_CATEGORIES
+except Exception:  # noqa: BLE001
+    _NO_LIST_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})
 
 
 def _offtopic_reading_list(decision, grounding):

@@ -10,6 +10,7 @@ from vera.env_files import load_vera_env
 from vera.discovery_panel import render_discovery
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
+from vera import ui_wake
 from vera.public_mode import is_public_mode, post_ask, upstream_base_url
 from vera.sources_sidebar import cited_numbers, render_nav, render_sources, render_sources_sidebar
 from vera.ui_evidence import (is_fulldoc, render_answer_scope_note, render_citations, render_evidence_scope,
@@ -81,84 +82,97 @@ question = st.text_input(
     help=ask_help_text()
 )
 
-# Ask button
-if st.button("Ask", type="primary"):
+def _send_question(question: str, force_bad: bool) -> None:
+    """Send one /ask (after the wake-up) and render the result."""
+    with st.spinner("🤔 Thinking..."):
+        try:
+            # Make API request
+            response = post_ask(api_base_url, question, "force_bad" if force_bad else "normal", api_key)
+
+            if response.status_code == 200:
+                data = response.json()
+                data = data if isinstance(data, dict) else {}
+                # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other
+                # value (missing, unknown, reading_list, decline, ...) renders the reading-list branch.
+                if data.get("result_kind") == "answer":
+                    if (data.get("claim_check") if isinstance(data.get("claim_check"), dict) else {}).get("answer_completeness") == "partial":  # D8: never styled as complete
+                        st.markdown("### ⚠️ Partial answer")
+                        st.warning(safe_markdown(data.get("answer")))
+                    else:
+                        st.markdown("### ✅ Answer")
+                        st.success(safe_markdown(data.get("answer")))
+                    full = is_fulldoc(data)
+                    render_evidence_scope(st, data)  # AE-1020 D3: N documents inspected, M passages admitted
+                    render_sources(st, data.get("sources") or [], data.get("traced_sources") or [],
+                                   data.get("claim_check"), fulldoc=full,
+                                   cited=cited_numbers(data.get("answer")))
+                    render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
+                    if full:
+                        render_answer_scope_note(st)
+
+                    # Display recalled findings from memory
+                    render_memory_panel(st, data)
+                else:
+                    render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
+                    render_discovery(st, data)
+
+                # Display metrics
+                st.markdown("### 💰 Metrics")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Tokens Used", f"{int(data.get('tokens_used') or 0):,}")
+                with col2:
+                    st.metric("Cost", f"${float(data.get('cost_usd') or 0):.6f}")
+
+                # K5.2.I: raw JSON is a dev-mode (owner debug) view only; public mode renders none.
+                if not PUBLIC:
+                    with st.expander("📊 Full Response (JSON)"):
+                        st.json(data)
+
+                # Next question suggestion
+                st.info("💡 Ask a follow-up question to explore further.")
+
+            elif response.status_code == 429:
+                st.error("Rate limit reached. Please try again later.")
+
+            elif PUBLIC:
+                st.error("The service could not answer this request. Please try again later.")
+                if response.status_code >= 500:  # item #83: find the earliest failing step
+                    _show_triage(api_base_url)
+
+            elif response.status_code == 401:
+                st.error("API key error. Check the key typed in the sidebar matches the server's VERA_API_KEY.")
+
+            else:
+                st.error(f"Error {response.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            if PUBLIC:
+                st.error("The service is unavailable. Please try again later.")
+                _show_triage(api_base_url)
+            else:
+                st.error(f"Request failed: {type(e).__name__}")
+                st.info("Make sure the API is running: `./run.sh`")
+
+
+# Ask button. UIWAKE-1022: the question is queued in session state and sent only once GET /health answers,
+# so a sleeping API is woken first and the question survives a rerun during the wait.
+_clicked = st.button("Ask", type="primary")
+if _clicked:
     if not question:
         st.warning("⚠️ Please enter a question.")
     elif not api_key:
         st.warning("The service is not configured." if PUBLIC else "No API key set. Type one in the sidebar.")
     else:
-        with st.spinner("🤔 Thinking..."):
-            try:
-                # Make API request
-                response = post_ask(api_base_url, question, "force_bad" if force_bad else "normal", api_key)
+        ui_wake.queue_question(st.session_state, {"question": question, "force_bad": bool(force_bad)})
 
-                if response.status_code == 200:
-                    data = response.json()
-                    data = data if isinstance(data, dict) else {}
-                    # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other
-                    # value (missing, unknown, reading_list, decline, ...) renders the reading-list branch.
-                    if data.get("result_kind") == "answer":
-                        if (data.get("claim_check") if isinstance(data.get("claim_check"), dict) else {}).get("answer_completeness") == "partial":  # D8: never styled as complete
-                            st.markdown("### ⚠️ Partial answer")
-                            st.warning(safe_markdown(data.get("answer")))
-                        else:
-                            st.markdown("### ✅ Answer")
-                            st.success(safe_markdown(data.get("answer")))
-                        full = is_fulldoc(data)
-                        render_evidence_scope(st, data)  # AE-1020 D3: N documents inspected, M passages admitted
-                        render_sources(st, data.get("sources") or [], data.get("traced_sources") or [],
-                                       data.get("claim_check"), fulldoc=full,
-                                       cited=cited_numbers(data.get("answer")))
-                        render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
-                        if full:
-                            render_answer_scope_note(st)
-
-                        # Display recalled findings from memory
-                        render_memory_panel(st, data)
-                    else:
-                        render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
-                        render_discovery(st, data)
-
-                    # Display metrics
-                    st.markdown("### 💰 Metrics")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("Tokens Used", f"{int(data.get('tokens_used') or 0):,}")
-                    with col2:
-                        st.metric("Cost", f"${float(data.get('cost_usd') or 0):.6f}")
-
-                    # K5.2.I: raw JSON is a dev-mode (owner debug) view only; public mode renders none.
-                    if not PUBLIC:
-                        with st.expander("📊 Full Response (JSON)"):
-                            st.json(data)
-
-                    # Next question suggestion
-                    st.info("💡 Ask a follow-up question to explore further.")
-
-                elif response.status_code == 429:
-                    st.error("Rate limit reached. Please try again later.")
-
-                elif PUBLIC:
-                    st.error("The service could not answer this request. Please try again later.")
-                    if response.status_code >= 500:  # item #83: find the earliest failing step
-                        _show_triage(api_base_url)
-
-                elif response.status_code == 401:
-                    st.error("API key error. Check the key typed in the sidebar matches the server's VERA_API_KEY.")
-
-                else:
-                    st.error(f"Error {response.status_code}")
-
-            except requests.exceptions.RequestException as e:
-                if PUBLIC:
-                    st.error("The service is unavailable. Please try again later.")
-                    _show_triage(api_base_url)
-                else:
-                    st.error(f"Request failed: {type(e).__name__}")
-                    st.info("Make sure the API is running: `./run.sh`")
-else:
+if st.session_state.get(ui_wake.PENDING_KEY):
+    _pending = ui_wake.take_ready_question(st, api_base_url, allow_restart_hook=PUBLIC)
+    if _pending:
+        _send_question(_pending["question"], _pending["force_bad"])
+elif not _clicked:
     st.info("👆 Click 'Ask' to get started.")
+    ui_wake.page_load_check(st, api_base_url, allow_restart_hook=PUBLIC)  # at most once a minute per session
 
 
 def _footer_commit(base_url: str) -> str:

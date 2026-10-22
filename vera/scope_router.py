@@ -105,6 +105,24 @@ def normalise(question: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", question or "")).strip().lower()
 
 
+_LETTER_RUN_RE = re.compile(r"(?<![^\W\d_])[^\W\d_](?: +[^\W\d_])+(?![^\W\d_])")
+
+
+def _join_letter_run(m: re.Match) -> str:
+    run = m.group(0)
+    letters = run.replace(" ", "")
+    if len(letters) < 4 or not re.search(r"(?<! ) (?! )", run):  # need 4+ letters and a single-space separator
+        return run
+    # single-spaced letters join into a word; gaps of 2+ spaces are word breaks
+    return " ".join(g.replace(" ", "") for g in re.split(r" {2,}", run))
+
+
+def collapse_letter_spaced(question: str) -> str:
+    """SCOPE2-1022: collapse letter-spaced text (4+ single letters separated by single spaces; "H O W  M A N Y" ->
+    "HOW MANY"). Word breaks are gaps of 2+ spaces. For layer-1 matching only; callers never pass the result on."""
+    return _LETTER_RUN_RE.sub(_join_letter_run, unicodedata.normalize("NFKC", question or ""))
+
+
 def _any(patterns: tuple[re.Pattern, ...], text: str) -> bool:
     return any(p.search(text) for p in patterns)
 
@@ -114,11 +132,17 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     q = normalise(question)
     if not q:
         return DECLINE, "empty"
-    if _any(cfg.injection, q):
-        return DECLINE, "deny:injection"
-    for name, pats in cfg.deny.items():
-        if _any(pats, q):
-            return DECLINE, f"deny:{name}"
+    # SCOPE2-1022: also match a letter-spaced-collapsed view (matching only; the question itself is never altered)
+    views = [q]
+    qc = normalise(collapse_letter_spaced(question))
+    if qc != q:
+        views.append(qc)
+    for v in views:
+        if _any(cfg.injection, v):
+            return DECLINE, "deny:injection"
+        for name, pats in cfg.deny.items():
+            if _any(pats, v):
+                return DECLINE, f"deny:{name}"
     if _any(cfg.tool_names, q):
         return ACCEPT, "tool_name"
     if _any(cfg.ai_terms, q) and _any(cfg.dev_terms, q):
@@ -166,6 +190,7 @@ def default_chat(messages: list[dict], model: str, l2: dict, client=None,
 
 
 LAYER2_CATEGORIES = ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
+REFUSE_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})  # SCOPE-1022: never answered, listed or acquired
 
 
 def parse_category(content: str) -> str:
@@ -207,8 +232,24 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     in_scope, why = parse_verdict(content)
     if in_scope is None:
         return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, 1)
+    category = parse_category(content)
+    if in_scope and category in REFUSE_CATEGORIES:  # SCOPE-1022: in_scope=true with an advice/harm/... category is a
+        # contradictory verdict; fail closed with the fixed refusal (never answered, listed or acquired)
+        return ScopeDecision(False, "layer2_llm", "classifier_malformed:category_conflict", pt + ct, cost, 1, category)
     return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, 1,
-                         parse_category(content))
+                         category)
+
+
+def intent_clean(question: str, cfg: RouterConfig | None = None) -> bool:
+    """SCOPE-1022: the single layer-1 intent rule shared by scope routing, discovery and acquisition. False when layer 1
+    hard-blocks the question (injection, explicit personal advice, harmful operational request, coding task), when it
+    holds the classifier's data markers, or on any error (fail closed). Topic words alone never make it False."""
+    try:
+        cfg = cfg or load_config()
+        verdict, _why = layer1(question, cfg)
+        return verdict != DECLINE and not has_marker(question)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def decline_text(cfg: RouterConfig | None = None) -> str:

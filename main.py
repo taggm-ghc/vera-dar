@@ -26,6 +26,7 @@ from vera.version_info import deployed_commit, short_commit
 from vera.public_mode import enforce_caps, record_request_cost
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 from vera.env_files import load_vera_env
+from vera import trace_viz
 
 logging.basicConfig(level=logging.INFO)  # before load_vera_env so its names-only audit line is emitted
 load_vera_env()  # PLAN-ENV: R/config/env/.env-vera (explicit, preflighted); the file wins over inherited values
@@ -456,6 +457,26 @@ def health_dar():
                 "rate_limits": rate_limit.health_aggregates()}
     except Exception:  # noqa: BLE001
         return {"dar": None, "reason_code": "health_error"}
+
+
+@app.get("/trace/public")
+def trace_public():
+    """TRACEVIZ-1022: public Trace Eval aggregates (no key). Allowlisted fields only; see vera/trace_viz.py."""
+    try:
+        return trace_viz.public_view()
+    except Exception as exc:  # noqa: BLE001  (generic state; the type only in the log)
+        logger.warning("trace public view failed (%s)", type(exc).__name__)
+        return {"schema": trace_viz.SCHEMA, "status": "error", "stages": [], "run": None, "check_validation": None}
+
+
+@app.get("/trace/private", dependencies=[Depends(trace_viz.verify_viz_key)])
+def trace_private():
+    """TRACEVIZ-1022: per-trace detail. Needs X-Viz-Key == VERA_TRACE_VIZ_KEY; unset key disables the route (403)."""
+    try:
+        return trace_viz.private_view()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace private view failed (%s)", type(exc).__name__)
+        return {"available": False, "traces": []}
 
 
 @app.get("/version")

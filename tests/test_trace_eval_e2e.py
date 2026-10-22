@@ -150,7 +150,7 @@ def test_no_results_state_explains_how(tmp_path):
     at = _run(tmp_path / "absent.json", tmp_path / "absent-v.json")
     assert not at.exception
     assert [w.value for w in at.warning] == [MISSING_RESULTS_TEXT]
-    assert [i.value for i in at.info] == [HOW_TO_PRODUCE_TEXT]
+    assert HOW_TO_PRODUCE_TEXT in [i.value for i in at.info]  # TRACEVIZ-1022: the public tier adds its own empty-state infos
     empty = tmp_path / "empty.json"
     empty.write_text(json.dumps({"schema": measure.SCHEMA, "variants": {}, "traces": []}))
     assert [w.value for w in _run(empty, tmp_path / "x").warning] == [MISSING_RESULTS_TEXT]

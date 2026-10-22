@@ -209,6 +209,7 @@
     "too_large": "R-ACQ-LARGE",
     "convert": "R-ACQ-CONVERT",
     "inject": "R-ACQ-INJECT",
+    "intent_denied": "R-ACQ-INTENT",
     "irrelevant": "R-ACQ-IRRELEVANT",
     "write_failed": "R-ACQ-WRITE",
     "stored": "ACQ-STORED",

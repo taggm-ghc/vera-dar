@@ -278,7 +278,7 @@ def _data(res: dict) -> None:
     st.dataframe(_per_group(res, "per_dimension", "dimension"), hide_index=True)
     st.markdown("**Per question category** (share of answers that passed every applicable check)")
     st.dataframe(_per_group(res, "per_category", "category"), hide_index=True)
-    _browser(res)
+    # TRACEVIZ-1022: the per-trace browser (answer excerpts, source titles) is the private tier; see _render_private.
 
 
 def _per_group(res: dict, key: str, label: str) -> pd.DataFrame:
@@ -295,46 +295,133 @@ def _per_group(res: dict, key: str, label: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _browser(res: dict) -> None:
-    st.markdown("#### Trace browser")
-    traces = res.get("traces", [])
-    variants = sorted({t["variant"] for t in traces})
-    if not variants:
-        st.info("No traces in the results file.")
-        return
-    variant = st.selectbox("Variant", variants)
-    ids = [t["id"] for t in traces if t["variant"] == variant]
-    qid = st.selectbox("Question id", ids)
-    t = next(t for t in traces if t["variant"] == variant and t["id"] == qid)
-    st.markdown(f"Category: `{t['category']}`; split: `{t['split']}`; all-pass: `{t['all_pass']}`")
-    if t.get("error"):
-        st.error(CAPTURE_ERROR_TEXT)  # the error value is only tested for truth, never shown, sliced or logged
-    st.dataframe(pd.DataFrame([{"check": c["name"], "applies": c["applies"],
-                                "passed": "n/a" if c["passed"] is None else str(c["passed"]),
-                                "reason": c["reason"]} for c in t["checks"]]), hide_index=True)
-    st.markdown("**Answer excerpt (first 25 words)**")
-    st.write(t.get("answer_excerpt") or "(none)")
-    st.markdown("**Sources**")
-    srcs = t.get("sources") or []
-    if not srcs:
-        st.write("(none)")
-    for s in srcs:
-        title, url = s.get("title") or "untitled", s.get("url") or ""
-        st.markdown(f"- [{title}]({url})" if url.startswith(ARXIV_PREFIX) else f"- {title}")
-
-
 def _resolve_paths(results_path, validation_path):
     return (results_path or os.environ.get(RESULTS_ENV) or RESULTS_PATH,
             validation_path or os.environ.get(VALIDATION_ENV) or VALIDATION_PATH)
 
 
-def render_trace_eval(results_path=None, validation_path=None) -> None:
-    """Order (literature-checked): context, TL;DR with caveat, computed determinations, decisioning,
-    elaboration, data. Any exception in the body shows one fixed line (no type, text or traceback)."""
+PRIVATE_DENIED_TEXT = "Detail is not available with that key."
+PRIVATE_OFF_TEXT = "Trace detail could not be loaded right now."
+PRIVATE_EMPTY_TEXT = "The key was accepted, but no per-trace detail exists on the server yet."
+
+
+def _pv(x, fmt="{:.0%}") -> str:
+    return "n/a" if x is None else fmt.format(x)
+
+
+def _render_public(view: dict) -> None:
+    """TRACEVIZ-1022 public tier: aggregates and structure from vera.trace_viz.public_view. No key, never blank."""
+    st.caption(f"Build {view.get('build', 'unknown')}. This section shows aggregates only: no individual questions, "
+               "answers or sources. Detail needs a viz key (bottom of the page).")
+    st.subheader("Evaluation flow")
+    st.markdown(" then ".join(f"{r['stage']}. {r['check']}" for r in view.get("stages", [])) or "(unavailable)")
+    run = view.get("run")
+    st.subheader("Latest run")
+    if not run:
+        st.info("No evaluation run has been published on this deployment yet, so there are no pass rates, latency or "
+                "cost figures to show. The flow above and the check validation below do not depend on a run.")
+    else:
+        st.caption(f"Evidence dated {view.get('run_file_date') or 'unknown'} (UTC); run captured {run.get('generated_at') or 'unknown'}.")
+        st.markdown(f"**{run.get('n_questions')}** questions, **{run.get('n_traces')}** answers, "
+                    f"**{run.get('n_errors')}** capture errors.")
+        rows = [{"variant": v, "check": c, "passed/applies": f"{_pv(x.get('passed'), '{:g}')}/{_pv(x.get('applies'), '{:g}')}",
+                 "rate": _pv(x.get("rate"))}
+                for v, d in (run.get("variants") or {}).items() for c, x in (d.get("per_check") or {}).items()]
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True)
+        lat, tot = run.get("latency_s"), run.get("totals")
+        if lat:
+            st.markdown(f"Latency: median {_pv(lat.get('p50'), '{:.1f}')} s, 95th percentile {_pv(lat.get('p95'), '{:.1f}')} s (n={lat.get('n')}).")
+        if tot:
+            st.markdown(f"Totals: ${tot.get('cost_usd', 0):.2f}, {tot.get('tokens', 0)} tokens.")
+    st.subheader("Check validation")
+    val = view.get("check_validation")
+    if not val:
+        st.info("Check validation is not available on this deployment.")
+    else:
+        st.caption(f"Evidence dated {view.get('validation_file_date') or 'unknown'} (UTC). Positive class = FAIL.")
+        st.dataframe(pd.DataFrame([{"check": c, "n": x.get("n"), "TP": x.get("tp"), "TN": x.get("tn"), "FP": x.get("fp"),
+                                    "FN": x.get("fn"), "TPR": _pv(x.get("tpr")), "TNR": _pv(x.get("tnr"))}
+                                   for c, x in val["checks"].items()]), hide_index=True)
+
+
+def fetch_private(base_url: str, key: str, timeout: int = 15):
+    """(status_code, body or None). The key goes in a header only; nothing is logged; errors give the status only."""
+    import requests
+    try:
+        r = requests.get(f"{base_url.rstrip('/')}/trace/private", headers={"X-Viz-Key": key}, timeout=timeout)
+        return r.status_code, (r.json() if r.status_code == 200 else None)
+    except (requests.exceptions.RequestException, ValueError):
+        return 0, None
+
+
+def _render_private(base_url: str | None = None) -> None:
+    """Private tier: the key is typed into a password field, kept in session_state only, never in a URL or message."""
+    st.subheader("Trace detail (viz key required)")
+    with st.form("trace_viz_form"):
+        st.text_input("Viz key", type="password", key="trace_viz_key", value="", help="Sent only to this app's API in a header.")
+        go = st.form_submit_button("Unlock detail")
+    key = st.session_state.get("trace_viz_key") or ""
+    if go and key:
+        if base_url is None:
+            from vera.public_mode import upstream_base_url
+            base_url = upstream_base_url()
+        status, body = fetch_private(base_url, key)
+        st.session_state["trace_viz_detail"] = body if status == 200 else None
+        st.session_state["trace_viz_status"] = status
+    status, body = st.session_state.get("trace_viz_status"), st.session_state.get("trace_viz_detail")
+    if status is None:
+        st.caption("Per-trace detail (question ids, per-check reasons, answer excerpts, source titles) is private.")
+    elif status in (401, 403, 429):
+        st.warning(PRIVATE_DENIED_TEXT)
+    elif status != 200:
+        st.warning(PRIVATE_OFF_TEXT)
+    elif not body or not body.get("available"):
+        st.info(PRIVATE_EMPTY_TEXT)
+    else:
+        _private_browser(body.get("traces", []))
+
+
+def _private_browser(traces: list) -> None:
+    variants = sorted({str(t.get("variant")) for t in traces})
+    variant = st.selectbox("Variant", variants)
+    ids = [t["id"] for t in traces if str(t.get("variant")) == variant]
+    qid = st.selectbox("Question id", ids)
+    t = next(t for t in traces if str(t.get("variant")) == variant and t["id"] == qid)
+    st.text(f"Category: {t.get('category')}; split: {t.get('split')}; all-pass: {t.get('all_pass')}")
+    if t.get("question"):
+        st.markdown("**Question**")
+        st.text(t["question"])
+    if t.get("capture_error"):
+        st.error(CAPTURE_ERROR_TEXT)
+    st.dataframe(pd.DataFrame([{"check": c.get("name"), "applies": c.get("applies"),
+                                "passed": "n/a" if c.get("passed") is None else str(c.get("passed")),
+                                "reason": c.get("reason")} for c in t.get("checks", [])]), hide_index=True)
+    st.markdown("**Answer excerpt (first 25 words)**")
+    st.text(t.get("answer_excerpt") or "(none)")
+    st.markdown("**Sources**")
+    for s_ in t.get("sources") or []:
+        st.text(str(s_.get("title") or "untitled"))
+    if not t.get("sources"):
+        st.write("(none)")
+
+
+def render_trace_eval(results_path=None, validation_path=None, public_path=None, base_url=None) -> None:
+    """TRACEVIZ-1022: public tier first (always), then the computed analysis when a results file exists, then the
+    key-gated detail. Any exception in a section shows one fixed line (no type, text or traceback)."""
     st.title("VERA-DAR Trace Eval")
+    from vera import trace_viz
+    try:
+        _render_public(trace_viz.public_view(results_path, validation_path, public_path))
+    except Exception:  # noqa: BLE001
+        st.error(RENDER_ERROR_TEXT)
     try:
         _render_body(*_resolve_paths(results_path, validation_path))
     except Exception:  # noqa: BLE001  (Streamlit's rerun/stop signals derive from BaseException and pass through)
+        st.error(RENDER_ERROR_TEXT)
+    try:
+        _render_private(base_url)
+    except Exception:  # noqa: BLE001
         st.error(RENDER_ERROR_TEXT)
 
 

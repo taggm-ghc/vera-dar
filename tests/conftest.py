@@ -254,3 +254,19 @@ def _reset_openai_default_client_latch():
     ask_service.reset_default_client_latch()
     yield
     ask_service.reset_default_client_latch()
+
+
+# UIWAKE-1022: the UI health-checks the API before /ask and on page load. Default every test to a healthy API with
+# no real sleeps, so UI tests that mock requests.post keep their behaviour; tests/test_ui_wake.py overrides these.
+class _UiWakeHealthy:
+    status_code = 200
+
+
+@pytest.fixture(autouse=True)
+def _ui_wake_default_healthy(monkeypatch):
+    from vera import ui_wake
+    monkeypatch.setattr(ui_wake, "http_get", lambda *a, **k: _UiWakeHealthy())
+    monkeypatch.setattr(ui_wake, "sleep", lambda s: None)
+    ui_wake.reset_hook_cooldown()
+    yield
+    ui_wake.reset_hook_cooldown()

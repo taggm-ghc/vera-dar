@@ -30,11 +30,19 @@ def test_set_v2_has_at_least_six_per_field_and_ten_negatives():
     assert all(i["expected_verdict"] in ("accept", "decline") and i["field"] for i in SET["items"])
 
 
-def test_layer1_deny_categories_unchanged_known_declines():
+def test_layer1_known_topic_word_declines_fixed_by_scope_1022():
+    """SCOPE-1022 (owner HITL-F1: B): the v2 items recorded as known layer-1 false declines (symptoms, diagnosis,
+    poison) are in-scope research questions and must now pass layer 1 (the frozen set's expected_layer1 is history)."""
     known = [i for i in SET["items"] if i.get("expected_layer1")]
     assert known
     for i in known:
-        assert sr.layer1(i["text"], CFG)[0] == sr.DECLINE, i["id"]
+        assert sr.layer1(i["text"], CFG)[0] != sr.DECLINE, i["id"]
+
+
+def test_layer1_never_declines_an_in_scope_v2_item():
+    for i in SET["items"]:
+        if i["label"] == "in_scope":
+            assert sr.layer1(i["text"], CFG)[0] != sr.DECLINE, i["id"]
 
 
 def test_layer1_never_accepts_an_out_of_scope_v2_item():
