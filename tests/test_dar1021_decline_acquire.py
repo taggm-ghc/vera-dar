@@ -188,7 +188,7 @@ def test_main_offtopic_search_is_scholarly_only_and_enqueues(monkeypatch):
     assert r.status_code == 200, r.text
     assert len(calls) == 1
     cfg, kw = calls[0]
-    assert cfg["providers"] == ["arxiv", "openalex"] and cfg["resolve"] == {"enabled": False} and "dar_corpus" not in kw
+    assert cfg["providers"] == ["arxiv", "openalex", "duckduckgo_lite"] and cfg["resolve"] == {"enabled": False} and "dar_corpus" not in kw
     assert acquired == [(OFF_Q, "decline")]
 
 

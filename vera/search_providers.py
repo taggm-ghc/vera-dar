@@ -291,6 +291,15 @@ def openalex_default_transport(url: str, params: dict, headers: dict, timeout: f
     return requests.get(url, params=params, headers=headers, timeout=timeout)
 
 
+def openalex_api_key(settings: Mapping | None = None, env: Mapping | None = None) -> str | None:
+    """YIELD-1021: OPTIONAL OpenAlex API key from the env var named by settings api_key_env (default OPENALEX_API_KEY).
+    Absent or blank = the keyless free tier, unchanged. The value is never logged or stored."""
+    import os
+    name = str((settings or {}).get("api_key_env") or "OPENALEX_API_KEY")
+    v = str((os.environ if env is None else env).get(name) or "").strip()
+    return v if re.fullmatch(r"[A-Za-z0-9_\-]{8,200}", v) else None
+
+
 def reconstruct_abstract(inverted: Mapping | None, max_chars: int) -> str:
     """OpenAlex stores abstracts as {word: [positions]}; rebuild the text in position order and truncate."""
     if not isinstance(inverted, Mapping) or not inverted:
@@ -310,6 +319,12 @@ def reconstruct_abstract(inverted: Mapping | None, max_chars: int) -> str:
 # its own search; default None = the unchanged /ask behaviour). Keys: "filter" (extra OpenAlex filter clause, e.g. works
 # held by PubMed Central, which is where Europe PMC full text comes from), "and_extra_max" (int), "generic_terms" (list).
 OPENALEX_PROFILE: contextvars.ContextVar = contextvars.ContextVar("openalex_search_profile", default=None)
+# YIELD-1021: acquisition-only extra OpenAlex fields (OA status, OA/PMC locations with licence, ids.pmcid) for the
+# licence/OA pre-filter in vera.auto_acquire.rank_candidates. Set ONLY by acquisition_search; /ask never sets it, so the
+# /ask select and candidate dicts are unchanged. Separate from OPENALEX_PROFILE so the OR retry (profile None) keeps it.
+OPENALEX_OA_FIELDS: contextvars.ContextVar = contextvars.ContextVar("openalex_oa_fields", default=False)
+OPENALEX_OA_SELECT_EXTRA = "open_access,best_oa_location,locations,ids"
+OPENALEX_PMC_SOURCE_ID = "S2764455111"  # PubMed Central (where Europe PMC full text comes from)
 
 
 def _profile_extra_and(extra, profile: Mapping) -> str:
@@ -387,9 +402,21 @@ class OpenAlexProvider:
                f"to_publication_date:{self.s['to_publication_date']}")
         if profile and profile.get("filter"):
             flt += "," + str(profile["filter"])
-        params = {"search": search, "filter": flt, "per_page": n, "select": OPENALEX_SELECT}
+        select = OPENALEX_SELECT + ("," + OPENALEX_OA_SELECT_EXTRA if OPENALEX_OA_FIELDS.get() else "")
+        params = {"search": search, "filter": flt, "per_page": n, "select": select}
         tx = self._transport or openalex_default_transport
-        return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
+        key = openalex_api_key(self.s)
+        if not key:
+            return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
+        try:  # YIELD-1021: OPTIONAL key (env only); never logged: any error text is redacted before it propagates
+            return tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).replace(key, "[redacted]")
+            try:
+                err = type(e)(msg)
+            except Exception:  # noqa: BLE001
+                err = ProviderUnavailable(msg)
+            raise err from None
 
     def parse(self, resp, n: int) -> list[dict]:
         body = resp.text or ""
@@ -431,6 +458,7 @@ class OpenAlexProvider:
                 "licence": licence_record(metadata=OPENALEX_METADATA_LICENCE),
                 "stored_text_kind": "abstract_metadata",
                 "provider_endpoint": self.endpoint,
+                **({"oa": oa} if (oa := openalex_oa_info(w)) is not None else {}),
             })
             if len(out) >= n:
                 break
@@ -442,6 +470,457 @@ class OpenAlexProvider:
     def failure_basis(self) -> str:
         return COST_BASIS_KEYLESS_FREE
 
+
+
+# ----------------------------------------------------------------------------------------- YIELD-1021 acquisition
+# Acquisition only (vera.auto_acquire / inline_acquire). Nothing here is used by the /ask reading list.
+_OA_KEYS = ("open_access", "best_oa_location", "locations", "ids")
+
+
+def _pmcid_of(v) -> str | None:
+    m = re.search(r"PMC\d{1,10}", str(v or ""), flags=re.I)
+    return m.group(0).upper() if m else None
+
+
+def openalex_oa_info(w: Mapping) -> dict | None:
+    """OA metadata the OpenAlex work already carries (no extra call), or None when the work has none of the fields
+    (the /ask select): {"is_oa", "has_oa_location", "licence", "pmcid"}; each None when not stated."""
+    if not isinstance(w, Mapping) or not any(k in w for k in _OA_KEYS):
+        return None
+    oa = w.get("open_access") if isinstance(w.get("open_access"), Mapping) else {}
+    best = w.get("best_oa_location") if isinstance(w.get("best_oa_location"), Mapping) else None
+    locs = [x for x in (w.get("locations") or ()) if isinstance(x, Mapping)] if isinstance(w.get("locations"), list) else []
+
+    def src_id(x):
+        return str(((x.get("source") or {}) if isinstance(x.get("source"), Mapping) else {}).get("id") or "")
+    pmc = [x for x in locs if src_id(x).rstrip("/").endswith(OPENALEX_PMC_SOURCE_ID)]
+    if "best_oa_location" in w or "locations" in w:
+        has_oa = best is not None or any(x.get("is_oa") is True for x in locs)
+    else:
+        has_oa = None
+    # The PMC location's licence is what Europe PMC full text reports; else the best OA location's.
+    lic = next((str(x["license"]) for x in pmc if x.get("license")), None) or (
+        str(best["license"]) if best is not None and best.get("license") else None)
+    ids = w.get("ids") if isinstance(w.get("ids"), Mapping) else {}
+    pmcid = _pmcid_of(ids.get("pmcid")) or next((p for p in (_pmcid_of(x.get("landing_page_url")) for x in pmc) if p),
+                                                 None)
+    return {"is_oa": oa.get("is_oa") if isinstance(oa.get("is_oa"), bool) else None, "has_oa_location": has_oa,
+            "licence": lic, "pmcid": pmcid}
+
+
+def _licence_is_nd(lic) -> bool:
+    s = re.sub(r"[\s_]+", "-", str(lic or "").strip().lower())
+    return bool(re.search(r"(^|-)nd($|-|\d)", s)) or "noderiv" in s
+
+
+def acq_prefilter(cand: Mapping) -> str | None:
+    """YIELD-1021 pre-filter BEFORE the top-N cut: "nd" (stated ND licence) or "not_oa" (metadata states no OA location
+    at all), else None. Missing metadata or an unknown licence keeps the candidate; the licence gate on the fetched text
+    is unchanged and still decides."""
+    oa = cand.get("oa") if isinstance(cand, Mapping) else None
+    if not isinstance(oa, Mapping):
+        return None
+    if _licence_is_nd(oa.get("licence")):
+        return "nd"
+    if oa.get("epmc_ft"):
+        return None
+    if oa.get("has_oa_location") is False and oa.get("is_oa") is not True:
+        return "not_oa"
+    return None
+
+
+def europepmc_default_transport(url: str, params: dict, headers: dict, timeout: float):
+    """THE one real network call for the acquisition Europe PMC search. Tests patch this (or requests.get)."""
+    import requests
+    return requests.get(url, params=params, headers=headers, timeout=timeout, allow_redirects=False)
+
+
+def build_europepmc_query(question: str, terms_cfg: Mapping | None, profile: Mapping | None, suffix: str) -> str:
+    search, _mode = build_openalex_search(question, terms_cfg, profile=profile)
+    return f"({search}) AND {suffix}" if suffix else search
+
+
+def europepmc_search(question: str, n: int, timeout_s: float, ecfg: Mapping, *, terms_cfg: Mapping | None = None,
+                     profile: Mapping | None = None, transport: Callable | None = None) -> list[dict]:
+    """ONE Europe PMC REST search (resultType lite) for open-access works with full text in Europe PMC. Hits without a
+    PMCID, not open access, or from a refused source are dropped; hits without a DOI stay (counted R-ACQ-NODOI by the
+    ranking, which resolves by DOI). Raises on transport or response errors."""
+    params = {"query": build_europepmc_query(question, terms_cfg, profile, str(ecfg.get("query_suffix") or "")),
+              "resultType": "lite", "format": "json", "pageSize": int(ecfg.get("page_size", 10))}
+    resp = (transport or europepmc_default_transport)(str(ecfg["search_url"]), params, {"User-Agent": USER_AGENT},
+                                                      float(timeout_s))
+    if int(getattr(resp, "status_code", 200) or 200) != 200:
+        raise ProviderResponseError(f"europepmc search HTTP {getattr(resp, 'status_code', '?')}")
+    body = resp.text or ""
+    if len(body.encode("utf-8", "ignore")) > int(ecfg.get("max_response_bytes", 2_000_000)):
+        raise ProviderResponseError("europepmc response too large; refused before parsing")
+    try:
+        doc = json.loads(body)
+        rows = (doc.get("resultList") or {}).get("result") or []
+    except (ValueError, AttributeError):
+        raise ProviderResponseError("europepmc response is not the expected JSON") from None
+    refuse = {str(x).upper() for x in ecfg.get("refuse_sources") or ()}
+    out = []
+    for r in rows if isinstance(rows, list) else ():
+        if not isinstance(r, dict):
+            continue
+        pmcid = _pmcid_of(r.get("pmcid"))
+        if (not pmcid or str(r.get("isOpenAccess") or "").upper() != "Y"
+                or str(r.get("source") or "").upper() in refuse):
+            continue
+        doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(r.get("doi") or "").strip(), flags=re.I) or None
+        out.append({"url": f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/PMC/{pmcid}",
+                    "title": " ".join(str(r.get("title") or "").split()), "snippet": "", "doi": doi,
+                    "year": int(r["pubYear"]) if str(r.get("pubYear") or "").isdigit() else None,
+                    "provider": "europepmc", "pmcid": pmcid,
+                    "oa": {"is_oa": True, "has_oa_location": True, "licence": None, "pmcid": pmcid, "epmc_ft": True}})
+        if len(out) >= n:
+            break
+    return out
+
+
+def _cand_ids(c: Mapping) -> set:
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(c.get("doi") or "").strip().lower())
+    pm = _pmcid_of(c.get("pmcid") or ((c.get("oa") or {}) if isinstance(c.get("oa"), Mapping) else {}).get("pmcid"))
+    return ({"doi:" + doi} if doi else set()) | ({"pmc:" + pm} if pm else set())
+
+
+def _default_terms_and_profile(cfg: Mapping):
+    from vera import search_and_fetch
+    chain = search_and_fetch.cached_chain()[0]
+    oa = next((p for p in chain if getattr(p, "name", None) == "openalex"), None)
+    return getattr(oa, "query_terms", None), ((cfg.get("search") or {}).get("openalex_profile") or None)
+
+
+# ---- DuckDuckGo results -> acquirable candidates (owner 2026-10-21: "ddg should be the first source for prompts/queries
+# that are not in the corpus"). Only results that carry or resolve to a scholarly identifier become candidates; they go
+# through the UNCHANGED resolve (Europe PMC by DOI), fetch and licence gates. Any other page is HELD (never ingested,
+# never evidence): the acquisition fetch accepts only Europe PMC JATS XML, so licensed HTML pages are not candidates.
+_DOI_IN_URL = re.compile(r"(10\.\d{4,9}/[^\s?#&\"'<>]+)", re.I)
+_ARXIV_URL = re.compile(r"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf)/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/?$",
+                        re.I)
+_PMC_URL = re.compile(r"^https?://(?:www\.)?(?:ncbi\.nlm\.nih\.gov/pmc/articles|pmc\.ncbi\.nlm\.nih\.gov/articles|"
+                      r"europepmc\.org/(?:article|abstract)/PMC)/(PMC\d{1,10})\b", re.I)
+_PMID_URL = re.compile(r"^https?://(?:pubmed\.ncbi\.nlm\.nih\.gov/|(?:www\.)?ncbi\.nlm\.nih\.gov/pubmed/|"
+                       r"europepmc\.org/(?:article|abstract)/MED/)(\d{1,9})\b", re.I)
+_META_DOI = re.compile(r"<meta\s[^>]*?name=[\"'](?:citation_doi|dc\.identifier|prism\.doi)[\"'][^>]*?>", re.I)
+_CONTENT = re.compile(r"content=[\"']\s*(?:doi:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\"'\s]+)", re.I)
+
+
+def ddg_identifier(url: str) -> dict | None:
+    """{"kind": "doi"|"pmcid"|"pmid"|"arxiv", "value"} from the URL alone (no request), or None."""
+    u = str(url or "").strip()
+    m = _ARXIV_URL.match(u)
+    if m:
+        return {"kind": "arxiv", "value": m.group(1).lower()}
+    m = _PMC_URL.match(u)
+    if m:
+        return {"kind": "pmcid", "value": m.group(1).upper()}
+    m = _PMID_URL.match(u)
+    if m:
+        return {"kind": "pmid", "value": m.group(1)}
+    m = _DOI_IN_URL.search(u)
+    if m:
+        doi = re.sub(r"(\.pdf|/full|/abstract|/epdf|/pdf|[.,;)])+$", "", m.group(1), flags=re.I).lower()
+        if re.fullmatch(r"10\.\d{4,9}/\S+", doi):
+            return {"kind": "doi", "value": doi}
+    return None
+
+
+def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | None = None,
+                url_check: Callable | None = None, deadline: float | None = None,
+                clock: Callable | None = None) -> str | None:
+    """ONE cheap GET of a journal landing page (public-address check on every hop, at most 2 redirects, size-capped,
+    short timeout) -> its citation_doi meta tag, or None. Never raises."""
+    if get is None:
+        import requests
+        get = requests.get
+    if url_check is None:
+        from vera.selective_fetch import is_public_url as url_check
+    import time as _t
+    clock = clock or _t.monotonic
+    cur = url
+    try:
+        for _hop in range(3):
+            left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
+            if left <= 0.2:
+                return None
+            ok = url_check(cur)
+            if not (ok[0] if isinstance(ok, tuple) else ok):
+                return None
+            r = get(cur, headers={"User-Agent": USER_AGENT}, timeout=left, allow_redirects=False, stream=True)
+            stop_at = clock() + left  # a trickling server cannot hold the thread past the hop budget or the deadline
+            try:
+                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                    from urllib.parse import urljoin
+                    cur = urljoin(cur, r.headers["Location"])
+                    continue
+                if r.status_code != 200:
+                    return None
+                buf = b""
+                for chunk in r.iter_content(65536):
+                    buf += chunk
+                    if len(buf) >= max_bytes or clock() > stop_at:
+                        break
+            finally:
+                try:
+                    r.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            text = buf[:max_bytes].decode("utf-8", "ignore")
+            for tag in _META_DOI.findall(text):
+                m = _CONTENT.search(tag)
+                if m:
+                    return m.group(1).rstrip(".").lower()
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def europepmc_ids_lookup(ids: list, timeout_s: float, ecfg: Mapping, *, transport: Callable | None = None) -> dict:
+    """ONE Europe PMC lite search mapping PMCIDs / PMIDs to DOIs: {"PMC..."|"pmid:N": {"doi", "pmcid"}}. Raises on error."""
+    terms = [f"PMCID:{v}" if k == "pmcid" else f"(EXT_ID:{v} AND SRC:MED)" for k, v in ids]
+    if not terms:
+        return {}
+    params = {"query": " OR ".join(terms), "resultType": "lite", "format": "json", "pageSize": len(terms)}
+    resp = (transport or europepmc_default_transport)(str(ecfg["search_url"]), params, {"User-Agent": USER_AGENT},
+                                                      float(timeout_s))
+    if int(getattr(resp, "status_code", 200) or 200) != 200:
+        raise ProviderResponseError(f"europepmc lookup HTTP {getattr(resp, 'status_code', '?')}")
+    rows = ((json.loads(resp.text or "{}").get("resultList") or {}).get("result") or [])
+    out = {}
+    for r in rows if isinstance(rows, list) else ():
+        if not isinstance(r, dict) or not r.get("doi"):
+            continue
+        rec = {"doi": str(r["doi"]).strip().lower(), "pmcid": _pmcid_of(r.get("pmcid"))}
+        if rec["pmcid"]:
+            out[rec["pmcid"]] = rec
+        if r.get("pmid"):
+            out["pmid:" + str(r["pmid"]).strip()] = rec
+    return out
+
+
+def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: float, clock: Callable,
+                      calls_left: int, transport: Callable | None = None, get: Callable | None = None,
+                      url_check: Callable | None = None) -> tuple[list, dict]:
+    """DDG results -> (acquirable candidates, counts). DOI in the URL and arXiv ids map directly; PMC/PubMed links map
+    through ONE Europe PMC id lookup (only when calls_left >= 1); a portal landing page with no identifier gets ONE
+    cheap GET for its citation_doi meta tag (at most dcfg.max_landing_fetches, inside the deadline). Everything else is
+    held (counted, dropped from acquisition; it stays a reading-list link on /ask)."""
+    counts = {"ddg_results": 0, "ddg_mapped": 0, "ddg_held": 0, "ddg_landing_get": 0}
+    out, pending, landing = [], [], 0
+    max_landing = int(dcfg.get("max_landing_fetches", 3))
+    lt = float(dcfg.get("landing_timeout_s", 5))
+    lb = int(dcfg.get("landing_max_bytes", 524288))
+    for r in results or ():
+        if not isinstance(r, Mapping) or not r.get("url"):
+            continue
+        counts["ddg_results"] += 1
+        ident = ddg_identifier(r["url"])
+        if ident is None and landing < max_landing and str(r.get("discovery_group") or "") in set(
+                dcfg.get("landing_groups") or ("portals",)) and deadline - clock() > lt:
+            landing += 1
+            counts["ddg_landing_get"] += 1
+            d = landing_doi(r["url"], lt, lb, get=get, url_check=url_check, deadline=deadline, clock=clock)
+            ident = {"kind": "doi", "value": d} if d else None
+        if ident is None:
+            counts["ddg_held"] += 1
+            continue
+        if ident["kind"] in ("pmcid", "pmid"):
+            pending.append((ident, r))
+            continue
+        doi = ident["value"] if ident["kind"] == "doi" else f"10.48550/arxiv.{ident['value']}"
+        out.append(_ddg_cand(r, doi, None, ident["kind"]))
+    if pending:
+        found = {}
+        if calls_left >= 1 and deadline - clock() > 1:
+            try:
+                found = europepmc_ids_lookup([(i["kind"], i["value"]) for i, _ in pending],
+                                             max(1.0, min(lt, deadline - clock())), ecfg, transport=transport)
+            except Exception:  # noqa: BLE001
+                found = {}
+        for ident, r in pending:
+            rec = found.get(ident["value"] if ident["kind"] == "pmcid" else "pmid:" + ident["value"])
+            if rec is None:
+                counts["ddg_held"] += 1
+                continue
+            out.append(_ddg_cand(r, rec["doi"], rec.get("pmcid"), ident["kind"]))
+    counts["ddg_mapped"] = len(out)
+    return out, counts
+
+
+def _ddg_cand(r: Mapping, doi: str, pmcid, kind: str) -> dict:
+    return {"url": f"https://doi.org/{doi}", "title": " ".join(str(r.get("title") or "").split()), "snippet": "",
+            "doi": doi, "provider": "ddg", "acq_source": "ddg", "ddg_id_kind": kind, "discovered_url": r.get("url"),
+            **({"pmcid": pmcid, "oa": {"pmcid": pmcid}} if pmcid else {})}
+
+
+def acq_source(c: Mapping) -> str:
+    if c.get("acq_source") == "ddg":
+        return "ddg"
+    return "epmc" if c.get("provider") == "europepmc" else "openalex"
+
+
+def acq_rank_tier(c: Mapping) -> int:
+    """Ranking tier (lower first): DuckDuckGo-mapped candidates first (owner 2026-10-21), arXiv-mapped ones last
+    (Europe PMC refuses preprints, so the unchanged resolver cannot yield them), everything else in between."""
+    if c.get("acq_source") == "ddg":
+        return 2 if c.get("ddg_id_kind") == "arxiv" else 0
+    return 1
+
+
+def merge_sources(*lists) -> list:
+    """Merge candidate lists in order, de-duplicated by DOI or PMCID; the first occurrence keeps its place and source,
+    and absorbs a later duplicate's OA metadata (Europe PMC full text marks epmc_ft) and empty snippet/title."""
+    out, index = [], {}
+    for lst in lists:
+        for c in lst or ():
+            if not isinstance(c, dict):
+                continue
+            ids = _cand_ids(c)
+            hit = next((index[k] for k in ids if k in index), None)
+            if hit is None:
+                out.append(c)
+                for k in ids:
+                    index[k] = c
+                continue
+            oa = dict(hit.get("oa") or {}) if isinstance(hit.get("oa"), Mapping) else {}
+            other = c.get("oa") if isinstance(c.get("oa"), Mapping) else {}
+            for k, v in other.items():
+                if oa.get(k) is None:
+                    oa[k] = v
+            if other.get("epmc_ft"):
+                oa["epmc_ft"] = True
+            if oa:
+                hit["oa"] = oa
+            for k in ("snippet", "title"):
+                if not hit.get(k) and c.get(k):
+                    hit[k] = c[k]
+            for k in ids:
+                index.setdefault(k, hit)
+    return out
+
+
+def merge_candidates(primary: list, extra: list) -> list:
+    return merge_sources(primary, extra)
+
+
+class _QuotaGate:
+    """Process-wide: after an OpenAlex 429/quota error the acquisition search treats OpenAlex as unavailable until the
+    cooldown ends (search.openalex_quota_cooldown_s). Nothing waits on it; DDG and Europe PMC still run."""
+    def __init__(self):
+        self.until, self.lock = 0.0, threading.Lock()
+
+    def blocked(self, now: float) -> bool:
+        with self.lock:
+            return now < self.until
+
+    def block(self, now: float, s: float) -> None:
+        with self.lock:
+            self.until = max(self.until, now + max(0.0, s))
+
+    def reset(self) -> None:
+        with self.lock:
+            self.until = 0.0
+
+
+_QUOTA = _QuotaGate()
+
+
+def _is_quota_error(e: Exception) -> bool:
+    t = str(e).lower()
+    return bool(re.search(r"\b429\b", t)) or "rate limit" in t or "budget" in t or "quota" in t
+
+
+def _default_ddg_search(cfg: Mapping) -> Callable:
+    from vera import auto_acquire
+    s = dict(cfg.get("search") or {})
+    s.update({"providers": [DDG_NAME], "openalex_profile": None})
+    return auto_acquire.make_search({**cfg, "search": s})  # the shared /ask DDG instance: its cache, cap and gate
+
+
+def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
+                       terms_fn: Callable | None = None, ddg_search: Callable | None = None,
+                       get: Callable | None = None, url_check: Callable | None = None,
+                       clock: Callable | None = None) -> Callable:
+    """Wrap the acquisition job's search (vera.auto_acquire.make_search): DuckDuckGo Lite (config search.ddg_first),
+    OpenAlex and Europe PMC run CONCURRENTLY within the same timeout, merged DDG first. Search calls are counted
+    against bounds.max_search_calls_per_job: OpenAlex 2 (AND profile + OR retry; else 1), then DuckDuckGo 1, Europe
+    PMC 1, the DDG id lookup 1, each only while the cap leaves a call. Any provider failing returns the others' results;
+    all failing re-raises the OpenAlex error. Landing-page GETs are fetches (dcfg.max_landing_fetches), not searches."""
+    import time as _time
+    clock = clock or _time.monotonic
+    s = cfg.get("search") or {}
+    ecfg = s.get("europepmc") or {}
+    dcfg = s.get("ddg_first") or {}
+    cap = int((cfg.get("bounds") or {}).get("max_search_calls_per_job", 0) or 0)
+    left = cap - (2 if s.get("openalex_profile") else 1)
+    use_ddg = dcfg.get("enabled") is True and left >= 1
+    left -= 1 if use_ddg else 0
+    use_epmc = ecfg.get("enabled") is True and left >= 1
+    left -= 1 if use_epmc else 0
+    lookup_left = left
+
+    def search(question, n, timeout_s):
+        import concurrent.futures as cf
+        t_end = clock() + float(timeout_s)
+        futs = {}
+        pool = cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="acq-search")
+        try:
+            if use_ddg:
+                futs["ddg"] = pool.submit(ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
+            if use_epmc:
+                try:
+                    terms, profile = (terms_fn or (lambda: _default_terms_and_profile(cfg)))()
+                except Exception:  # noqa: BLE001
+                    terms, profile = None, None
+                futs["epmc"] = pool.submit(europepmc_search, question, int(ecfg.get("page_size", n)), float(timeout_s),
+                                           ecfg, terms_cfg=terms, profile=profile, transport=transport)
+        finally:
+            pool.shutdown(wait=False)
+        counts = {}
+        base, base_err = [], None
+        if _QUOTA.blocked(clock()):  # a recent OpenAlex 429/quota error: unavailable, no call (no retry storm)
+            counts["openalex_skipped_quota"] = 1
+            base_err = ProviderUnavailable("openalex quota cooldown")
+        else:
+            tok = OPENALEX_OA_FIELDS.set(True)
+            try:
+                base = list(base_search(question, n, timeout_s) or [])
+            except Exception as e:  # noqa: BLE001
+                base_err = e
+                if _is_quota_error(e):
+                    counts["openalex_429"] = 1
+                    _QUOTA.block(clock(), float(s.get("openalex_quota_cooldown_s", 900)))
+            finally:
+                OPENALEX_OA_FIELDS.reset(tok)
+        got = {}
+        for k, f in futs.items():
+            try:
+                got[k] = list(f.result(timeout=max(0.1, t_end - clock())) or [])
+            except Exception as e:  # noqa: BLE001  (timeout, transport or parse error: the other sources stand)
+                got[k] = []
+                if _is_quota_error(e):
+                    counts[f"{k}_429"] = 1
+        ddg = []
+        if got.get("ddg"):
+            ddg, dcounts = ddg_to_candidates(got["ddg"], ecfg, dcfg, deadline=t_end, clock=clock,
+                                            calls_left=lookup_left, transport=transport, get=get, url_check=url_check)
+            counts.update(dcounts)
+        if base_err is not None and not ddg and not got.get("epmc"):
+            raise base_err
+        merged = merge_sources(ddg, base, got.get("epmc"))
+        by = {}
+        for c in merged:
+            by[acq_source(c)] = by.get(acq_source(c), 0) + 1
+        import logging
+        logging.getLogger("vera.auto_acquire").info(
+            "autoacq sources %s", " ".join(f"{k}={v}" for k, v in sorted({**counts, **{f"cand_{k}": v for k, v in by.items()},
+                                                                         "openalex_raw": len(base),
+                                                                         "epmc_raw": len(got.get("epmc") or ())}.items())))
+        return merged
+    return search
 
 
 # ----------------------------------------------------------------------------------------- DOAJ

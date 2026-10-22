@@ -125,7 +125,7 @@ def test_config_validation(monkeypatch):
         sr.offtopic_providers(bad)
     with pytest.raises(sr.ScopeConfigError):
         sr.offtopic_notice(sr.parse_config({**RAW, "offtopic_notice": ""}))
-    assert sr.offtopic_providers(sr.parse_config(RAW)) == ["arxiv", "openalex"]
+    assert sr.offtopic_providers(sr.parse_config(RAW)) == ["arxiv", "openalex", "duckduckgo_lite"]  # YIELD-1021: DDG restored (links only)
 
 
 def test_notice_has_no_secrets_or_hosts():

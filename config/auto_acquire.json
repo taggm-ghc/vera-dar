@@ -51,6 +51,25 @@
       "and_extra_max": 4,
       "generic_terms": ["key", "main", "major", "differences", "difference", "different", "compare", "compared", "comparison", "similarities", "similar", "versus", "vs", "best", "better", "good", "bad", "common", "important", "types", "type", "kinds", "work", "works", "cause", "causes", "effect", "effects", "role", "impact", "know", "tell", "explain", "describe", "give", "make", "get"]
     },
+    "ddg_first": {
+      "enabled": true,
+      "max_landing_fetches": 3,
+      "landing_timeout_s": 5,
+      "landing_max_bytes": 524288,
+      "landing_groups": ["portals"],
+      "_note": "YIELD-1021 (owner 2026-10-21: \"ddg should be the first source for prompts/queries that are not in the corpus\"). Acquisition and inline only. The shared /ask DuckDuckGoLiteProvider (its cache, daily_query_cap and gate, config search.duckduckgo_lite in vera_eval_run.json) runs concurrently with OpenAlex and Europe PMC; a result becomes a candidate ONLY via a scholarly identifier (DOI in the URL, PMC/PubMed link via one Europe PMC id lookup, arXiv id, or the citation_doi meta tag of a portal landing page fetched once, public-address checked, <= landing_max_bytes, <= landing_timeout_s, at most max_landing_fetches) and then passes the UNCHANGED resolve, fetch and licence gates; DDG-mapped candidates rank first. Every other page is held (never ingested or used as evidence). Planner priors, uncalibrated. enabled=false restores the previous search."
+    },
+    "europepmc": {
+      "enabled": true,
+      "search_url": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+      "query_suffix": "OPEN_ACCESS:y AND HAS_FT:y AND NOT SRC:PPR AND NOT LICENSE:\"cc by-nd\" AND NOT LICENSE:\"cc by-nc-nd\"",
+      "page_size": 10,
+      "max_response_bytes": 2000000,
+      "refuse_sources": ["PPR"],
+      "_note": "YIELD-1021: second metadata search, acquisition only (never the /ask reading list): Europe PMC lite search for open-access works with Europe PMC full text, merged with OpenAlex de-duplicated by DOI or PMCID; hits still resolve through the unchanged resolve_oa (by DOI; hits without a DOI are R-ACQ-NODOI). One search call. enabled=false removes it."
+    },
+    "openalex_quota_cooldown_s": 900,
+    "_openalex_quota_note": "YIELD-1021: after an OpenAlex HTTP 429 / budget error (keyless free tier = a small daily budget shared per IP, observed exhausted 2026-10-21 by BENCH-1021 and this task's live check) the acquisition search skips OpenAlex for this many seconds (process-wide; DDG and Europe PMC still run; the job makes one OpenAlex attempt, max_retries 1, so no Retry-After sleep). Planner prior, uncalibrated: lower it once a key (optional env OPENALEX_API_KEY, never logged) is set. Counted as openalex_429 / openalex_skipped_quota in the 'autoacq sources' log line.",
     "results_per_provider": 10,
     "timeout_s": 20,
     "max_calls_per_provider_per_job": 1
@@ -60,7 +79,8 @@
     "jobs_per_hour": 6,
     "jobs_per_day": 30,
     "docs_per_day": 20,
-    "max_search_calls_per_job": 2,
+    "max_search_calls_per_job": 5,
+    "_max_search_calls_note": "YIELD-1021: 2 -> 5 = OpenAlex 2 (AND profile + OR retry) + DuckDuckGo 1 + Europe PMC 1 + Europe PMC id lookup for DDG PMC/PubMed links 1. A lower value drops the later ones in that order (vera.search_providers.acquisition_search).",
     "max_candidates_resolved": 6,
     "max_docs_per_job": 2,
     "max_fetch_bytes": 8000000,

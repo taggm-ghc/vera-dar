@@ -272,7 +272,8 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
           "pool_pre_ping": True}
     wo = create_engine(env[cfg["db_url_env_wo"]], **kw)
     ro = create_engine(env[cfg["db_url_env_ro"]], **kw)
-    search = make_search(cfg)
+    from vera import search_providers
+    search = search_providers.acquisition_search(make_search(cfg), cfg)  # YIELD-1021: + DDG first, Europe PMC
 
     def keys():
         return served_doc_keys(fulldoc_corpus)
@@ -608,6 +609,7 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
 def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count) -> list:
     """Stage (shared by the background job and DAR-INLINE-1021): DOI required, not already served (DOI/URL/ISBN),
     deduplicated by DOI, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
+    from vera import search_providers
     from vera.dar_corpus import doc_key_set
     ranked, seen = [], set()
     for c in cands or ():
@@ -617,6 +619,10 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
         if not doi:
             count(acq_config.reason(cfg, "no_doi"))
             continue
+        why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
+        if why:
+            count(acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence"))
+            continue
         isbn = candidate_isbn(c)
         keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
         if doi in seen or keys & served:
@@ -624,8 +630,13 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
             continue
         seen.add(doi)
         ranked.append((prerank_score(question, c, fdcfg), doi, c, isbn))
-    ranked.sort(key=lambda x: (-x[0], x[1]))
-    return ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
+    ranked.sort(key=lambda x: (search_providers.acq_rank_tier(x[2]), -x[0], x[1]))  # YIELD-1021: DDG-mapped first
+    cut = ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
+    by: dict = {}
+    for _s, _d, c, _i in cut:
+        by[search_providers.acq_source(c)] = by.get(search_providers.acq_source(c), 0) + 1
+    _log("ranked", **{f"src_{k}": v for k, v in sorted(by.items())})
+    return cut
 
 
 def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: dict, deps: Deps, icfg: dict,
