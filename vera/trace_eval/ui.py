@@ -141,10 +141,11 @@ def _per_check(res: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def _validation(val: dict) -> None:
-    st.markdown("#### Check validation (dev labels)")
+    st.markdown(f"#### {TNR_SECTION}: dev labels")
+    st.caption(TNR_NOTE)
     st.caption(f"Positive class: {val.get('positive_class')}; labeller: {LABELLER_TEXT}.")
     rows = [{"check": n, "n": c["n"], "TP": c["tp"], "TN": c["tn"], "FP": c["fp"], "FN": c["fn"],
-             "TPR": _pct(c.get("tpr")), "TNR": _pct(c.get("tnr")), "note": c.get("note", "")}
+             "TPR": _pct(c.get("tpr")), "TNR": _tnr_cell(c.get("tn"), c.get("fp"), c.get("tnr")), "note": c.get("note", "")}
             for n, c in val.get("per_check", {}).items()]
     st.dataframe(pd.DataFrame(rows), hide_index=True)
     s = val.get("support")
@@ -209,7 +210,7 @@ def _determinations(overall, checks, trust) -> None:
     st.markdown("**Which checks changed?** (paired, questions where the check applies to both variants)")
     st.dataframe(pd.DataFrame(checks), hide_index=True)
     if trust:
-        st.markdown("**How far can each check be trusted?** (against blind labels; positive class = FAIL)")
+        st.markdown(f"**{TNR_SECTION}** (blind labels; positive class = FAIL). {TNR_NOTE}")
         st.dataframe(pd.DataFrame(trust), hide_index=True)
 
 
@@ -305,6 +306,58 @@ PRIVATE_OFF_TEXT = "Trace detail could not be loaded right now."
 PRIVATE_EMPTY_TEXT = "The key was accepted, but no per-trace detail exists on the server yet."
 
 
+HISTORICAL_TEXT = ("HISTORICAL: this run was not made on the build deployed now (or its build is unknown), so it describes "
+                   "an earlier state of the system and may not reflect current behaviour.")
+CHECK_ACCURACY_TEXT = ("Check accuracy, not answer pass rates. This table measures how well each automated check agrees with "
+                       "human labels (TPR = failures the check catches, TNR = passes it correctly leaves alone). It says nothing "
+                       "about how often VERA-DAR's answers pass.")
+
+
+METHOD_TEXT = ("**Method.** Each question is sent to VERA-DAR's answer route; every answer is scored by nine rule-based checks "
+               "(citation present, citations resolve, numbers grounded, no phantom evidence, date window, claim support, false "
+               "premise corrected, out-of-scope declined, clarification or stated assumption). A case passes only if every "
+               "check that applies passes; a capture error counts as a failure. Rates carry 95% Wilson intervals. "
+               "Per-case detail is private.")
+
+
+def historical_label(run: dict) -> str:
+    m = run.get("run_meta") or {}
+    models = ", ".join(m.get("models") or []) or "model unknown"
+    if m.get("mode") == "historical":
+        return (f"HISTORICAL (TRACE v1, {m.get('finished_at') or 'date unknown'}, earlier abstract-grounded variant, "
+                "build not recorded, superseded)")
+    return f"HISTORICAL ({m.get('finished_at') or run.get('generated_at') or 'date unknown'}, {models})"
+
+
+def _limitations(run: dict) -> list[str]:
+    """Fixed limitation lines chosen from the run's recorded flags (no free text from the data)."""
+    m = run.get("run_meta") or {}
+    out = ["Rule-based checks A1-A9 are heuristics; a pass is not proof an answer is correct."]
+    if m.get("offline"):
+        out.append("Offline fixture run: synthetic answers, no model or search was called.")
+    if m.get("checks_validated") is False:
+        out.append("The question set is not the frozen set the checks were validated on.")
+    if (run.get("n_errors") or 0) > 0:
+        out.append("Capture errors count as failures in the pass rates.")
+    if not m:
+        out.append("No run metadata was recorded for this file, so its build and scoring version are unknown.")
+    out.append("Rates come from a small question set; read the 95% intervals, not only the point values.")
+    return out
+
+
+TNR_SECTION = "Checker agreement with human labels (true-negative rate)"
+TNR_NOTE = ("These figures come from few labelled examples and are not answer pass rates. n/N = good answers the check "
+            "correctly left alone out of all good answers labelled by humans.")
+
+
+def _tnr_cell(tn, fp, rate) -> str:
+    """Counts first (TN/(TN+FP)); a bare percentage is never shown."""
+    if tn is None or fp is None:
+        return "n/a"
+    n = int(tn + fp)
+    return f"{int(tn)}/{n}" + (f" ({rate:.0%})" if rate is not None and n else "") if n else "n/a"
+
+
 def _pv(x, fmt="{:.0%}") -> str:
     return "n/a" if x is None else fmt.format(x)
 
@@ -318,10 +371,15 @@ def _render_public(view: dict) -> None:
     run = view.get("run")
     st.subheader("Latest run")
     if not run:
-        st.info("No evaluation run has been published on this deployment yet, so there are no pass rates, latency or "
-                "cost figures to show. The flow above and the check validation below do not depend on a run.")
+        st.info("No run aggregates are available on this deployment. The method, limitations and check accuracy below "
+                "do not depend on a run.")
     else:
-        st.caption(f"Evidence dated {view.get('run_file_date') or 'unknown'} (UTC); run captured {run.get('generated_at') or 'unknown'}.")
+        meta = run.get("run_meta") or {}
+        if view.get("historical"):
+            st.warning(((historical_label(run) + ". ") if (meta.get("mode") == "historical") else "") + HISTORICAL_TEXT)
+        st.caption(f"Run build {view.get('run_build') or 'unknown'} (deployed build {view.get('build', 'unknown')}); "
+                   f"run date {view.get('run_file_date') or 'unknown'} (UTC); scoring {meta.get('scoring_version') or 'unknown'}; "
+                   f"eval set {(meta.get('eval_set_sha256') or 'unknown')[:12]}.")
         st.markdown(f"**{run.get('n_questions')}** questions, **{run.get('n_traces')}** answers, "
                     f"**{run.get('n_errors')}** capture errors.")
         rows = [{"variant": v, "check": c, "passed/applies": f"{_pv(x.get('passed'), '{:g}')}/{_pv(x.get('applies'), '{:g}')}",
@@ -334,14 +392,23 @@ def _render_public(view: dict) -> None:
             st.markdown(f"Latency: median {_pv(lat.get('p50'), '{:.1f}')} s, 95th percentile {_pv(lat.get('p95'), '{:.1f}')} s (n={lat.get('n')}).")
         if tot:
             st.markdown(f"Totals: ${tot.get('cost_usd', 0):.2f}, {tot.get('tokens', 0)} tokens.")
-    st.subheader("Check validation")
+        st.markdown("**Limitations**\n" + "\n".join(f"- {t}" for t in _limitations(run)))
+    st.subheader("Method and limitations")
+    st.markdown(METHOD_TEXT)
+    st.markdown("\n".join(f"- {t}" for t in _limitations(run or {})))
+    off = view.get("offline_suite")
+    if off:
+        st.subheader("Offline suite")
+        st.caption("Synthetic fixture run through the same checks (no model called); it tests the pipeline, not VERA-DAR's answers.")
+        st.markdown(f"**{off.get('n_traces')}** fixture answers, **{off.get('n_errors')}** simulated capture errors.")
+    st.subheader(TNR_SECTION)
     val = view.get("check_validation")
     if not val:
         st.info("Check validation is not available on this deployment.")
     else:
-        st.caption(f"Evidence dated {view.get('validation_file_date') or 'unknown'} (UTC). Positive class = FAIL.")
+        st.caption(f"Evidence dated {view.get('validation_file_date') or 'unknown'} (UTC). Positive class = FAIL. {CHECK_ACCURACY_TEXT} {TNR_NOTE}")
         st.dataframe(pd.DataFrame([{"check": c, "n": x.get("n"), "TP": x.get("tp"), "TN": x.get("tn"), "FP": x.get("fp"),
-                                    "FN": x.get("fn"), "TPR": _pv(x.get("tpr")), "TNR": _pv(x.get("tnr"))}
+                                    "FN": x.get("fn"), "TPR": _pv(x.get("tpr")), "TNR": _tnr_cell(x.get("tn"), x.get("fp"), x.get("tnr"))}
                                    for c, x in val["checks"].items()]), hide_index=True)
 
 

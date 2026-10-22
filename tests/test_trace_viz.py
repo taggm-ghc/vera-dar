@@ -168,7 +168,7 @@ def test_page_public_with_data_shows_aggregates_no_key_no_leak(paths):
     at = _at(r, v, tmp / "none.json")
     assert not at.exception
     text = _page(at)
-    assert "Evaluation flow" in text and "Latest run" in text and "Check validation" in text
+    assert "Evaluation flow" in text and "Latest run" in text and "Checker agreement" in text
     assert len(at.dataframe) >= 2
     for bad in (SENT_Q, SENT_EXC, SENT_HOST, SENT_SECRET, SENT_TITLE):
         assert bad not in text, bad
@@ -179,8 +179,9 @@ def test_page_public_no_data_is_not_blank(tmp_path):
     at = _at(tmp_path / "x.json", tmp_path / "y.json", tmp_path / "z.json")
     assert not at.exception
     text = _page(at)
-    assert "Evaluation flow" in text and "No evaluation run has been published" in text
-    assert [i for i in at.info] and at.text_input[0].proto.type == 1  # PASSWORD
+    # No run, no key, no shipped file: method, limitations and validation still render (never blank).
+    assert "Evaluation flow" in text and "Method and limitations" in text and "Checker agreement" in text
+    assert at.text_input[0].proto.type == 1  # PASSWORD
 
 
 def test_page_key_flow_sends_header_only_and_denial_shows_status_text_only(paths, monkeypatch):
@@ -210,3 +211,11 @@ def test_page_unlock_success_shows_detail(paths, monkeypatch):
     at.text_input[0].set_value(KEY).run()
     at.button[0].click().run()
     assert not at.exception and len(at.selectbox) == 2 and SENT_Q in _page(at)
+
+
+@pytest.fixture(autouse=True)
+def _no_shipped_fallbacks(tmp_path, monkeypatch):
+    """These tests cover the empty and sentinel-data states; the shipped historical/offline aggregates are covered in test_trace_auto.py."""
+    from vera import trace_viz as _tv
+    monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
+    monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")

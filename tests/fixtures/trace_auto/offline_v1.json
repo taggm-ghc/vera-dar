@@ -1,0 +1,22 @@
+{
+ "_note": "Synthetic offline fixture for scripts/trace_run.py --offline. Questions and answers are invented test text, not evaluation material.",
+ "version": "offline-v1",
+ "questions": {"status": "FROZEN", "items": [
+  {"id": "f01", "text": "Synthetic question one about assistants and productivity?", "category": "in_scope_synthesis", "split": "dev"},
+  {"id": "f02", "text": "Synthetic false-premise question two?", "category": "false_premise", "split": "dev"},
+  {"id": "f03", "text": "Synthetic out-of-scope question three?", "category": "out_of_scope", "split": "dev"},
+  {"id": "f04", "text": "Synthetic vague question four?", "category": "ambiguous_or_underspecified", "split": "dev"},
+  {"id": "f05", "text": "Synthetic multi-part question five?", "category": "multi_part", "split": "dev"}
+ ]},
+ "bodies": {
+  "f01": {"answer": "A randomized trial found developers were 19% slower on familiar code [1].",
+          "sources": [{"n": 1, "url": "https://arxiv.org/abs/2507.09089", "title": "Trial", "published": "2025-07-12"}],
+          "cost_usd": 0.0, "tokens_used": 10, "model": "offline-fixture", "result_kind": "answer", "outcome": "answer"},
+  "f02": {"answer": "That premise is false: the evidence does not show assistants double output [1].",
+          "sources": [{"n": 1, "url": "https://doi.org/10.1/x", "title": "Survey", "published": "2024-01-01"}],
+          "cost_usd": 0.0, "tokens_used": 10, "model": "offline-fixture"},
+  "f03": {"answer": "That is outside what VERA-DAR covers, so I cannot answer it.", "sources": [], "cost_usd": 0.0, "model": "offline-fixture"},
+  "f04": {"answer": "Better than what? Do you mean assistants versus no assistant?", "sources": [], "cost_usd": 0.0, "model": "offline-fixture"},
+  "f05": {"__error": "ConnectionError"}
+ }
+}

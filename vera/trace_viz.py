@@ -21,6 +21,9 @@ DENIED_DETAIL = "Not available"  # identical for a missing, wrong or unset key
 RESULTS_PATH = ROOT / "eval_results" / "trace_eval_v1.json"
 VALIDATION_PATH = ROOT / "eval_results" / "trace_eval_v1_validation.json"
 PUBLIC_PATH = ROOT / "eval_results" / "trace_eval_public.json"
+# Shipped fallbacks (sanitized aggregates, no questions/traces): the superseded v1 run and the offline fixture suite summary.
+HISTORICAL_PATH = ROOT / "eval_results" / "trace_eval_historical_public.json"
+OFFLINE_PATH = ROOT / "eval_results" / "trace_eval_offline_public.json"
 SCHEMA = "vera-trace-public-v1"
 FAIL_LIMIT, FAIL_WINDOW_S = 10, 600  # failed key attempts per client per window before 429 (generic)
 
@@ -84,6 +87,28 @@ def _name_map(known: dict, prefix: str, raw: list) -> dict:
     return out
 
 
+_META_STR = ("run_id", "mode", "trigger", "commit", "deployed_version", "config_hash", "eval_set_sha256", "scoring_version",
+             "started_at", "finished_at", "provider")
+_META_RE = re.compile(r"^[A-Za-z0-9._:+\-]{1,80}$")
+_META_MODES = ("offline", "live", "historical")
+_META_TRIGGERS = ("manual", "post-deploy", "scheduled")
+
+
+def _project_meta(m) -> dict | None:
+    """Closed run metadata: identifiers only (strict charset), numbers, booleans. Free text is dropped."""
+    if not isinstance(m, dict):
+        return None
+    out = {k: (str(m[k]) if _META_RE.match(str(m.get(k) or "")) else None) for k in _META_STR}
+    out["mode"] = out["mode"] if out["mode"] in _META_MODES else None
+    out["trigger"] = out["trigger"] if out["trigger"] in _META_TRIGGERS else None
+    out["models"] = [str(x) for x in (m.get("models") or []) if _META_RE.match(str(x))][:5] if isinstance(m.get("models"), list) else []
+    for k in ("n", "planned"):
+        out[k] = _num(m.get(k))
+    for k in ("offline", "checks_validated"):
+        out[k] = m.get(k) if isinstance(m.get(k), bool) else None
+    return out
+
+
 def _project(src: dict) -> dict:
     """The ONE closed projection used for built and loaded summaries: only known fields, numbers through _num, names
     through display maps. Anything else in `src` (extra keys, raw ids, strings in numeric slots) is dropped."""
@@ -113,10 +138,11 @@ def _project(src: dict) -> dict:
             "n_questions": _num(src.get("n_questions")), "n_traces": _num(src.get("n_traces")), "n_errors": _num(src.get("n_errors")),
             "variants": variants,
             "latency_s": {f: _num(lat.get(f)) for f in ("p50", "p95", "n")} if isinstance(lat, dict) else None,
-            "totals": {"cost_usd": _num(tot.get("cost_usd")), "tokens": _num(tot.get("tokens"))} if isinstance(tot, dict) else None}
+            "totals": {"cost_usd": _num(tot.get("cost_usd")), "tokens": _num(tot.get("tokens"))} if isinstance(tot, dict) else None,
+            "run_meta": _project_meta(src.get("run_meta"))}
 
 
-def build_public(results: dict | None, raw_traces: list | None = None) -> dict | None:
+def build_public(results: dict | None, raw_traces: list | None = None, run_meta: dict | None = None) -> dict | None:
     """Aggregates from a results document (and optionally raw capture records for latency/cost), through _project."""
     if not results or not results.get("traces"):
         return None
@@ -131,7 +157,8 @@ def build_public(results: dict | None, raw_traces: list | None = None) -> dict |
                      "n_traces": len(results["traces"]), "n_errors": sum(1 for t in results["traces"] if t.get("error")),
                      "variants": results.get("variants") or {},
                      "latency_s": {"p50": _quantile(lat, 0.5), "p95": _quantile(lat, 0.95), "n": len(lat)} if lat else None,
-                     "totals": {"cost_usd": round(cost, 4), "tokens": toks} if raw_traces else None})
+                     "totals": {"cost_usd": round(cost, 4), "tokens": toks} if raw_traces else None,
+                     "run_meta": run_meta})
 
 
 def _validation_public(val: dict | None) -> dict | None:
@@ -149,20 +176,54 @@ def stage_flow() -> list[dict]:
     return [{"stage": i, "check": cn[c]} for i, c in enumerate(_STAGE_ORDER, 1)]
 
 
-def public_view(results_path=None, validation_path=None, public_path=None, commit: str | None = None) -> dict:
-    """Always returns a dict with the structure and a `status`; data sections are None when no evidence exists."""
+def run_build(meta: dict | None) -> str:
+    """The build a run evaluated: the deployed version it recorded, else its commit; 'unknown' when neither is known."""
+    from vera.version_info import short_commit
+    for k in ("deployed_version", "commit"):
+        v = (meta or {}).get(k)
+        if v and v != "unknown":
+            return short_commit(v)
+    return "unknown"
+
+
+def is_historical(meta: dict | None, deployed_build: str) -> bool:
+    """HISTORICAL unless the run's build is known and equals the deployed build (an unknown on either side is historical)."""
+    if (meta or {}).get("offline"):
+        return True  # an offline fixture run evaluates no deployed build
+    rb = run_build(meta)
+    return rb == "unknown" or deployed_build == "unknown" or rb != deployed_build
+
+
+def public_view(results_path=None, validation_path=None, public_path=None, commit: str | None = None,
+                historical_path=None, offline_path=None) -> dict:
+    """Always returns a dict with the structure and a `status`. Source order for `run`: the newest published run file, then a
+    local results file, then the shipped historical file; if none exist the method and validation sections still render."""
     from vera.version_info import deployed_commit, short_commit
     pub_p, val_p = Path(public_path or PUBLIC_PATH), Path(validation_path or VALIDATION_PATH)
     res_p = Path(results_path or os.environ.get("VERA_TRACE_EVAL_RESULTS") or RESULTS_PATH)
-    summary, src_date = None, None
-    pub = _load(pub_p)
-    if pub and pub.get("schema") == SCHEMA:
-        summary, src_date = _project(pub), _date(pub_p)
-    else:
-        summary, src_date = build_public(_load(res_p)), _date(res_p)
+    hist_p, off_p = Path(historical_path or HISTORICAL_PATH), Path(offline_path or OFFLINE_PATH)
+    summary, src_date, source = None, None, None
+    for kind, p in (("run", pub_p), ("historical_file", hist_p)):
+        d = _load(p)
+        if d and d.get("schema") == SCHEMA and d.get("variants"):
+            summary, src_date, source = _project(d), _date(p), kind
+            break
+        if kind == "run":
+            r = build_public(_load(res_p))
+            if r:
+                summary, src_date, source = r, _date(res_p), "run"
+                break
     val = _load(val_p)
-    return {"schema": SCHEMA, "status": "ok" if summary else "no_run_results", "build": short_commit(commit or deployed_commit()),
-            "stages": stage_flow(), "run": summary, "run_file_date": src_date if summary else None,
+    build = short_commit(commit or deployed_commit())
+    meta = (summary or {}).get("run_meta")
+    fin = str((meta or {}).get("finished_at") or "")[:10]
+    if re.match(r"^\d{4}-\d\d-\d\d$", fin):
+        src_date = fin  # the run's own UTC date beats file mtime
+    off = _load(off_p)
+    off = _project(off) if off and off.get("schema") == SCHEMA else None
+    return {"schema": SCHEMA, "status": "ok" if summary else "no_run_results", "build": build, "source": source,
+            "run_build": run_build(meta), "historical": (True if source == "historical_file" else is_historical(meta, build)) if summary else None,
+            "stages": stage_flow(), "run": summary, "run_file_date": src_date if summary else None, "offline_suite": off,
             "check_validation": _validation_public(val), "validation_file_date": _date(val_p) if val else None}
 
 

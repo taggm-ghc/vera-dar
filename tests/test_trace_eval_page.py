@@ -277,3 +277,11 @@ def test_error_value_only_used_as_truth_test():
     # TRACEVIZ-1022: the browser moved to the private tier, which only receives a boolean capture_error (never the text)
     assert uses == [] and 'if t.get("capture_error"):' in src
     assert "labeller')" not in src and "val['labeller']" not in src
+
+
+@pytest.fixture(autouse=True)
+def _no_shipped_fallbacks(tmp_path, monkeypatch):
+    """These tests cover the empty and sentinel-data states; the shipped historical/offline aggregates are covered in test_trace_auto.py."""
+    from vera import trace_viz as _tv
+    monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
+    monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")

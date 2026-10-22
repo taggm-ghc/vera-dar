@@ -1,0 +1,218 @@
+{
+ "generated_at": "2026-10-04",
+ "latency_s": null,
+ "n_errors": 1,
+ "n_questions": 30,
+ "n_traces": 60,
+ "run_meta": {
+  "checks_validated": true,
+  "commit": "unknown",
+  "deployed_version": "unknown",
+  "finished_at": "2026-10-04",
+  "mode": "historical",
+  "models": [
+   "gpt-4.1-nano"
+  ],
+  "n": 60,
+  "offline": false,
+  "planned": 60,
+  "provider": "abstract-grounded-variant",
+  "run_id": "trace-v1-20261004",
+  "scoring_version": "trace-checks-v1"
+ },
+ "schema": "vera-trace-public-v1",
+ "totals": null,
+ "variants": {
+  "Baseline": {
+   "by_split": {
+    "dev": {
+     "all_pass": 2,
+     "all_pass_rate": 0.1,
+     "errors": 0,
+     "n": 20
+    },
+    "heldout": {
+     "all_pass": 2,
+     "all_pass_rate": 0.2,
+     "errors": 0,
+     "n": 10
+    }
+   },
+   "per_category": {},
+   "per_check": {
+    "Citation present": {
+     "applies": 22,
+     "passed": 1,
+     "rate": 0.0455,
+     "wilson95": [
+      0.0081,
+      0.218
+     ]
+    },
+    "Citations resolve": {
+     "applies": 22,
+     "passed": 18,
+     "rate": 0.8182,
+     "wilson95": [
+      0.6148,
+      0.9269
+     ]
+    },
+    "Clarifies or states assumptions": {
+     "applies": 4,
+     "passed": 2,
+     "rate": 0.5,
+     "wilson95": [
+      0.15,
+      0.85
+     ]
+    },
+    "False premise corrected": {
+     "applies": 5,
+     "passed": 2,
+     "rate": 0.4,
+     "wilson95": [
+      0.1176,
+      0.7693
+     ]
+    },
+    "No phantom evidence": {
+     "applies": 22,
+     "passed": 4,
+     "rate": 0.1818,
+     "wilson95": [
+      0.0731,
+      0.3852
+     ]
+    },
+    "Numbers grounded": {
+     "applies": 22,
+     "passed": 18,
+     "rate": 0.8182,
+     "wilson95": [
+      0.6148,
+      0.9269
+     ]
+    },
+    "Out-of-scope declined": {
+     "applies": 4,
+     "passed": 2,
+     "rate": 0.5,
+     "wilson95": [
+      0.15,
+      0.85
+     ]
+    },
+    "Time window": {
+     "applies": 22,
+     "passed": 17,
+     "rate": 0.7727,
+     "wilson95": [
+      0.5656,
+      0.8988
+     ]
+    }
+   }
+  },
+  "Grounded": {
+   "by_split": {
+    "dev": {
+     "all_pass": 3,
+     "all_pass_rate": 0.15,
+     "errors": 1,
+     "n": 20
+    },
+    "heldout": {
+     "all_pass": 2,
+     "all_pass_rate": 0.2,
+     "errors": 0,
+     "n": 10
+    }
+   },
+   "per_category": {},
+   "per_check": {
+    "Citation present": {
+     "applies": 22,
+     "passed": 10,
+     "rate": 0.4545,
+     "wilson95": [
+      0.2692,
+      0.6534
+     ]
+    },
+    "Citations resolve": {
+     "applies": 22,
+     "passed": 22,
+     "rate": 1.0,
+     "wilson95": [
+      0.8513,
+      1.0
+     ]
+    },
+    "Clarifies or states assumptions": {
+     "applies": 3,
+     "passed": 0,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.5615
+     ]
+    },
+    "False premise corrected": {
+     "applies": 5,
+     "passed": 1,
+     "rate": 0.2,
+     "wilson95": [
+      0.0362,
+      0.6245
+     ]
+    },
+    "No phantom evidence": {
+     "applies": 22,
+     "passed": 17,
+     "rate": 0.7727,
+     "wilson95": [
+      0.5656,
+      0.8988
+     ]
+    },
+    "Numbers grounded": {
+     "applies": 22,
+     "passed": 22,
+     "rate": 1.0,
+     "wilson95": [
+      0.8513,
+      1.0
+     ]
+    },
+    "Out-of-scope declined": {
+     "applies": 4,
+     "passed": 0,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.4899
+     ]
+    },
+    "Support": {
+     "applies": 14,
+     "passed": 14,
+     "rate": 1.0,
+     "wilson95": [
+      0.7847,
+      1.0
+     ]
+    },
+    "Time window": {
+     "applies": 22,
+     "passed": 22,
+     "rate": 1.0,
+     "wilson95": [
+      0.8513,
+      1.0
+     ]
+    }
+   }
+  }
+ }
+}

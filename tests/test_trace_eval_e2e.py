@@ -302,3 +302,11 @@ def test_ui_and_capture_sources_have_no_host_literals():
         src = (ROOT / rel).read_text()
         for bad in ("onrender", "localhost", "127.0.0.1", "http://"):
             assert bad not in src, (rel, bad)
+
+
+@pytest.fixture(autouse=True)
+def _no_shipped_fallbacks(tmp_path, monkeypatch):
+    """These tests cover the empty and sentinel-data states; the shipped historical/offline aggregates are covered in test_trace_auto.py."""
+    from vera import trace_viz as _tv
+    monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
+    monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")

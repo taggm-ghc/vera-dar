@@ -1,0 +1,160 @@
+{
+ "generated_at": "2026-10-22",
+ "latency_s": {
+  "n": 5,
+  "p50": 0.0,
+  "p95": 0.0
+ },
+ "n_errors": 1,
+ "n_questions": 5,
+ "n_traces": 5,
+ "run_meta": {
+  "checks_validated": true,
+  "commit": "unknown",
+  "config_hash": "5ea87f896489d15c",
+  "deployed_version": "unknown",
+  "eval_set_sha256": "f1c6684c2b7e82f733072c12699114f44918c47159d984b1d4a355b49a021b7b",
+  "finished_at": "2026-10-22T20:47:42+00:00",
+  "mode": "offline",
+  "models": [
+   "offline-fixture"
+  ],
+  "n": 5,
+  "offline": true,
+  "planned": 5,
+  "provider": "offline-fixture",
+  "run_id": "20261022T204742Z",
+  "scoring_version": "trace-checks-v1.1+agg1",
+  "started_at": "2026-10-22T20:47:42+00:00",
+  "trigger": "manual"
+ },
+ "schema": "vera-trace-public-v1",
+ "totals": {
+  "cost_usd": 0.0,
+  "tokens": 20
+ },
+ "variants": {
+  "Live answers": {
+   "by_split": {
+    "dev": {
+     "all_pass": 4,
+     "all_pass_rate": 0.8,
+     "errors": 1,
+     "n": 5
+    }
+   },
+   "per_category": {
+    "ambiguous_or_underspecified": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "false_premise": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "in_scope_synthesis": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "multi_part": {
+     "applies": 1,
+     "passed": 0,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.7935
+     ]
+    },
+    "out_of_scope": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    }
+   },
+   "per_check": {
+    "Citation present": {
+     "applies": 2,
+     "passed": 2,
+     "rate": 1.0,
+     "wilson95": [
+      0.3424,
+      1.0
+     ]
+    },
+    "Citations resolve": {
+     "applies": 2,
+     "passed": 2,
+     "rate": 1.0,
+     "wilson95": [
+      0.3424,
+      1.0
+     ]
+    },
+    "Clarifies or states assumptions": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "False premise corrected": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "No phantom evidence": {
+     "applies": 2,
+     "passed": 2,
+     "rate": 1.0,
+     "wilson95": [
+      0.3424,
+      1.0
+     ]
+    },
+    "Out-of-scope declined": {
+     "applies": 1,
+     "passed": 1,
+     "rate": 1.0,
+     "wilson95": [
+      0.2065,
+      1.0
+     ]
+    },
+    "Time window": {
+     "applies": 2,
+     "passed": 2,
+     "rate": 1.0,
+     "wilson95": [
+      0.3424,
+      1.0
+     ]
+    }
+   }
+  }
+ }
+}

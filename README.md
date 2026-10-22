@@ -2,136 +2,143 @@
 
 **Verifiable Evidence-based Research Answers**
 
-VERA-DAR is an experimental, provenance-grounded research system developed for the **TAI Labs Agentic AI Engineering Bootcamp** capstone. It investigates whether deliberately selecting and examining evidence before generation can produce research answers that are both **more defensible** and **better** than direct responses from leading language models.
+VERA-DAR is an experimental research assistant that answers a question only from full-text documents it has checked, and shows which passage supports each sentence. When it cannot do that, it says so and gives a reading list of links instead of a guess. It was built during the AI engineering bootcamp capstone (TAI Labs Agentic AI Engineering Bootcamp, 2026).
 
-**Project status:** Working FastAPI research endpoint and Streamlit interface; active capstone development. The central claim of superiority over leading-model baselines **has not been demonstrated**.
-
-## Purpose and status
-
-VERA-DAR's foundational requirements are full-document acquisition, inspection, evidence evaluation, context construction, answer synthesis and claim verification. Evidence-grounded answer synthesis is the intended primary result of `/ask`; a reading list and an explicit insufficient-evidence result are its defined fallbacks.
-
-**Verified today** (checked against the code, not only the design):
-
-- By default `/ask` returns a reading list: no answer is generated and no claim check runs.
-- The verified full-document answering path is enabled in the shipped configuration (`fulldoc.enabled` is true in `config/fulldoc_answer.json`), but it also needs a configured corpus source (for example `VERA_FULLDOC_BUNDLE_DIR`) before it can produce an answer. Its thresholds are placeholders pending calibration.
-- Automated full-document acquisition is designed but not yet implemented.
+**Status, 2026-10-22:** Demo Day candidate (commit `de609d1`). A FastAPI service and a Streamlit interface work end to end in offline tests. Live behaviour of this exact commit is untested (assumed) in this document. The claim that VERA-DAR beats leading language models **has not been demonstrated**.
 
 ## The problem
 
-Language models can produce persuasive answers without exposing how supporting evidence was found, selected, or interpreted. Adding citations alone does not establish that sources were examined adequately, or that the answer is correct.
+Language models write fluent research answers without showing how the evidence was found or read. A citation list does not prove the sources were examined, or that the answer follows from them.
 
-VERA-DAR investigates a more demanding question:
+VERA-DAR asks a narrower question: if the system acquires a full document, admits only the passages that bear on the question, and checks each answer sentence against the passage it cites, is the result easier to trust and to audit? Two things are needed: traceable evidence decisions, and an answer that is actually better. Neither substitutes for the other.
 
-> Can deliberate, auditable evidence acquisition, critical evaluation, and context construction cause a frontier model to produce a materially better research response than it produces directly?
+## How it works
 
-Success requires two things: **traceable evidence decisions** and **a demonstrably better final answer**. Neither substitutes for the other.
-
-## Approach
-
-By default, the public `/ask` workflow is a **discovery service**. For an accepted research question it searches scholarly indexes and the web and returns a **reading list** of published documents that may be relevant, with links. It generates no answer and runs no claim check on that list, because VERA-DAR has not read the full documents and does not treat abstracts or snippets as evidence.
-
-A grounded, cited answer is produced only on an **optional verified full-document path**: documents are acquired and verified, relevant passages are admitted, an answer is generated from those passages, and cited claims are checked. This path is enabled only when `fulldoc.enabled` is true in config/fulldoc_answer.json and a verified bundle is configured via VERA_FULLDOC_BUNDLE_DIR.
-
-```text
-Research question
-       |
-       v
-Scope check and evidence discovery
-       |
-       +--> default: reading list with links (no generated answer)
-       |
-       +--> optional, needs a configured corpus source: verified full documents
-                   |
-                   v
-            Admitted passages -> cited answer -> claim check
+```mermaid
+flowchart TD
+    UI["Streamlit UI<br/>streamlit_app.py, pages/"] -->|"X-API-Key"| API["FastAPI<br/>main.py: POST /ask"]
+    API --> CAPS["Public-mode caps<br/>vera/public_mode.py"]
+    CAPS --> SCOPE["Scope router<br/>vera/scope_router.py<br/>layer 1: rules, layer 2: LLM verdict"]
+    SCOPE -->|"declined"| DECL{"layer-2 off_topic?"}
+    DECL -->|"no"| REFUSE["Fixed decline text"]
+    DECL -->|"yes, and acquisition on"| INL["Inline acquisition,<br/>else reading list"]
+    SCOPE -->|"accepted"| FD["Full-document path<br/>fulldoc_corpus, fulldoc_admission"]
+    FD --> ADMIT{"admitted<br/>passages?"}
+    ADMIT -->|"yes"| ANS["Answer from passages<br/>fulldoc_answer"]
+    ANS --> CC["Claim check per sentence<br/>claim_check"]
+    CC --> OUT["Cited answer<br/>(unsupported sentences removed)"]
+    ADMIT -->|"no"| INL
+    INL -->|"documents pass gates"| ANS
+    INL -->|"none"| RL["Reading list with links<br/>search_providers: arXiv, OpenAlex,<br/>DuckDuckGo lite"]
+    ADMIT -.->|"insufficient"| BG["Background acquisition<br/>auto_acquire"]
+    BG --> STORE[("Postgres:<br/>full-text corpus")]
+    FD --- STORE
+    LLM["Groq models (provider chain)"] -.-> SCOPE
+    LLM -.-> ANS
+    LLM -.-> CC
 ```
 
-The broader research design also calls for critical evidence evaluation, deliberately constructed context, and comparative assessment. Those ambitions are not all implemented.
+What each step does:
 
-## Current capabilities
+1. **Scope check.** Layer 1 is a deterministic rule set (`config/scope_router.json`) that hard-blocks explicit personal advice, operational harm, prompt injection and coding tasks. Anything unsure goes to layer 2, a Groq model that returns a JSON verdict. A declined question gets a fixed text, never model-written text. The scope is published research on AI-assisted software development, epidemiology, climate science, research reproducibility and ecology.
+2. **Full-document retrieval and admission.** Passages are retrieved from a small, operator-selected, licence-checked collection of full documents stored in Postgres. Each passage is evaluated and admitted or rejected with a reason code. No admitted passage means no generated answer.
+3. **Answer and claim check.** The model writes from up to six admitted passages with numbered citations. A second model call judges each cited sentence against its passage. Unsupported sentences are removed, and if none survive, no answer is shown.
+4. **Inline and background acquisition.** If the collection cannot answer (including for in-scope questions) and automatic acquisition is on, the search runs inside the request (inline), and a background job can follow; VERA-DAR can search for open-access full text (OpenAlex, Europe PMC, DuckDuckGo as a pointer to scholarly identifiers, and one Wikipedia reference-portal search slot used only to find source identifiers, never as evidence). A document is used only if it passes the licence rules, content and injection checks and a per-document relevance gate. Documents with enough relevant passages are added to the collection. Bounds are set in `config/auto_acquire.json` (for example 6 jobs per hour, 30 per day, 2 documents per job). A kill switch, `VERA_AUTOACQ_DISABLED=1`, turns it off.
+5. **Reading list fallback.** Otherwise the response is a list of published documents that may be relevant, with links, from arXiv, OpenAlex and DuckDuckGo lite (DOAJ and a seed-file provider also exist in the code). VERA-DAR has not read those documents, and the response says so.
 
-- **Evidence discovery:** searches arXiv, OpenAlex and the web and returns a reading list of candidate documents.
-- **Provenance:** returns source metadata such as provider, identifier, retrieval time, and recorded licence decision.
-- **Optional grounded answers:** with the full-document path enabled, cited answers and a claim-check summary.
-- **Operational visibility:** API health, version information, usage tokens, and estimated cost.
-- **Interactive demonstration:** Streamlit interface for questions and selected evaluation views.
+Answers from acquired documents carry a notice, and a question outside the scope can be answered only from open-access documents found for it, with a stated warning that the answer may be wrong.
 
-VERA-DAR is a prototype, not an independent verification authority. Search relevance, model-based checking and rights handling have known limitations.
+## Stack
 
-## Why provenance matters
+Python, FastAPI and Uvicorn (API), Streamlit (UI), Pydantic, SQLAlchemy with psycopg2 on Postgres, the OpenAI-compatible client pointed at Groq (`openai/gpt-oss-20b`, then `openai/gpt-oss-120b`, for scope and answers; claim checking tries `qwen/qwen3.8-27b` first, then `openai/gpt-oss-120b`; the OpenAI fallback is off by default), defusedxml for JATS full-text conversion, pytest, Docker, Render for hosting. Dependencies are pinned in `requirements.txt`.
 
-A bibliography is not an evidence trail. Useful provenance should help a reviewer distinguish:
+## Try it
 
-- **Discovery:** where a candidate research record came from.
-- **Inspection:** what material was actually read or processed.
-- **Use:** which source excerpt was supplied for a generated claim.
-- **Assessment:** what checking occurred and what uncertainty remains.
+- Live demo: https://vera-dar-demo.onrender.com (free-tier hosting; the first request after idle can be slow while the service wakes).
+- Recording: **OUTSTANDING.** No walkthrough recording has been made as of 2026-10-22. A 30-60 s clip and a full backup run will be linked here once they exist.
 
-By default the system reports discovery provenance only. Inspection of complete documents exists only on the optional full-document path. That boundary is central to the research design, not a minor documentation detail.
+<!-- LIVE-RESULT -->
+- Locally: see [Development](docs/development.md). The API needs a key (`X-API-Key` header) and a Groq key in the environment. Without a configured full-document corpus source it returns reading lists only.
+- Container entry point `start.sh` refuses to run unless `RENDER=true` or `VERA_ENV_CONTEXT=production` is set; locally use `run.sh` / `run_demo.sh`. Untested (assumed) for a fresh machine.
+
+Endpoints: `POST /ask`, `GET /health`, `GET /version`, `GET /corpus-summary` and `GET /health/dar` (API key), `GET /trace/public` (no key), `GET /trace/private` (separate key), and owner-only memory review routes (`X-Owner-Key`). See [API and data use](docs/api.md).
 
 ## Evaluation: what has been measured
 
-A small TRACE comparison evaluated an earlier question-only baseline against an abstract-grounded variant, using the same model and frozen checks. It found improvements in some citation-related measures, **but not in the overall rate of passing every applicable check**.
+Numbers below are small-sample and not comparable with each other.
+
+**Scope fix in this commit (OFFLINE LAYER-1 SCOPE-ROUTER measurement, not an answer success rate).** The earlier scope rules blocked topic words such as "medicine" or "stocks", so legitimate research questions were refused. This commit replaces topic blocking with intent-based rules. Measured on the 85-probe set the fix was developed against (48 that should pass, 37 that should be blocked; not held out), run against layer 1 only and reproduced independently twice:
+
+| Measure (offline layer-1 scope router) | Before | After (`de609d1`) |
+|---|---:|---:|
+| Benign questions wrongly blocked | 34/48 | 0/48 |
+| Should-block questions caught | 28/37 | 36/37 |
+
+These count how the rule layer routes questions. They say nothing about whether an answer was correct. Limits: layer 1 only, no model calls; the probe set was written by a verifier agent before the fix, was used while developing it (three probes appear in the tests), is not held out and has not been externally reviewed; one operational-harm probe still passes layer 1 and relies on layer 2. Real-model layer-2 behaviour under the new prompt is untested (assumed).
+
+**Historical TRACE v1 (2026-10-04, abstract-grounded variant, SUPERSEDED; not the current full-document system).** An earlier question-only baseline against an abstract-grounded variant, same model, frozen checks:
 
 | Measure | Direct baseline | Abstract-grounded variant |
 |---|---:|---:|
 | Citation present (22 applicable cases) | 1/22 | 10/22 |
 | No phantom evidence (22 applicable cases) | 4/22 | 17/22 |
-| All checks passed, development set (20 questions) | 2/20 | 3/20 |
+| All checks passed, dev set (20 questions; the variant had 1 error) | 2/20 | 3/20 |
 | All checks passed, held-out set (10 questions) | 2/10 | 2/10 |
 
-These are **historical, small-sample results** from a variant that used abstracts, which the current default workflow no longer does. They are not evidence that the current application outperforms frontier research tools. See [Evaluation and findings](docs/evaluation.md) for methods and caveats.
+Citation-related measures improved; the overall pass rate did not. The current default no longer grounds on abstracts, so these results do not describe the current system. See [Evaluation](docs/evaluation.md).
 
-## Try it or explore the code
+**Not measured (as of 2026-10-22):** answer quality of the current full-document path, any comparison with other systems, and the accuracy of the claim checker. The Trace Eval page shows, without secrets, a historical aggregate labelled "HISTORICAL (TRACE v1, 2026-10-04, earlier abstract-grounded variant, build not recorded, superseded)", a "Checker agreement with human labels (true-negative rate)" table as n/N counts, and the method and limitations. No evaluation of the current full-document path has been published. This page behaviour depends on applying `work/demo-1022/trace/trace-auto.diff`; without it the page shows no published run.
 
-No public demonstration URL is asserted here. The project includes:
+## Memory and what is stored
 
-- FastAPI backend with `POST /ask` and `GET /health`.
-- Streamlit research and demonstration interface.
-- Tests and offline evaluation utilities.
+Five questions, answered from the code at `de609d1`:
 
-For local setup, see [Development](docs/development.md). For service configuration, see [Deployment](docs/deployment.md).
+1. **What persists?** The evidence corpus: open-access full-text documents the operator selected or that automatic acquisition added (title, landing URL, licence, full-text chunks, provenance). **User memory is off**: no visitor profile, no conversation memory, and the question and the derived search query are not stored. `memory.store.enabled` is `false` in `config/ask-provider-chain.json`, and the owner review routes (`/memory/...`) return 503.
+2. **When is it written?** After a question is accepted, when a fetched open-access document passes the licence, content, injection and relevance checks. This can happen inside the request (inline acquisition) or in a queued background job, bounded by `config/auto_acquire.json` (6 jobs/hour, 30/day, 2 documents/job; kill switch `VERA_AUTOACQ_DISABLED=1`). Documents with too few relevant passages are used for that one answer only and not saved.
+3. **Where does it live?** In Postgres (documents, chunks and provenance), written through the app's write account.
+4. **How is it retrieved?** Stored documents are loaded into an in-process index (BM25 passage search, `vera/fulldoc_corpus.py`, `vera/dar_corpus.py`); the acquired set is refreshed in the background, at most every 300 s. Retrieved passages go through admission and the claim check before they can support an answer. (The disabled user-memory feature, if enabled, would recall only owner-confirmed rows by term matching, with a 30-day TTL and 14-day half-life.)
+5. **When is it removed?** No removal mechanism for corpus documents was found in the application code or the repository's SQL (a search for delete, truncate and expiry paths outside tests, as of 2026-10-22; the corpus store is written insert-only, `vera/dar_store.py`). Documents are kept until the operator removes them by hand in the database, and the public deployment is planned to end by 2026-10-31. Only the disabled user-memory feature has an expiry (TTL and owner rejection).
 
-## Privacy and disclosure
+Other settings: discovery notes are written only when the `L2` layer is enabled (the shipped contract lists `L0` only), and corpus admission of abstract-level sources is off (`corpus.enabled` is `false`).
 
-Every page of the demonstration shows one shared data-use disclosure. Its closing text reads:
+## Privacy and data handling
 
-"Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document's source, licence and the time it was added; it does not store your question."
+Every page of the demo shows one data-use disclosure, built from the live configuration in `vera/disclosure.py`. With the shipped configuration its closing text says that the question is sent to third-party AI and search services, that VERA-DAR does not save the question or information identifying the user, and that its collection may grow with open-access full text found while searching.
 
-The final sentence applies while automatic acquisition is switched on (`config/auto_acquire.json`, P1.7). With it switched off, and corpus admission and discovery notes off, the final sentence reads instead: "During this demonstration, VERA-DAR does not save newly discovered documents or research notes from your questions." If corpus admission or discovery notes are enabled, the disclosure text changes accordingly.
+What the code shows at `de609d1`:
 
-Automatic acquisition (P1.7): a question VERA-DAR cannot answer from its full documents, or one it declines as outside its fields, may start a bounded background search for open-access full text (OpenAlex search, Europe PMC full text). A document is added only if it passes every ingest filter and the licence rule and its own passages answer the question; later questions are answered only from the stored verbatim passages. A question declined by the fixed injection and advice rules never starts one; a question declined only by the AI scope check may (its search terms go to OpenAlex), but a declined question is never answered from acquired documents. The question itself is never stored. Kill switch: set `VERA_AUTOACQ_DISABLED=1` on the API service.
+- Acquisition runs inside the request (inline, including for in-scope questions) and can also queue a background job. Terms from the question go to Groq (scope, answering, claim checking) and to the search services: arXiv, OpenAlex, Europe PMC, DuckDuckGo and the Wikipedia API.
+- Stored: acquired open-access documents (title, landing URL, licence, full-text chunks, provenance). Not stored: the question or the derived search query. The question is held in memory only for a queued job (maximum age 600 s).
+- Request caps and rate-limit counters are held in process memory, and the DuckDuckGo query cache is disabled in the demonstration configuration; see [API and data use](docs/api.md).
+- Provider retention, and the hosting platform's standard access logs (client IP, path, status), are outside VERA-DAR's control.
 
-When the full-document path is enabled, the disclosure opens differently: it says answers are written from up to six passages of a small, operator-supplied, licence-checked collection of full documents, and that the question, the selected passages with their titles and links, and draft answer sentences are sent to third-party AI services. The closing text quoted above is unchanged.
+Records written by earlier configurations are not erased by this configuration.
 
-External provider retention is outside VERA-DAR's control. See [API and data use](docs/api.md).
+## Limitations
 
-**OpenAI fallback switch.** `openai_fallback.enabled` in `config/ask-provider-chain.json` is `false` by default. While it is false, the API never calls OpenAI and does not need `OPENAI_API_KEY`; answering and claim checking use Groq only. When it is true, OpenAI is the last fallback after the other providers fail, it needs a valid key, and it is a paid route.
-
-## Important limitations
-
-- **Full documents are not read by default.** An optional verified full-document path is enabled in the shipped configuration but produces answers only when a corpus source is configured; otherwise results are links to published documents, and abstracts or snippets are not used as evidence.
-- **Source provenance is incomplete.** Returned index records do not provide immutable document versions or precise passage locations.
-- **A source's metadata licence does not grant rights to the underlying paper.** Licence decisions are as reported by indexing services and are not verified with rights holders.
-- **Claim checking is imperfect.** Its error rate has not been fully established.
-- **Comparative superiority is unproven.** The full multi-stage research pipeline has not been validated end to end against live services.
+- Full-document answers need a configured corpus source; the collection is small, so most questions get a reading list or a decline.
+- Claim checking is done by a language model and can be wrong.
+- Thresholds are placeholders pending calibration on live data.
+- Licence labels come from indexing services and publisher XML and are not verified with rights holders.
+- The scope router's layer 2 and the off-topic category accuracy are uncalibrated.
+- Comparative superiority over frontier models is unproven.
+- Live behaviour of this commit is untested (assumed) in this document; the free-tier host can be slow on first request.
+- No removal mechanism exists for stored corpus documents (see Memory, answer 5).
+- No recording exists yet (OUTSTANDING).
 
 ## Documentation
 
 | Resource | Contents |
 |---|---|
 | [Documentation index](docs/README.md) | All published documents |
-| [API and data use](docs/api.md) | Public endpoints, response semantics, privacy and provenance limits |
-| [Development](docs/development.md) | Local requirements, startup and testing |
-| [Deployment](docs/deployment.md) | Docker and Render setup for separate API and UI services |
-| [Architecture](docs/architecture.md) | Public conceptual architecture and known gaps |
-| [Evaluation and findings](docs/evaluation.md) | TRACE methodology, measured results and limitations |
+| [API and data use](docs/api.md) | Endpoints, response semantics, privacy |
+| [Development](docs/development.md) | Local setup and tests |
+| [Deployment](docs/deployment.md) | Docker and Render |
+| [Architecture](docs/architecture.md) | Conceptual architecture and gaps |
+| [Evaluation](docs/evaluation.md) | TRACE method, results, limits |
 
-## Project and attribution
+## Credit
 
-**VERA-DAR — Verifiable Evidence-based Research Answers**  
-TAI Labs Agentic AI Engineering Bootcamp capstone · 2026
+Built during the AI engineering bootcamp capstone (TAI Labs Agentic AI Engineering Bootcamp, 2026) and published for education, evaluation and portfolio purposes.
 
-This repository is published for educational demonstration, evaluation, and portfolio purposes. Public access does not imply that undisclosed internal mechanisms, algorithms, or decision methods are described here.
-
-Copyright © 2026 Tagg Maiwald. All rights reserved.
+Copyright (c) 2026 Tagg Maiwald. All rights reserved. [OWNER: confirm this line]

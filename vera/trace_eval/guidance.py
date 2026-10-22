@@ -144,7 +144,7 @@ def check_trust(val: dict, cfg: dict) -> list[dict]:
         rows.append({"check": name, "real failures": pos, "caught (TP)": c["tp"],
                      "TPR": "n/a" if tpr is None else f"{tpr:.0%}", "TPR 95%": _fmt_ci(wilson(c["tp"], pos, z)),
                      "good answers": neg, "left alone (TN)": c["tn"],
-                     "TNR": "n/a" if tnr is None else f"{tnr:.0%}", "TNR 95%": _fmt_ci(wilson(c["tn"], neg, z)),
+                     "TNR": "n/a" if tnr is None else f"{c['tn']}/{neg} ({tnr:.0%})", "TNR 95%": _fmt_ci(wilson(c["tn"], neg, z)),
                      "indicator": _trust(tpr, tnr, cfg) + (" (few labels)" if min(pos, neg) < cfg["small_n"] else "")})
     return rows
 
