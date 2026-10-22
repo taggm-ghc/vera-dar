@@ -1,0 +1,157 @@
+{
+  "_doc": "WED-ACQ2 / P1.7 automatic corpus expansion (records/wed-acq2-auto-corpus-expansion-plan.md). Read by vera/acq_config.py. The feature is OFF unless `enabled` is exactly true AND the kill-switch env var is not true-like AND both DB env vars are set. Env var NAMES only; values are never read except to build engines and never logged.",
+  "_calibration_note": "Capacity and cost bounds below are planner priors (not decision thresholds). The only decision gate (relevance) reuses config/fulldoc_answer.json admission thresholds unchanged. Calibrate from the first live job log lines (reason-code counts and stage durations only) - plan DV-2.",
+  "enabled": true,
+  "kill_switch_env": "VERA_AUTOACQ_DISABLED",
+  "db_url_env_wo": "VERA_DB_URL_WO",
+  "db_url_env_ro": "VERA_DB_URL_RO",
+  "db_statement_timeout_ms": 15000,
+  "marker": "vera-dar-auto-acquire-v1",
+  "question_text": "VERA-DAR automatic acquisition (open-access full text; visitor question not stored)",
+  "triggers": {
+    "on_decline_reasons_prefix": [
+      "llm_out:",
+      "unsure:decline"
+    ],
+    "never_on_reasons_prefix": [
+      "deny:",
+      "empty",
+      "classifier_malformed"
+    ],
+    "on_insufficient": true,
+    "_note": "plan s11 V1: classifier_malformed never triggers; layer-1 injection/deny patterns are re-run on the question before enqueue"
+  },
+  "scope_expansion": {
+    "enabled": true,
+    "override_layer2_declines": true,
+    "layer2_categories_allowed": ["off_topic"],
+    "_dar1021_note": "DAR-1021: a layer-2 decline starts acquisition (and, only when override_layer2_declines is true, may later be answered from acquired documents alone through the unchanged full-document admission, claim check and citation path) ONLY when the classifier's category is in layer2_categories_allowed (closed enum; missing or unknown = no). Layer-1 declines, malformed replies, other categories and layer2_none never acquire or answer. UNCALIBRATED: the classifier's category accuracy has not been measured on live traffic.",
+    "override_answer_prefix": "This question is outside VERA-DAR's curated scope. The answer below comes only from open-access documents VERA-DAR added to its collection automatically after licence, content and relevance checks; it may be wrong. For medical, legal, financial or safety matters, please consult a qualified professional or an appropriate official source.",
+    "reading_list_notice_answering": "VERA-DAR has started a background search for open-access full-text sources on this question. If any pass its licence, content and relevance checks, asking the same question again in about ten minutes may give an answer drawn only from those documents.",
+    "reading_list_notice_listing": "VERA-DAR has started a background search for open-access full-text sources on this question. Documents that pass its licence, content and relevance checks may be added to its collection; they are not used to answer questions outside its scope.",
+    "_note": "plan s11 V1: answering a declined question from acquired documents ships OFF until the router returns a category enum (owner decision OD-1, P1.8). When true, only an off-domain (never deny/injection/malformed) decline whose ACQUIRED-only corpus admits >= admission thresholds is answered."
+  },
+  "search": {
+    "providers": [
+      "openalex"
+    ],
+    "_providers_note": "plan D-3 + s11 V9: openalex only by default (Europe PMC refuses preprints, so arXiv candidates yield nothing; add \"arxiv\" to opt in); duckduckgo_lite excluded (no DOI/licence, shared daily cap, query-keyed cache). Provider instances are the /ask chain's cached instances (shared rate gates).",
+    "results_per_provider": 10,
+    "timeout_s": 20,
+    "max_calls_per_provider_per_job": 1
+  },
+  "bounds": {
+    "queue_max": 4,
+    "jobs_per_hour": 6,
+    "jobs_per_day": 30,
+    "docs_per_day": 20,
+    "max_search_calls_per_job": 2,
+    "max_candidates_resolved": 6,
+    "max_docs_per_job": 2,
+    "max_fetch_bytes": 8000000,
+    "fetch_timeout_s": 20,
+    "job_deadline_s": 120,
+    "max_groq_tokens_per_job": 0,
+    "served_acquired_max": 30,
+    "dedupe_window_s": 3600,
+    "question_max_age_s": 600,
+    "sync_wait_s": 0,
+    "served_acquired_max_bytes": 50000000,
+    "min_admitted_spans": 2,
+    "_min_admitted_spans_note": "calibration 2026-10-21 (work/wed-acq2/measure/measure-out.json): single-document admission over the 9 real DAR-9 texts. calset-v2 on-topic (question, source doc) pairs: 17, of which >=1 span 7, >=2 5, >=3 4. Off-topic pairs (calset question vs other doc): 230, >=1 6 (2.6%), >=2 5 (2.2%), >=3 2 (0.9%). B2 off-corpus probes x 9 docs: 54, >=1 8 (14.8%), >=2 4 (7.4%), >=3 3 (5.6%). Value 2: halves the probe false-pass rate of 1 at a cost of 2 of 7 on-topic passes; 3 loses another on-topic pass for a small further gain. The gate is conservative (most on-topic pairs admit 0 spans) and not clean (2-7% false passes): residual R-7/FM-13. Change it when live R-ACQ-FEWSPANS/IRRELEVANT counts and stored-document reviews show a different trade-off.",
+    "_served_acquired_max_note": "measured 2026-10-21 (work/wed-acq2/measure/measure-out.json, measure2-out.json; dev machine, CPU only): acquired-corpus rebuild = verify + DarCorpus index 20 docs 64.5 s + evidence index 63.3 s; 30 docs 75.9 s + 77.5 s; 50 docs 141 s; 100 docs 230 s (index only). For scale, the existing 9-document base corpus costs 45.6 s + 45.9 s. 30 keeps one background rebuild at about the base corpus's own cost; more needs incremental indexing (plan OM-4). Rebuilds run off the request path and at most once per refresh_ttl_s."
+  },
+  "serve": {
+    "refresh_ttl_s": 300,
+    "_note": "probe = one read-only SELECT; a changed signature starts ONE background rebuild (evidence index pre-warmed) with atomic swap; 300 s coalesces rebuilds"
+  },
+  "resolve": {
+    "_note": "Open-access resolution by DOI through the Europe PMC REST search (core result). API shape from DAR-9 precedent and documentation knowledge; NOT live-verified (plan FM-11).",
+    "search_url": "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+    "fulltext_url_template": "https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML",
+    "landing_url_template": "https://europepmc.org/article/PMC/{pmcid}",
+    "require_open_access": true,
+    "refuse_pub_types": [
+      "preprint",
+      "retracted publication",
+      "retraction of publication",
+      "expression of concern"
+    ],
+    "refuse_sources": [
+      "PPR"
+    ],
+    "licence_url_map": {
+      "_note": "Europe PMC licence strings (lower-cased, whitespace-collapsed) -> version-less CC family URL; never a guessed version; unmapped = hold",
+      "cc by": "https://creativecommons.org/licenses/by/",
+      "cc by-sa": "https://creativecommons.org/licenses/by-sa/",
+      "cc by-nc": "https://creativecommons.org/licenses/by-nc/",
+      "cc by-nc-sa": "https://creativecommons.org/licenses/by-nc-sa/",
+      "cc by-nd": "https://creativecommons.org/licenses/by-nd/",
+      "cc by-nc-nd": "https://creativecommons.org/licenses/by-nc-nd/",
+      "cc0": "https://creativecommons.org/publicdomain/zero/1.0/"
+    }
+  },
+  "fetch": {
+    "allowed_hosts": [
+      "www.ebi.ac.uk",
+      "eutils.ncbi.nlm.nih.gov"
+    ],
+    "content_types": [
+      "application/xml",
+      "text/xml"
+    ],
+    "fulltext_format": "jats-xml"
+  },
+  "ingest_overlay": {
+    "_note": "labels only; every fulltext_ingest filter runs unchanged",
+    "verified_status": "AUTO-VERIFIED",
+    "admitted_by": "automatic acquisition (WED-ACQ2 P1.7)",
+    "question_text": "VERA-DAR automatic acquisition (open-access full text; visitor question not stored)",
+    "licence_observations_enabled": false,
+    "candidate": {
+      "gate_a_decision": null,
+      "fetch_status": "fetched",
+      "rationale_prefix": "Automatic open-access full-text acquisition (WED-ACQ2). Gate A not applied; relevance = answer-path admission over the single document."
+    },
+    "_versioning": "labels are bound to marker vera-dar-auto-acquire-v1; never edit in place (a change needs a new marker version; old rows keep their labels)",
+    "embedded_licence_unknown_holds": true,
+    "_embedded_licence_note": "WED-P17-VER item 4: an embedded licence that is present but not a recognised CC/CC0 licence is held (unclear = hold); applies to acquired documents only"
+  },
+  "injection_scan": {
+    "_note": "applied to the converted full text at write AND at read for acquired documents; any match refuses the document (R-ACQ-INJECT); stored text is never edited",
+    "max_hits": 0,
+    "patterns": [
+      "\\b(ignore|disregard|forget|override)\\b.{0,40}\\b(previous|prior|above|earlier|all|your|the)\\b.{0,20}\\b(instructions?|rules|prompts?|guidelines|directions)\\b",
+      "\\byou are now\\b",
+      "\\bdeveloper mode\\b",
+      "\\b(note|message|instructions?) (to|for) (the )?(ai|llm|assistant|language model|chatbot)\\b",
+      "\\b(if you are|as) an? (ai|llm|large language model|language model|assistant)\\b.{0,40}\\b(must|should|always|never)\\b",
+      "<\\|im_start\\|>|<\\|im_end\\|>|\\[inst\\]|<\\|system\\|>|<\\|assistant\\|>"
+    ],
+    "_calibration_note": "max_hits 0 (any match refuses). Measured 2026-10-21 over the 9 DAR-9 texts (work/wed-acq2/measure/injection-scan-base9.txt): 0 hits. Expected false positives in AI-security/AI-coding papers that quote injection strings (not in the sample); review R-ACQ-INJECT counts (plan FM-16)."
+  },
+  "reason_codes": {
+    "disabled": "R-ACQ-OFF",
+    "queue_full": "R-ACQ-QUEUE",
+    "rate": "R-ACQ-RATE",
+    "daily_cap": "R-ACQ-DAILY",
+    "duplicate_question": "R-ACQ-DUPQ",
+    "expired": "R-ACQ-EXPIRED",
+    "deadline": "R-ACQ-DEADLINE",
+    "search_failed": "R-ACQ-SEARCH",
+    "no_doi": "R-ACQ-NODOI",
+    "in_corpus": "R-ACQ-KNOWN",
+    "not_oa": "R-ACQ-NOTOA",
+    "no_licence": "R-ACQ-NOLIC",
+    "pub_type": "R-ACQ-PUBTYPE",
+    "unreachable": "R-ACQ-UNREACHABLE",
+    "host": "R-ACQ-HOST",
+    "too_large": "R-ACQ-LARGE",
+    "convert": "R-ACQ-CONVERT",
+    "inject": "R-ACQ-INJECT",
+    "irrelevant": "R-ACQ-IRRELEVANT",
+    "write_failed": "R-ACQ-WRITE",
+    "stored": "ACQ-STORED",
+    "few_spans": "R-ACQ-FEWSPANS"
+  }
+}

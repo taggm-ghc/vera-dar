@@ -70,6 +70,23 @@ def _trace_counts(trace: dict) -> dict:
     return out
 
 
+def _mark_in_corpus(results: list, dar_corpus) -> list:
+    """Copy of `results` with in_corpus=True on every result whose DOI or URL (normalised, either direction) is that of
+    any stored document (DarCorpus.doc_keys). The input list is returned unchanged when nothing matches."""
+    from vera.dar_corpus import doc_key_set
+
+    keys_fn = getattr(dar_corpus, "doc_keys", None)  # duck-typed corpora without it: no corpus-wide check
+    held = keys_fn() if callable(keys_fn) else ()
+    if not held:
+        return results
+    out, hit = [], False
+    for r in results:
+        if isinstance(r, dict) and doc_key_set(r.get("doi"), r.get("url")) & held:
+            r, hit = {**r, "in_corpus": True}, True
+        out.append(r)
+    return out if hit else results
+
+
 def _merge_stored(results: list, question: str, dar_corpus, cfg: dict, info: dict) -> list:
     """DAR stored-corpus branch (flag-gated; DEC-FDA1: stored FULL documents only, the corpus refuses abstracts).
     The ordering policy lives in DarCorpus.rank_merge: the first head external results are protected; stored chunks
@@ -83,7 +100,10 @@ def _merge_stored(results: list, question: str, dar_corpus, cfg: dict, info: dic
         return results
     try:
         ccfg = getattr(dar_corpus, "cfg", None) or {}
-        if ccfg.get("enabled") is not True or (ccfg.get("corpus") or {}).get("stored_branch_enabled") is not True:
+        if ccfg.get("enabled") is not True:
+            return results
+        results = _mark_in_corpus(results, dar_corpus)  # WED-ACQ A1: corpus-wide, not only the retrieved chunks
+        if (ccfg.get("corpus") or {}).get("stored_branch_enabled") is not True:
             return results
         stored, tr = dar_corpus.as_sources(question)
         info["stored"] = {k: v for k, v in (tr or {}).items() if isinstance(v, (int, str))}
@@ -161,7 +181,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                "snippet": snippet, "source_type": r.get("source_type")}
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
-        for k in ("licence", "stored_text_kind", "doi", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition"):  # internal, for the corpus gauntlet; never in the response
+        for k in ("licence", "stored_text_kind", "doi", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet; never in the response
             if r.get(k):
                 src[k] = r[k]
         src.update(provenance(r))
@@ -312,6 +332,8 @@ def public_candidates(sources: list[dict]) -> tuple:
     for s in sources:
         c = {k: s.get(k) for k in PUBLIC_CANDIDATE_FIELDS}
         c["acquisition"] = contract.acquisition_state(s)
+        if c["acquisition"] == contract.ACQ_NOT_ACQUIRED and (s.get("span") or s.get("in_corpus")):
+            c["acquisition"] = contract.ACQ_IN_CORPUS  # WED-ACQ A1: stored in the collection (not "not acquired")
         c["representation"] = contract.representation(c["acquisition"])
         c["retrieved_at"] = s.get("retrieved_at")
         if s.get("span"):  # stored candidates only; web candidates keep their exact shape

@@ -70,7 +70,10 @@ def test_acquisition_never_from_fetch_status_or_abstract_kinds():
 
 
 def test_representation_text_per_state():
-    assert ac.representation(ac.ACQ_NOT_ACQUIRED) == "index record or abstract; full document not acquired"
+    assert ac.representation(ac.ACQ_NOT_ACQUIRED) == ("not in VERA-DAR's collection (index record or abstract; "
+                                                      "full document not acquired)")
+    assert ac.representation(ac.ACQ_IN_CORPUS) == "in VERA-DAR's collection: full document stored (not inspected for this answer)"
+    assert ac.text("representation_not_acquired") == "index record or abstract; full document not acquired"  # fallback
     assert ac.representation(ac.ACQ_ACQUIRED) == "full document stored (not inspected for this answer)"
 
 

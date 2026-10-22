@@ -154,7 +154,8 @@ _HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask pa
 def how_answers_text() -> str:
     """Chosen by the runtime fulldoc flag (S1), never static."""
     from vera.disclosure import fulldoc_enabled
-    return _HOW_FULLDOC if fulldoc_enabled() else _HOW_LIST
+    from vera.disclosure import offtopic_sentence
+    return (_HOW_FULLDOC if fulldoc_enabled() else _HOW_LIST) + offtopic_sentence()
 
 
 def render_sources_sidebar(st) -> None:

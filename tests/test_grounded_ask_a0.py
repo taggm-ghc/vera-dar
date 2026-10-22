@@ -161,3 +161,143 @@ def test_with_count_substitutes_count_only_and_tolerates_missing_placeholder():
     assert _with_count("Inspected {n_inspected} documents {x}.", ev) == "Inspected 3 documents {x}."
     assert _with_count("No placeholder.", ev) == "No placeholder."
     assert _with_count("N={n_inspected}", None) == "N=0"
+
+
+# ---- WED-ACQ Phase A: in-collection vs not-yet-in-collection labels; counts-only log ----
+STORED = {"n": 3, "title": "T3", "url": "https://doi.org/10.1/stored", "published": "2020-01-01", "snippet": ABSTRACT,
+          "provider": "dar_corpus", "stored_text_kind": "fulldoc_chunks", "admission_passed": True,
+          "span": "chars=0-10", "source_id": "s3", "canonical_source_id": "doi:10.1/stored"}
+
+
+def test_stored_fulldoc_chunks_candidate_is_not_labelled_not_acquired():  # FM-1
+    (c,) = grounded_ask.public_candidates([STORED])
+    assert answer_contract.acquisition_state(STORED) == answer_contract.ACQ_NOT_ACQUIRED  # admission gate unchanged
+    assert c["acquisition"] == answer_contract.ACQ_IN_CORPUS
+    assert c["representation"] == answer_contract.text("representation_in_corpus")
+    assert "not acquired" not in c["representation"] and "not yet" not in c["representation"]
+
+
+def test_web_candidate_with_corpus_flag_is_in_collection_and_others_are_candidates_for_addition():
+    flagged = dict(SRC[0], in_corpus=True)
+    a, b = grounded_ask.public_candidates([flagged, SRC[1]])
+    assert a["acquisition"] == answer_contract.ACQ_IN_CORPUS and "in_corpus" not in a
+    assert b["acquisition"] == answer_contract.ACQ_NOT_ACQUIRED
+    assert b["representation"] == answer_contract.text("representation_out_of_corpus")
+    assert b["representation"].startswith("not in VERA-DAR's collection") and "candidate" not in b["representation"]
+    assert answer_contract.not_read_line([a, b]) == answer_contract.text("not_read_line_partial")
+
+
+def test_label_texts_come_from_config(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"texts": {"representation_in_corpus": "IN", "representation_out_of_corpus": "OUT"}}))
+    assert answer_contract.representation(answer_contract.ACQ_IN_CORPUS, p) == "IN"
+    assert answer_contract.representation(answer_contract.ACQ_NOT_ACQUIRED, p) == "OUT"
+
+
+class _Corpus:
+    cfg = {"enabled": True, "corpus": {"stored_branch_enabled": True}}
+
+    def doc_keys(self):
+        return frozenset({"doi:10.1/stored", "url:https://example.org/held"})
+
+    def as_sources(self, q):
+        return [dict(STORED, doi="10.1/stored")], {}
+
+    def rank_merge(self, q, external, stored, n):
+        return list(external) + list(stored)
+
+
+def test_merge_stored_marks_external_result_for_a_stored_document_only():  # see also the corpus-wide tests below
+    ext = [{"title": "W", "url": "https://x.org/w", "doi": "10.1/STORED", "snippet": "s"},
+           {"title": "V", "url": "https://x.org/v", "snippet": "s"}]
+    out = grounded_ask._merge_stored(ext, "q", _Corpus(), {"num_results": 5}, {})
+    assert out[0].get("in_corpus") is True and not out[1].get("in_corpus")
+    assert "in_corpus" not in ext[0]  # input not mutated
+
+
+def test_retrieve_all_carries_in_corpus_flag_to_candidates():
+    cfg = {"num_results": 5, "snippet_max_chars": 200}
+    r = [{"title": "W", "url": "https://x.org/w", "doi": "10.1/stored", "snippet": "s", "in_corpus": True}]
+    src, _ = grounded_ask.retrieve_all("q", cfg, search=lambda q: r)
+    assert src[0]["in_corpus"] is True
+    assert grounded_ask.public_candidates(src)[0]["acquisition"] == answer_contract.ACQ_IN_CORPUS
+
+
+def test_question_never_reaches_any_log_and_counts_line_has_no_identifiers(caplog):
+    import logging
+    sent = "SENTINEL-VISITOR-QUESTION-8c1f"
+    src = [dict(SRC[0], title="SENTINEL-TITLE", url="https://arxiv.org/abs/SENT-URL"), dict(SRC[1]), dict(STORED)]
+    caplog.set_level(logging.DEBUG)
+    r = ask_service.answer_in_scope(f"Do AI assistants help? {sent}", "m", PRICING, grounding=(lambda: src, CFG))
+    assert r.result_kind == "reading_list"
+    blob = "\n".join(f"{x.name} {x.getMessage()} {x.args} {x.exc_text}" for x in caplog.records)
+    for forbidden in (sent, "SENTINEL-TITLE", "SENT-URL", "arxiv.org", "doi:x", "SENTINEL-ABSTRACT"):
+        assert forbidden not in blob
+    line = [x.getMessage() for x in caplog.records if x.getMessage().startswith("acquisition candidates:")]
+    assert len(line) == 1
+    assert json.loads(line[0].split(": ", 1)[1]) == {"listed": 3, "not_in_collection": 2,
+                                                       "by_provider": {"arxiv": 1, "openalex": 1}}
+
+
+def test_counts_log_drops_unsafe_provider_values(caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    ask_service._log_acquisition_counts([{"acquisition": "not_acquired", "provider": "evil\nforged line"}])
+    (x,) = [x for x in caplog.records if x.getMessage().startswith("acquisition candidates:")]
+    assert "\n" not in x.getMessage() and '"other": 1' in x.getMessage()
+
+
+def _corpus_with_held_doc():
+    from tests.test_dar_corpus import doc, make_cfg  # synthetic corpus fixtures
+    from vera.dar_corpus import DarCorpus
+    c = DarCorpus(make_cfg())
+    c.ingest_document(doc("held", "reef", 0, doi="10.1234/ABC.Held", url="https://example.org/held/"))
+    return c
+
+
+def test_doc_keys_cover_all_stored_documents_and_normalise_doi_and_url():
+    from vera.dar_corpus import doc_key_set
+    keys = _corpus_with_held_doc().doc_keys()
+    assert "doi:10.1234/abc.held" in keys and "url:https://example.org/held" in keys
+    for doi, url in (("10.1234/ABC.HELD", None), ("doi:10.1234/abc.held", None), (None, "https://doi.org/10.1234/abc.HELD"),
+                     (None, "http://dx.doi.org/10.1234/abc.held/"), (None, "http://Example.org/held#frag")):
+        assert doc_key_set(doi, url) & keys, (doi, url)
+    assert not doc_key_set("10.9999/other", "https://example.org/other") & keys
+
+
+def test_corpus_wide_membership_without_any_retrieved_chunk_and_never_opposite_labels():
+    c = _corpus_with_held_doc()
+    c.cfg["corpus"] = dict(c.cfg.get("corpus") or {}, stored_branch_enabled=False)  # no stored chunk can surface
+    ext = [{"title": "A", "url": "https://doi.org/10.1234/abc.held", "snippet": "s", "provider": "openalex"},
+           {"title": "B", "url": "https://example.org/held", "snippet": "s", "provider": "arxiv"},
+           {"title": "C", "url": "https://example.org/other", "doi": "10.5/other", "snippet": "s", "provider": "arxiv"}]
+    out = grounded_ask._merge_stored(ext, "q", c, {"num_results": 5}, {})
+    cands = grounded_ask.public_candidates([dict(r, n=i) for i, r in enumerate(out, 1)])
+    assert [x["acquisition"] for x in cands] == ["in_collection", "in_collection", "not_acquired"]
+    # the stored chunk of the same document (span present) is labelled the same way as its web twin
+    (st,) = grounded_ask.public_candidates([dict(STORED, doi="10.1234/abc.held")])
+    assert st["acquisition"] == cands[0]["acquisition"]
+
+
+def test_header_line_depends_on_label_mix_none_some_all():
+    i, n = {"acquisition": answer_contract.ACQ_IN_CORPUS}, {"acquisition": answer_contract.ACQ_NOT_ACQUIRED}
+    assert answer_contract.not_read_line([n, n]) == answer_contract.text("not_read_line")
+    assert answer_contract.not_read_line([i, n]) == answer_contract.text("not_read_line_partial")
+    allin = answer_contract.not_read_line([i, i])
+    assert allin == answer_contract.text("not_read_line_all_in_collection")
+    assert "has not acquired or read" not in allin and "in VERA-DAR's collection" in allin
+    assert len({answer_contract.text("not_read_line"), answer_contract.text("not_read_line_partial"), allin}) == 3
+
+
+def test_counts_log_provider_allowlist_comes_from_config(tmp_path, monkeypatch, caplog):
+    import logging
+    assert {"arxiv", "openalex"} <= answer_contract.acquisition_log_providers()
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"acquisition_log": {"providers": ["onlyone"]}}))
+    monkeypatch.setattr(answer_contract, "CONFIG_PATH", p)
+    monkeypatch.setattr(answer_contract.acquisition_log_providers, "__defaults__", (p,))
+    caplog.set_level(logging.INFO)
+    ask_service._log_acquisition_counts([{"acquisition": "not_acquired", "provider": "onlyone"},
+                                         {"acquisition": "not_acquired", "provider": "arxiv"}])
+    (x,) = [x for x in caplog.records if x.getMessage().startswith("acquisition candidates:")]
+    assert json.loads(x.getMessage().split(": ", 1)[1])["by_provider"] == {"onlyone": 1, "other": 1}

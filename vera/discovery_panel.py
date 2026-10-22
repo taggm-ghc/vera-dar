@@ -20,7 +20,7 @@ def _candidates(raw) -> list[dict]:
         if not (c["title"].strip() or c["url"].strip()):
             continue
         state = c.get("acquisition")
-        state = state if state in (answer_contract.ACQ_NOT_ACQUIRED, answer_contract.ACQ_ACQUIRED) \
+        state = state if state in (answer_contract.ACQ_NOT_ACQUIRED, answer_contract.ACQ_ACQUIRED, answer_contract.ACQ_IN_CORPUS) \
             else answer_contract.ACQ_NOT_ACQUIRED
         out.append({"title": c["title"].strip(), "url": c["url"].strip(), "acquisition": state,
                     "published": c.get("published") if isinstance(c.get("published"), (str, int)) else None,
@@ -53,6 +53,9 @@ def render_discovery(st, data: dict) -> None:
         return
     cands = _candidates(data.get("candidates"))
     st.markdown("### Reading list")
+    c_ = data.get("contract")
+    if cands and isinstance(c_, dict) and c_.get("offtopic") is True and isinstance(data.get("answer"), str):
+        st.info(safe_markdown(data["answer"]))  # FIX1-1021: outside-scope notice shown above the list
     if cands:
         st.warning(answer_contract.not_read_line([{"acquisition": c["acquisition"]} for c in cands]))
         for i, c in enumerate(cands, 1):

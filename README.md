@@ -96,9 +96,11 @@ For local setup, see [Development](docs/development.md). For service configurati
 
 Every page of the demonstration shows one shared data-use disclosure. Its closing text reads:
 
-"Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. During this demonstration, VERA-DAR does not save newly discovered documents or research notes from your questions."
+"Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document's source, licence and the time it was added; it does not store your question."
 
-The final sentence applies only while corpus admission and discovery notes are off; if either is enabled, the disclosure text changes accordingly.
+The final sentence applies while automatic acquisition is switched on (`config/auto_acquire.json`, P1.7). With it switched off, and corpus admission and discovery notes off, the final sentence reads instead: "During this demonstration, VERA-DAR does not save newly discovered documents or research notes from your questions." If corpus admission or discovery notes are enabled, the disclosure text changes accordingly.
+
+Automatic acquisition (P1.7): a question VERA-DAR cannot answer from its full documents, or one it declines as outside its fields, may start a bounded background search for open-access full text (OpenAlex search, Europe PMC full text). A document is added only if it passes every ingest filter and the licence rule and its own passages answer the question; later questions are answered only from the stored verbatim passages. A question declined by the fixed injection and advice rules never starts one; a question declined only by the AI scope check may (its search terms go to OpenAlex), but a declined question is never answered from acquired documents. The question itself is never stored. Kill switch: set `VERA_AUTOACQ_DISABLED=1` on the API service.
 
 When the full-document path is enabled, the disclosure opens differently: it says answers are written from up to six passages of a small, operator-supplied, licence-checked collection of full documents, and that the question, the selected passages with their titles and links, and draft answer sentences are sent to third-party AI services. The closing text quoted above is unchanged.
 

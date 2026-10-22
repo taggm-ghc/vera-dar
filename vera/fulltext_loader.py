@@ -164,6 +164,11 @@ def _cc_family(url_or_id, cfg: dict) -> str | None:
     return "cc-" + re.sub(r"\s+", "-", m.group(1).strip()) + "-" + m.group(2)
 
 
+def _public_domain_zero(rec: dict) -> bool:
+    s = f"{rec.get('id') or ''} {rec.get('url') or ''}".lower()
+    return "publicdomain/zero" in s or bool(re.search(r"\bcc0\b", s))
+
+
 def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
     """Returns the licence record for provenance; raises Refused on reject/hold."""
     lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"), "source": "manifest declared"}}
@@ -188,6 +193,12 @@ def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
         fam_man = _cc_family(item.get("licence_url"), cfg) or _cc_family(item.get("licence"), cfg)
         if fam_doc and fam_man and fam_doc != fam_man:
             _refuse(cfg, "licence_mismatch", f"document licence {fam_doc} differs from the declared {fam_man}: held")
+        # WED-P17-VER item 4 ("unclear = hold"): with embedded_licence_unknown_holds (set ONLY by the automatic
+        # acquisition overlay, vera/acq_config.ingest_cfg), an embedded licence whose family is not recognised (e.g. a
+        # publisher user licence) is held. The curated base config does not set it, so the human-verified DAR-9 items
+        # whose JATS embeds a non-CC marker ("open-access": eyring2016, lehner2020) keep their recorded decision.
+        if cfg.get("embedded_licence_unknown_holds") is True and not fam_doc and not _public_domain_zero(emb):
+            _refuse(cfg, "licence_hold", f"licence embedded in the document is not a recognised licence: held")
         lic["embedded"] = {"id": emb.get("id"), "url": emb.get("url"), "statement": emb.get("statement"),
                            "source": "document"}
     return {"licence": lic, "licence_decision": d, "licence_rationale": cand["gate_a_rationale"].strip()}

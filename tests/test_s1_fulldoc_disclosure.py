@@ -42,9 +42,10 @@ def test_flag_parsing_fails_closed_for_text_selection(tmp_path):
     assert disclosure.fulldoc_enabled(ROOT / "config" / "fulldoc_answer.json") is True  # shipped = on (P1.6)
 
 
-def test_state1_off_keeps_todays_text(tmp_path):
+def test_state1_off_keeps_todays_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)  # WED-ACQ2: the P1.7-off text is unchanged
     t = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, False))
-    assert t.startswith(STATE1_DISCLOSURE_START) and t == (disclosure._BASE + disclosure._THIRD_PARTY + disclosure._NO_SAVE
+    assert t.startswith(STATE1_DISCLOSURE_START) and t == (disclosure._BASE + disclosure.offtopic_sentence() + disclosure._THIRD_PARTY + disclosure._NO_SAVE
                                                          + disclosure._DEMO_NO_STORAGE)  # full state-1 text
     assert disclosure.DISCLOSURE_TEXT.startswith(STATE23_DISCLOSURE_START)  # shipped = state 2/3 (P1.6)
     assert "has not acquired or read these full documents, so it does not use abstracts or snippets as evidence" in t
@@ -52,7 +53,8 @@ def test_state1_off_keeps_todays_text(tmp_path):
     assert disclosure._THIRD_PARTY.strip() in t  # question-only transmission is true only while off
 
 
-def test_state2_and_3_disclosure_names_passage_transmission_and_never_claims_unread_collection(tmp_path):
+def test_state2_and_3_disclosure_names_passage_transmission_and_never_claims_unread_collection(tmp_path, monkeypatch):
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)  # WED-ACQ2: the P1.7-off text is unchanged
     on = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, True))
     assert on.startswith(STATE23_DISCLOSURE_START)
     assert PASSAGES_SENTENCE in on  # whenever fulldoc is on
@@ -65,10 +67,10 @@ def test_state2_and_3_disclosure_names_passage_transmission_and_never_claims_unr
 
 def test_sidebar_text_follows_runtime_state(monkeypatch):
     monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: False)
-    assert sb.how_answers_text() == sb._HOW_LIST and "has not read the full documents" in sb.how_answers_text()
+    assert sb.how_answers_text() == sb._HOW_LIST + disclosure.offtopic_sentence() and "has not read the full documents" in sb.how_answers_text()
     monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: True)
     t = sb.how_answers_text()
-    assert t == HOW_FULLDOC and BAD not in t and "up to six passages" in t
+    assert t == HOW_FULLDOC + disclosure.offtopic_sentence() and BAD not in t and "up to six passages" in t
     assert "lists documents it has not read" in t
 
 
@@ -118,3 +120,11 @@ def test_disclosed_passage_count_equals_admission_cap():
     chunk = int(json.loads((ROOT / "config" / "domain_routing.json").read_text(encoding="utf-8"))["corpus"]["chunk_chars"])
     assert int(cfg["admission"]["max_admitted_chars"]) <= 3 * n * chunk  # plan AC-5: <= 3x the 6 x 400 baseline
     assert int(cfg["admission"]["merge_adjacent"]["max_passage_chars"]) <= 3 * chunk
+
+
+def test_p17_state2_with_auto_acquire_ends_with_the_acquisition_sentence(tmp_path, monkeypatch):
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: True)
+    on = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, True))
+    assert on.startswith(STATE23_DISCLOSURE_START) and PASSAGES_SENTENCE in on
+    assert on.endswith(disclosure._NO_SAVE.strip() + disclosure._AUTO_ACQUIRE_MAY_STORE)
+    assert "During this demonstration" not in on

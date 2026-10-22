@@ -17,6 +17,9 @@ RESULT_KINDS = ("answer", "discovery", "reading_list", "decline", "unspecified")
 NON_ANSWER_KINDS = tuple(k for k in RESULT_KINDS if k != "answer")
 DEFAULT_KIND = "unspecified"  # V2: the default is a non-answer
 ACQ_NOT_ACQUIRED, ACQ_ACQUIRED = "not_acquired", "full_document_acquired"
+# WED-ACQ (A1): display-only state for a candidate whose full document is already stored in the DAR collection
+# (stored fulldoc_chunks). It is never returned by acquisition_state (the corpus admission gate relies on that).
+ACQ_IN_CORPUS = "in_collection"
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -71,15 +74,27 @@ def acquisition_state(candidate: dict, path: Path = CONFIG_PATH) -> str:
 
 
 def representation(state: str, path: Path = CONFIG_PATH) -> str:
-    return text("representation_acquired" if state == ACQ_ACQUIRED else "representation_not_acquired", path)
+    if state == ACQ_IN_CORPUS:
+        return text("representation_in_corpus", path) or text("representation_acquired", path)
+    if state == ACQ_ACQUIRED:
+        return text("representation_acquired", path)
+    return text("representation_out_of_corpus", path) or text("representation_not_acquired", path)
 
 
 def not_read_line(candidates, path: Path = CONFIG_PATH) -> str:
     """The ratified fixed disclosure; the partial variant when at least one but not all candidates are acquired."""
     states = [c.get("acquisition") for c in candidates or ()]
-    if ACQ_ACQUIRED in states and ACQ_NOT_ACQUIRED in states:
+    held = [s in (ACQ_ACQUIRED, ACQ_IN_CORPUS) for s in states]
+    if any(held) and not all(held):
         return text("not_read_line_partial", path)
+    if held and all(held) and ACQ_IN_CORPUS in states:  # every listed document is in the collection (WED-ACQ)
+        return text("not_read_line_all_in_collection", path) or text("not_read_line_partial", path)
     return text("not_read_line", path)
+
+
+def acquisition_log_providers(path: Path = CONFIG_PATH) -> frozenset:
+    """Provider names the counts-only acquisition log may use as keys (config acquisition_log.providers)."""
+    return frozenset(str(p).lower() for p in ((load_config(path).get("acquisition_log") or {}).get("providers") or []))
 
 
 def examined_full_documents(candidates) -> list:

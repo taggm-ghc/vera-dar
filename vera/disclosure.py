@@ -36,6 +36,12 @@ _NO_SAVE = " VERA-DAR does not save your question or information identifying you
 _DEMO_NO_STORAGE = (" During this demonstration, VERA-DAR does not save newly discovered documents or research notes from "
                     "your questions.")
 _CORPUS_MAY_STORE = " VERA-DAR may add documents found for your question to its own collection; it does not store the question."
+# WED-ACQ2 / P1.7 (owner approval 2026-10-21 of "the new disclosure wording"; text chosen per plan D-2): replaces
+# _DEMO_NO_STORAGE while automatic acquisition is switched on in config/auto_acquire.json. Accurate to what the code
+# stores (document chunks, source and licence provenance, acquisition time and trigger kind; never the question).
+_AUTO_ACQUIRE_MAY_STORE = (" Its collection also grows automatically: VERA-DAR may add open-access full-text documents "
+                           "found while searching for your question, after automated licence and content checks, recording "
+                           "each document's source, licence and the time it was added; it does not store your question.")
 _EVIDENCE_FINDINGS = " Earlier findings were checked only against the abstract or index record they cite."
 
 
@@ -76,21 +82,69 @@ _HELP_FULLDOC = ("Ask a question. VERA-DAR answers only from the full documents 
                  "why it cannot; otherwise it lists sources it has not read.")
 
 
+def auto_acquire_enabled() -> bool:
+    """The release-config flag only (config/auto_acquire.json enabled is exactly true). Deliberately ignores the env
+    gates: a service without the write account (the UI) over-discloses, never under-discloses. Unreadable = False is
+    safe here because an unreadable acquisition config also switches the feature itself off (vera.acq_config)."""
+    from vera import acq_config
+    return acq_config.flag_on(acq_config.load_config())
+
+
 def ask_help_text(fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
     """Help text of the question box, chosen by the runtime fulldoc flag (S1)."""
     return _HELP_FULLDOC if fulldoc_enabled(fulldoc_path) else _HELP_LIST
+
+
+_OFFTOPIC = (" For a question outside its scope VERA-DAR gives no answer, but it may still search published scholarly "
+             "sources for the question and list documents it has not read.")
+
+
+# DAR-1021 (wording needs owner approval, DISC-E2): used instead of _OFFTOPIC only while automatic acquisition is on
+# AND scope_expansion.override_layer2_declines is true in config/auto_acquire.json.
+_OFFTOPIC_ANSWERING = (" For a question outside its scope VERA-DAR first lists published scholarly documents it has not read "
+                       "and may start a background search for open-access full text on the question. If documents found "
+                       "this way pass its licence, content and relevance checks, a later ask of such a question may be "
+                       "answered only from those documents, in the same way: brief quoted citations, each cited sentence "
+                       "checked by an AI model, unsupported sentences removed. Such answers may be wrong.")
+
+
+def _layer2_answering_on() -> bool:
+    """Release-config flags only (over-disclose on a service without the DB env). Unreadable = True: over-disclose."""
+    try:
+        from vera import acq_config
+        cfg = acq_config.load_config()
+        return acq_config.flag_on(cfg) and acq_config.override_layer2_declines(cfg)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def offtopic_sentence() -> str:
+    """FIX1-1021: the sentence is emitted while the off-topic reading list is configured on (unreadable config -> emitted:
+    over-disclose rather than under-disclose)."""
+    try:
+        from vera.scope_router import offtopic_enabled
+
+        if not offtopic_enabled():
+            return ""
+        return _OFFTOPIC_ANSWERING if _layer2_answering_on() else _OFFTOPIC
+    except Exception:  # noqa: BLE001
+        return _OFFTOPIC
 
 
 def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
                     chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
     """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
     (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
-    out = (_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + _THIRD_PARTY + _NO_SAVE
+    out = (_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + _THIRD_PARTY + _NO_SAVE
     corpus_on = corpus_admission_enabled(chain_path)
+    auto = auto_acquire_enabled()
     if not corpus_on and "L2" not in answer_contract.layers(contract_path):
-        out += _DEMO_NO_STORAGE
-    elif corpus_on:
-        out += _CORPUS_MAY_STORE
+        out += _AUTO_ACQUIRE_MAY_STORE if auto else _DEMO_NO_STORAGE
+    else:
+        if corpus_on:
+            out += _CORPUS_MAY_STORE
+        if auto:  # every state with automatic acquisition on says so (never under-discloses)
+            out += _AUTO_ACQUIRE_MAY_STORE
     if "L2" in answer_contract.layers(contract_path):
         out += (" VERA-DAR's memory may hold discovery notes: which documents VERA-DAR listed for a topic, taken from the "
                 "document titles. A discovery note is not a finding and not evidence. "

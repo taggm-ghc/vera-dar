@@ -162,7 +162,9 @@ _FD_INFLIGHT: list = []  # at most one slot: {"done": Event, "result": dict | No
 
 def _fulldoc_compute() -> dict:
     try:
-        from vera import fulldoc_corpus  # lazy
+        from vera import fulldoc_corpus, fulldoc_warm  # lazy
+        if fulldoc_warm.warming():  # WED-P161: never wait on the startup warm-up's corpus load
+            return fulldoc_warm.loading_status()
         return fulldoc_corpus.readiness()
     except Exception:  # noqa: BLE001
         return _fulldoc_error()
@@ -178,20 +180,34 @@ def _fulldoc_status() -> dict:
         else:
             flight, leader = {"done": threading.Event(), "result": None}, True
             _FD_INFLIGHT.append(flight)
-    if not leader:
-        flight["done"].wait()
-        res = flight["result"]
-        if res is None:  # leader died on a non-Exception BaseException
-            return dict(_fulldoc_error())
-        return dict(res)
+    if leader:  # DIAG-1021: compute in a daemon worker; the request thread (leader or follower) waits a bounded time
+        def work():
+            try:
+                flight["result"] = _fulldoc_compute()
+            finally:
+                with _FD_LOCK:
+                    if _FD_INFLIGHT and _FD_INFLIGHT[0] is flight:
+                        _FD_INFLIGHT.clear()
+                flight["done"].set()
+        threading.Thread(target=work, name="fulldoc-status", daemon=True).start()
+    if not flight["done"].wait(fulldoc_wait_s()):
+        return {**_fulldoc_error(), "status": "timeout"}  # codes only; the computation continues in the background
+    res = flight["result"]
+    if res is None:  # worker died on a non-Exception BaseException
+        return dict(_fulldoc_error())
+    return dict(res)
+
+
+FULLDOC_WAIT_DEFAULT_S = 15.0
+
+
+def fulldoc_wait_s() -> float:
+    """DIAG-1021: /health/dar's bound on the full-document status (config/fulldoc_answer.json db_bounds)."""
     try:
-        flight["result"] = _fulldoc_compute()
-        return dict(flight["result"])
-    finally:
-        with _FD_LOCK:
-            if _FD_INFLIGHT and _FD_INFLIGHT[0] is flight:
-                _FD_INFLIGHT.clear()
-        flight["done"].set()
+        from vera import fulldoc_corpus, fulldoc_db
+        return fulldoc_db.deadline_s(fulldoc_corpus.load_config(), "health_wait_s", FULLDOC_WAIT_DEFAULT_S)
+    except Exception:  # noqa: BLE001
+        return FULLDOC_WAIT_DEFAULT_S
 
 
 def _fulldoc_error() -> dict:

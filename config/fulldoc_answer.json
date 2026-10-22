@@ -279,8 +279,16 @@
     "claim_check_disabled": "claim_check_disabled",
     "model_insufficient": "model_insufficient"
   },
+  "db_bounds": {
+    "db_load_deadline_s": 30,
+    "single_flight_wait_s": 60,
+    "health_wait_s": 15,
+    "_note": "DIAG-1021 (live /health/dar hung 60 s+): total deadline on the full-document DB read (connect, DNS, TLS, both SELECTs), the bounded wait of concurrent callers on one in-flight load, and /health/dar's bound on the full-document status. Not decision thresholds; liveness bounds. Basis: the 9-document DB read is a two-SELECT round trip (well under 30 s on the dev rehearsal, work/g1-rehearsal); the CPU build after it is about 46 s (WED-COLDSTART), so followers wait up to 60 s; health_wait_s 15 keeps /health/dar under the 20 s owner check. Change after measuring live load times in the API log."
+  },
   "fulldoc": {
     "_note": "F13 flag. false = FDA path off, /ask behaves as before (pending acceptance; INT sets true after acceptance).",
-    "enabled": true
+    "enabled": true,
+    "_warm_note": "WED-P161: true (or absent) = load the DB-backed corpus and its evidence index in one startup daemon thread; false = load lazily on the first request, as before. Ignored when enabled is false or no DB source is configured.",
+    "warm_at_startup": true
   }
 }

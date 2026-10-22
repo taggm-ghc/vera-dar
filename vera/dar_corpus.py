@@ -65,6 +65,38 @@ def doc_from_admitted(cand: dict, outcome: str) -> dict:
             "admission_passed": outcome == "admitted"}
 
 
+_DOI_IN_URL = re.compile(r"^https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
+
+
+def doc_key_set(doi=None, url=None, isbn=None) -> set:
+    """Normalised membership keys for one document (WED-ACQ): "doi:<bare lower-case DOI>" and "url:<https URL
+    without fragment, trailing slash or case>". A doi.org / dx.doi.org URL contributes its DOI key instead of a URL
+    key, so a record with only a doi.org URL matches a stored document that has the DOI (and the reverse)."""
+    keys = set()
+    d = str(doi or "").strip().lower()
+    if d.startswith("doi:"):
+        d = d[4:].strip()
+    m = _DOI_IN_URL.match(d)
+    d = m.group(1) if m else d
+    if d:
+        keys.add("doi:" + d)
+    u = str(url or "").strip().lower().split("#")[0].rstrip("/")
+    if u:
+        m = _DOI_IN_URL.match(u)
+        if m:
+            keys.add("doi:" + m.group(1).rstrip("/"))
+        else:
+            keys.add("url:" + re.sub(r"^http://", "https://", u))
+    # WED-ACQ2 (owner 2026-10-21, ISBN post-script): a validated ISBN-13 (hyphens removed) is a third membership key.
+    # Only a value that passes the check digit counts; anything else contributes no key (never guessed).
+    if isbn:
+        from vera.acq_config import normalise_isbn
+        n = normalise_isbn(isbn)
+        if n:
+            keys.add("isbn:" + n["isbn"])
+    return keys
+
+
 class DarCorpus:
     def __init__(self, cfg: dict | None = None, registry=None, clock: Callable[[], str] | None = None):
         self.cfg = domain_registry.load_config() if cfg is None else cfg
@@ -156,6 +188,8 @@ class DarCorpus:
                "licence": doc.get("licence"), "licence_decision": doc.get("licence_decision"),
                "admission_passed": doc.get("admission_passed") is True,
                "db_source_id": doc.get("db_source_id"), "db_canonical_source_id": doc.get("db_canonical_source_id")}
+        if doc.get("isbn"):  # WED-ACQ2: only acquired books carry one; absent keeps the record shape unchanged
+            rec["isbn"] = doc["isbn"]
         self._docs[rec["source_key"]] = rec
         return rec
 
@@ -669,6 +703,14 @@ class DarCorpus:
             return "configured"
         n = len(self.registry.corpora_for_domain(domain_id))
         return "established" if n >= int(self._icfg["established_support"]) else "provisional"
+
+    def doc_keys(self) -> frozenset:
+        """Membership keys (see doc_key_set) of every stored document, not only those retrieved for a question."""
+        out: set = set()
+        for d in self._docs.values():
+            out |= doc_key_set(d.get("doi"), d.get("url"), d.get("isbn"))
+            out |= doc_key_set(None, d.get("source_key"))
+        return frozenset(out)
 
     def stats(self) -> dict:
         st = [self.domain_status(d.domain_id) for d in self.registry.list_domains()]

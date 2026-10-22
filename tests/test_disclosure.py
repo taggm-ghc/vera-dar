@@ -140,12 +140,21 @@ def test_shipped_config_is_demo_configuration():
     assert json.loads((ROOT / "config" / "discovery_contract.json").read_text())["layers"] == ["L0"]
 
 
-def test_exact_owner_text_as_shipped():
-    assert disclosure.DISCLOSURE_TEXT.endswith(" " + EXACT_TAIL)
+EXACT_TAIL_P17 = ("Your question is sent to third-party AI and search services to generate a response. These services have "
+                  "their own data-handling and retention policies. VERA-DAR does not save your question or information "
+                  "identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text "
+                  "documents found while searching for your question, after automated licence and content checks, "
+                  "recording each document's source, licence and the time it was added; it does not store your question.")
+
+
+def test_exact_owner_text_as_shipped():  # WED-ACQ2 P1.7: automatic acquisition ships switched on (owner 2026-10-21)
+    assert disclosure.DISCLOSURE_TEXT.endswith(" " + EXACT_TAIL_P17)
+    assert "During this demonstration" not in disclosure.DISCLOSURE_TEXT
     assert "A third-party hosted language model may be used" not in disclosure.DISCLOSURE_TEXT  # folded into the exact text
 
 
-def test_demo_sentence_only_when_corpus_and_l2_off(tmp_path):
+def test_demo_sentence_only_when_corpus_and_l2_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)  # the pre-P1.7 state keeps its exact text
     off = _chain(tmp_path, False)
     assert disclosure.disclosure_text(contract_path=_contract(tmp_path, ("L0",)), chain_path=off).endswith(EXACT_TAIL)
     for chain, layers in ((_chain(tmp_path, True), ("L0",)), (off, ("L0", "L2")), (tmp_path / "missing.json", ("L0",))):
@@ -165,3 +174,39 @@ def test_text_does_not_imply_third_parties_retain_nothing():
     assert "own data-handling and retention policies" in t
     for bad in ("never keeps", "nothing is stored", "no one keeps", "deleted immediately", "not retained"):
         assert bad not in t.lower()
+
+
+def test_r028_no_save_sentence_still_emitted_and_backed_by_counts_only_logging(monkeypatch):  # WED-ACQ D2
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)  # R-028 text holds while P1.7 is off
+    t = disclosure.disclosure_text()
+    assert ("During this demonstration, VERA-DAR does not save newly discovered documents or research notes from "
+            "your questions.") in t
+    assert "VERA-DAR does not save your question or information identifying you." in t
+    # the only acquisition log is the counts-only line: no question/title/url/identifier is read by it
+    import inspect
+
+    from vera import ask_service
+    fn = ast.parse(inspect.getsource(ask_service._log_acquisition_counts)).body[0]
+    fn.body = fn.body[1:]  # drop the docstring
+    code = ast.unparse(fn)
+    for token in ("question", "title", "url", "identifier", "doi", "snippet"):
+        assert token not in code
+
+
+def test_p17_auto_acquire_sentence_replaces_r028_and_keeps_third_party_sentences(tmp_path, monkeypatch):
+    """WED-ACQ2 AC-13: flag on -> the R-028 demonstration sentence is replaced; both third-party sentences and the
+    no-save sentence stay verbatim; flag off -> exactly the R-028 text."""
+    off = _chain(tmp_path, False)
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: True)
+    on = disclosure.disclosure_text(contract_path=_contract(tmp_path, ("L0",)), chain_path=off)
+    assert on.endswith(EXACT_TAIL_P17) and "During this demonstration" not in on
+    assert disclosure._THIRD_PARTY in on and disclosure._NO_SAVE in on
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)
+    assert disclosure.disclosure_text(contract_path=_contract(tmp_path, ("L0",)), chain_path=off).endswith(EXACT_TAIL)
+
+
+def test_p17_flag_reader_is_the_shipped_config_flag(tmp_path, monkeypatch):
+    from vera import acq_config
+    assert disclosure.auto_acquire_enabled() is True  # shipped config enables it (owner 2026-10-21)
+    monkeypatch.setattr(acq_config, "load_config", lambda *a, **k: None)  # unreadable config = feature off
+    assert disclosure.auto_acquire_enabled() is False

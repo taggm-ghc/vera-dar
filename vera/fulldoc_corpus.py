@@ -18,6 +18,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -425,6 +426,7 @@ def _apply_cache_bound(cfg: dict) -> None:
 
 def reset_for_tests() -> None:
     _CACHE.clear()
+    reset_acquired_for_tests()
     from vera import fulldoc_db
     fulldoc_db.reset_for_tests()
 
@@ -522,3 +524,117 @@ def readiness(cfg: dict | None = None, env=os.environ) -> dict:
         if "codes" in out:
             out["codes"] = []
         return out
+
+
+# ------------------------------------------------------------------------------------------------ WED-ACQ2 acquired corpus
+# The automatically acquired documents (vera/auto_acquire.py) are served as a SEPARATE FullDocCorpus (plan s11 V6):
+# ask_service admits over the base corpus first and consults this one only when the base cannot answer. Refresh is a
+# cheap read-only probe (max source_id, count) at most every serve.refresh_ttl_s; a rebuild runs OFF the request path
+# (a daemon thread, atomic swap), so a request never waits for one (V7). Tests call refresh_acquired(sync=True).
+_ACQ: dict = {"sig": None, "corpus": None, "checked": None, "building": False, "probing": False}
+_ACQ_LOCK = threading.Lock()
+
+
+def _acq_setup(cfg: dict, env):
+    """(acq_cfg, connect, base_run_id) when acquired documents may be served, else None. Never raises."""
+    try:
+        from vera import acq_config, fulldoc_db
+        acfg = acq_config.load_config()
+        if not acq_config.enabled(acfg, env):  # flag, kill switch AND both DB env vars (AC-12)
+            return None
+        run_raw = (env.get(_db_run_env(cfg)) or "").strip()
+        if not run_raw or (env.get(cfg["bundle_dir_env"]) or "").strip():
+            return None  # acquired documents are DB rows: served only next to the DB-backed base corpus
+        rid = fulldoc_db.parse_run_id(run_raw)
+        ro_cfg = {**cfg, "db_url_env": acfg.get("db_url_env_ro") or cfg.get("db_url_env")}
+        connect = fulldoc_db.default_connect(ro_cfg, env)
+        if rid is None or connect is None:
+            return None
+        return acfg, connect, rid
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rebuild_acquired(cfg, setup, sig) -> None:
+    from vera import fulldoc_db
+    acfg, connect, rid = setup
+    try:
+        c = fulldoc_db.load_acquired_db(connect, rid, cfg, acfg)
+        if c.status == STATUS_OK and c.acquired and (cfg.get("retrieval") or {}).get("evidence_only"):
+            c._evidence_dar()  # pre-warm the evidence-only index here, never on the request path (measured, plan V7)
+        with _ACQ_LOCK:
+            _ACQ["corpus"] = c if (c.status == STATUS_OK and c.acquired) else None
+            _ACQ["sig"] = sig
+    finally:
+        with _ACQ_LOCK:
+            _ACQ["building"] = False
+
+
+def refresh_acquired(cfg: dict | None = None, env=os.environ, sync: bool = False, now=time.monotonic) -> None:
+    """Probe the acquired-row signature and rebuild when it changed. Never raises; sync=True rebuilds in this thread
+    (the acquisition worker after a commit, and tests)."""
+    try:
+        cfg = cfg if cfg is not None else load_config()
+        setup = _acq_setup(cfg, env)
+        if setup is None:
+            with _ACQ_LOCK:
+                _ACQ.update(sig=None, corpus=None, checked=now())
+            return
+        from vera import fulldoc_db
+        acfg, connect, rid = setup
+        sig = fulldoc_db.acquired_signature(connect, rid, acfg["marker"])
+        with _ACQ_LOCK:
+            _ACQ["checked"] = now()
+            if sig == _ACQ["sig"] or _ACQ["building"]:
+                return
+            _ACQ["building"] = True
+        if sync:
+            _rebuild_acquired(cfg, setup, sig)
+        else:
+            threading.Thread(target=_rebuild_acquired, args=(cfg, setup, sig), name="vera-autoacq-serve",
+                             daemon=True).start()
+    except Exception as e:  # noqa: BLE001  (class only; the base corpus is unaffected)
+        import logging
+        logging.getLogger("vera").warning("acquired corpus refresh failed (%s)", type(e).__name__)
+        with _ACQ_LOCK:
+            _ACQ["checked"] = now()
+
+
+def get_acquired_corpus(cfg: dict | None = None, env=os.environ, now=time.monotonic) -> FullDocCorpus | None:
+    """The current acquired corpus, or None (feature off, nothing acquired yet, or first build still running)."""
+    try:
+        cfg = cfg if cfg is not None else load_config()
+        if _acq_setup(cfg, env) is None:
+            return None
+        from vera import acq_config
+        ttl = float(((acq_config.load_config() or {}).get("serve") or {}).get("refresh_ttl_s", 60))
+        with _ACQ_LOCK:
+            due = (_ACQ["checked"] is None or now() - _ACQ["checked"] >= ttl) and not _ACQ["probing"]
+            if due:
+                _ACQ["probing"], _ACQ["checked"] = True, now()  # one probe at a time; failures back off for ttl
+        if due:  # the probe AND any rebuild run in a background thread: the request never waits on the DB (V7, D1)
+            threading.Thread(target=_probe_and_rebuild, args=(cfg, env, now), name="vera-autoacq-serve",
+                             daemon=True).start()
+        with _ACQ_LOCK:
+            return _ACQ["corpus"]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _probe_and_rebuild(cfg, env, now) -> None:
+    try:
+        refresh_acquired(cfg, env, sync=True, now=now)
+    finally:
+        with _ACQ_LOCK:
+            _ACQ["probing"] = False
+
+
+def invalidate_acquired() -> None:
+    """Force the next get_acquired_corpus() to probe (called by the acquisition worker after a commit)."""
+    with _ACQ_LOCK:
+        _ACQ["checked"] = None
+
+
+def reset_acquired_for_tests() -> None:
+    with _ACQ_LOCK:
+        _ACQ.update(sig=None, corpus=None, checked=None, building=False, probing=False)

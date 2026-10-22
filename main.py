@@ -124,6 +124,11 @@ startup_checks()
 from vera import dar_health  # noqa: E402
 dar_health.startup_log_async()
 
+# WED-P161: warm the DB-backed full-document corpus and its evidence index in ONE daemon thread (only when fulldoc is
+# enabled, a DB source is configured and fulldoc.warm_at_startup is not false). Never raises; no thread otherwise.
+from vera import fulldoc_warm  # noqa: E402
+fulldoc_warm.start()
+
 
 class APIModel(BaseModel):
     """Shared base: unknown fields 422, they are never silently dropped."""
@@ -482,6 +487,16 @@ def _discovery_note_wanted(memory, result) -> bool:
         return False
 
 
+def _acquire(question: str, trigger: str) -> None:
+    """WED-ACQ2 (P1.7): hand the question to the bounded background acquisition queue. O(1), never blocks and never
+    fails /ask; the question is held in memory only (vera/auto_acquire.py). Logs a class name at most."""
+    try:
+        from vera import auto_acquire
+        auto_acquire.enqueue(question, trigger)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("acquisition enqueue failed (%s)", type(exc).__name__)
+
+
 def _after_response(admit_args, memory, result, question: str, discovery=None) -> None:
     """Background: corpus admission first, then memory writes (never raises, never affects the response)."""
     try:
@@ -554,7 +569,14 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         grounding, cache = None, {}
         if GROUNDING is not None:
 
-            def sources_fn():  # one search per request, reused if the provider chain falls through
+            def sources_fn(restricted=False):  # one search per request, reused if the provider chain falls through
+                if restricted:  # FIX1-1021: off-topic reading list: scholarly providers only, no link following, no stored branch
+                    if "r" not in cache:
+                        from vera.scope_router import offtopic_providers
+
+                        rcfg = {**GROUNDING, "providers": offtopic_providers(), "resolve": {"enabled": False}}
+                        cache["r"] = retrieve_all(req.question, rcfg)[0]
+                    return cache["r"]
                 if "s" not in cache:
                     from vera.dar_runtime import get_corpus  # lazy; flag-gated, returns None when DAR is off
 
@@ -607,6 +629,8 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=502, detail="OpenAI request failed. Please try again.") from exc
 
     record_request_cost(request, result.cost_usd)
+    if getattr(result, "acquire_trigger", None):  # WED-ACQ2: once per request, only after the chain succeeded
+        _acquire(req.question, result.acquire_trigger)
     fulldoc = result.evidence is not None and result.result_kind == "answer"  # D-055: sources are admitted passages
     store = store_from_env(CORPUS) if result.sources and not fulldoc else None  # never re-admitted as web candidates
     memory = None

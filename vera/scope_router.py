@@ -5,7 +5,9 @@ categories DECLINE, an AI term plus a software-development term (or a named codi
 UNSURE. Layer 2 (config `layer2_mode`) resolves UNSURE: "llm" asks the selected model for a JSON verdict
 {in_scope, reason}; "none" applies `none_mode_unsure_action`. "embedding" is noted in config but not implemented.
 
-Declines always return the fixed `decline_template`; no model-generated text is ever shown for a decline. The
+Declines always return the fixed `decline_template`; no model-generated text is ever shown for a decline. Exception (FIX1-1021, config
+`offtopic_reading_list`, default off in code): a well-formed layer-2 out-of-scope verdict may instead yield a fixed notice plus a
+scholarly-only reading list (see ask_service.answer_in_scope); the notice is fixed text, never model-generated. The
 classifier prompt holds no secrets, keys, hosts or internal names (OWASP LLM07; enforced by a test). A malformed
 classifier reply fails closed (decline). OpenAI SDK errors propagate to the routing layer like the answer call's.
 The default OpenAI client (default_chat with client=None) raises OpenAIFallbackDisabled in the API process unless
@@ -39,6 +41,7 @@ class ScopeDecision:
     tokens_used: int = 0
     cost_usd: float = 0.0
     llm_calls: int = 0
+    category: str = ""  # DAR-1021: layer-2 verdict category ("" when absent or not in LAYER2_CATEGORIES)
 
 
 @dataclass(frozen=True)
@@ -123,13 +126,29 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     return UNSURE, "no_rule"
 
 
+_MARKER_RE = re.compile(r"<<+\s*question|question\s*>>+", re.IGNORECASE)  # SEC C1: 2+ angle brackets
+_VERDICT_TOKENS_RE = re.compile(r"\b(categor(y|ies)|in[\s_-]*scope|off[\s_-]*topic)\b", re.IGNORECASE)  # SEC C1
+
+
+def has_marker(question: str) -> bool:
+    """DAR-1021 SEC H1: the question contains the classifier's own data markers (an attempt to close the data block)."""
+    return bool(_MARKER_RE.search(unicodedata.normalize("NFKC", str(question or ""))))
+
+
+def _neutralise_for_classifier(q: str) -> str:
+    """DAR-1021 SEC H1: the classifier sees no braces or verdict-field words from the question, so the question cannot
+    forge a JSON verdict or name its own category. Only the classifier input changes; the question is not altered."""
+    q = unicodedata.normalize("NFKC", q).replace("{", "(").replace("}", ")")
+    return _VERDICT_TOKENS_RE.sub("[x]", q)
+
+
 # chat(messages, layer2_cfg) -> (content, prompt_tokens, completion_tokens)
 ChatFn = Callable[[list[dict], str, dict], tuple[str, int, int]]
 
 
 def classifier_messages(question: str, cfg: RouterConfig) -> list[dict]:
     l2 = cfg.layer2
-    q = (question or "")[: int(l2["max_question_chars"])]
+    q = _neutralise_for_classifier((question or "")[: int(l2["max_question_chars"])])
     return [{"role": "system", "content": l2["system_prompt"]},
             {"role": "user", "content": l2["user_template"].format(question=q)}]
 
@@ -144,6 +163,20 @@ def default_chat(messages: list[dict], model: str, l2: dict, client=None,
         **({"extra_body": extra_body} if extra_body else {}),
     )
     return c.choices[0].message.content or "", c.usage.prompt_tokens, c.usage.completion_tokens
+
+
+LAYER2_CATEGORIES = ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
+
+
+def parse_category(content: str) -> str:
+    """DAR-1021: the classifier's optional `category` (a closed enum). Anything else, including a missing field, a
+    non-string or an unknown value, is "" so every gate keyed on it fails closed."""
+    try:
+        obj = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    c = obj.get("category") if isinstance(obj, dict) else None
+    return c if isinstance(c, str) and c in LAYER2_CATEGORIES else ""
 
 
 def parse_verdict(content: str) -> tuple[bool | None, str]:
@@ -163,6 +196,8 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     verdict, reason = layer1(question, cfg)
     if verdict != UNSURE:
         return ScopeDecision(verdict == ACCEPT, "layer1", reason)
+    if has_marker(question):  # DAR-1021 SEC H1: fixed refusal, no classifier call, never a reading list or acquisition
+        return ScopeDecision(False, "layer1", "deny:injection_marker")
     if cfg.layer2_mode == "none":
         return ScopeDecision(cfg.none_mode_unsure_action == ACCEPT, "layer2_none", "unsure:" + cfg.none_mode_unsure_action)
     content, pt, ct = (chat or default_chat)(classifier_messages(question, cfg), model, cfg.layer2)
@@ -172,8 +207,39 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     in_scope, why = parse_verdict(content)
     if in_scope is None:
         return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, 1)
-    return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, 1)
+    return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, 1,
+                         parse_category(content))
 
 
 def decline_text(cfg: RouterConfig | None = None) -> str:
     return (cfg or load_config()).decline_template
+
+
+def offtopic_enabled(cfg: RouterConfig | None = None) -> bool:
+    """FIX1-1021: True only for an explicit boolean true in `offtopic_reading_list` (missing/other -> off, the refusal)."""
+    return (cfg or load_config()).raw.get("offtopic_reading_list") is True
+
+
+def offtopic_applies(decision: ScopeDecision, cfg: RouterConfig | None = None) -> bool:
+    """True only for a declined question whose decline came from a WELL-FORMED layer-2 LLM out-of-scope verdict (so
+    layer 1 matched no deny/injection rule). Layer-1 declines, malformed replies and layer2_mode none never qualify."""
+    cfg = cfg or load_config()
+    return (offtopic_enabled(cfg) and not decision.accepted and decision.layer == "layer2_llm"
+            and decision.reason.startswith("llm_out:"))
+
+
+def offtopic_providers(cfg: RouterConfig | None = None) -> list[str]:
+    provs = (cfg or load_config()).raw.get("offtopic_providers")
+    if not isinstance(provs, list) or not provs or not all(isinstance(p, str) for p in provs):
+        raise ScopeConfigError("scope_router.json: offtopic_providers must be a non-empty list of names")
+    return list(provs)
+
+
+def offtopic_notice(cfg: RouterConfig | None = None) -> str:
+    cfg = cfg or load_config()
+    t = cfg.raw.get("offtopic_notice")
+    if not isinstance(t, str) or not t.strip():
+        raise ScopeConfigError("scope_router.json: offtopic_notice missing")
+    scope = str(cfg.raw.get("scope", "")).rstrip(".")
+    scope = scope[:1].lower() + scope[1:]  # FIX1 verify D3: mid-sentence insertion, lower-case first letter
+    return t.replace("{scope}", scope)

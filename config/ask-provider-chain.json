@@ -42,7 +42,7 @@
     "output_per_1m": 0.0
   },
   "grounding": {
-    "note": "Item #79 (2026-10-07): /ask searches these providers once per accepted question. Results with an abstract are used directly; link-only results (DuckDuckGo, news, portals, OpenAlex records without an abstract) are followed to their original scholarly sources under `resolve` (vera/source_resolver.py). Only sources with an abstract reach the grounded-v1 prompt (vera/trace_eval/capture.py).",
+    "note": "Item #79 (2026-10-07): /ask searches these providers once per accepted question (and, when scope_router.json offtopic_reading_list is true, once with the scholarly-only providers arxiv and openalex for a layer-2 out-of-scope question; with domain routing on that is up to 1 + 2 queries (question plus domain terms, max_domain_branches), still scholarly-only, with link following off and no stored branch). Results with an abstract are used directly; link-only results (DuckDuckGo, news, portals, OpenAlex records without an abstract) are followed to their original scholarly sources under `resolve` (vera/source_resolver.py). Only sources with an abstract reach the grounded-v1 prompt (vera/trace_eval/capture.py).",
     "enabled": true,
     "providers": [
       "arxiv",

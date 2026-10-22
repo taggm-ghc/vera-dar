@@ -6,6 +6,9 @@
     "not_read_line_partial": "VERA-DAR has not acquired or read these full documents, except those marked 'full document stored (not inspected for this answer)'. This is a discovery result, not an evidence-grounded answer.",
     "representation_not_acquired": "index record or abstract; full document not acquired",
     "representation_acquired": "full document stored (not inspected for this answer)",
+    "representation_in_corpus": "in VERA-DAR's collection: full document stored (not inspected for this answer)",
+    "representation_out_of_corpus": "not in VERA-DAR's collection (index record or abstract; full document not acquired)",
+    "not_read_line_all_in_collection": "These documents are in VERA-DAR's collection as stored full documents, but VERA-DAR did not inspect them for this answer. This is a discovery result, not an evidence-grounded answer.",
     "no_sources_fallback": "VERA-DAR could not find published sources for this question right now, so it has not answered from memory. Please try again shortly or rephrase the question.",
     "note_prefix": "Discovery note (not evidence). ",
     "note_template": "For topic {topic}, VERA-DAR identified candidates {candidates} as discovery material. Their full contents were not verified.",
@@ -16,6 +19,10 @@
   "acquisition": {
     "non_document_text_kinds": ["abstract_metadata", "abstract", "snippet", "metadata", "index_record", "fulldoc_chunks"],
     "_note_fulldoc_chunks": "fulldoc_chunks is NOT a non-document text: it is a full document stored as evidence_spans chunks (sources.content empty). It is listed here only so the content-based acquisition paths (DarReader, answer_contract) do not treat the empty sources row as an acquired document."
+  },
+  "acquisition_log": {
+    "note": "WED-ACQ A2 counts-only log: provider names allowed as keys in the count; any other value is counted as 'other'. No identifiers are logged.",
+    "providers": ["arxiv", "openalex", "duckduckgo_lite", "dar_corpus"]
   },
   "memory": {
     "evidence_recall_enabled": false

@@ -88,8 +88,17 @@ def test_unknown_acquisition_shown_as_not_acquired():
     d["candidates"][0]["representation"] = "SENTREP"
     st = render(d)
     t = " ".join(texts(st))
-    assert TEXTS["representation_not_acquired"] in t and "SENTREP" not in t
+    assert TEXTS["representation_out_of_corpus"] in t and "SENTREP" not in t
     assert st.warning.call_args_list[0].args[0] == TEXTS["not_read_line"]
+
+
+def test_in_collection_candidate_is_labelled_in_collection_and_uses_partial_line():  # WED-ACQ A1
+    d = body()
+    d["candidates"].append(dict(d["candidates"][0], acquisition="in_collection", url="https://x.org/c"))
+    st = render(d)
+    t = " ".join(texts(st))
+    assert TEXTS["representation_in_corpus"] in t and TEXTS["representation_out_of_corpus"] in t
+    assert st.warning.call_args_list[0].args[0] == TEXTS["not_read_line_partial"]
 
 
 @pytest.mark.parametrize("kind", [None, "MISSING", "unspecified"])

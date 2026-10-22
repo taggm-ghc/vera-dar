@@ -136,17 +136,19 @@ def _unusable_corpus(cfg, items, code, reason) -> FullDocCorpus:
     return FullDocCorpus(STATUS_UNUSABLE, [], un, {}, None, {}, cfg)
 
 
-def load_from_rows(sources: list, spans: list, cfg: dict, ingest_cfg: dict | None = None) -> FullDocCorpus:
+def load_from_rows(sources: list, spans: list, cfg: dict, ingest_cfg: dict | None = None,
+                   extra_keys: frozenset | set | None = None) -> FullDocCorpus:
     """sources: dicts {source_id, canonical_url, content, content_hash, provenance}; spans: dicts {source_id, start_index,
     end_index, text}. Never raises for bad input: any problem yields corpus_unusable / UNUSABLE entries."""
     try:
-        return _load_rows(list(sources or ()), list(spans or ()), cfg, ingest_cfg)
+        return _load_rows(list(sources or ()), list(spans or ()), cfg, ingest_cfg, extra_keys)
     except Exception as e:  # noqa: BLE001  fail closed
         return _unusable_corpus(cfg, [], R_ERR, f"rows could not be loaded ({type(e).__name__})")
 
 
-def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
+def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None) -> FullDocCorpus:
     icfg = ingest_cfg if ingest_cfg is not None else fulltext_loader.load_config()
+    ek = _EXTRA_KEYS if extra_keys is None else frozenset(extra_keys)  # WED-ACQ2: wider ONLY on the acquired path
     if not sources:
         return _unusable_corpus(cfg, [], R_DBEMPTY, "no chunk-stored documents for the configured run")
     by_src: dict = {}
@@ -215,7 +217,7 @@ def _load_rows(sources, spans, cfg, ingest_cfg) -> FullDocCorpus:
                        "licence_decision": rec["provenance"].get("licence_decision")}
                 if not isinstance(dp, dict) or any(got[k] is None or got[k] != dp.get(k) for k in got):
                     raise _DocPinFail(f"document {did!r} differs from its configured pin")
-            base = {k: v for k, v in prov.items() if k not in _EXTRA_KEYS}
+            base = {k: v for k, v in prov.items() if k not in ek}
             if base != {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}:
                 raise fulltext_loader.Refused(R_DBROW, "stored provenance differs from the re-derived record")
             key = rec["canonical_url"]
@@ -316,10 +318,40 @@ def load_db(connect, run_id, cfg: dict, ingest_cfg: dict | None = None) -> FullD
     if rid is None:
         return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
     try:
-        sources, spans = fetch_rows(connect, rid)
+        sources, spans = _fetch_with_deadline(connect, rid, deadline_s(cfg, "db_load_deadline_s", 30.0))
     except Exception as e:  # noqa: BLE001
         return _unusable_corpus(cfg, [], R_DBCONN, f"rows could not be read ({type(e).__name__})")
     return load_from_rows(sources, spans, cfg, ingest_cfg)
+
+
+class LoadTimeout(Exception):
+    """DIAG-1021: the DB read did not finish within its total deadline (connect, DNS, TLS and queries together)."""
+
+
+def deadline_s(cfg: dict, key: str, default: float) -> float:
+    """A positive number of seconds from config/fulldoc_answer.json `db_bounds` (missing/invalid -> default)."""
+    v = ((cfg or {}).get("db_bounds") or {}).get(key)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else float(default)
+
+
+def _fetch_with_deadline(connect, rid: int, limit_s: float) -> tuple:
+    """DIAG-1021: run fetch_rows in a daemon worker and give up after limit_s, so a hung connect/DNS/TLS/query never
+    blocks the calling thread past the deadline. The abandoned worker ends on its own (statement_timeout, keepalives)."""
+    box: dict = {}
+
+    def work():
+        try:
+            box["ok"] = fetch_rows(connect, rid)
+        except BaseException as e:  # noqa: BLE001
+            box["err"] = e
+    t = threading.Thread(target=work, name="fulldoc-db-load", daemon=True)
+    t.start()
+    t.join(limit_s)
+    if t.is_alive():
+        raise LoadTimeout()
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
 
 
 def default_connect(cfg: dict, env):
@@ -332,7 +364,8 @@ def default_connect(cfg: dict, env):
 
     def connect():
         from sqlalchemy import create_engine
-        eng = create_engine(url, connect_args={"connect_timeout": 5, "options": f"-c statement_timeout={ms}"},
+        eng = create_engine(url, connect_args={"connect_timeout": 5, "options": f"-c statement_timeout={ms}",
+                                               "keepalives": 1, "keepalives_idle": 10, "keepalives_interval": 5, "keepalives_count": 3},  # DIAG-1021: TCP keepalives
                             hide_parameters=True)
         raw = eng.raw_connection()
         orig = raw.close
@@ -353,24 +386,219 @@ _LOCK = threading.Lock()
 FAIL_TTL_S = 30.0
 
 
+_INFLIGHT: dict = {}  # WED-P161: key -> {"done": Event, "result": corpus | None}; single-flight per key
+
+
 def cached_load(connect, run_id, cfg, cache: dict, now=time.monotonic) -> FullDocCorpus:
+    """Single-flight (WED-P161): concurrent first callers for one key share ONE load_db; followers wait on the leader's
+    Event (no lock held while waiting) and take its result. Cache and the short failure cache are unchanged."""
     key = ("db", str(run_id).strip(), json.dumps(cfg.get("pins") or {}, sort_keys=True))
-    with _LOCK:
-        hit = cache.get(key)
-        if hit is not None:
-            return hit
-        f = _FAIL.get(key)
-        if f and now() < f[0]:
-            return f[1]
-    c = load_db(connect, run_id, cfg)
-    with _LOCK:
-        if c.status == STATUS_OK and c.acquired:
-            cache[key] = c
-        else:
-            _FAIL[key] = (now() + FAIL_TTL_S, c)
-    return c
+    while True:
+        with _LOCK:
+            hit = cache.get(key)
+            if hit is not None:
+                return hit
+            f = _FAIL.get(key)
+            if f and now() < f[0]:
+                return f[1]
+            flight = _INFLIGHT.get(key)
+            leader = flight is None
+            if leader:
+                flight = _INFLIGHT[key] = {"done": threading.Event(), "result": None}
+        if not leader:
+            if not flight["done"].wait(deadline_s(cfg, "single_flight_wait_s", 60.0)):  # DIAG-1021: bounded wait
+                return _unusable_corpus(cfg, [], R_DBCONN, "rows could not be read (LoadTimeout)")  # not cached
+            if flight["result"] is not None:
+                return flight["result"]
+            continue  # the leader died without a result: retry (as leader or follower of a new flight)
+        try:
+            c = load_db(connect, run_id, cfg)
+            with _LOCK:
+                if c.status == STATUS_OK and c.acquired:
+                    cache[key] = c
+                else:
+                    _FAIL[key] = (now() + FAIL_TTL_S, c)
+            flight["result"] = c
+            return c
+        finally:
+            with _LOCK:
+                if _INFLIGHT.get(key) is flight:
+                    del _INFLIGHT[key]
+            flight["done"].set()
 
 
 def reset_for_tests() -> None:
     with _LOCK:
         _FAIL.clear()
+
+
+# ------------------------------------------------------------------------------------------------ WED-ACQ2 acquired documents
+# Automatically acquired documents (vera/auto_acquire.py) are stored one document per run, marked in provenance
+# (`acquisition.marker`), and served as a SEPARATE corpus next to the pinned base run (plan s11 V6): the base run's
+# validation and pins are untouched. Each acquired run is verified alone by the same _load_rows with a pins-free cfg,
+# the acquisition label overlay and a wider extra-keys set; any failure makes that ONE document unusable.
+ACQ_EXTRA_KEYS = frozenset(_EXTRA_KEYS | {"acquisition", "isbn", "isbn10"})
+R_ACQINJECT = "R-ACQ-INJECT"
+R_ACQCAP = "R-ACQ-SERVECAP"
+
+SQL_ACQ_FILTER = (f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
+                  f"JOIN {SCHEMA}.candidates d ON d.candidate_id = s.candidate_id "
+                  f"WHERE s.provenance->>'stored_text_kind' = %(kind)s "
+                  f"AND s.provenance->'acquisition'->>'marker' = %(marker)s AND d.run_id <> %(base)s")
+SQL_ACQ_SOURCES = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+                   f"{SQL_ACQ_FILTER} ORDER BY s.source_id DESC LIMIT %(lim)s")
+SQL_ACQ_MAX = f"SELECT max(s.source_id), count(*) {SQL_ACQ_FILTER}"
+
+
+def acquired_signature(connect, base_run_id, marker: str) -> tuple:
+    """(max source_id, count) of marked acquired rows: the cheap refresh probe (one static SELECT, read-only)."""
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        try:
+            r = _select(cur, SQL_ACQ_MAX, {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(base_run_id)})
+        finally:
+            try:
+                cur.close()
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    row = r[0] if r else (None, 0)
+    return (row[0], int(row[1] or 0))
+
+
+def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int) -> tuple:
+    conn = connect()
+    try:
+        cur = conn.cursor()
+        try:
+            srows = _select(cur, SQL_ACQ_SOURCES, {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker),
+                                                   "base": int(base_run_id), "lim": int(limit)})
+            sources = [{"run_id": r[0], "source_id": r[1], "canonical_url": r[2], "content": r[3], "content_hash": r[4],
+                        "provenance": r[5]} for r in srows]
+            ids = [x["source_id"] for x in sources]
+            prow = _select(cur, SQL_SPANS, {"ids": ids}) if ids else []
+            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3]} for r in prow]
+        finally:
+            try:
+                cur.close()
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return sources, spans
+
+
+def load_acquired_rows(sources: list, spans: list, cfg: dict, acq_cfg: dict, ingest_cfg: dict | None = None,
+                       max_docs: int | None = None, max_bytes: int | None = None) -> FullDocCorpus:
+    """One FullDocCorpus of the acquired documents. Never raises. Rows are processed newest first (source_id DESC)
+    so the serve caps keep the most recent acquisitions. A document is served only if its run verifies alone."""
+    try:
+        return _load_acquired(list(sources or ()), list(spans or ()), cfg, acq_cfg, ingest_cfg, max_docs, max_bytes)
+    except Exception as e:  # noqa: BLE001  fail closed
+        return _unusable_corpus(cfg, [], R_ERR, f"acquired rows could not be loaded ({type(e).__name__})")
+
+
+def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes) -> FullDocCorpus:
+    from vera import acq_config
+
+    if ingest_cfg is None:
+        ingest_cfg = acq_config.ingest_cfg(fulltext_loader.load_config(), acq_cfg)
+    b = acq_cfg.get("bounds") or {}
+    max_docs = int(b.get("served_acquired_max", 0) if max_docs is None else max_docs)
+    max_bytes = int(b.get("served_acquired_max_bytes", 0) if max_bytes is None else max_bytes)
+    open_cfg = {k: v for k, v in cfg.items() if k != "pins"}  # pins-free: acquired runs are not part of the bundle
+    by_src: dict = {}
+    for sp in spans:
+        by_src.setdefault(sp.get("source_id"), []).append(sp)
+    runs: dict = {}
+    for row in sorted(sources, key=lambda r: -int(r.get("source_id") or 0)):
+        runs.setdefault(row.get("run_id"), []).append(row)
+    acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
+    seen_keys, seen_hashes, total = set(), set(), 0
+    for rid, rows in runs.items():
+        if len(acquired) >= max_docs:
+            break
+        rspans = [sp for r in rows for sp in by_src.get(r.get("source_id"), [])]
+        bare = [{k: v for k, v in r.items() if k != "run_id"} for r in rows]
+        c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS)
+        unusable.extend(c.unusable)
+        provs = {}
+        for r in rows:
+            try:
+                p = _prov(r)
+            except Exception:  # noqa: BLE001
+                continue
+            if (p.get("acquisition") or {}).get("marker") != acq_cfg.get("marker"):
+                continue
+            provs[p.get("document_id")] = p
+        for a in c.acquired:
+            did = a["document_id"]
+            text = c._texts[did]
+            key = a["canonical_source_id"]
+            if did not in provs:
+                unusable.append(_unusable(did, R_DBROW, "acquired row carries no matching acquisition marker"))
+                continue
+            try:  # WED-P17-VER v2: every JATS licence element, re-decided at read (filters apply to all ingest)
+                from vera import auto_acquire
+                lic = ((provs[did].get("licence") or {}).get("content") or {}).get("id")
+                elements = (provs[did].get("meta") or {}).get("jats_licences")
+                if not isinstance(elements, list):
+                    raise fulltext_loader.Refused(R_DBROW, "acquired row has no licence-element record")
+                auto_acquire.licence_elements_decision(elements, lic, ingest_cfg)
+            except fulltext_loader.Refused as e:
+                unusable.append(_unusable(did, e.code, e))
+                continue
+            if acq_config.injection_refused(text, acq_cfg):  # re-applied at read (filters apply to all ingest)
+                unusable.append(_unusable(did, R_ACQINJECT, "instruction-like text found by the injection scan"))
+                continue
+            n = len(text.encode("utf-8"))
+            if len(acquired) >= max_docs or total + n > max_bytes:
+                unusable.append(_unusable(did, R_ACQCAP, "serve cap reached (documents or bytes)"))
+                continue
+            if key in seen_keys or a["text_sha256"] in seen_hashes or did in texts:
+                unusable.append(_unusable(did, R_DUP, "acquired document duplicated"))
+                continue
+            seen_keys.add(key)
+            seen_hashes.add(a["text_sha256"])
+            total += n
+            texts[did] = text
+            key_to_doc[key] = did
+            p = provs[did]
+            if p.get("isbn"):
+                a = {**a, "isbn": p["isbn"]}
+            acquired.append(a)
+            for d in c._docs_for_dar:
+                if d["source_key"] == key:
+                    docs.append({**d, **({"isbn": p["isbn"]} if p.get("isbn") else {})})
+    if not acquired:
+        out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
+                            {}, None, {}, cfg)
+        out.source_kind = "db"
+        return out
+    dar = DarCorpus(_routing_cfg())
+    for d in docs:
+        dar.ingest_document(d)
+    out = FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs)
+    out.source_kind = "db"
+    return out
+
+
+def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocCorpus:
+    """Never raises: any DB failure => an unusable (empty) acquired corpus; the base corpus is unaffected."""
+    rid = parse_run_id(base_run_id)
+    if rid is None:
+        return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
+    try:
+        lim = int((acq_cfg.get("bounds") or {}).get("served_acquired_max", 0))
+        sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim)
+    except Exception as e:  # noqa: BLE001
+        return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
+    return load_acquired_rows(sources, spans, cfg, acq_cfg)

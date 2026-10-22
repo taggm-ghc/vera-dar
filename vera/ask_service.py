@@ -31,6 +31,9 @@ class AskResult:
     # when the full-document path is not configured) and the answer's citations bound to admitted spans.
     evidence: object | None = None
     citations: tuple = ()
+    # WED-ACQ2 (P1.7): None, or "decline" / "insufficient" when this result should start ONE background acquisition.
+    # Set only while the feature is effectively on; main.py enqueues once, after the provider chain succeeded.
+    acquire_trigger: str | None = None
 
 
 _CHAIN_CONFIG = Path(__file__).resolve().parent.parent / "config" / "ask-provider-chain.json"
@@ -121,10 +124,34 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
-    if not decision.accepted:
-        return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
-                         result_kind="decline")
+    acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
+    if not decision.accepted:
+        trig = None
+        if acq is not None:
+            from vera import acq_config
+            if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
+                    and acq_config.layer2_category_ok(acq, decision)):  # DAR-1021 category gate (fails closed)
+                trig = "decline"
+                if decision.layer != "layer1" and acq_config.override_layer2_declines(acq):  # ships OFF (plan V1)
+                    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True)
+                    if isinstance(out, AskResult):  # DAR-1021 SEC M1: scope notice first; no memory (accepted=False)
+                        pre = acq_config.override_answer_prefix(acq)
+                        return replace(out, answer=f"{pre} {out.answer}" if pre else out.answer, accepted=False,
+                                       contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
+        # DAR-1021 (FIX1 + P1.7): a qualifying layer-2 out-of-scope verdict shows the FIX1 notice + scholarly reading
+        # list AND keeps P1.7's background acquisition trigger (same trig as the refusal would carry). The list itself
+        # never admits anything (sources=()); acquired documents never answer a declined question unless
+        # override_layer2_declines is true (ships false).
+        off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
+        if off is not None:
+            if not trig:
+                return off
+            from vera import acq_config
+            note = acq_config.reading_list_notice(acq)
+            return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, acquire_trigger=trig)
+        return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
+                         result_kind="decline", acquire_trigger=trig)
     from vera import answer_contract as contract
 
     fd = _fulldoc(question, model, pricing, decision, chained, grounding)  # D-055; None = path not configured
@@ -135,7 +162,67 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     return replace(res, answer=text, evidence=ev,
-                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token})
+                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token},
+                   **({"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) else {}))
+
+
+def _acq_cfg_if_on():
+    """The auto_acquire config when the feature is effectively on (flag, kill switch, DB env), else None. Never raises."""
+    import os
+
+    try:
+        from vera import acq_config
+        cfg = acq_config.load_config()
+        return cfg if acq_config.enabled(cfg, os.environ) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _acq_on_insufficient(acq: dict) -> bool:
+    return ((acq.get("triggers") or {}).get("on_insufficient")) is True
+
+
+def _layer1_clean(question: str) -> bool:
+    """plan s11 V1: re-run the layer-1 injection and deny patterns before any acquisition (never trigger on a hit)."""
+    try:
+        from vera import scope_router as sr
+        cfg = sr.load_config()
+        verdict, why = sr.layer1(question, cfg)
+        return not (verdict == sr.DECLINE)
+    except Exception:  # noqa: BLE001  fail closed: no acquisition
+        return False
+
+
+_NO_LIST_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})
+
+
+def _offtopic_reading_list(decision, grounding):
+    """FIX1-1021: a well-formed layer-2 out-of-scope verdict (layer 1 matched nothing) returns a fixed notice plus a
+    scholarly-only reading list instead of the refusal. No model call, no full-document path, no answer. The result
+    carries sources=() and accepted=False so main.py neither admits anything to the corpus nor touches memory.
+    Returns None (caller refuses as before) when the flag is off, the verdict does not qualify or no search seam exists."""
+    from vera import answer_contract as contract
+    from vera import scope_router as sr
+
+    if grounding is None or not sr.offtopic_applies(decision):
+        return None
+    if getattr(decision, "category", "") in _NO_LIST_CATEGORIES:  # DAR-1021 SEC M2: classifier said advice/harm/...
+        return None
+    sources_fn, _cfg = grounding
+    cands = ()
+    try:
+        from vera.grounded_ask import public_candidates
+
+        cands = public_candidates(sources_fn(restricted=True) or [])
+    except Exception as exc:  # noqa: BLE001  (fail closed: the fixed refusal; class only in the log)
+        import logging
+
+        logging.getLogger("vera").warning("off-topic reading list unavailable (%s)", type(exc).__name__)
+        return None
+    notice = sr.offtopic_notice()
+    res = contract.reading_list_result(cands, decision.tokens_used, decision.cost_usd, accepted=False)
+    return replace(res, answer=notice if cands else f"{notice} {res.answer}", sources=(),
+                   contract={**(res.contract or {}), "offtopic": True})
 
 
 def _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=None,
@@ -155,11 +242,31 @@ def _reading_list(question, model, pricing, decision, chained, grounding, contra
     if contract.result_kind_for(candidates) == "answer":  # unreachable: dict candidates never satisfy the L3 seam
         return _answer_grounded(question, model, pricing, sources, cfg, decision, chained)  # (only a grounded
     #                                                       EvidenceBundle does; tests monkeypatch the seam to reach it)
+    _log_acquisition_counts(candidates)
     # L0 reading list: no model call after the router, no fix_citations, no claim check, no claims (C-1)
     return contract.reading_list_result(candidates, tokens, cost, sources=sources)
 
 
-def _fulldoc(question, model, pricing, decision, chained, grounding):
+def _log_acquisition_counts(candidates) -> None:
+    """WED-ACQ A2 (owner decision D2, counts only): one log line with how many listed candidates are not yet in the
+    collection, in total and per search provider. No question, title, URL, identifier or snippet is logged, so the
+    R-028 disclosure ("does not save ... from your questions") stays true. Never fails the request."""
+    import logging
+    from collections import Counter
+
+    from vera import answer_contract as contract
+
+    try:
+        out = [c for c in candidates if c.get("acquisition") == contract.ACQ_NOT_ACQUIRED]
+        allowed = contract.acquisition_log_providers()
+        by = Counter(p if p in allowed else "other" for p in (str(c.get("provider") or "").lower() for c in out))
+        logging.getLogger(__name__).info("acquisition candidates: %s", json.dumps(
+            {"listed": len(candidates), "not_in_collection": len(out), "by_provider": dict(sorted(by.items()))}))
+    except Exception:  # noqa: BLE001  (a counts log never fails the request)
+        pass
+
+
+def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only: bool = False):
     """D-055 Option C: full-document acquisition/verification -> span retrieval -> admission -> generation -> claim
     check. None when the path is not configured (today's behaviour exactly); an AskResult (result_kind "answer") when
     grounded; else (evidence, fallback token, tokens, cost, text) for an explicit insufficient-evidence result.
@@ -176,7 +283,21 @@ def _fulldoc(question, model, pricing, decision, chained, grounding):
             return None
         from vera.fulldoc_admission import admit
 
-        ev = admit(question, corpus, cfg)
+        if acquired_only:  # WED-ACQ2 scope override (ships off): only acquired documents may answer a declined question
+            acq_corpus = fulldoc_corpus.get_acquired_corpus(cfg)
+            ev = admit(question, acq_corpus, cfg) if acq_corpus is not None else None
+            if ev is None or contract.result_kind_for((ev,)) != "answer":
+                return None
+        else:
+            ev = admit(question, corpus, cfg)
+            if contract.result_kind_for((ev,)) != "answer" and ev.status != "corpus_unusable":
+                # WED-ACQ2 (plan V6): base corpus first, exactly as before; the separate acquired corpus is consulted
+                # only when the base corpus cannot answer, so base answers never change.
+                acq_corpus = fulldoc_corpus.get_acquired_corpus(cfg)
+                if acq_corpus is not None:
+                    ev2 = admit(question, acq_corpus, cfg)
+                    if contract.result_kind_for((ev2,)) == "answer":
+                        ev = ev2
     except Exception as exc:  # noqa: BLE001  (fail closed: unusable corpus, no answer; class only in the log)
         logging.getLogger("vera").warning("full-document path unavailable (%s)", type(exc).__name__)
         try:

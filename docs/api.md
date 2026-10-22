@@ -55,7 +55,7 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 
 ### Health details
 
-`GET /health/dar` requires the API key. Besides the readiness details it includes a `fulldoc` block with codes and counts only: `enabled`, `bundle_configured`, `status` (`disabled`, `not_configured`, `ok`, `unusable` or `error`), `n_acquired`, `n_unusable`, `pins_ok` and `source`. Public `GET /health` returns only `status` and `dar`.
+`GET /health/dar` requires the API key. Besides the readiness details it includes a `fulldoc` block with codes and counts only: `enabled`, `bundle_configured`, `status` (`disabled`, `not_configured`, `loading`, `ok`, `unusable` or `error`; `loading` means the startup warm-up of the database-backed corpus is still running, so check again later), `n_acquired`, `n_unusable`, `pins_ok` and `source`. Public `GET /health` returns only `status` and `dar`.
 
 ## Default behaviour
 

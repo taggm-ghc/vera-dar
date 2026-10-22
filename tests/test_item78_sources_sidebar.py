@@ -397,14 +397,14 @@ def test_sidebar_caption_exact_a0(monkeypatch):
     at = AppTest.from_function(_page)
     at.run(timeout=30)
     assert not at.exception
-    assert EXPECTED_CAPTION in [c.value for c in at.sidebar.caption]
+    assert EXPECTED_CAPTION.replace(" " + sb.MODEL_LINE, __import__("vera.disclosure").disclosure.offtopic_sentence() + " " + sb.MODEL_LINE) in [c.value for c in at.sidebar.caption]
 
 
 def test_sidebar_caption_exact_shipped_state():
     at = AppTest.from_function(_page)  # shipped config = state 2 (P1.6)
     at.run(timeout=30)
     assert not at.exception
-    assert sb._HOW_FULLDOC + " " + sb.MODEL_LINE in [c.value for c in at.sidebar.caption]
+    assert sb._HOW_FULLDOC + __import__("vera.disclosure").disclosure.offtopic_sentence() + " " + sb.MODEL_LINE in [c.value for c in at.sidebar.caption]
 
 
 def test_sidebar_has_no_abstract_grounding_claims(monkeypatch):
