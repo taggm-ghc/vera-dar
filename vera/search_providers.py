@@ -16,6 +16,7 @@ money, uses a key, or can be selected by config (an unknown provider name is a S
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import re
@@ -305,11 +306,29 @@ def reconstruct_abstract(inverted: Mapping | None, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars].rstrip() + "..."
 
 
-def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: bool = False) -> tuple[str, str]:
+# ACQ-SEARCH-1021: per-call search profile for the P1.7 acquisition job only (set by vera.auto_acquire.make_search around
+# its own search; default None = the unchanged /ask behaviour). Keys: "filter" (extra OpenAlex filter clause, e.g. works
+# held by PubMed Central, which is where Europe PMC full text comes from), "and_extra_max" (int), "generic_terms" (list).
+OPENALEX_PROFILE: contextvars.ContextVar = contextvars.ContextVar("openalex_search_profile", default=None)
+
+
+def _profile_extra_and(extra, profile: Mapping) -> str:
+    """Acquisition: a question with no core phrase gives an all-OR query that ranks any one common token (the
+    ambiguous 'mma' matched alpha-gal papers). Instead AND the distinctive terms: drop the profile's generic terms
+    (unless that leaves none) and keep at most `and_extra_max` in question order. Deterministic, no model call."""
+    generic = {str(g).lower() for g in profile.get("generic_terms") or ()}
+    terms = [t for t in extra if str(t).lower() not in generic] or list(extra)
+    return " AND ".join(terms[: max(1, int(profile.get("and_extra_max") or 4))])
+
+
+def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: bool = False,
+                          profile: Mapping | None = None) -> tuple[str, str]:
     """-> (OpenAlex `search` string, mode): quoted core phrases AND-ed, AND (OR of the other terms)."""
     if terms_cfg is not None:
         qt = build_query_terms(question, terms_cfg)
         if not qt.empty:
+            if profile and not qt.core and qt.extra and profile.get("and_extra_max"):
+                return _profile_extra_and(qt.extra, profile), qt.mode + "+and"
             parts = [f'"{c}"' for c in qt.core]
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
                 parts = ["(" + " OR ".join(parts) + ")"]
@@ -360,13 +379,15 @@ class OpenAlexProvider:
         return can_relax(query, self.query_terms)
 
     def call(self, query: str, n: int, timeout_s: float):
-        search, mode = build_openalex_search(query, self.query_terms, relaxed=self.relaxed)
+        profile = OPENALEX_PROFILE.get()
+        search, mode = build_openalex_search(query, self.query_terms, relaxed=self.relaxed, profile=profile)
         self.last_query = {"query": search, "mode": mode, **({"relaxed": True} if self.relaxed else {})}
         self._spend()  # every HTTP attempt counts, retries included
-        params = {"search": search,
-                  "filter": f"from_publication_date:{self.s['from_publication_date']},"
-                            f"to_publication_date:{self.s['to_publication_date']}",
-                  "per_page": n, "select": OPENALEX_SELECT}
+        flt = (f"from_publication_date:{self.s['from_publication_date']},"
+               f"to_publication_date:{self.s['to_publication_date']}")
+        if profile and profile.get("filter"):
+            flt += "," + str(profile["filter"])
+        params = {"search": search, "filter": flt, "per_page": n, "select": OPENALEX_SELECT}
         tx = self._transport or openalex_default_transport
         return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
 

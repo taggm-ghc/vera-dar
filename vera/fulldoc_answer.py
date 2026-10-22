@@ -200,18 +200,21 @@ def _metadata_strings(*dict_groups) -> list:
     return out
 
 
-def _bundle_reference(ev, sources, cfg, reference_texts=None):
+def _bundle_reference(ev, sources, cfg, reference_texts=None, reference_corpus=None):
     """(reference texts, metadata strings): the FULL text of every bundle document when the corpus is configured
-    (or `reference_texts` is supplied); else only the admitted passages (the weaker fallback, used by unit tests)."""
+    (or `reference_texts` is supplied); else only the admitted passages (the weaker fallback, used by unit tests).
+    FIX-CCWAIT-1021: `reference_corpus` (the acquired-only path passes the already pinned, already loaded acquired
+    corpus whose documents supplied the evidence) replaces the base-corpus lookup, so that path never waits on or
+    leads the base corpus load, and its verbatim accounting runs against the documents it actually quotes."""
     acquired: list = []
     texts = None
     if reference_texts is not None:
         texts = list(reference_texts.values() if isinstance(reference_texts, dict) else reference_texts)
-    elif isinstance(cfg, dict) and cfg.get("bundle_dir_env"):
+    elif reference_corpus is not None or (isinstance(cfg, dict) and cfg.get("bundle_dir_env")):
         try:
             from vera import fulldoc_corpus
 
-            c = fulldoc_corpus.get_corpus(cfg)
+            c = reference_corpus if reference_corpus is not None else fulldoc_corpus.get_corpus(cfg)
             if c is not None and c.status == fulldoc_corpus.STATUS_OK:
                 acquired = list(c.acquired)
                 texts = [c.text(a["document_id"]) for a in acquired]
@@ -334,7 +337,7 @@ def _clip(t: str, n: int = 160) -> str:
 
 
 def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call, reference_texts, fall, totals,
-                  add_cost=lambda rows: None):
+                  add_cost=lambda rows: None, reference_corpus=None):
     """D8 = A: per-part answering. A part is answered only with >= 1 kept `supported` claim; every other part is
     explicitly marked; >= 1 answered part is required (D7); a partly answered question is never presented as full."""
     from vera.claim_check import RECORDS, USAGE, check_answer
@@ -386,7 +389,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     if vcfg.get("enabled", True):
         from vera.fulldoc_verbatim import VerbatimChecker
 
-        ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts)
+        ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts, reference_corpus)
         checker = VerbatimChecker(ref_texts, meta, vcfg)
     cand = [r for r in records if r.get("part") is not None]
     dropped = 0
@@ -460,7 +463,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
 
 def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_cfg: dict | None, cfg: dict,
            base_tokens: int = 0, base_cost: float = 0.0, complete_fn=None, check_call=None,
-           reference_texts=None) -> FullDocOutcome:
+           reference_texts=None, reference_corpus=None) -> FullDocOutcome:
     fb = cfg["fallback_tokens"]
     tokens, cost = base_tokens, base_cost
 
@@ -493,7 +496,7 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
 
     if per_part_enabled(cfg):  # D8 = A: per-part marker handler replaces the whole-draft substring rule
         return _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call, reference_texts, fall,
-                             lambda: (tokens, cost), add_cost)
+                             lambda: (tokens, cost), add_cost, reference_corpus)
     marker = cfg["answer"].get("insufficient_marker")
     if marker and marker in (res.answer or ""):  # the model judged the passages off-question: no answer, no check call
         return fall(fb.get("model_insufficient") or fb["insufficient"])  # C2 (F14): its own token for the marker branch
@@ -521,7 +524,7 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
     if vcfg.get("enabled", True):
         from vera.fulldoc_verbatim import VerbatimChecker
 
-        ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts)
+        ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts, reference_corpus)
         checker = VerbatimChecker(ref_texts, meta, vcfg)
     kept, profs, dropped = enforce_verbatim(records, sources, checker, cfg)
     if cfg["answer"].get("require_supported_claim", True):  # D7 (POL hook): >= 1 fully supported claim, else fall back

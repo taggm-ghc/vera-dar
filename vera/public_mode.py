@@ -160,7 +160,14 @@ def upstream_base_url(env=None, local_url_file: Path | None = None) -> str:
     return DEFAULT_LOCAL_URL
 
 
-def post_ask(base_url: str, question: str, mode: str, api_key: str, timeout: int = 60):  # #79: search + link following
+# DAR-1021-ASKDIAG: client wait for POST /ask. Liveness bound, not a decision threshold. 60 s was below the server's
+# bounded worst case on a cold or warming process (classifier 20 s + base-corpus single-flight wait 60 s + search
+# 10 s, before any answer or claim-check call), so a slow answer surfaced as "service unavailable". 180 s covers
+# that sum with margin; lower it once live /ask latencies are measured in the API log.
+ASK_TIMEOUT_S = 180
+
+
+def post_ask(base_url: str, question: str, mode: str, api_key: str, timeout: int = ASK_TIMEOUT_S):  # #79: search + link following
     """Single place the key is attached to an outgoing request. `api_key` is server-side (public)
     or typed by the user (dev); the caller decides, this never reads a widget."""
     return requests.post(

@@ -278,8 +278,10 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
 
     try:
         cfg = fulldoc_corpus.load_config()
-        corpus = fulldoc_corpus.get_corpus(cfg)
-        if corpus is None:
+        # DAR-1021-ASKDIAG: the acquired-only branch never reads the base corpus, so it must not wait on its load
+        # (startup warm-up follower wait up to db_bounds.single_flight_wait_s, or a synchronous DB read + CPU build).
+        corpus = None if acquired_only else fulldoc_corpus.get_corpus(cfg)
+        if (not fulldoc_corpus.flag_enabled(cfg)) if acquired_only else corpus is None:
             return None
         from vera.fulldoc_admission import admit
 
@@ -315,7 +317,9 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
 
     out = fulldoc_answer.answer(question, ev, model, pricing, chained=chained,
                                 grounding_cfg=grounding[1] if grounding else None, cfg=cfg,
-                                base_tokens=decision.tokens_used, base_cost=decision.cost_usd)
+                                base_tokens=decision.tokens_used, base_cost=decision.cost_usd,
+                                # FIX-CCWAIT-1021: the claim check's verbatim reference is the acquired corpus itself
+                                reference_corpus=acq_corpus if acquired_only else None)
     if out.result is not None and out.result.result_kind == "answer":
         return replace(out.result, evidence=ev, accepted=True,
                        contract={"layers": contract.layers(), "fallback": None})

@@ -285,3 +285,154 @@ def test_c1_verdict_word_variants_removed():
     for w in ("off-topic", "offtopic", "Off Topic", "in-scope", "inscope", "categories"):
         user = sr.classifier_messages(f"boxing {w} mma", sr.load_config())[1]["content"]
         assert w.lower() not in user.lower() and "boxing" in user
+
+
+# ------------------------------------------------------------------------------------------------ DAR-1021-ASKDIAG
+def _no_base_load(monkeypatch):
+    from vera import fulldoc_corpus
+
+    calls = []  # _fulldoc swallows exceptions, so record calls instead of raising
+
+    def spy(*a, **k):
+        calls.append(1)
+        return None
+    monkeypatch.setattr(fulldoc_corpus, "get_corpus", spy)
+    return calls
+
+
+def test_askdiag_override_reading_list_never_waits_on_base_corpus(h, monkeypatch):
+    h.bundle(docs=BASE_NO_EPI)
+    h.install()
+    _serve(monkeypatch, None)  # nothing acquired yet (the first ask)
+    _override(monkeypatch, True)
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:sports", "off_topic")
+    base = _no_base_load(monkeypatch)
+    s = Search()
+    r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and s.calls == [True] and base == []
+
+
+def test_askdiag_override_answer_from_acquired_never_waits_on_base_corpus(h, monkeypatch):
+    h.bundle(docs=BASE_NO_EPI)
+    h.install()
+    acq, _ = _acquired_corpus()
+    _serve(monkeypatch, acq)
+    _override(monkeypatch, True)
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
+    base = _no_base_load(monkeypatch)
+    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    assert r.result_kind == "answer" and r.accepted is False and r.contract["acquired_only"] is True
+    assert all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
+    # FIX-CCWAIT-1021: neither admission nor the claim-check reference (fulldoc_answer._bundle_reference) loads,
+    # waits on or leads the base corpus on the acquired-only path
+    assert base == []
+
+
+def _spy_verbatim(monkeypatch):
+    from vera import fulldoc_verbatim
+
+    seen = []
+    real = fulldoc_verbatim.VerbatimChecker
+
+    class Spy(real):
+        def __init__(self, refs, meta, vcfg):
+            seen.append((list(refs), list(meta)))
+            super().__init__(refs, meta, vcfg)
+    monkeypatch.setattr(fulldoc_verbatim, "VerbatimChecker", Spy)
+    return seen
+
+
+def test_ccwait_acquired_only_reference_is_the_acquired_corpus_full_text(h, monkeypatch):
+    """The verbatim accounting on the acquired-only path runs against the FULL text of the acquired documents that
+    supplied the evidence (not base-bundle texts, not only the admitted passages), with no base-corpus call."""
+    h.bundle(docs=BASE_NO_EPI)
+    h.install()
+    acq, _ = _acquired_corpus()
+    _serve(monkeypatch, acq)
+    _override(monkeypatch, True)
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
+    base = _no_base_load(monkeypatch)
+    seen = _spy_verbatim(monkeypatch)
+    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    assert r.result_kind == "answer" and r.contract["acquired_only"] is True and base == []
+    assert seen, "the verbatim checker must still run on the acquired-only path"
+    refs, _meta = seen[-1]
+    full = [acq.text(a["document_id"]) for a in acq.acquired]
+    assert full and all(t in refs for t in full)  # every acquired document's full text is in the reference
+    assert all(a["document_id"].startswith("acq-") for a in acq.acquired)
+    # citations still come only from the acquired documents' admitted passages
+    assert r.citations and all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
+
+
+def test_ccwait_bundle_reference_prefers_supplied_corpus_and_never_calls_get_corpus(monkeypatch):
+    from types import SimpleNamespace
+
+    from vera import fulldoc_answer, fulldoc_corpus
+
+    base = _no_base_load(monkeypatch)
+    corp = SimpleNamespace(status=fulldoc_corpus.STATUS_OK, acquired=[{"document_id": "acq-1", "title": "Acq Title"}],
+                           text=lambda did: {"acq-1": "FULL ACQUIRED TEXT"}[did])
+    src = [{"n": 1, "snippet": "passage", "title": "Acq Title"}]
+    texts, meta = fulldoc_answer._bundle_reference(SimpleNamespace(), src, {"bundle_dir_env": "X"}, None, corp)
+    assert texts == ["FULL ACQUIRED TEXT", "passage"] and "Acq Title" in meta and base == []
+    # fail closed: a corpus that cannot supply text degrades to the admitted passages (still a check), no base call
+    bad = SimpleNamespace(status=fulldoc_corpus.STATUS_OK, acquired=[{"document_id": "acq-1"}],
+                          text=lambda did: (_ for _ in ()).throw(RuntimeError("x")))
+    texts, _ = fulldoc_answer._bundle_reference(SimpleNamespace(), src, {"bundle_dir_env": "X"}, None, bad)
+    assert texts == ["passage"] and base == []
+    # the base path (no supplied corpus) still consults the base corpus exactly as before
+    fulldoc_answer._bundle_reference(SimpleNamespace(), src, {"bundle_dir_env": "X"})
+    assert base == [1]
+
+
+def test_ccwait_base_path_reference_unchanged(h, monkeypatch):
+    """In-scope (base) answers keep the base-corpus reference: answer() receives no reference_corpus."""
+    from vera import fulldoc_answer
+
+    got = []
+    real = fulldoc_answer.answer
+
+    def spy(*a, **k):
+        got.append(k.get("reference_corpus"))
+        return real(*a, **k)
+    monkeypatch.setattr(fulldoc_answer, "answer", spy)
+    h.bundle()
+    h.install()
+    ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    assert got == [None]
+
+
+def test_askdiag_override_respects_fulldoc_flag_off(h, monkeypatch):
+    from vera import fulldoc_corpus
+    h.bundle(docs=BASE_NO_EPI)
+    h.install()
+    acq, _ = _acquired_corpus()
+    _serve(monkeypatch, acq)
+    _override(monkeypatch, True)
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
+    real = fulldoc_corpus.load_config
+    monkeypatch.setattr(fulldoc_corpus, "load_config", lambda *a, **k: {**real(*a, **k), "fulldoc": {"enabled": False}})
+    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    assert r.result_kind == "reading_list" and r.evidence is None
+
+
+@pytest.mark.parametrize("fd,want", [({"enabled": True}, True), ({"enabled": "on"}, True), ({"enabled": False}, False),
+                                     ({"enabled": "maybe"}, False), ({}, False), (None, False)])
+def test_askdiag_flag_enabled_matches_get_corpus_allowlist(fd, want):
+    from vera import fulldoc_corpus
+    assert fulldoc_corpus.flag_enabled({} if fd is None else {"fulldoc": fd}) is want
+
+
+def test_askdiag_ui_timeout_covers_server_bounds(monkeypatch):
+    from pathlib import Path
+
+    from vera import public_mode
+    root = Path(__file__).resolve().parents[1]
+    l2 = json.loads((root / "config/scope_router.json").read_text())["layer2"]["timeout_s"]
+    bounds = json.loads((root / "config/fulldoc_answer.json").read_text())["db_bounds"]
+    search = json.loads((root / "config/ask-provider-chain.json").read_text())["grounding"]["deadline_s"]
+    assert public_mode.ASK_TIMEOUT_S > l2 + bounds["single_flight_wait_s"] + search
+    seen = {}
+    monkeypatch.setattr(public_mode.requests, "post", lambda url, **k: seen.update(k) or "R")
+    assert public_mode.post_ask("http://x.invalid", "q", "normal", "k") == "R"
+    assert seen["timeout"] == public_mode.ASK_TIMEOUT_S

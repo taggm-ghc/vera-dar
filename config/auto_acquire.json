@@ -36,6 +36,12 @@
       "openalex"
     ],
     "_providers_note": "plan D-3 + s11 V9: openalex only by default (Europe PMC refuses preprints, so arXiv candidates yield nothing; add \"arxiv\" to opt in); duckduckgo_lite excluded (no DOI/licence, shared daily cap, query-keyed cache). Provider instances are the /ask chain's cached instances (shared rate gates).",
+    "openalex_profile": {
+      "_note": "ACQ-SEARCH-1021 (acquisition only; /ask unchanged). filter: OpenAlex works held by PubMed Central (source S2764455111), the only place Europe PMC full text comes from. and_extra_max/generic_terms: when the question has no core phrase, AND the distinctive terms instead of OR-ing every token (OR let ambiguous 'mma' match alpha-gal papers). No model call. Remove the block to restore the previous query.",
+      "filter": "locations.source.id:S2764455111",
+      "and_extra_max": 4,
+      "generic_terms": ["key", "main", "major", "differences", "difference", "different", "compare", "compared", "comparison", "similarities", "similar", "versus", "vs", "best", "better", "good", "bad", "common", "important", "types", "type", "kinds", "work", "works", "cause", "causes", "effect", "effects", "role", "impact", "know", "tell", "explain", "describe", "give", "make", "get"]
+    },
     "results_per_provider": 10,
     "timeout_s": 20,
     "max_calls_per_provider_per_job": 1

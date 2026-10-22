@@ -1,0 +1,76 @@
+{
+ "results": [
+  {
+   "id": "https://openalex.org/W4386356269",
+   "doi": "https://doi.org/10.1097/iop.0000000000002510",
+   "title": "Eye Trauma in Mixed Martial Arts and Boxing",
+   "publication_date": "2023-09-01",
+   "publication_year": 2023,
+   "type": "article",
+   "primary_location": {
+    "is_oa": false,
+    "license": null,
+    "license_id": null,
+    "source": {
+     "id": "https://openalex.org/S49137649",
+     "display_name": "Ophthalmic Plastic and Reconstructive Surgery",
+     "is_oa": false
+    }
+   }
+  },
+  {
+   "id": "https://openalex.org/W4410873508",
+   "doi": "https://doi.org/10.1038/s41598-025-02492-z",
+   "title": "Changes in the rheological properties of blood in combat sports athletes (boxing vs MMA)",
+   "publication_date": "2025-05-29",
+   "publication_year": 2025,
+   "type": "article",
+   "primary_location": {
+    "is_oa": true,
+    "license": "cc-by-sa",
+    "license_id": "https://openalex.org/licenses/cc-by-sa",
+    "source": {
+     "id": "https://openalex.org/S196734849",
+     "display_name": "Scientific Reports",
+     "is_oa": true
+    }
+   }
+  },
+  {
+   "id": "https://openalex.org/W4393997148",
+   "doi": "https://doi.org/10.1371/journal.pone.0301229",
+   "title": "Indonesian martial artists’ preferences in martial arts schools: Sustaining business competitiveness through conjoint analysis",
+   "publication_date": "2024-04-05",
+   "publication_year": 2024,
+   "type": "article",
+   "primary_location": {
+    "is_oa": true,
+    "license": "cc-by",
+    "license_id": "https://openalex.org/licenses/cc-by",
+    "source": {
+     "id": "https://openalex.org/S202381698",
+     "display_name": "PLoS ONE",
+     "is_oa": true
+    }
+   }
+  },
+  {
+   "id": "https://openalex.org/W4406597945",
+   "doi": "https://doi.org/10.1038/s41598-025-86432-x",
+   "title": "Exploring the mechanisms influencing psychological adaptation in athletes in high-risk sports: a moderated mediation model",
+   "publication_date": "2025-01-17",
+   "publication_year": 2025,
+   "type": "article",
+   "primary_location": {
+    "is_oa": true,
+    "license": "cc-by-nc-nd",
+    "license_id": "https://openalex.org/licenses/cc-by-nc-nd",
+    "source": {
+     "id": "https://openalex.org/S196734849",
+     "display_name": "Scientific Reports",
+     "is_oa": true
+    }
+   }
+  }
+ ]
+}

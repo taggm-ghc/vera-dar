@@ -195,7 +195,13 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None):
         provs = [p for p in chain if getattr(p, "name", None) in names]
         if not provs:
             return []
-        return search_and_clear(search_fn or search_and_fetch.search_question, provs, question, n, timeout_s)
+        # ACQ-SEARCH-1021: acquisition-only OpenAlex profile (config search.openalex_profile); /ask never sets it.
+        from vera import search_providers
+        tok = search_providers.OPENALEX_PROFILE.set((cfg.get("search") or {}).get("openalex_profile") or None)
+        try:
+            return search_and_clear(search_fn or search_and_fetch.search_question, provs, question, n, timeout_s)
+        finally:
+            search_providers.OPENALEX_PROFILE.reset(tok)
     return search
 
 

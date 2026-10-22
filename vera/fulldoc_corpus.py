@@ -441,6 +441,15 @@ def _label_bundle(c):
     return c
 
 
+def flag_enabled(cfg: dict | None) -> bool:
+    """The fulldoc.enabled check of get_corpus alone (strict allowlist, absent = off). No I/O, never raises."""
+    fd = cfg.get("fulldoc") if isinstance(cfg, dict) else None
+    if not isinstance(fd, dict) or "enabled" not in fd:
+        return False
+    en = fd["enabled"]
+    return en is True or str(en).strip().lower() in ("true", "1", "yes", "on")
+
+
 def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
     """None when the path is disabled (fulldoc.enabled is false, or the env var is unset/empty): /ask then behaves exactly
     as before. An absent `fulldoc` / `enabled` key counts as DISABLED (fail closed, ON-1020-FIX-1); only an explicit
