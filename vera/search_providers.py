@@ -131,7 +131,8 @@ def licence_record(metadata: dict | None = None, content: dict | None = None) ->
 def arxiv_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for arXiv. Tests patch this to raise; nothing else may import requests."""
     import requests
-    return requests.get(url, params=params, headers=headers, timeout=timeout)
+    from vera import rate_limit  # RATE-1022 A1
+    return rate_limit.limited("arxiv", requests.get)(url, params=params, headers=headers, timeout=timeout)
 
 
 def _stamp(date_iso: str, end: bool) -> str:
@@ -288,7 +289,8 @@ OPENALEX_SELECT = "id,doi,title,publication_year,publication_date,primary_locati
 def openalex_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for OpenAlex. Tests patch this (and requests.get) to raise."""
     import requests
-    return requests.get(url, params=params, headers=headers, timeout=timeout)
+    from vera import rate_limit  # RATE-1022 A2
+    return rate_limit.limited("openalex", requests.get)(url, params=params, headers=headers, timeout=timeout)
 
 
 def openalex_api_key(settings: Mapping | None = None, env: Mapping | None = None) -> str | None:
@@ -532,7 +534,9 @@ def acq_prefilter(cand: Mapping) -> str | None:
 def europepmc_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for the acquisition Europe PMC search. Tests patch this (or requests.get)."""
     import requests
-    return requests.get(url, params=params, headers=headers, timeout=timeout, allow_redirects=False)
+    from vera import rate_limit  # RATE-1022 A3 (search and id lookup)
+    return rate_limit.limited("europepmc", requests.get)(url, params=params, headers=headers, timeout=timeout,
+                                                         allow_redirects=False)
 
 
 def build_europepmc_query(question: str, terms_cfg: Mapping | None, profile: Mapping | None, suffix: str) -> str:
@@ -577,6 +581,17 @@ def europepmc_search(question: str, n: int, timeout_s: float, ecfg: Mapping, *, 
         if len(out) >= n:
             break
     return out
+
+
+def _or_differs(question: str, terms_cfg, profile, suffix: str) -> bool:
+    """DAR-TRACE-1022 review M3: True only when the OR (profile None) Europe PMC query differs from the AND one."""
+    if not profile:
+        return False
+    try:
+        return build_europepmc_query(question, terms_cfg, None, suffix) != build_europepmc_query(question, terms_cfg,
+                                                                                                  profile, suffix)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _cand_ids(c: Mapping) -> set:
@@ -757,8 +772,8 @@ def _ddg_cand(r: Mapping, doi: str, pmcid, kind: str) -> dict:
 
 
 def acq_source(c: Mapping) -> str:
-    if c.get("acq_source") == "ddg":
-        return "ddg"
+    if c.get("acq_source") in ("ddg", "wikipedia_portal"):  # WIKIREF-1022 edit 2
+        return c["acq_source"]
     return "epmc" if c.get("provider") == "europepmc" else "openalex"
 
 
@@ -767,6 +782,8 @@ def acq_rank_tier(c: Mapping) -> int:
     (Europe PMC refuses preprints, so the unchanged resolver cannot yield them), everything else in between."""
     if c.get("acq_source") == "ddg":
         return 2 if c.get("ddg_id_kind") == "arxiv" else 0
+    if c.get("acq_source") == "wikipedia_portal":  # WIKIREF-1022 edit 2: arXiv refs last, others scholarly tier
+        return 2 if c.get("ref_id_kind") == "arxiv" else 1
     return 1
 
 
@@ -828,6 +845,13 @@ class _QuotaGate:
 _QUOTA = _QuotaGate()
 
 
+def _is_rate_skip(e: Exception) -> bool:
+    """RATE-1022: a portal skip (vera.rate_limit.RateLimited, or the search chain's 'rate_limited (...; not an
+    attempt)' note): nothing was sent, so it is never a 429 and never starts the fallback quota cooldown."""
+    from vera import rate_limit
+    return isinstance(e, rate_limit.RateLimited) or "not an attempt" in str(e).lower()
+
+
 def _is_quota_error(e: Exception) -> bool:
     t = str(e).lower()
     return bool(re.search(r"\b429\b", t)) or "rate limit" in t or "budget" in t or "quota" in t
@@ -840,10 +864,17 @@ def _default_ddg_search(cfg: Mapping) -> Callable:
     return auto_acquire.make_search({**cfg, "search": s})  # the shared /ask DDG instance: its cache, cap and gate
 
 
+def _wiki_cfg() -> dict:
+    """config/wiki_ref_portal.json (fails closed to {"enabled": False}). One seam so the offline suite can keep the
+    portal off unless a test opts in."""
+    from vera import wiki_ref_portal
+    return wiki_ref_portal.load_config()
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
-                       clock: Callable | None = None) -> Callable:
+                       clock: Callable | None = None, wiki_get: Callable | None = None) -> Callable:
     """Wrap the acquisition job's search (vera.auto_acquire.make_search): DuckDuckGo Lite (config search.ddg_first),
     OpenAlex and Europe PMC run CONCURRENTLY within the same timeout, merged DDG first. Search calls are counted
     against bounds.max_search_calls_per_job: OpenAlex 2 (AND profile + OR retry; else 1), then DuckDuckGo 1, Europe
@@ -860,23 +891,38 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     left -= 1 if use_ddg else 0
     use_epmc = ecfg.get("enabled") is True and left >= 1
     left -= 1 if use_epmc else 0
+    from vera import wiki_ref_portal  # WIKIREF-1022 edit 1: Wikipedia as a reference portal (never evidence)
+    wcfg = _wiki_cfg()
+    use_wiki = wiki_ref_portal.enabled(wcfg) and left >= 1
+    left -= 1 if use_wiki else 0
     lookup_left = left
+    if use_wiki and wiki_get is None:
+        import requests
+        from vera import rate_limit
+        wiki_get = rate_limit.limited("wikipedia", requests.get)
 
     def search(question, n, timeout_s):
         import concurrent.futures as cf
         t_end = clock() + float(timeout_s)
         futs = {}
-        pool = cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="acq-search")
+        terms, profile = None, None
+        pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
-            if use_ddg:
-                futs["ddg"] = pool.submit(ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
+            if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context (the inline rate-limit deadline)
+                futs["ddg"] = pool.submit(contextvars.copy_context().run, ddg_search or _default_ddg_search(cfg),
+                                          question, n, timeout_s)
             if use_epmc:
                 try:
                     terms, profile = (terms_fn or (lambda: _default_terms_and_profile(cfg)))()
                 except Exception:  # noqa: BLE001
                     terms, profile = None, None
-                futs["epmc"] = pool.submit(europepmc_search, question, int(ecfg.get("page_size", n)), float(timeout_s),
+                futs["epmc"] = pool.submit(contextvars.copy_context().run, europepmc_search, question,
+                                           int(ecfg.get("page_size", n)), float(timeout_s),
                                            ecfg, terms_cfg=terms, profile=profile, transport=transport)
+            if use_wiki:
+                futs["wiki"] = pool.submit(contextvars.copy_context().run,
+                                           wiki_ref_portal.make_portal_search(wcfg, http_get=wiki_get),
+                                           question, n, timeout_s)
         finally:
             pool.shutdown(wait=False)
         counts = {}
@@ -890,27 +936,47 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 base = list(base_search(question, n, timeout_s) or [])
             except Exception as e:  # noqa: BLE001
                 base_err = e
-                if _is_quota_error(e):
+                if _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
+                    counts["openalex_skipped_quota"] = 1
+                elif _is_quota_error(e):
                     counts["openalex_429"] = 1
+                    # INT-1022-B: kept as a FALLBACK (spec D1 option 1) for injected searches that bypass the adapter;
+                    # on the live path the adapter cools down from Retry-After/headers as well.
                     _QUOTA.block(clock(), float(s.get("openalex_quota_cooldown_s", 900)))
             finally:
                 OPENALEX_OA_FIELDS.reset(tok)
         got = {}
+        epmc_ok = False
         for k, f in futs.items():
             try:
                 got[k] = list(f.result(timeout=max(0.1, t_end - clock())) or [])
+                epmc_ok = epmc_ok or k == "epmc"
             except Exception as e:  # noqa: BLE001  (timeout, transport or parse error: the other sources stand)
                 got[k] = []
                 if _is_quota_error(e):
                     counts[f"{k}_429"] = 1
+        sfx = str(ecfg.get("query_suffix") or "")
+        if (use_epmc and epmc_ok and not got.get("epmc") and not got.get("ddg") and lookup_left >= 1
+                and t_end - clock() > 1 and _or_differs(question, terms, profile, sfx)):
+            # DAR-TRACE-1022: the AND query SUCCEEDED with 0 hits -> ONE Europe PMC retry with the plain OR query
+            # (profile None), in the id-lookup slot, used only when DDG returned nothing (so no lookup can need it).
+            # Review M3: never after a failed first call (429/error/timeout), never when the OR query is identical.
+            try:
+                got["epmc"] = list(europepmc_search(question, int(ecfg.get("page_size", n)),
+                                                    max(1.0, t_end - clock()), ecfg, terms_cfg=terms, profile=None,
+                                                    transport=transport) or [])
+                counts["epmc_or_retry"] = 1
+            except Exception as e:  # noqa: BLE001
+                if _is_quota_error(e):
+                    counts["epmc_429"] = 1
         ddg = []
         if got.get("ddg"):
             ddg, dcounts = ddg_to_candidates(got["ddg"], ecfg, dcfg, deadline=t_end, clock=clock,
                                             calls_left=lookup_left, transport=transport, get=get, url_check=url_check)
             counts.update(dcounts)
-        if base_err is not None and not ddg and not got.get("epmc"):
+        if base_err is not None and not ddg and not got.get("epmc") and not got.get("wiki"):
             raise base_err
-        merged = merge_sources(ddg, base, got.get("epmc"))
+        merged = merge_sources(ddg, base, got.get("epmc"), got.get("wiki"))  # DDG first; portal refs last
         by = {}
         for c in merged:
             by[acq_source(c)] = by.get(acq_source(c), 0) + 1
@@ -918,7 +984,13 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         logging.getLogger("vera.auto_acquire").info(
             "autoacq sources %s", " ".join(f"{k}={v}" for k, v in sorted({**counts, **{f"cand_{k}": v for k, v in by.items()},
                                                                          "openalex_raw": len(base),
-                                                                         "epmc_raw": len(got.get("epmc") or ())}.items())))
+                                                                         "epmc_raw": len(got.get("epmc") or ()),
+                                                                         "wiki_raw": len(got.get("wiki") or ())}.items())))
+        try:  # RATE-1022 E2: portal names and counters only
+            from vera import rate_limit
+            logging.getLogger("vera.auto_acquire").info("autoacq %s", rate_limit.get_registry().log_line())
+        except Exception:  # noqa: BLE001  telemetry never breaks the search
+            pass
         return merged
     return search
 
@@ -936,7 +1008,8 @@ COST_BASIS_DOAJ = "keyless_doaj"
 def doaj_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for DOAJ. Tests patch this (and requests.get) to raise."""
     import requests
-    return requests.get(url, params=params, headers=headers, timeout=timeout)
+    from vera import rate_limit  # RATE-1022 A4
+    return rate_limit.limited("doaj", requests.get)(url, params=params, headers=headers, timeout=timeout)
 
 
 def _doaj_words(question: str, terms_cfg: Mapping | None) -> tuple[list[str], list[str], str]:
@@ -1099,7 +1172,10 @@ _IP_LITERAL = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}|\[.*\]|.*:.*)$")
 def ddg_default_transport(url: str, data: dict, headers: dict, timeout: float):
     """THE one real network call for DuckDuckGo Lite. Tests patch this (and requests.post) to raise."""
     import requests
-    return requests.post(url, data=data, headers=headers, timeout=timeout)
+    from vera import rate_limit  # RATE-1022 A5: a 200 challenge page is a throttle; 202 via throttle_statuses
+    return rate_limit.limited("duckduckgo", requests.post,
+                              classify=lambda r: DuckDuckGoLiteProvider._is_challenge(r.text or ""))(
+        url, data=data, headers=headers, timeout=timeout)
 
 
 def _domain_of(host: str) -> str:

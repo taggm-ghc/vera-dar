@@ -194,14 +194,29 @@ def test_max_docs_per_job_and_max_candidates_resolved():
 
 
 def test_daily_cap_from_the_database_count_and_fail_closed_lookup():
-    out, store, web = _run(lookup=A.Lookup(day=20))
+    # DAR-TRACE-1022: the shipped cap is null (owner 2026-10-22); a configured number still works and fails closed
+    out, store, web = _run(lookup=A.Lookup(day=20), c=A.cfg(docs_per_day=20))
     assert out["codes"] == {"R-ACQ-DAILY": 1} and web.urls == []
 
     class Broken(A.Lookup):
         def docs_last_24h(self):
             raise RuntimeError("db down")
-    out, _, web = _run(lookup=Broken())
+    out, _, web = _run(lookup=Broken(), c=A.cfg(docs_per_day=20))
     assert out["codes"] == {"R-ACQ-DAILY": 1} and web.urls == []
+
+
+def test_no_daily_cap_when_docs_per_day_is_null_and_the_count_is_never_read():
+    """OWNER DECISION 2026-10-22 ("abolish the 20-a-day limit"): null = unlimited; a failed or huge DB count no longer
+    blocks acquisition (the count is not read); max_docs_per_job still bounds the job."""
+    assert A.cfg()["bounds"]["docs_per_day"] is None  # the shipped value
+
+    class Broken(A.Lookup):
+        def docs_last_24h(self):
+            raise RuntimeError("must not be read")
+    out, store, _ = _run(lookup=Broken())
+    assert out["stored"] == 1 and "R-ACQ-DAILY" not in out["codes"]
+    out, store, _ = _run(lookup=A.Lookup(day=10 ** 6))
+    assert out["stored"] == 1
 
 
 def test_job_deadline_stops_the_job():

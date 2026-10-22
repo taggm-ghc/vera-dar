@@ -451,7 +451,9 @@ def health():
 def health_dar():
     """Full DAR readiness (migrations, codes, corpus counts). Behind the same API key as /corpus-summary."""
     try:
-        return {**dar_health.cached_readiness(), "fulldoc": dar_health._fulldoc_status()}
+        from vera import rate_limit  # RATE-1022 E1: authenticated route only; portal names and counters, no hosts/keys
+        return {**dar_health.cached_readiness(), "fulldoc": dar_health._fulldoc_status(),
+                "rate_limits": rate_limit.health_aggregates()}
     except Exception:  # noqa: BLE001
         return {"dar": None, "reason_code": "health_error"}
 

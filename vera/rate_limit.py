@@ -682,3 +682,19 @@ def httpx_transport(portal: str, inner=None, *, registry: Registry | None = None
             self.inner.close()
 
     return _LimitedTransport(inner)
+
+
+def openai_http_client(base_url: str | None, timeout_s: float):
+    """INT-1022-B (RATE-1022 A9/A10): an httpx.Client for an OpenAI-SDK client whose base URL maps to a configured
+    portal (groq, openrouter), else None (the SDK's own client; never an error at request time). Config errors fail
+    open to None here: a broken rate-limit file must not take the model chain down (the release gate validates it)."""
+    if not base_url:
+        return None
+    try:
+        ad = get_registry().portal_for_url(base_url)
+    except RateLimitConfigError:
+        return None
+    if ad is None or not ad.c.get("enabled", True):  # a disabled portal is a pure pass-through: the SDK's own client
+        return None
+    import httpx
+    return httpx.Client(transport=httpx_transport(ad.name), timeout=timeout_s)

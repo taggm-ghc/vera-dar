@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from vera import acq_config
+from vera import acq_config, rate_limit
 
 logger = logging.getLogger("vera.autoacq")
 CODE_VERSION = "wed-acq2-p17-1"
@@ -286,7 +286,9 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
         wo.dispose()
         ro.dispose()
 
-    return Deps(search=search, http_get=requests.get, lookup=RoLookup(ro, cfg), store=WoStore(wo, ro, cfg),
+    # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); other hosts pass through.
+    return Deps(search=search, http_get=rate_limit.limited_by_url(requests.get), lookup=RoLookup(ro, cfg),
+                store=WoStore(wo, ro, cfg),
                 corpus_keys=keys, url_check=selective_fetch.is_public_url, refresh=refresh, close=close)
 
 
@@ -294,6 +296,19 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
 def _fd_cfg() -> dict:
     from vera import fulldoc_corpus
     return fulldoc_corpus.load_config()
+
+
+def rank_question(question: str, cfg: dict | None) -> str:
+    """DAR-TRACE-1022: the question with the acquisition profile's generic terms (search.openalex_profile.generic_terms:
+    "different", "types", "key", ...) removed, for the pre-fetch ORDER only. Unchanged when nothing distinctive would
+    remain. The relevance gate itself still scores the full question."""
+    generic = {str(g).lower() for g in (((cfg or {}).get("search") or {}).get("openalex_profile") or {}).get(
+        "generic_terms") or ()}
+    if not generic:
+        return question
+    words = re.findall(r"\S+", str(question or ""))
+    kept = [w for w in words if re.sub(r"[^\w-]", "", w).lower() not in generic]
+    return " ".join(kept) if len(kept) < len(words) and kept else question
 
 
 def prerank_score(question: str, cand: dict, fdcfg: dict) -> float:
@@ -326,6 +341,14 @@ def _doi(c: dict) -> str | None:
     d = str(c.get("doi") or "").strip().lower()
     d = re.sub(r"^https?://(dx\.)?doi\.org/", "", d)
     return d if re.fullmatch(r"10\.\d{4,9}/\S+", d) else None
+
+
+def _pmcid(c: dict) -> str | None:
+    """PLAN-NONDOI-1022: the candidate's PMCID (e.g. a Europe PMC open-access hit), or None. Used only when the
+    candidate has no DOI."""
+    from vera.search_providers import _pmcid_of
+    oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
+    return _pmcid_of(c.get("pmcid") or oa.get("pmcid"))
 
 
 # ------------------------------------------------------------------------------------------------ resolve + fetch
@@ -368,6 +391,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             try:
                 resp = deps.http_get(current, headers={"User-Agent": sf.USER_AGENT}, timeout=timeout_s,
                                      allow_redirects=False, stream=True)
+            except rate_limit.RateLimited:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
+                raise _Stop(acq_config.reason(cfg, "rate_limited")) from None
             except Exception:  # noqa: BLE001  unreachable = unusable (never substituted by an abstract)
                 raise _Stop(acq_config.reason(cfg, "unreachable")) from None
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
@@ -412,11 +437,18 @@ def _close(resp) -> None:
         pass
 
 
-def resolve_oa(doi: str, cfg: dict, deps: Deps, clock=time.monotonic, deadline: float | None = None) -> dict:
-    """Europe PMC REST search by DOI (core result). Raises _Stop with a reason code when not usable."""
+def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, deadline: float | None = None,
+               pmcid: str | None = None) -> dict:
+    """Europe PMC REST search by DOI (core result), or by PMCID when the candidate has no DOI (PLAN-NONDOI-1022).
+    Raises _Stop with a reason code when not usable. The result's "doi" is the core record's well-formed DOI or None."""
     rcfg = cfg.get("resolve") or {}
+    # INT-1022-B (orchestrator disposition b): refuse BEFORE any network call when there is neither a DOI nor a
+    # well-formed PMCID (never a query on an empty or malformed identifier).
+    pmcid = str(pmcid or "").strip().upper() or None
+    if not doi and not (pmcid and re.fullmatch(r"PMC\d{1,10}", pmcid)):
+        raise _Stop(acq_config.reason(cfg, "not_oa"))
     from urllib.parse import urlencode
-    url = rcfg["search_url"] + "?" + urlencode({"query": f'DOI:"{doi}"', "resultType": "core", "format": "json",
+    url = rcfg["search_url"] + "?" + urlencode({"query": f'DOI:"{doi}"' if doi else f'PMCID:"{pmcid}"', "resultType": "core", "format": "json",
                                                 "pageSize": 1})
     raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
                                clock=clock, deadline=deadline)
@@ -426,7 +458,9 @@ def resolve_oa(doi: str, cfg: dict, deps: Deps, clock=time.monotonic, deadline: 
         r = res[0] if res and isinstance(res[0], dict) else None
     except Exception:  # noqa: BLE001
         r = None
-    if r is None or str(r.get("doi") or "").strip().lower() != doi:
+    rdoi = str((r or {}).get("doi") or "").strip().lower()
+    if r is None or (doi and rdoi != doi) or (not doi and (not pmcid or
+                                                           str(r.get("pmcid") or "").strip().upper() != pmcid)):
         raise _Stop(acq_config.reason(cfg, "not_oa"))
     pmcid = str(r.get("pmcid") or "").strip().upper()
     if rcfg.get("require_open_access", True) and (str(r.get("isOpenAccess") or "").upper() != "Y"
@@ -447,7 +481,8 @@ def resolve_oa(doi: str, cfg: dict, deps: Deps, clock=time.monotonic, deadline: 
     return {"pmcid": pmcid, "licence": lic, "licence_url": lic_url, "title": " ".join(str(r.get("title") or "").split()),
             "authors": " ".join(str(r.get("authorString") or "").split()),
             "year": str(r.get("pubYear") or "").strip(), "pub_types": [str(p) for p in ptypes],
-            "isbn_values": [book.get(k) for k in ("isbn13", "isbn10", "isbn") if book.get(k)], "is_book": bool(book)}
+            "isbn_values": [book.get(k) for k in ("isbn13", "isbn10", "isbn") if book.get(k)], "is_book": bool(book),
+            "doi": _doi({"doi": rdoi})}
 
 
 def _family(licence_or_url: str) -> str | None:
@@ -462,7 +497,7 @@ def _family(licence_or_url: str) -> str | None:
 
 
 # ------------------------------------------------------------------------------------------------ the job
-def build_document(doi: str, cand: dict, res: dict, raw: bytes, final_url: str, cfg: dict, icfg: dict, job: Job,
+def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url: str, cfg: dict, icfg: dict, job: Job,
                    score: float, now_iso: str) -> tuple[dict, dict, dict, str]:
     """(rec, item, meta, text) after conversion and EVERY fulltext_loader filter; raises _Stop / Refused."""
     from vera import fulltext_loader as fl
@@ -475,9 +510,11 @@ def build_document(doi: str, cand: dict, res: dict, raw: bytes, final_url: str, 
     meta = {k: v for k, v in conv.items() if k != "text"}
     meta.update({"document_id": None, "raw_sha256": hashlib.sha256(raw).hexdigest(),
                  "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "raw_file": None})
-    did = "acq-" + hashlib.sha256(doi.encode("utf-8")).hexdigest()[:16]
-    meta["document_id"] = did
     jm = meta.get("meta") or {}
+    if not doi:  # PLAN-NONDOI-1022 rule 6: a DOI stated in the JATS article-id gives the DOI identity (one paper, one URL)
+        doi = _doi({"doi": jm.get("doi")})
+    did = "acq-" + hashlib.sha256((doi if doi else "pmcid:" + res["pmcid"]).encode("utf-8")).hexdigest()[:16]
+    meta["document_id"] = did
     authors = res.get("authors") or "; ".join(str(a) for a in (jm.get("authors") or []) if a)
     year = res.get("year") or str(jm.get("year") or "")
     item = {"document_id": did, "title": res.get("title") or cand.get("title") or "", "doi": doi,
@@ -486,6 +523,8 @@ def build_document(doi: str, cand: dict, res: dict, raw: bytes, final_url: str, 
             "text_file": f"acquired/{did}.xml", "licence": res["licence"], "licence_url": res["licence_url"],
             "authors": authors, "published_year": year, "fetched_at": now_iso,
             "attribution": None, "verifier_status": icfg["verified_status"], "read_status": "VERBATIM"}
+    if not doi:  # PLAN-NONDOI-1022: PMCID identity (doi stays None; the loader waives the DOI only for this kind)
+        item["identifier"] = {"kind": "pmcid", "id": res["pmcid"], "url": item["landing_url"]}
     # WED-P17-VER v2: EVERY <license> element of the JATS (href, license-type, ali:license_ref, license-p text) is
     # classified BEFORE the loader runs; the loader itself reads only the first element (base path unchanged). The
     # summary is kept in the conversion record so the acquired-path reader re-applies the same decision.
@@ -607,30 +646,36 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
 
 
 def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count) -> list:
-    """Stage (shared by the background job and DAR-INLINE-1021): DOI required, not already served (DOI/URL/ISBN),
-    deduplicated by DOI, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
+    """Stage (shared by the background job and DAR-INLINE-1021): DOI or PMCID required (PLAN-NONDOI-1022), not already
+    served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
     from vera import search_providers
     from vera.dar_corpus import doc_key_set
     ranked, seen = [], set()
-    for c in cands or ():
+    rq = rank_question(question, cfg)
+    for pos, c in enumerate(cands or ()):
         if not isinstance(c, dict):
             continue
         doi = _doi(c)
-        if not doi:
+        pmcid = None if doi else _pmcid(c)
+        if not doi and not pmcid:
             count(acq_config.reason(cfg, "no_doi"))
             continue
+        ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
         why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
         if why:
             count(acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence"))
             continue
         isbn = candidate_isbn(c)
         keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
-        if doi in seen or keys & served:
+        if ident in seen or keys & served:
             count(acq_config.reason(cfg, "in_corpus"))
             continue
-        seen.add(doi)
-        ranked.append((prerank_score(question, c, fdcfg), doi, c, isbn))
-    ranked.sort(key=lambda x: (search_providers.acq_rank_tier(x[2]), -x[0], x[1]))  # YIELD-1021: DDG-mapped first
+        seen.add(ident)
+        ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))
+    # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
+    # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).
+    ranked.sort(key=lambda x: (search_providers.acq_rank_tier(x[2]), -x[0], x[4]))
+    ranked = [r[:4] for r in ranked]
     cut = ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
     by: dict = {}
     for _s, _d, c, _i in cut:
@@ -650,7 +695,11 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
     t = clock()
-    res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline)
+    res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand))
+    if not doi and res.get("doi"):  # PLAN-NONDOI-1022 rule 6: promote to the DOI identity, re-check known
+        doi = res["doi"]
+        if deps.lookup.known(doi, None, (isbn or {}).get("isbn")):
+            raise _Stop(acq_config.reason(cfg, "in_corpus"))
     if isbn is None and res.get("is_book"):
         isbn = acq_config.first_isbn(res.get("isbn_values"))
         if isbn and deps.lookup.known(doi, None, isbn["isbn"]):
@@ -663,6 +712,9 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     t = clock()
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso)
+    if not doi and item.get("doi"):  # PLAN-NONDOI-1022: promoted from the JATS article-id; re-check known
+        if deps.lookup.known(item["doi"], None, (isbn or {}).get("isbn")):
+            raise _Stop(acq_config.reason(cfg, "in_corpus"))
     if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
         raise _Stop(acq_config.reason(cfg, "inject"))
     value = {"open_access": True, "licence_family": _family(res["licence"]) or "",
@@ -709,12 +761,20 @@ def docs_budget(cfg: dict, deps: Deps, clock=time.monotonic, reserve: bool = Fal
     """Documents this job may still store: min(docs_per_day remaining (local and DB count, minus documents other
     in-progress inline jobs reserved), max_docs_per_job). Fails closed (0) when the DB count is unavailable.
     VER L5: reserve=True reserves the returned number under the same lock (release it with settle_docs), so two
-    concurrent inline jobs can no longer both spend the same remaining daily budget."""
+    concurrent inline jobs can no longer both spend the same remaining daily budget.
+    DAR-TRACE-1022 (owner 2026-10-22): docs_per_day null = no daily cap: max_docs_per_job only, and the RO daily count
+    is not read at all (a failed count can no longer block acquisition)."""
+    cap = acq_config.docs_per_day_cap(cfg)
+    if cap is None:
+        n = max(0, int(acq_config.bound(cfg, "max_docs_per_job")))
+        if reserve:
+            with _S.lock:
+                _S.docs_reserved += n
+        return n
     try:
         db_day = int(deps.lookup.docs_last_24h())
     except Exception:  # noqa: BLE001
         return 0
-    cap = int(acq_config.bound(cfg, "docs_per_day"))
     now = clock()
     with _S.lock:
         _prune(_S.docs_day, now, 86400.0)
@@ -766,16 +826,19 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         with _S.lock:
             _prune(_S.docs_day, now, 86400.0)
             local_day = len(_S.docs_day) + _S.docs_reserved  # VER L5: inline reservations count too
-        cap = int(acq_config.bound(cfg, "docs_per_day"))
-        try:
-            db_day = int(deps.lookup.docs_last_24h())
-        except Exception:  # noqa: BLE001  fail closed: no count, no acquisition
-            count(acq_config.reason(cfg, "daily_cap"))
-            return done()
-        if max(local_day, db_day) >= cap:
-            count(acq_config.reason(cfg, "daily_cap"))
-            return done()
-        budget = min(cap - max(local_day, db_day), int(acq_config.bound(cfg, "max_docs_per_job")))
+        cap = acq_config.docs_per_day_cap(cfg)  # DAR-TRACE-1022 (owner 2026-10-22): None = no daily document cap
+        if cap is None:
+            budget = int(acq_config.bound(cfg, "max_docs_per_job"))
+        else:
+            try:
+                db_day = int(deps.lookup.docs_last_24h())
+            except Exception:  # noqa: BLE001  fail closed: no count, no acquisition
+                count(acq_config.reason(cfg, "daily_cap"))
+                return done()
+            if max(local_day, db_day) >= cap:
+                count(acq_config.reason(cfg, "daily_cap"))
+                return done()
+            budget = min(cap - max(local_day, db_day), int(acq_config.bound(cfg, "max_docs_per_job")))
         # max_groq_tokens_per_job: this job makes NO model call (deterministic evaluation; lowest-cost default). The
         # bound is kept in config so a future model-assisted evaluation must stay within it (0 = none allowed).
         s = cfg.get("search") or {}
@@ -810,7 +873,8 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 stored += 1
                 with _S.lock:
                     _S.docs_day.append(clock())
-                served |= doc_key_set(doi, cand.get("url"), (isbn or {}).get("isbn"))
+                served |= doc_key_set(doi or plan["source"]["provenance"].get("doi"),
+                                      cand.get("url"), (isbn or {}).get("isbn"))  # PLAN-NONDOI-1022: promoted DOI
                 count(acq_config.reason(cfg, "stored"))
             except _Stop as e:
                 count(e.code)

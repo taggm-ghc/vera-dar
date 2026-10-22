@@ -69,7 +69,9 @@ def test_health_dar_full_dict_with_key(client, monkeypatch):
     _set(monkeypatch, main, FULL)
     r = c.get("/health/dar", headers={"X-API-Key": KEY})
     body = r.json()
-    assert r.status_code == 200 and body.pop("fulldoc") is not None and body == FULL  # fulldoc: /health/dar only (AE-1020 WP-H)
+    assert r.status_code == 200 and body.pop("fulldoc") is not None  # fulldoc: /health/dar only (AE-1020 WP-H)
+    rl = body.pop("rate_limits")  # INT-1022-B (RATE-1022 E1): portal names and counters only
+    assert isinstance(rl, dict) and "groq" in rl and not any("." in k for k in rl) and body == FULL
 
 
 def test_health_dar_failure_does_not_raise(client, monkeypatch):

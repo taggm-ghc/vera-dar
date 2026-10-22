@@ -212,17 +212,28 @@ def test_hourly_job_cap_means_no_search(rig):
     rig.cfg["bounds"]["jobs_per_hour"] = 0
     r = rig.run()
     assert rig.search_calls == [] and rig.outcomes[0].status == "rate"
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline"  # old behaviour: background trigger kept
+    # DAR-TRACE-1022: the background queue shares the cap, so no trigger and the capped notice (not "search started")
+    assert r.result_kind == "reading_list" and r.acquire_trigger is None
     assert rig.cfg["scope_expansion"]["inline_notice_none"] not in r.answer
+    assert rig.cfg["scope_expansion"]["inline_notice_capped"] in r.answer
 
 
 def test_daily_document_cap_means_nothing_new_is_fetched_or_stored(rig):
     # R2 defect 1: the search still runs (stored documents may be reused), but nothing is resolved, fetched or stored
+    rig.cfg["bounds"]["docs_per_day"] = 20  # DAR-TRACE-1022: shipped null (no cap); a configured cap still works
     rig.setup(lookup=A.Lookup(day=10 ** 6))
     r = rig.run()
     assert len(rig.search_calls) == 1 and rig.web.urls == [] and rig.store.plans == []
     assert rig.outcomes[0].status == "daily_cap"
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline"
+    assert r.result_kind == "reading_list" and r.acquire_trigger is None  # DAR-TRACE-1022: doc-cap notice instead
+    assert rig.cfg["scope_expansion"]["inline_notice_doc_cap"] in r.answer
+
+
+def test_null_daily_document_cap_means_a_huge_db_count_does_not_stop_inline_acquisition(rig):
+    assert rig.cfg["bounds"]["docs_per_day"] is None  # owner 2026-10-22: abolished
+    rig.setup(lookup=A.Lookup(day=10 ** 6))
+    r = rig.run()
+    assert rig.outcomes[0].status == "ok" and r.result_kind == "answer"
 
 
 def test_kill_switch_means_no_search_no_inline(rig, monkeypatch):

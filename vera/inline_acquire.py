@@ -19,8 +19,8 @@ one's outcome; outcomes are reused for result_ttl_s so a provider-chain retry ne
 
 ONE-SPAN-1021 (owner approval): a document answers this request with >= bounds.answer_min_admitted_spans (1) qualifying
 passages but is persisted only with >= bounds.persist_min_admitted_spans (2); below that it is in the ephemeral corpus
-only (Outcome.documents: persisted false, reason below_persist_min; counts n_answer_eligible / n_persisted). It still
-counts against docs_per_day (fetched and checked, as an unsaved document does).
+only (Outcome.documents: persisted false, reason below_persist_min; counts n_answer_eligible / n_persisted). It does
+not count against docs_per_day: only STORED documents do (used = out.stored; the cap is null = off since 2026-10-22).
 
 Persist failure: the answer still goes out (every licence, content, injection and relevance gate already passed, and
 the claim check still runs); the note then says the documents could NOT be added, and the failure is logged (class
@@ -29,6 +29,7 @@ counts and durations only.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import logging
 import os
@@ -38,7 +39,7 @@ from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from vera import acq_config
+from vera import acq_config, rate_limit
 from vera import auto_acquire as aa
 
 logger = logging.getLogger("vera.autoacq")
@@ -46,6 +47,10 @@ logger = logging.getLogger("vera.autoacq")
 # statuses: a search was made -> "ok" (corpus set), "none", "deadline", "search_failed"
 #           no search was made -> "off", "busy", "rate", "daily_cap", "error"
 SEARCHED = frozenset({"ok", "none", "deadline", "search_failed", "unanswered"})
+CAPPED = frozenset({"rate", "daily_cap"})  # DAR-TRACE-1022: the shared hourly/daily caps refused the acquisition
+# DAR-TRACE-1022 (review S1): provider/time failures are cached only failure_ttl_s; deterministic none/unanswered keep
+# result_ttl_s (re-running them early would only burn the shared jobs_per_hour cap).
+TRANSIENT = frozenset({"search_failed", "deadline"})
 BELOW_PERSIST_MIN = "below_persist_min"  # ONE-SPAN-1021 per-document telemetry reason
 
 
@@ -153,7 +158,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         now = clock()
         with _I.lock:
             ttl = _b(acq, "result_ttl_s", 600)
-            for k in [k for k, (t, _o) in _I.results.items() if now - t >= ttl]:
+            fttl = min(ttl, _b(acq, "failure_ttl_s", 60))  # DAR-TRACE-1022: a TRANSIENT failure is replayed <= 60 s
+            for k in [k for k, (t, o) in _I.results.items() if now - t >= (fttl if o.status in TRANSIENT else ttl)]:
                 del _I.results[k]
             if key in _I.results:
                 return _I.results[key][1]
@@ -195,6 +201,13 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
 
 
 def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
+    """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
+    so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
+    with rate_limit.deadline_scope(time.monotonic() + float(_b(acq, "deadline_s", 45))):
+        return _run_body(question, acq, env, clock, deps_factory, served)
+
+
+def _run_body(question, acq, env, clock, deps_factory, served=None) -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
     deadline = t0 + _b(acq, "deadline_s", 45)
@@ -211,6 +224,10 @@ def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
                 n_answer_eligible=o.n_answer_eligible, n_persisted=o.n_persisted,
                 n_below_persist_min=o.answer_only, reused=o.reused,
                 **{f"n_{k}": v for k, v in o.codes.items()}, **{f"ms_{k}": v for k, v in ms.items()})
+        try:  # RATE-1022 E2: portal names and counters only
+            logger.info("autoacq %s", rate_limit.get_registry().log_line())
+        except Exception:  # noqa: BLE001  telemetry never breaks the run
+            pass
         return o
 
     if int(acq_config.bound(acq, "max_search_calls_per_job")) <= 0:  # VER L6: the job's search bound applies too
@@ -244,7 +261,8 @@ def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
         # (read-only) instead of being skipped as R-ACQ-KNOWN while lower-ranked documents are acquired in their place
         # (the run-2 failure: a new process, the served acquired corpus still loading in the background).
         t = clock()
-        reused, ranked = _stored_for(ranked, acq, deps, count)
+        reused, ranked = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg,
+                                     clock=clock, deadline=deadline)
         ms["reuse"] = int((clock() - t) * 1000)
         job_max = int(acq_config.bound(acq, "max_docs_per_job"))
         fresh_budget = max(0, min(budget, job_max - len(reused[0])))
@@ -282,7 +300,7 @@ def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
                 out.documents.append({"persisted": False, "reason": "write_failed"})
                 logger.warning("autoacq inline persist failed (%s)", type(e).__name__)
         out.persist_failed = failed > 0 and out.stored == 0  # VER L4: the note says unsaved only if none was saved
-        used = len(plans)  # admitted documents count against docs_per_day even if unsaved (settled in finally)
+        used = out.stored  # DAR-TRACE-1022: only STORED documents count against docs_per_day (owner wording "stored documents/day"; the cap itself is null = off since 2026-10-22)
         ms["write"] = int((clock() - t) * 1000)
         t = clock()
         out.corpus = ephemeral_corpus(plans, acq, fdcfg, icfg, stored=reused)
@@ -299,10 +317,17 @@ def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
             logger.warning("autoacq close failed (%s)", type(e).__name__)
 
 
-def _stored_for(ranked, acq, deps, count):
+def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, clock=None, deadline=None):
     """((sources, spans) of the ranked candidates already stored as acquired documents, at most max_docs_per_job, in
     rank order), and the ranked candidates left to evaluate. Read-only; a lookup failure reuses nothing (the
-    evaluate stage's known check still prevents duplicates)."""
+    evaluate stage's known check still prevents duplicates).
+
+    DAR-TRACE-1022: a stored document is reused only when it passes THIS question's relevance gate (the same admission
+    over a corpus of that document alone, >= answer_min_admitted_spans). Before, any ranked stored document was taken
+    unchecked and filled max_docs_per_job, so fresh_budget fell to 0, no fresh candidate was evaluated, and the
+    ephemeral corpus admitted nothing (status "unanswered", no answer-writer call). A failing stored document is
+    counted R-ACQ-REUSE-IRRELEVANT (or R-ACQ-REUSE-UNUSABLE when the reader refused its rows) and never re-acquired
+    (it is known). The checks stop at `deadline` (review S5): a row not checked in time is not reused."""
     from vera.corpus_admission import canonical_url
     fn = getattr(deps, "stored_rows", None)
     if fn is None or not ranked:
@@ -316,10 +341,22 @@ def _stored_for(ranked, acq, deps, count):
     newest: dict = {}
     for r in sorted(srcs or (), key=lambda r: -int(r.get("source_id") or 0)):
         newest.setdefault(r.get("canonical_url"), r)  # one (the newest) stored row per canonical URL
+    by_src: dict = {}
+    for sp in spans or ():
+        by_src.setdefault(sp.get("source_id"), []).append(sp)
     take, rest = [], []
     for cu, r in zip(cus, ranked):
         if cu in newest and len(take) < int(acq_config.bound(acq, "max_docs_per_job")):
-            take.append(newest.pop(cu))
+            row = newest.pop(cu)
+            if question is not None:
+                if clock is not None and deadline is not None and clock() >= deadline:
+                    count(acq_config.reason(acq, "deadline"))
+                    continue
+                why = _reuse_relevant(question, row, by_src.get(row.get("source_id"), []), acq, fdcfg, icfg)
+                if why:
+                    count(why)
+                    continue
+            take.append(row)
             count("ACQ-REUSED")
         elif cu in newest:
             newest.pop(cu)  # stored but over the per-job cap: never re-acquired (evaluate would stop it as known)
@@ -328,6 +365,29 @@ def _stored_for(ranked, acq, deps, count):
             rest.append(r)
     ids = {r["source_id"] for r in take}
     return (take, [sp for sp in spans or () if sp.get("source_id") in ids]), rest
+
+
+REUSE_IRRELEVANT = "R-ACQ-REUSE-IRRELEVANT"
+REUSE_UNUSABLE = "R-ACQ-REUSE-UNUSABLE"  # review S4: the reader refused the stored rows (a safety refusal, not relevance)
+
+
+def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
+    """DAR-TRACE-1022: None when the stored row passes this question's relevance gate (auto_acquire.relevance_gate
+    semantics: the answer path's admission over a corpus of this document alone), else the refusal code. Fails closed
+    (REUSE_UNUSABLE) on any error."""
+    import json
+
+    from vera import fulldoc_admission, fulldoc_db
+    try:
+        src = json.loads(json.dumps(row, default=str))
+        c = fulldoc_db.load_acquired_rows([src], [dict(sp) for sp in spans], fdcfg, acq, ingest_cfg=icfg, max_docs=1)
+        if c.status != "ok" or not c.acquired:
+            return REUSE_UNUSABLE
+        ev = fulldoc_admission.admit(question, c, fdcfg)
+        return None if len(ev.admitted or ()) >= acq_config.answer_min_spans(acq) else REUSE_IRRELEVANT
+    except Exception as e:  # noqa: BLE001
+        logger.warning("autoacq inline reuse check failed (%s)", type(e).__name__)
+        return REUSE_UNUSABLE
 
 
 def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms) -> list:
@@ -360,7 +420,7 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
         finally:
             job.question = ""
 
-    futs = {pool.submit(one, i, *r) for i, r in enumerate(ranked)}
+    futs = {pool.submit(contextvars.copy_context().run, one, i, *r) for i, r in enumerate(ranked)}  # RATE-1022 C2
     got: dict = {}
     try:
         pending = futs
@@ -413,9 +473,12 @@ def ephemeral_corpus(plans: list, acq: dict, fdcfg: dict, icfg: dict, stored=Non
 def notice(acq: dict | None, status: str) -> str | None:
     """Honest reading-list notice after an inline search ("none" / "deadline" / "search_failed" / "unanswered");
     None when no search was made (the caller keeps today's behaviour)."""
+    se = (acq or {}).get("scope_expansion") or {}
+    if status in CAPPED:  # DAR-TRACE-1022: the background queue shares these caps, so "a search has started" is false
+        t = se.get("inline_notice_capped" if status == "rate" else "inline_notice_doc_cap")  # review S2
+        return t if isinstance(t, str) and t else None
     if status not in SEARCHED and status != "unanswered":
         return None
-    se = (acq or {}).get("scope_expansion") or {}
     t = se.get({"none": "inline_notice_none", "deadline": "inline_notice_deadline",
                 "search_failed": "inline_notice_search_failed", "ok": "inline_notice_unanswered",
                 "unanswered": "inline_notice_unanswered"}[status])

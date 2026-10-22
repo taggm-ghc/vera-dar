@@ -9,7 +9,7 @@ import json
 from tests import fulltext_synth
 from vera import acq_config, auto_acquire, fulldoc_db
 
-SENTINEL = "ZQXJ-SENTINEL-QUESTION-7781"
+SENTINEL = "Q7781-0042-ZX9"  # DAR-TRACE-1022: no relevance-bearing token (was 3 nonsense content stems that a 0.7 coverage gate rightly penalises); still unique for leak checks
 Q_EPI = f"How was the transmission of the pathogen related to incidence during an outbreak {SENTINEL}?"
 ENV_ON = {"VERA_DB_URL_WO": "postgresql://wo.invalid/x", "VERA_DB_URL_RO": "postgresql://ro.invalid/x"}
 

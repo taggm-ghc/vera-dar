@@ -27,6 +27,7 @@ import os
 
 import requests
 
+from vera import rate_limit
 from vera.cost_ledger import CostLedger
 from vera.search_providers import (ProviderResponseError, ProviderUnavailable, SearchConfigError as _SCE,
                                     build_chain)
@@ -111,6 +112,10 @@ def _attempts_once(provider, question, n, *, ledger, max_retries, backoff_s, dea
                 resp = provider.call(question, n, timeout_s)
             except _SCE:
                 raise
+            except rate_limit.RateLimited as exc:  # RATE-1022 B1: nothing was sent, so this is not an attempt
+                notes.append(f"attempt {attempt}: rate_limited ({exc.reason}; not an attempt)")
+                rec(cost_usd=0.0, ok=False, detail=notes[-1], units={"rate_limited": 1, "sent": 0})
+                raise _ProviderFailed(notes) from None
             except ProviderUnavailable as exc:  # non-retryable (e.g. daily budget spent): recorded, chain skips
                 notes.append(f"attempt {attempt}: provider unavailable: {exc}")
                 rec(cost_usd=0.0, ok=False, detail=notes[-1], units={"attempt": attempt})

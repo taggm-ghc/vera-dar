@@ -48,6 +48,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "live: makes live provider calls; needs --run-live-stages")
     config.addinivalue_line("markers", "live_api: calls the deployed VERA-DAR API; needs --run-live-stages and API_BASE_URL")
     config.addinivalue_line("markers", "boundary_probe: deliberately triggers a refused DB access; violations are expected")
+    config.addinivalue_line("markers", "wiki_portal: this test keeps the Wikipedia reference portal enabled in "
+                            "acquisition_search (it must inject wiki_get; no network)")
     config.addinivalue_line("markers", "vera_sockets: this test explicitly requests local sockets (loopback, AF_UNIX under "
                             "the session basetemp); without it every socket connect is refused (owner decision OA-2)")
     _boundary.set_live_enabled(bool(config.getoption("--run-live-stages")) or alias_active(os.environ))
@@ -219,6 +221,21 @@ def _vera_boundary_item(request, monkeypatch):
     _reset_singletons(monkeypatch)
     yield
     _reset_singletons(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _offline_wiki_portal_and_fresh_rate_limits(request, monkeypatch):
+    """INT-1022-B: the Wikipedia reference portal ships enabled; offline tests keep it OFF in acquisition_search unless
+    marked `wiki_portal` (they then inject wiki_get). Each test gets a fresh rate-limit registry (no pacing leak)."""
+    sp = _sys.modules.get("vera.search_providers")
+    if sp is None:
+        import vera.search_providers as sp
+    if "wiki_portal" not in request.keywords:
+        monkeypatch.setattr(sp, "_wiki_cfg", lambda: {"enabled": False})
+    import vera.rate_limit as rl
+    rl.set_registry_for_tests(None)
+    yield
+    rl.set_registry_for_tests(None)
 
 
 @pytest.fixture(autouse=True)

@@ -73,9 +73,27 @@ def _refuse(cfg: dict, key: str, reason: str):
 
 
 # --------------------------------------------------------------------------------------------- filters
+def non_doi_identifier_ok(item: dict, cfg: dict) -> bool:
+    """PLAN-NONDOI-1022: True only when doi is None AND item["identifier"] is an allowlisted kind (config
+    non_doi_identifier_kinds, set ONLY by the acquisition overlay; the base config lists none) whose id fully matches
+    the kind's anchored pattern and whose url matches url_pattern. Waives the doi requirement and doi_pattern only;
+    every other filter still runs."""
+    kinds = cfg.get("non_doi_identifier_kinds")
+    ident = item.get("identifier")
+    if item.get("doi") is not None or not isinstance(kinds, dict) or not isinstance(ident, dict):
+        return False
+    pat = kinds.get(str(ident.get("kind") or ""))
+    return (isinstance(pat, str) and pat.startswith("^") and pat.endswith("$")
+            and bool(re.fullmatch(pat, str(ident.get("id") or "")))
+            and bool(re.match(cfg["url_pattern"], str(ident.get("url") or "").strip())))
+
+
 def check_item(item: dict, cfg: dict, contract_path: Path = answer_contract.CONFIG_PATH) -> None:
     ph = re.compile(cfg["placeholder_pattern"])
+    non_doi = non_doi_identifier_ok(item, cfg)  # PLAN-NONDOI-1022: waives ONLY the doi requirement + doi_pattern
     for f in cfg["required_item_fields"]:
+        if f == "doi" and non_doi:
+            continue
         v = item.get(f)
         if v is None or (isinstance(v, (list, dict)) and not v):
             _refuse(cfg, "missing_field", f"required field {f!r} is missing")
@@ -84,7 +102,7 @@ def check_item(item: dict, cfg: dict, contract_path: Path = answer_contract.CONF
     for f in cfg["url_fields"]:
         if not re.match(cfg["url_pattern"], str(item.get(f) or "").strip()):
             _refuse(cfg, "bad_url", f"{f} is not a single https URL")
-    if not re.match(cfg["doi_pattern"], str(item["doi"]).strip()):
+    if not non_doi and not re.match(cfg["doi_pattern"], str(item["doi"]).strip()):
         _refuse(cfg, "bad_doi", f"doi {item['doi']!r} is not well formed")
     if item.get("verifier_status") != cfg["verified_status"]:
         _refuse(cfg, "not_verified", f"verifier_status is {item.get('verifier_status')!r}, not {cfg['verified_status']}")
@@ -232,10 +250,11 @@ def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | 
         check_item_declared(item, cfg)
     lic = check_text_record(item, text, meta, cfg)
     now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    src = {"doi": item["doi"], "url": item["landing_url"]}
+    src = {"doi": item.get("doi"), "url": item["landing_url"]}
     cu = canonical_url(src)
     provenance = {
-        "url": item["landing_url"], "fulltext_url": item["fulltext_url"], "doi": str(item["doi"]).strip().lower(),
+        "url": item["landing_url"], "fulltext_url": item["fulltext_url"],
+        "doi": str(item["doi"]).strip().lower() if item.get("doi") is not None else None,  # PLAN-NONDOI-1022
         "title": item["title"], "authors": item["authors"], "published": str(item["published_year"]),
         "source_type": cfg["source_type"], "licence": lic["licence"], "licence_decision": lic["licence_decision"],
         "attribution": item.get("attribution"), "stored_text_kind": cfg["stored_text_kind"],

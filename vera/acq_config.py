@@ -67,6 +67,20 @@ def bound(cfg: dict, key: str, default=None):
     return v
 
 
+def docs_per_day_cap(cfg: dict):
+    """OWNER DECISION 2026-10-22 ("abolish the 20-a-day limit", relayed by the orchestrator, DAR-TRACE-1022):
+    bounds.docs_per_day null or absent = NO daily document cap (the job caps jobs_per_hour / jobs_per_day and
+    max_docs_per_job still bound acquisition). A number (int >= 0) restores the cap; anything else is treated as 0
+    (fail closed: a malformed cap acquires nothing)."""
+    v = ((cfg or {}).get("bounds") or {}).get("docs_per_day")
+    if v is None:
+        return None
+    try:
+        return max(0, int(v)) if not isinstance(v, bool) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 def answer_min_spans(cfg: dict) -> int:
     """ONE-SPAN-1021 (owner approval): qualifying, provenance-verified passages a fetched document needs to supply
     evidence to THIS request's ephemeral answer corpus. Floor 1: a document with no qualifying passage never answers."""
@@ -111,12 +125,13 @@ def trigger_for_decline(cfg: dict | None, layer: str, why: str) -> bool:
 
 # ------------------------------------------------------------------------------------------------ ingest overlay
 def ingest_cfg(base: dict, cfg: dict) -> dict:
-    """fulltext_ingest config with the acquisition label overlay (plan AC-5): only labels change, every filter key and
-    limit stays the base value. Deep copy; the base dict is never mutated."""
+    """fulltext_ingest config with the acquisition label overlay (plan AC-5): labels plus the non-DOI identity
+    allowlist (PLAN-NONDOI-1022); every filter key and limit stays the base value. Deep copy; the base dict is never
+    mutated."""
     out = copy.deepcopy(base)
     ov = (cfg or {}).get("ingest_overlay") or {}
     for k in ("verified_status", "admitted_by", "question_text", "licence_observations_enabled",
-              "embedded_licence_unknown_holds"):
+              "embedded_licence_unknown_holds", "non_doi_identifier_kinds"):
         if k in ov:
             out[k] = ov[k]
     if isinstance(ov.get("candidate"), dict):

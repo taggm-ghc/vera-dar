@@ -256,7 +256,7 @@ def test_all_failing_raises():
 
 def test_config_caps_and_providers():
     c = A.cfg()
-    assert c["bounds"]["max_search_calls_per_job"] == 5
+    assert c["bounds"]["max_search_calls_per_job"] == 6  # INT-1022-B: +1 slot for the Wikipedia reference portal
     assert c["search"]["europepmc"]["enabled"] is True and c["search"]["ddg_first"]["enabled"] is True
 
 

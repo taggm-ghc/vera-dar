@@ -17,6 +17,10 @@ import requests
 
 from vera.selective_fetch import fetch_html
 from vera.search_providers import OPENALEX_METADATA_LICENCE, USER_AGENT, licence_record, reconstruct_abstract
+from vera import rate_limit
+
+# RATE-1022 A7: api.openalex.org -> openalex, api.semanticscholar.org -> semantic_scholar; other hosts pass through.
+_LIMITED_GET = rate_limit.limited_by_url(requests.get)
 
 logger = logging.getLogger("vera")
 
@@ -64,7 +68,7 @@ def scholarly_links(html: str, base_url: str, hosts: list[str], max_links: int) 
 S2_PAPER = "https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
 
 
-def _s2(doi: str, timeout_s: float, http_get=requests.get) -> dict:
+def _s2(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict:
     """Semantic Scholar record (keyless; may rate-limit, which counts as a miss)."""
     try:
         r = http_get(S2_PAPER.format(doi=doi), params={"fields": "title,abstract,publicationDate"},
@@ -83,7 +87,7 @@ def _record(doi: str, title, published, abstract: str) -> dict:
     return rec
 
 
-def with_abstract(rec: dict, timeout_s: float, http_get=requests.get) -> dict:
+def with_abstract(rec: dict, timeout_s: float, http_get=_LIMITED_GET) -> dict:
     """Fill a missing abstract from Semantic Scholar; the record keeps an empty snippet if none is found."""
     if rec.get("snippet") or not rec.get("doi"):
         return rec
@@ -92,7 +96,7 @@ def with_abstract(rec: dict, timeout_s: float, http_get=requests.get) -> dict:
     return dict(rec, snippet=s2["abstract"], licence=None, abstract_source="semanticscholar") if s2.get("abstract") else rec
 
 
-def lookup_doi(doi: str, timeout_s: float, http_get=requests.get) -> dict | None:
+def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None:
     """Original source for a DOI: OpenAlex metadata, abstract from OpenAlex or Semantic Scholar.
     None when neither index knows the DOI; an empty snippet means the original has no free abstract."""
     try:
@@ -116,7 +120,7 @@ def _words(t: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", str(t or "").lower()))
 
 
-def lookup_title(title: str, timeout_s: float, min_match: float, http_get=requests.get) -> dict | None:
+def lookup_title(title: str, timeout_s: float, min_match: float, http_get=_LIMITED_GET) -> dict | None:
     """OpenAlex title search; accept only a record whose title word overlap (Jaccard) is at least min_match."""
     want = _words(title)
     if len(want) < 4:

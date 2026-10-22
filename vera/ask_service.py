@@ -159,9 +159,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
             return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer,
                            contract={**(off.contract or {}), **_inline_trace(inline_note)} if _inline_trace(inline_note) else off.contract,
-                           acquire_trigger=trig if inline_note is None else None)  # inline searched: no 2nd job
-        return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
-                         result_kind="decline", acquire_trigger=trig if inline_note is None else None)
+                           acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
+                           **_spent(inline_note))
+        return replace(AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
+                                 result_kind="decline", acquire_trigger=trig if inline_note is None else None),
+                       **_spent(inline_note))
     from vera import answer_contract as contract
 
     used_in: dict = {}
@@ -190,7 +192,36 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
                    contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
-                             **_inline_trace(inline_note)}, **trig)
+                             **_inline_trace(inline_note)}, **trig,
+                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
+
+
+class _InlineNotice(str):
+    """Honest inline-search notice text that also carries the specific fallback token (None for non-fallback notices)."""
+    token = None
+
+
+class _Note(_InlineNotice):
+    """DAR-TRACE-1022: an inline notice that also carries the INLINE attempt's tokens/cost (classifier + inline answer
+    writer + claim check) when the writer ran but no checked answer came out, so tokens_used no longer hides that spend.
+    Review S6 limit: on the off-topic path a writer run on the earlier STORED acquired-corpus attempt (rare: it needs
+    an admitting stored corpus whose answer then failed the check) is still not added."""
+
+    def __new__(cls, text, tokens, cost):
+        o = super().__new__(cls, text)
+        o.tokens, o.cost = int(tokens or 0), float(cost or 0.0)
+        return o
+
+
+def _spent(note, base_tokens=None, base_cost=None, classifier_tokens=0, classifier_cost=0.0) -> dict:
+    """tokens_used / cost_usd overrides for a result carrying an inline _Note. With base_* (in-scope path, review M1):
+    the base attempt's total PLUS the inline spend, with the classifier counted once."""
+    if not isinstance(note, _Note):
+        return {}
+    if base_tokens is None:
+        return {"tokens_used": note.tokens, "cost_usd": round(note.cost, 6)}
+    return {"tokens_used": int(base_tokens) + note.tokens - int(classifier_tokens or 0),
+            "cost_usd": round(float(base_cost or 0.0) + note.cost - float(classifier_cost or 0.0), 6)}
 
 
 def _doc_keys(corpus) -> set:
@@ -200,11 +231,6 @@ def _doc_keys(corpus) -> set:
         return set(dar.doc_keys()) if dar is not None and hasattr(dar, "doc_keys") else set()
     except Exception:  # noqa: BLE001
         return set()
-
-
-class _InlineNotice(str):
-    """Honest inline-search notice text that also carries the specific fallback token (None for non-fallback notices)."""
-    token = None
 
 
 def _inline_trace(note) -> dict:
@@ -226,12 +252,16 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
-        # "unanswered" notice except for premise_unverified, which has its own fixed text.
+        # "unanswered" notice except for premise_unverified, which has its own fixed text. INT-1022-B merge: the
+        # DAR-TRACE-1022 _Note (an _InlineNotice subclass) also carries the inline writer/check spend.
         tok = out[1] if isinstance(out, tuple) and len(out) > 1 and isinstance(out[1], str) else None
         logging.getLogger("vera").info("inline answer fallback token=%s", tok)
         from vera.fulldoc_answer import PREMISE_FALLBACK, PREMISE_UNVERIFIED_TEXT
-        note = _InlineNotice(PREMISE_UNVERIFIED_TEXT if tok == PREMISE_FALLBACK
-                             else inline_acquire.notice(acq, "unanswered"))
+        text = PREMISE_UNVERIFIED_TEXT if tok == PREMISE_FALLBACK else inline_acquire.notice(acq, "unanswered")
+        if text is None:
+            return None
+        note = (_Note(text, out[2], out[3]) if isinstance(out, tuple) and len(out) == 5  # DAR-TRACE-1022: spend kept
+                else _InlineNotice(text))
         note.token = tok
         return note
     if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer

@@ -58,14 +58,30 @@ def _stems(text: str, icfg: dict, n: int) -> set:
         return set()
 
 
+def _q_stems(question: str, icfg: dict, n: int) -> set:
+    """DAR-TRACE-1022: the question's CONTENT stems: its stems minus the stems of relevance.question_generic_terms
+    (question words and generic wording such as "did", "key", "types", "different"). Absent key = all stems (the
+    previous behaviour). A question left with no content stem has none (it is never grounded)."""
+    gen = icfg.get("question_generic_terms") if isinstance(icfg, dict) else None
+    if not isinstance(gen, list) or not gen:
+        return _stems(question, icfg, n)
+    try:
+        # INT-1022-B (fix2 verifier must-fix 1): generic terms are dropped as WHOLE TOKENS before stemming, never by
+        # stem prefix (that dropped commodity->common, imports->important, majority->major, description->describe).
+        drop = {str(g).casefold() for g in gen if isinstance(g, str)}
+        return {t[:n] for t in tokenize(question, icfg) if t not in drop}
+    except Exception:  # odd config: fail closed (no content stems)
+        return set()
+
+
 def _relevance(question: str, text: str, icfg: dict, n: int) -> float:
-    q = _stems(question, icfg, n)
+    q = _q_stems(question, icfg, n)
     return len(q & _stems(text, icfg, n)) / len(q) if q else 0.0
 
 
 def _matched(question: str, text: str, icfg: dict, n: int) -> tuple[int, int]:
     """(question content stems found in the span, question content stems)."""
-    q = _stems(question, icfg, n)
+    q = _q_stems(question, icfg, n)
     return len(q & _stems(text, icfg, n)), len(q)
 
 
@@ -228,6 +244,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     adm = cfg.get("admission") or {}
     min_rel = float(adm.get("min_relevance", 0.4))
     min_hits = int(adm.get("min_matched_stems", 2))  # absolute floor: one shared word never grounds an answer
+    adaptive = adm.get("adaptive_min_matched_stems") is True  # DAR-TRACE-1022 (exactly true; absent = off)
     max_doc = int(adm.get("max_spans_per_doc", 2))
     max_total = int(adm.get("max_spans_total", 6))
     max_chars = adm.get("max_admitted_chars")  # WED-P16-RET: total admitted characters (absent = no character budget)
@@ -277,6 +294,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         inspected = {}
 
     rejected, scored, n_cand = [], [], {}
+    relaxed: dict = {}  # id(candidate) -> document id, for spans that passed only under the 1-stem relaxed floor
     for c in cands:
         if not isinstance(c, dict):
             rejected.append({"span_id": None, "document_id": None, "reason": "span_mismatch"})
@@ -331,7 +349,12 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         else:
             rel = _relevance(question, text, icfg, stem_n)
             hits, q_n = _matched(question, text, icfg, stem_n)
-        if rel < min_rel or hits < min_hits or q_n == 0:  # no relaxation for one-word questions (review B2)
+        # review B2: no relaxation for one-word questions, UNLESS admission.adaptive_min_matched_stems is true
+        # (DAR-TRACE-1022, orchestrator decision; calibration note work/dar-trace-1022/CALIBRATION.md): then the floor
+        # is min(min_matched_stems, the question's content stems), never below 1, and only in the legacy signal (the
+        # weighted signal keeps its fixed MIN_MATCHED_STEMS_FLOOR).
+        need = max(1, min(min_hits, q_n)) if (adaptive and not weighted) else min_hits
+        if rel < min_rel or hits < need or q_n == 0:
             rej("low_relevance")
             continue
         if use_pointer and _pointer(text, pcfg):  # POL hook: a bare cross-reference / reference list is not evidence
@@ -342,6 +365,25 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         except (TypeError, ValueError):
             score = 0.0
         scored.append((-rel, -score, str(sid), c, dict(d, _attribution=attr), rel))
+        if adaptive and not weighted and q_n == 1 and need < min_hits:
+            relaxed[id(c)] = did_s
+    if relaxed:
+        # INT-1022-B (fix2 verifier must-fix 2): a ONE-content-stem question admitted under the relaxed floor needs
+        # >= 2 passing spans in the same document, or that stem in the document's title; a single passing mention
+        # (e.g. "horse" in an office-worker diet study) is not enough.
+        q1 = _q_stems(question, icfg, stem_n)
+        per = {}
+        for v in relaxed.values():
+            per[v] = per.get(v, 0) + 1
+        kept = []
+        for t in scored:
+            did_r = relaxed.get(id(t[3]))
+            if did_r is not None and per[did_r] < 2 and not (q1 & _stems(str(t[4].get("title") or ""), icfg, stem_n)):
+                rejected.append({"span_id": t[3].get("span_id"), "document_id": t[3].get("document_id"),
+                                 "reason": "low_relevance"})
+            else:
+                kept.append(t)
+        scored = kept
     scored.sort(key=lambda t: t[:3])
 
     mcfg = adm.get("merge_adjacent") or {}
@@ -401,7 +443,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             admitted = [a for a in admitted if str(a["document_id"]) not in weak]
             per_doc = {k: v for k, v in per_doc.items() if k not in weak}
     else:
-        q_stems = _stems(question, icfg, stem_n)
+        q_stems = _q_stems(question, icfg, stem_n)
         min_cov = float(adm.get("min_question_coverage", 1.0))
         # review B2: each cited document's admitted passages must together cover the question's content terms
         cover = {}

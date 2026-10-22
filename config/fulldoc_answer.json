@@ -68,6 +68,8 @@
   "admission": {
     "min_relevance": 0.4,
     "min_matched_stems": 2,
+    "adaptive_min_matched_stems": true,
+    "_adaptive_min_matched_stems_note": "DAR-TRACE-1022 (orchestrator decision 2026-10-21, overrides review B2 for the legacy signal): the per-span floor is min(min_matched_stems, the question's content stems), never below 1, so a one-content-word question ('types of horses' -> {horse}) can ground; min_relevance and min_question_coverage still apply. Calibration: work/dar-trace-1022/CALIBRATION.md. false/absent = the fixed floor.",
     "max_spans_total": 6,
     "max_spans_per_doc": 6,
     "max_admitted_chars": 4800,
@@ -150,14 +152,17 @@
         "used",
         "using"
       ],
-      "stem_len": 5
+      "stem_len": 5,
+      "question_generic_terms": ["his", "her", "him", "she", "hers", "did", "does", "doing", "done", "key", "main", "major", "types", "type", "kinds", "kind", "different", "differences", "difference", "best", "better", "good", "bad", "common", "important", "explain", "describe", "tell", "give", "make", "get", "know", "versus", "similar", "similarities", "really", "much", "many", "exactly"],
+      "_question_generic_terms_note": "DAR-TRACE-1022 (orchestrator decision 2026-10-21): question words and generic wording removed from the QUESTION's stems before relevance, matched-stem count and coverage (stem_len prefixes, so 'different' also drops 'differentiation'). Content-bearing words (effect, cause, impact, role, work, compare) are deliberately NOT listed. Calibration: work/dar-trace-1022/CALIBRATION.md. Remove the key to restore the previous behaviour."
     },
     "evidence_section_kinds": [
       "body"
     ],
     "section_gap_chars": 2,
     "_note": "A passage is admissible only if it lies wholly inside a body section of the converted full text (conversion record sections): title, abstract and back matter are never evidence. min_matched_stems has no relaxation, so a one-content-word question is never grounded. The admitted passages together must also cover at least min_question_coverage of the question's content stems (review B2: incidental overlap on a subset of terms is not evidence); otherwise nothing is admitted.",
-    "min_question_coverage": 0.5,
+    "min_question_coverage": 0.7,
+    "_min_question_coverage_note": "DAR-TRACE-1022 (0.5 -> 0.7, with question_generic_terms and adaptive_min_matched_stems): per document, the admitted passages must cover >= 70% of the question's CONTENT stems (3 of 3, 3 of 4, 4 of 5, 5 of 6/7). Calibrated on 30 questions x (up to 6 fetched Europe PMC documents + the 9 base documents), labelled by title: vs 65af0ac: off-question admissions fetched 58 -> 35 and base 21 -> 4, on-question fetched 74 -> 70 and base 3 -> 2, questions with >= 1 on-question document admitted 24 -> 23 (work/dar-trace-1022/CALIBRATION.md). Raising it to 0.8 cut off-question admissions to 21/1 but on-question ones to 63/0. A semantic false-premise or unanswerable question is NOT caught by this gate.",
     "excluded_section_headings": [
       "How to cite",
       "Code availability",

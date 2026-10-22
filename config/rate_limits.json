@@ -133,6 +133,8 @@
       "_note": "rate 2/s = 120/min, under 200/min, which needs the compliant User-Agent (config/encyclopedia_source.json user_agent carries a project URL, no email). Serial per the etiquette page. base_cooldown_s 5 = the documented no-Retry-After wait."
     },
     "groq": {
+      "enabled": false,
+      "_enabled_note": "INT-1022-B (orchestrator disposition 2026-10-22): disabled until calibrated against Groq headers live. /ask makes about 3 Groq calls within a few seconds, which the uncalibrated prior (0.5/s, burst 2, max_wait 1 s) could skip. With enabled=false the OpenAI-SDK clients get no rate-limit transport at all (vera.rate_limit.openai_http_client returns None), so LLM calls behave exactly as at 76ceb2a. Calibrate from live x-ratelimit-* headers and 429 counts, then set true.",
       "hosts": ["api.groq.com"],
       "rate_per_s": 0.5,
       "burst": 2,

@@ -155,7 +155,8 @@ def test_health_endpoint_dar_fields_and_status_independent(monkeypatch):
     assert body["dar"] in {"degraded", "unavailable", "disabled", "unknown"}  # v3: coarse public enum only
     monkeypatch.setenv("VERA_API_KEY", "k" * 24)
     full = TestClient(main.app).get("/health/dar", headers={"X-API-Key": "k" * 24}).json()
-    assert set(full) == {"dar", "migrations", "stored_corpus", "routing", "corpus", "fallback", "reason_code", "fulldoc"}
+    assert set(full) == {"dar", "migrations", "stored_corpus", "routing", "corpus", "fallback", "reason_code", "fulldoc",
+                         "rate_limits"}  # INT-1022-B (RATE-1022 E1)
     assert full["dar"] != "ready"
     monkeypatch.setattr(dar_health, "cached_readiness", lambda *a, **k: 1 / 0)
     assert TestClient(main.app).get("/health").json()["status"] == "ok"

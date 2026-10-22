@@ -218,6 +218,7 @@ def test_5b_all_tampered_is_unusable(h):
 
 def test_6a_unsupported_claim_removed_from_answer_and_citations(h):
     root = h.bundle()
+    _relax_coverage()  # DAR-TRACE-1022: 0.7 per-document coverage admits one topic of this two-topic question
     h.answer_text = "Transmission relates to incidence [1]. Temperature forcing relates to precipitation [2]."
     h.verdicts = {1: "unsupported"}
     raw, body = h.ask(Q_TWO)
