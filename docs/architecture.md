@@ -23,7 +23,7 @@ These are objectives and are not all established by current tests.
 
 ## Evidence inspection boundary
 
-By default the service handles index records and links, not full documents. Some pages are consulted to recover DOI or arXiv identifiers, not used as research-paper evidence. An optional verified full-document path exists and is disabled by default; only on that path are full documents inspected and passages admitted as evidence.
+By default the service handles index records and links, not full documents. Some pages are consulted to recover DOI or arXiv identifiers, not used as research-paper evidence. An optional verified full-document path exists and is enabled in the shipped configuration (config/fulldoc_answer.json) but produces answers only when a corpus source is configured; only on that path are full documents inspected and passages admitted as evidence.
 
 Accordingly, default-path source records do not include definitive document content hashes, immutable full-text versions or precise examined passages, and a reading list should not be described as verification of any original paper.
 

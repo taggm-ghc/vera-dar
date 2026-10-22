@@ -16,7 +16,7 @@ Read-only and offline: no database, no network, no file writes by the tool itsel
 | G2 | `scripts/check_catalog_evidence_freshness.py` sha256 equals the pin inside `release_gate.py` | FAIL |
 | G3 | `release_gate.py --skip-tests` sub-checks: (b) frozen-file hashes, (c1) no env key in widgets, (c2) no unsafe HTML on model text, (c3) public-mode default | FAIL |
 | G4 | R-028 persistence config: `corpus.enabled` false and discovery `layers` equal `["L0"]` (static config, not proof of production behaviour) | FAIL |
-| G5 | `fulldoc.enabled` state in `config/fulldoc_answer.json` | OWNER-REQUIRED while false (the owner enables it) |
+| G5 | `fulldoc.enabled` state in `config/fulldoc_answer.json` | Shipped as true at 8b16bf3; the corpus source and deploy check are G5b (OWNER-REQUIRED) |
 | G5b | deploy-time owner check (not run by the script; `scripts/` is dockerignored): `fulldoc.enabled=true` and a corpus source is configured (local bundle via `VERA_FULLDOC_BUNDLE_DIR` for local runs; DB-backed chunks for the deployed API once implemented and authorized) and the API-key-protected `/health/dar` reports `fulldoc.status` = `ok` (codes and counts only; `not_configured` or `unusable` means the full-document path is inert or fails closed) | OWNER-REQUIRED |
 | G6 | candidate = `git rev-parse HEAD`, worktree clean | OWNER-REQUIRED if dirty (the owner commits the candidate) |
 | G7 | catalog evidence for the candidate passes the pinned freshness checker (see binding below) | OWNER-REQUIRED if missing or stale |
@@ -55,7 +55,7 @@ Steps 1-3 run in the candidate worktree.
        env -i PATH=/usr/bin:/bin HOME="$HOME" USER="$USER" LANG=C.UTF-8 <venv>/bin/python -I scripts/release_gate.py --catalog-evidence catalog-evidence-<sha12>.txt --expect-candidate-sha <SHA>
 
    Expected last line: `RESULT: PASS (N checks, 0 failed)`.
-5. Enabling `fulldoc.enabled`, deploying and any production change: owner decision, outside these tools.
+5. Changing `fulldoc.enabled` (true in the shipped config), deploying and any production change: owner decision, outside these tools.
 
 ## How fresh evidence binds to the HP-1 script hash
 
@@ -71,7 +71,7 @@ and needs a guarded, owner-approved edit to `release_gate.py`.
 
 ## Current status (2026-10-19, uncommitted reconciled tree)
 
-G1, G2, G3, G4 PASS; G5 fulldoc.enabled=false and G6 dirty worktree are OWNER-REQUIRED; G7 has no evidence for the
+G1, G2, G3, G4 PASS; G5 fulldoc.enabled was false as of 2026-10-19 (shipped true at 8b16bf3; see G5 row above) and G6 dirty worktree are OWNER-REQUIRED; G7 has no evidence for the
 new script hash, so catalog evidence is stale/missing and OWNER-REQUIRED; G8 SKIPPED unless `--with-tests`.
 Overall PREFLIGHT: OWNER-REQUIRED (exit 3). G4 also notes `corpus.licence_observations_enabled` and
 `discovery_memory.write_on_l0` are true; the owner confirms they are inert with the Demo Day persistence settings.

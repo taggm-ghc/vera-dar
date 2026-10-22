@@ -13,7 +13,7 @@ VERA-DAR's foundational requirements are full-document acquisition, inspection, 
 **Verified today** (checked against the code, not only the design):
 
 - By default `/ask` returns a reading list: no answer is generated and no claim check runs.
-- The verified full-document answering path exists in the code but is disabled (`fulldoc.enabled` is false), pending calibration of its thresholds and a recheck against a real document bundle.
+- The verified full-document answering path is enabled in the shipped configuration (`fulldoc.enabled` is true in `config/fulldoc_answer.json`), but it also needs a configured corpus source (for example `VERA_FULLDOC_BUNDLE_DIR`) before it can produce an answer. Its thresholds are placeholders pending calibration.
 - Automated full-document acquisition is designed but not yet implemented.
 
 ## The problem
@@ -40,7 +40,7 @@ Scope check and evidence discovery
        |
        +--> default: reading list with links (no generated answer)
        |
-       +--> optional, off by default: verified full documents
+       +--> optional, needs a configured corpus source: verified full documents
                    |
                    v
             Admitted passages -> cited answer -> claim check
@@ -108,7 +108,7 @@ External provider retention is outside VERA-DAR's control. See [API and data use
 
 ## Important limitations
 
-- **Full documents are not read by default.** An optional verified full-document path exists and is disabled by default; otherwise results are links to published documents, and abstracts or snippets are not used as evidence.
+- **Full documents are not read by default.** An optional verified full-document path is enabled in the shipped configuration but produces answers only when a corpus source is configured; otherwise results are links to published documents, and abstracts or snippets are not used as evidence.
 - **Source provenance is incomplete.** Returned index records do not provide immutable document versions or precise passage locations.
 - **A source's metadata licence does not grant rights to the underlying paper.** Licence decisions are as reported by indexing services and are not verified with rights holders.
 - **Claim checking is imperfect.** Its error rate has not been fully established.
