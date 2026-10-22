@@ -11,7 +11,13 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 
-CHECKS_VERSION = "trace-checks-v1"
+# v1.1 (TRACEEVAL-1022): adds the ask_api variant (the real /ask route) as a grounded variant, and makes A3/A6 not
+# applicable when a record says its source text was not available to the harness (/ask returns no passage text).
+# Records of the v1 variants (baseline, grounded_v1) score exactly as under v1; tests/test_trace_checks.py pins this.
+CHECKS_VERSION = "trace-checks-v1.1"
+
+# Why: variants whose answers carry numbered [n] citations into a numbered source list.
+GROUNDED_VARIANTS = frozenset({"grounded_v1", "ask_api"})
 
 # Why: citation/evidence checks make no sense for declines or clarifications, so they are category-gated.
 EVIDENCE_CATEGORIES = frozenset({"in_scope_synthesis", "multi_part", "false_premise"})
@@ -109,7 +115,12 @@ def _answer(rec: dict) -> str:
 
 
 def _is_grounded(rec: dict) -> bool:
-    return rec.get("variant") == "grounded_v1"
+    return rec.get("variant") in GROUNDED_VARIANTS
+
+
+def _source_text_missing(rec: dict) -> bool:
+    """True only when the capture recorded that source text was unavailable (absent key = v1 record = available)."""
+    return rec.get("source_text_available") is False
 
 
 def _sources(rec: dict) -> list[dict]:
@@ -223,6 +234,8 @@ def a3_numbers_grounded(rec: dict) -> CheckResult:
     if na:
         return na
     srcs, grounded = _sources(rec), _is_grounded(rec)
+    if grounded and _source_text_missing(rec):
+        return _na(name, "source text not available to the harness")
     qnorm = {c.group(0).lower().replace(" ", "") for c in _NUMBER_CLAIM.finditer(_question_text(rec))}
     for sent in split_sentences(_answer(rec)):
         cited = [n for n in _cites(sent) if 1 <= n <= len(srcs)]
@@ -327,6 +340,8 @@ def a6_support(rec: dict) -> CheckResult:
         return _na(name, "capture error")
     if not _is_grounded(rec) or not _CITE.search(_answer(rec)):
         return _na(name, "not a grounded record with [n] citations")
+    if _source_text_missing(rec):
+        return _na(name, "source text not available to the harness")
     judgements = support_judgements(rec)
     for j in judgements:
         if not j["passed"]:

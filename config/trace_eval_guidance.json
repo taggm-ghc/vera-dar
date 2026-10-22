@@ -7,5 +7,31 @@
     "reliable_min_tpr": 0.9,
     "reliable_min_tnr": 0.9,
     "unusable_max_tpr": 0.5
+  },
+  "dimensions_description": "Groups of checks A1-A9 reported together on the page (vera/trace_eval/measure.py per_dimension). A check in no group is reported under its own name.",
+  "dimensions": {
+    "Citation": ["A1_citation_present", "A2_citations_resolve"],
+    "Grounding": ["A3_numbers_grounded", "A4_phantom_evidence", "A6_support"],
+    "Recency": ["A5_window"],
+    "Behaviour": ["A7_premise_corrected", "A8_scope_decline", "A9_clarify_or_assume"]
+  },
+  "variant_descriptions_description": "One public sentence per variant for the page's Context section (keyed by raw variant name; never shown raw).",
+  "variant_descriptions": {
+    "baseline": "a single call to a third-party hosted language model, with no search (historical capture shape)",
+    "grounded_v1": "the historical search-grounded prompt: numbered abstracts and a cite-only rule",
+    "ask_api": "VERA-DAR's live answer route, exactly as a user receives it (scope routing, retrieval and claim checks included)"
+  },
+  "case_sets_description": "Rules that adapt an un-frozen question file to the check categories (vera/trace_eval/capture.py load_case_set). First matching rule wins; match values are case-insensitive substrings of the named field. Results from an adapted set are marked not validated: the blind labels in docs/trace_eval/ cover only the frozen set.",
+  "case_sets": {
+    "accept": {
+      "items_key": "questions",
+      "split": "dev",
+      "default_category": "in_scope_synthesis",
+      "rules": [
+        {"match": {"expected": "layer1_denied"}, "category": "out_of_scope"},
+        {"match": {"topic": "false premise"}, "category": "false_premise"},
+        {"match": {"topic": "vague"}, "category": "ambiguous_or_underspecified"}
+      ]
+    }
   }
 }

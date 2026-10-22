@@ -102,9 +102,9 @@ _OFFTOPIC = (" For a question outside its scope VERA-DAR gives no answer, but it
 # DAR-1021 (wording needs owner approval, DISC-E2): used instead of _OFFTOPIC only while automatic acquisition is on
 # AND scope_expansion.override_layer2_declines is true in config/auto_acquire.json.
 _OFFTOPIC_ANSWERING = (" For a question outside its scope VERA-DAR first lists published scholarly documents it has not read "
-                       "and may start a background search for open-access full text on the question. If documents found "
-                       "this way pass its licence, content and relevance checks, a later ask of such a question may be "
-                       "answered only from those documents, in the same way: brief quoted citations, each cited sentence "
+                       "and searches for open-access full text on the question in the same request. If documents found "
+                       "this way pass its licence, content and relevance checks, VERA-DAR answers only from those "
+                       "documents, in the same way: brief quoted citations, each cited sentence "
                        "checked by an AI model, unsupported sentences removed. Such answers may be wrong.")
 
 

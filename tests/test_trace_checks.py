@@ -148,7 +148,7 @@ def test_results_file_has_no_long_text(tmp_path):
     out = tmp_path / "r.json"
     res = measure.measure([p], out)
     data = json.loads(out.read_text())
-    assert data["schema"] == "vera-trace-eval-results-v1" and data["checks_version"] == "trace-checks-v1"
+    assert data["schema"] == "vera-trace-eval-results-v1" and data["checks_version"] == checks.CHECKS_VERSION
     assert set(data["variants"]["grounded_v1"]["by_split"]) == {"dev", "heldout"}
     for t in data["traces"]:
         assert len(t["answer_excerpt"].split()) <= 25

@@ -12,6 +12,11 @@ def _app(report):
     render_demo(report, "test")
 
 
+def _offline(at):
+    at.radio[0].set_value(at.radio[0].options[1])
+    return at.run()
+
+
 def _at(report):
     at = AppTest.from_function(_app, kwargs={"report": report}, default_timeout=30)
     return at.run()
@@ -45,6 +50,7 @@ def test_page_file_renders_with_fixture_env(monkeypatch):
     monkeypatch.setenv("VERA_DEMO_SOURCE", "fixture")
     at = AppTest.from_file(os.path.join(os.path.dirname(__file__), "..", "pages", "vera_demo.py"),
                            default_timeout=30).run()
+    at = _offline(at)  # REPORT-1022: live mode is the default; the fixture is the explicit offline mode
     assert not at.exception
     assert at.title and "VERA-DAR" in at.title[0].value
 
@@ -91,7 +97,7 @@ def test_demo_page_is_neutral_and_isolated(monkeypatch):
             monkeypatch.setenv("VERA_DEMO_SOURCE", env)
         else:
             monkeypatch.delenv("VERA_DEMO_SOURCE", raising=False)
-        at = AppTest.from_file(path, default_timeout=30).run()
+        at = _offline(AppTest.from_file(path, default_timeout=30).run())
         assert not at.exception
         text = _tree_text(at)
         assert "Example report" in text and "EXAMPLE REPORT" in text

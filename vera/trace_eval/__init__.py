@@ -1,1 +1,1 @@
-"""Trace evaluation of VERA-DAR answers (item #70): capture harness now, checks and results later."""
+"""Trace evaluation of VERA-DAR answers (item #70; wired end to end by TRACEEVAL-1022): capture (capture.py), deterministic checks A1-A9 (checks.py), results (measure.py), decision guidance (guidance.py) and the page (ui.py)."""

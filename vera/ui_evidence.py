@@ -10,7 +10,7 @@ import json
 import re
 from pathlib import Path
 
-from vera.sources_sidebar import _link, plain
+from vera.sources_sidebar import _link, plain, plain_url
 from vera.ui_safety import safe_markdown
 
 FULLDOC_CONFIG = Path(__file__).resolve().parent.parent / "config" / "fulldoc_answer.json"
@@ -34,6 +34,8 @@ _TOKEN_DEFAULT = {
     "claim_check_insufficient": "The automated claim check did not support enough of the draft, so no answer is shown.",
     "claim_check_disabled": "The automated claim check is off, so no answer is shown.",
     "model_insufficient": "The documents inspected did not give enough to answer, so no answer is shown.",
+    # mirrors vera.fulldoc_answer.PREMISE_UNVERIFIED_TEXT (a test ties the two)
+    "premise_unverified": "VERA-DAR's draft flagged a possible problem with the question's premise, but no cited correction could be verified, so no answer is shown. You may want to rephrase the question.",
 }
 GENERIC_FALLBACK = "VERA-DAR did not write an answer to this question. The sources below may still help; read them yourself."
 ANSWER_SCOPE_NOTE = ("Automated checks, not human review, compared each claim with the passages shown, and can be wrong. "
@@ -89,22 +91,58 @@ def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0) -> str:
     return _TOKEN_DEFAULT[token]
 
 
+def _distinct_docs(items) -> int:
+    """Distinct documents among dict rows (same canonical id / document id / DOI / URL counts once). Rows with no
+    identifying field count one each; non-list input counts like _count."""
+    if not isinstance(items, list):
+        return _count(items)
+    seen, extra = set(), 0
+    for d in items:
+        key = next(((k, str(d[k]).lower()) for k in ("canonical_source_id", "document_id", "doi", "url")
+                    if isinstance(d, dict) and d.get(k)), None)
+        if key is None:
+            extra += 1
+        else:
+            seen.add(key)
+    return len(seen) + extra
+
+
 def evidence_scope_line(data: dict | None) -> str | None:
-    """'N documents inspected, M passages admitted' from the response, or None when it carries no evidence fields."""
+    """'N documents inspected, M passages admitted (from K documents)' from the response, or None without evidence fields.
+    N and K count distinct documents, so inspected vs used are never conflated."""
     data = data if isinstance(data, dict) else {}
     if data.get("evidence_status") is None and "examined_full_documents" not in data and "admitted_evidence" not in data:
         return None
-    n, m = _count(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
+    n, m = _distinct_docs(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
+    k = _distinct_docs(data.get("admitted_evidence")) if isinstance(data.get("admitted_evidence"), list) else 0
+    used = f" (from {k} document{'s' if k != 1 else ''})" if m and k else ""
     return (f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected, "
-            f"{m} passage{'s' if m != 1 else ''} admitted as evidence.")
+            f"{m} passage{'s' if m != 1 else ''} admitted as evidence{used}.")
 
 
 _SOURCE_LABEL = {"db": "stored database", "bundle": "local files"}
 
 
 def evidence_source_line(data: dict | None) -> str | None:
-    """'Evidence source: stored database / local files' from the response's corpus_source.kind; None otherwise."""
-    cs = data.get("corpus_source") if isinstance(data, dict) else None
+    """Accurate source mix. A contract.inline_acquisition block (documents fetched for this request) decides between
+    'stored database', 'this request only (not saved)' or both; else corpus_source.kind ('stored database' / 'local files')."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition")
+    if isinstance(ia, dict):
+        docs = [d for d in (ia.get("documents") if isinstance(ia.get("documents"), list) else []) if isinstance(d, dict)]
+        only = sum(1 for d in docs if d.get("reason") == "below_persist_min")
+        held = _count(ia.get("reused")) + _count(ia.get("n_persisted"))
+        admitted = _count(data.get("admitted_evidence")) > 0  # SEC U3: "used for this answer" needs admitted evidence
+        if only and not admitted:
+            return "Evidence source: documents fetched for this request (not saved); none were admitted as evidence."
+        if only and held:
+            return "Evidence source: stored database and documents used for this answer only."
+        if only:
+            return "Evidence source: documents used for this answer only (not saved)."
+        if held:
+            return "Evidence source: stored database."
+    cs = data.get("corpus_source")
     label = _SOURCE_LABEL.get(cs.get("kind")) if isinstance(cs, dict) and isinstance(cs.get("kind"), str) else None
     return f"Evidence source: {label}." if label else None
 

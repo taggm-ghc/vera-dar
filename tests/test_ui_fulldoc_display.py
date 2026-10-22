@@ -179,3 +179,123 @@ def test_evidence_source_caption(monkeypatch, cs, expect):
     at = _render(monkeypatch, _body(corpus_source=cs))
     caps = [c.value for c in at.caption if c.value.startswith("Evidence source")]
     assert caps == ([expect] if expect else [])
+
+
+# ---- DAR-UI-1022 ----
+DOI = "https://doi.org/10.4103/ijem.ijem_546_20"
+
+
+def test_doi_with_dots_and_underscores_is_an_unescaped_link(monkeypatch):
+    b = _body()
+    b["sources"][0].update(title=DOI, url=DOI, identifier=DOI)
+    at = _render(monkeypatch, b)
+    t = _main_text(at)
+    assert f"[{DOI}]({DOI})" in t and "doi\\.org" not in t and "ijem\\_546" not in t
+    b["sources"][0].update(url=None)  # URL only as the title: still a clickable link, not escaped text
+    assert f"[{DOI}]({DOI})" in _main_text(_render(monkeypatch, b))
+
+
+def _multi():
+    srcs = [{"n": i, "title": TITLE, "url": URL, "published": "2024", "document_id": "d1", "span": f"chars={i}0-{i}9",
+             "acquisition": "full_document_acquired"} for i in range(1, 7)]
+    return _body(sources=srcs, examined_full_documents=[{"document_id": "d1", "canonical_source_id": "c1"},
+                                                        {"document_id": "d9", "canonical_source_id": "c1"}],
+                 admitted_evidence=[{"span_id": f"s{i}", "document_id": "d1", "span": f"chars={i}0-{i}9"} for i in range(1, 7)])
+
+
+def test_sources_grouped_one_entry_per_document_cited_first(monkeypatch):
+    at = _render(monkeypatch, _multi())
+    rows = [m.value for m in at.markdown if TITLE in m.value]
+    assert len(rows) == 1 and rows[0].startswith("[1] ")
+    caps = " ".join(c.value for c in at.caption)
+    assert "passages used: chars=10\\-19" in caps and "also admitted, not cited: chars=20\\-29" in caps
+
+
+def test_scope_counts_distinct_documents_inspected_and_used(monkeypatch):
+    t = _main_text(_render(monkeypatch, _multi()))
+    assert "1 document inspected, 6 passages admitted as evidence (from 1 document)" in t
+
+
+@pytest.mark.parametrize("ia,expect", [
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0}, "documents used for this answer only (not saved)"),
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 1, "n_persisted": 0}, "stored database and documents used for this answer only"),
+    ({"documents": [], "reused": 1, "n_persisted": 0}, "stored database."),
+])
+def test_evidence_source_mix_from_inline_acquisition(monkeypatch, ia, expect):
+    at = _render(monkeypatch, _body(corpus_source={"kind": "db"}, contract={"inline_acquisition": ia}))
+    caps = [c.value for c in at.caption if c.value.startswith("Evidence source")]
+    assert len(caps) == 1 and expect in caps[0]
+
+
+def test_uncited_document_listed_under_also_admitted_heading(monkeypatch):
+    b = _multi()
+    b["sources"].append({"n": 7, "title": "Herpes paper", "url": "https://example.org/h", "document_id": "d2",
+                         "span": "chars=1-9", "acquisition": "full_document_acquired"})
+    at = _render(monkeypatch, b)
+    md = [m.value for m in at.markdown]
+    i = next(k for k, v in enumerate(md) if v.startswith("**Also admitted, not cited**"))
+    assert any("Herpes paper" in v for v in md[i + 1:]) and not any("Herpes paper" in v for v in md[:i])
+
+
+# --- SEC-1022-A fixes U1-U4 ---------------------------------------------------------------------------------------
+def test_u1_cited_set_comes_from_answer_markers_not_citation_rows(monkeypatch):
+    assert sb.cited_numbers("A [1] and B [2, 3].") == {1, 2, 3} and sb.cited_numbers("none") == set()
+    assert sb.cited_numbers(None) is None
+    b = _multi()
+    b["sources"].append({"n": 7, "title": "Seventh paper", "url": "https://example.org/s", "document_id": "d7",
+                         "span": "chars=1-9", "acquisition": "full_document_acquired"})
+    b["answer"] = "Batching reduces latency [1]. Another claim [7]."  # [7] has no citation row (no attribution)
+    b["citations"] = [c for c in b["citations"] if c["n"] == 1]
+    md = [m.value for m in _render(monkeypatch, b).markdown]
+    assert not any(v.startswith("**Also admitted, not cited**") for v in md)
+    b["answer"] = "Batching reduces latency [1]."
+    md = [m.value for m in _render(monkeypatch, b).markdown]
+    assert any(v.startswith("**Also admitted, not cited**") for v in md)
+
+
+@pytest.mark.parametrize("title,url,must_not", [
+    ("javascript:alert(1)", None, "]("),
+    ("data:text/html;base64,AAAA", None, "]("),
+    ("https://a.test/x)[y](javascript:z)", None, "javascript"),
+    ("[click](javascript:alert(1))", "javascript:alert(1)", "](javascript"),
+    ("<img src=x onerror=alert(1)>", None, "<img"),
+    ("https://x.test/a\n", None, "\n)"),
+    ("Plain title", "https://x.test/a\nb", "\n"),
+])
+def test_u2_u4_hostile_titles_and_urls_never_become_unsafe_links(title, url, must_not):
+    import re
+    out = sb._link(title, url)
+    m = re.fullmatch(r"\[(?:[^\]\\]|\\.)*\]\((https?://[^\s()<>\"'\x00-\x1f]+)\)", out)
+    if m:  # a link: its single target is a clean http(s) URL and the visible text has no unescaped markup
+        assert m.group(1) in (url, title)
+    else:  # plain text: nothing that Markdown or HTML would act on
+        assert not re.search(r"(?<!\\)(\]\(|<|`)", out)
+    assert not re.search(r"(?<!\\)\]\((javascript|data):", out) and "\n" not in out
+    assert not sb._URLISH.fullmatch("https://x\n") and sb._URLISH.fullmatch("https://x.test/a")
+    assert sb.plain_url("https://x.test/a\n").startswith("https") and "\\." in sb.plain_url("https://x.test/a\n")
+
+
+def test_u4_render_sources_with_hostile_and_sentinel_host_titles(monkeypatch):
+    b = _body(sources=[{"n": 1, "title": "javascript:alert(1)", "url": "javascript:alert(1)", "document_id": "d1",
+                        "span": "chars=1-9", "acquisition": "full_document_acquired"},
+                       {"n": 2, "title": "https://sentinel-host.invalid/x\n", "url": None, "document_id": "d2",
+                        "span": "chars=1-9", "acquisition": "full_document_acquired"}],
+              answer="One [1]. Two [2].")
+    at = _render(monkeypatch, b)
+    md = " ".join(m.value for m in at.markdown)
+    assert "](javascript" not in md and "](data:" not in md and "<img" not in md
+    assert "\n)" not in md and ".invalid/x\n]" not in md
+    for host_var in ("upstream.invalid", "API_BASE_URL"):  # the API base never appears in the rendered tree
+        assert host_var not in _tree_text(at)
+
+
+@pytest.mark.parametrize("ia,adm,expect", [
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0}, [], "none were admitted as evidence"),
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 1, "n_persisted": 0}, [], "none were admitted as evidence"),
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0},
+     [{"span_id": "s1", "document_id": "d1", "span": "chars=1-9"}], "documents used for this answer only (not saved)"),
+])
+def test_u3_this_answer_only_requires_admitted_evidence(monkeypatch, ia, adm, expect):
+    at = _render(monkeypatch, _body(corpus_source={"kind": "db"}, contract={"inline_acquisition": ia}, admitted_evidence=adm))
+    caps = [c.value for c in at.caption if c.value.startswith("Evidence source")]
+    assert len(caps) == 1 and expect in caps[0]

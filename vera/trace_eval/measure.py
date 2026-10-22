@@ -58,7 +58,32 @@ def trace_row(rec: dict) -> dict:
     }
 
 
-def summarize(rows: list[dict]) -> dict:
+def _per_dimension(per_check: dict, dimensions: dict | None) -> dict:
+    """Pooled applies/passed per configured group of checks; a check in no group is its own dimension."""
+    groups = dict(dimensions or {})
+    grouped = {c for names in groups.values() for c in names}
+    groups.update({n: [n] for n in per_check if n not in grouped})
+    out = {}
+    for dim, names in groups.items():
+        hit = [per_check[n] for n in names if n in per_check]
+        if not hit:
+            continue
+        k, n = sum(c["passed"] for c in hit), sum(c["applies"] for c in hit)
+        out[dim] = {"checks": [x for x in names if x in per_check], "applies": n, "passed": k, **_rate(k, n)}
+    return out
+
+
+def _per_category(vrows: list[dict]) -> dict:
+    out = {}
+    for cat in sorted({str(r["category"]) for r in vrows}):
+        crows = [r for r in vrows if str(r["category"]) == cat]
+        k = sum(1 for r in crows if r["all_pass"])
+        out[cat] = {"n": len(crows), "errors": sum(1 for r in crows if r["all_pass"] is None), "all_pass": k,
+                    **_rate(k, len(crows))}
+    return out
+
+
+def summarize(rows: list[dict], dimensions: dict | None = None) -> dict:
     """Per-variant aggregates from trace rows."""
     out: dict = {}
     for variant in sorted({r["variant"] for r in rows}):
@@ -84,23 +109,44 @@ def summarize(rows: list[dict]) -> dict:
                     d["passed"] += 1 if c["passed"] else 0
         for d in per_check.values():
             d.update(_rate(d["passed"], d["applies"]))
-        out[variant] = {"by_split": by_split, "per_check": per_check}
+        out[variant] = {"by_split": by_split, "per_check": per_check,
+                        "per_dimension": _per_dimension(per_check, dimensions), "per_category": _per_category(vrows)}
     return out
 
 
-def build_results(records: list[dict], *, questions_sha256: str | None = None) -> dict:
+def _run_meta(records: list[dict]) -> dict:
+    """Facts about the capture the page states as caveats (computed, never fixed text)."""
+    case_sets = sorted({str(r.get("case_set") or "frozen") for r in records})
+    return {"case_sets": case_sets,
+            "checks_validated": all(r.get("checks_validated", True) for r in records),
+            "capture_errors": sum(1 for r in records if r.get("error")),
+            "source_text_unavailable": sum(1 for r in records if r.get("source_text_available") is False),
+            "traces": len(records)}
+
+
+def build_results(records: list[dict], *, questions_sha256: str | None = None, dimensions: dict | None = None) -> dict:
     rows = [trace_row(r) for r in records]
     shas = {r.get("questions_sha256") for r in records if r.get("questions_sha256")}
     return {
         "schema": SCHEMA, "checks_version": CHECKS_VERSION,
         "questions_sha256": questions_sha256 or (sorted(shas)[0] if len(shas) == 1 else sorted(shas) or None),
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "variants": summarize(rows), "traces": rows,
+        "run": _run_meta(records), "variants": summarize(rows, dimensions), "traces": rows,
     }
 
 
-def measure(trace_paths: list[str | Path], out_path: str | Path) -> dict:
-    results = build_results(load_traces(trace_paths))
+def configured_dimensions() -> dict | None:
+    """The check groups from config/trace_eval_guidance.json; None (each check its own group) if unreadable."""
+    from vera.trace_eval import guidance
+    try:
+        return guidance.load_config().get("dimensions")
+    except (OSError, ValueError):
+        return None
+
+
+def measure(trace_paths: list[str | Path], out_path: str | Path, dimensions: dict | None = None) -> dict:
+    dimensions = configured_dimensions() if dimensions is None else dimensions
+    results = build_results(load_traces(trace_paths), dimensions=dimensions)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(results, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -116,4 +162,6 @@ def aggregate_lines(results: dict) -> list[str]:
                          f"rate={s['all_pass_rate']} wilson95={s['wilson95']}")
         for name, c in d["per_check"].items():
             lines.append(f"  {name}: {c['passed']}/{c['applies']} wilson95={c['wilson95']}")
+        for name, c in d.get("per_dimension", {}).items():
+            lines.append(f"  dimension {name}: {c['passed']}/{c['applies']} wilson95={c['wilson95']}")
     return lines

@@ -4,6 +4,7 @@ propagate to the routing layer, where main.py translates provider failures
 into HTTP responses — this module has no knowledge of HTTP.
 """
 import json
+import logging
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -157,6 +158,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             from vera import acq_config
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
             return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer,
+                           contract={**(off.contract or {}), **_inline_trace(inline_note)} if _inline_trace(inline_note) else off.contract,
                            acquire_trigger=trig if inline_note is None else None)  # inline searched: no 2nd job
         return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
                          result_kind="decline", acquire_trigger=trig if inline_note is None else None)
@@ -174,7 +176,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         from vera import inline_acquire
         from vera import fulldoc_corpus
         ft = fulldoc_corpus.load_config()["fallback_tokens"]
-        if inline_acquire.icfg_of(acq).get("in_scope") is True and token in (ft["insufficient"], ft["corpus_unusable"]):
+        # INT-1022-B (orchestrator-approved): a base-corpus 'nonresponsive' result (RESP-1022: every verified claim was
+        # off-question) also starts inline acquisition. _inline is called at most ONCE per request: if its own answer
+        # is nonresponsive too, it returns a notice and the request falls through to the reading list (no loop).
+        retry_tokens = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"))
+        if inline_acquire.icfg_of(acq).get("in_scope") is True and token and token in retry_tokens:
             inl = _inline(question, model, pricing, decision, chained, grounding, acq, tried=_doc_keys(used_in.get("acq")),
                           in_scope=True)
             if isinstance(inl, AskResult):
@@ -183,7 +189,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
-                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token}, **trig)
+                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
+                             **_inline_trace(inline_note)}, **trig)
 
 
 def _doc_keys(corpus) -> set:
@@ -193,6 +200,16 @@ def _doc_keys(corpus) -> set:
         return set(dar.doc_keys()) if dar is not None and hasattr(dar, "doc_keys") else set()
     except Exception:  # noqa: BLE001
         return set()
+
+
+class _InlineNotice(str):
+    """Honest inline-search notice text that also carries the specific fallback token (None for non-fallback notices)."""
+    token = None
+
+
+def _inline_trace(note) -> dict:
+    tok = getattr(note, "token", None)
+    return {"inline_fallback": tok} if tok else {}
 
 
 def _inline(question, model, pricing, decision, chained, grounding, acq, tried=None, in_scope=False):
@@ -208,7 +225,15 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         return inline_acquire.notice(acq, o.status)
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
     if not isinstance(out, AskResult):
-        return inline_acquire.notice(acq, "unanswered")
+        # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
+        # "unanswered" notice except for premise_unverified, which has its own fixed text.
+        tok = out[1] if isinstance(out, tuple) and len(out) > 1 and isinstance(out[1], str) else None
+        logging.getLogger("vera").info("inline answer fallback token=%s", tok)
+        from vera.fulldoc_answer import PREMISE_FALLBACK, PREMISE_UNVERIFIED_TEXT
+        note = _InlineNotice(PREMISE_UNVERIFIED_TEXT if tok == PREMISE_FALLBACK
+                             else inline_acquire.notice(acq, "unanswered"))
+        note.token = tok
+        return note
     if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer
         note = inline_acquire.answer_note(acq, o)
         return replace(out, answer=f"{note} {out.answer}" if note else out.answer,
@@ -410,6 +435,10 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     if out.result is not None and out.result.result_kind == "answer":
         return replace(out.result, evidence=ev, accepted=True,
                        contract={"layers": contract.layers(), "fallback": None})
+    if getattr(out, "premise", None) and out.fallback:  # DAR-PREMISE-1022: flagged premise, correction unverifiable
+        from vera.fulldoc_answer import PREMISE_UNVERIFIED_TEXT
+
+        return (ev, out.fallback, out.tokens_used, out.cost_usd, PREMISE_UNVERIFIED_TEXT)
     return (ev, out.fallback or tokens_["insufficient"], out.tokens_used, out.cost_usd,
             _with_count(texts["insufficient_text"], ev))
 

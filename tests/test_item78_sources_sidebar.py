@@ -292,7 +292,7 @@ def test_licence_and_heading_reworded(tmp_path, monkeypatch):
 
 
 def test_nav_labels_and_streamlit_config():
-    assert tuple(label for _, label in sb.NAV) == ("Ask VERA-DAR", "Example report", "Trace Eval")
+    assert tuple(label for _, label in sb.NAV) == ("Ask VERA-DAR", "Report", "Trace Eval")
     assert not any("streamlit" in label.lower() for _, label in sb.NAV)
     cfg = (ROOT / ".streamlit" / "config.toml").read_text()
     assert re.search(r"^showSidebarNavigation\s*=\s*false\s*$", cfg, re.M)
@@ -309,7 +309,7 @@ def test_nav_labels_and_streamlit_config():
         sidebar = Side()
 
     sb.render_nav(St())
-    assert [c[1] for c in calls] == ["Ask VERA-DAR", "Example report", "Trace Eval"]
+    assert [c[1] for c in calls] == ["Ask VERA-DAR", "Report", "Trace Eval"]
 
 
 def test_main_page_nav_renders_via_apptest_with_labels(monkeypatch):
@@ -323,7 +323,7 @@ def test_main_page_nav_renders_via_apptest_with_labels(monkeypatch):
     at = AppTest.from_file(str(ROOT / "streamlit_app.py"), default_timeout=30).run()
     assert not at.exception
     labels = [e.proto.label for e in at.get("page_link")]
-    assert labels == ["Ask VERA-DAR", "Example report", "Trace Eval"]
+    assert labels == ["Ask VERA-DAR", "Report", "Trace Eval"]
 
 
 def _no_network(monkeypatch):

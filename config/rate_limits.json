@@ -1,0 +1,176 @@
+{
+  "_doc": "RATE-1022: per-portal rate-limit adapters (vera/rate_limit.py). rate_per_s/burst = token bucket; max_concurrency = in-flight cap; daily_cap = requests SENT per UTC day (throttled ones included; skips never sent are not counted). Throttles (throttle_statuses or caller-flagged anti-bot pages) halve the rate (AIMD) and set a cooldown: Retry-After when sent (clamped to retry_after_max_s), else base_cooldown_s doubling per consecutive throttle up to max_cooldown_s, plus upward-only jitter. The breaker opens after breaker_failures consecutive throttles/failures for breaker_open_s (doubling per failed half-open probe, up to breaker_open_max_s). acquire() waits at most min(max_wait_s, caller deadline - min_call_s), otherwise it skips at once. 429/cooldown tries never count as attempts; they are always counted as requests. No email is sent anywhere: contact_param is used only if VERA_CONTACT_EMAIL is set (unset by default).",
+  "_calibration_note": "UNCALIBRATED against live traffic. Sources were read 2026-10-21 by the research-reader agent through WebFetch (a summarizing fetch, not raw page text: every quote is a paraphrase-level check). Where a portal documents a ceiling, rate_per_s is set at or BELOW it (planner prior chosen for a shared Render egress IP, where other tenants spend the same per-IP allowance); where nothing is documented the value is a planner prior, flagged 'prior'. The AIMD, breaker and cooldown defaults are planner priors (no live spread measured). What would change them: the per-portal 'ratelimit' log line and /health/dar aggregates over a week of live inline runs (429 share, skip share, time in cooldown, and inline yield); raise a rate only up to its documented ceiling.",
+  "version": 1,
+  "defaults": {
+    "increase_frac": 0.05,
+    "decrease_factor": 0.5,
+    "min_rate_factor": 0.05,
+    "breaker_failures": 3,
+    "breaker_open_s": 30.0,
+    "breaker_open_max_s": 900.0,
+    "half_open_max": 1,
+    "jitter_frac": 0.2,
+    "max_wait_s": 2.0,
+    "min_call_s": 1.0,
+    "retry_after_max_s": 3600.0,
+    "base_cooldown_s": 30.0,
+    "max_cooldown_s": 900.0,
+    "poll_s": 0.05,
+    "_note": "Planner priors. max_wait_s 2 keeps any in-request wait far below the 45 s inline deadline (config/auto_acquire.json inline.deadline_s); min_call_s 1 is the least time left for a call to be worth sending."
+  },
+  "portals": {
+    "openalex": {
+      "hosts": ["api.openalex.org"],
+      "rate_per_s": 1.0,
+      "burst": 2,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "base_cooldown_s": 900.0,
+      "max_cooldown_s": 3600.0,
+      "remaining_headers": [
+        {"remaining": "X-RateLimit-Remaining", "reset": "X-RateLimit-Reset", "reset_format": "seconds", "reserve": 0, "pace": false}
+      ],
+      "key_env": "OPENALEX_API_KEY",
+      "with_key": {"rate_per_s": 2.0, "burst": 4},
+      "contact_param": null,
+      "sources": [
+        {"url": "https://help.openalex.org/how-to-use-the-api/rate-limits-and-authentication", "read": "2026-10-21", "inspection": "summarizing fetch (docs.openalex.org 301-redirects here)",
+         "claims": "no key 10 req/s, free key 30 req/s; daily budget per key (keyless about a tenth); 429 for daily budget or per-second excess; headers X-RateLimit-Limit/-Remaining/-Credits-Used/-Reset (seconds to midnight UTC)"}
+      ],
+      "_note": "rate 1.0 = the existing search.openalex.min_interval_s (vera_eval_run.json), max_concurrency 1 = existing; both under the documented 10 req/s. Remaining is a budget unit (credits), so pace=false: only remaining <= 0 sets a cooldown to the reset. base_cooldown_s 900 = the existing search.openalex_quota_cooldown_s (auto_acquire.json), now the no-Retry-After fallback. No mailto (none approved; the page documents none)."
+    },
+    "europepmc": {
+      "hosts": ["www.ebi.ac.uk"],
+      "rate_per_s": 5.0,
+      "burst": 5,
+      "max_concurrency": 4,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://europepmc.org/RestfulWebService", "read": "2026-10-21", "inspection": "fetch failed (HTTP 403); https://www.ebi.ac.uk/europepmc/webservices/rest/ returned 404",
+         "claims": "no official limit found (observation as of 2026-10-21, not proof of absence); a third-party client defaults to 10 req/s (not official)"}
+      ],
+      "_note": "prior. Covers the acquisition search, the resolve_oa DOI search and the fullTextXML (JATS) fetch: one host, one shared budget. max_concurrency 4 = auto_acquire inline.fetch_workers; rate 5/s is half the unofficial 10/s."
+    },
+    "duckduckgo": {
+      "hosts": ["lite.duckduckgo.com"],
+      "rate_per_s": 0.2,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": 8,
+      "throttle_statuses": [429, 503, 202],
+      "breaker_failures": 2,
+      "base_cooldown_s": 900.0,
+      "max_cooldown_s": 3600.0,
+      "contact_param": null,
+      "sources": [
+        {"url": "https://duckduckgo.com/terms", "read": "2026-10-21", "inspection": "summarizing fetch; Acceptable Use Policy not read",
+         "claims": "no rate limit or automated-query statement found (observation, not proof of absence)"}
+      ],
+      "_note": "prior. rate 0.2 = existing search.duckduckgo_lite.min_interval_s 5; max_concurrency 1 and daily_cap 8 = existing (vera_eval_run.json). 202 is the anti-bot page seen from Render; the caller also flags challenge-marker pages as throttled. A challenge is never retried or evaded: it starts a cooldown."
+    },
+    "arxiv": {
+      "hosts": ["export.arxiv.org"],
+      "rate_per_s": 0.333333,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://info.arxiv.org/help/api/tou.html", "read": "2026-10-21", "inspection": "summarizing fetch",
+         "claims": "no more than one request every three seconds; a single connection at a time; across all machines you control"}
+      ],
+      "_note": "documented ceiling, equal to the existing search.arxiv.min_interval_s 3.0 and max_concurrency 1."
+    },
+    "doaj": {
+      "hosts": ["doaj.org"],
+      "rate_per_s": 1.666667,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://doaj.org/api/v4/docs", "read": "2026-10-21", "inspection": "fetch failed (HTTP 502 twice, Retry-After 60); value carried from the item #71 plan as recorded in vera/search_providers.py (DOAJ section comment)",
+         "claims": "two requests per second (prior record, not re-read today)"}
+      ],
+      "_note": "rate = the existing search.doaj.min_interval_s 0.6 s, under the recorded 2 req/s."
+    },
+    "semantic_scholar": {
+      "hosts": ["api.semanticscholar.org"],
+      "rate_per_s": 1.0,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://www.semanticscholar.org/product/api", "read": "2026-10-21", "inspection": "summarizing fetch of the product page (the api-docs page had no limit text)",
+         "claims": "unauthenticated: 1000 req/s shared among all unauthenticated users; introductory key limit 1 RPS on all endpoints"}
+      ],
+      "_note": "used by vera/source_resolver.py (grounded /ask abstracts). 1/s because the shared unauthenticated pool is contended."
+    },
+    "wikipedia": {
+      "hosts": ["en.wikipedia.org"],
+      "rate_per_s": 2.0,
+      "burst": 2,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "base_cooldown_s": 5.0,
+      "max_cooldown_s": 300.0,
+      "contact_param": null,
+      "sources": [
+        {"url": "https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits", "read": "2026-10-21", "inspection": "summarizing fetch (api.wikimedia.org/wiki/Rate_limits 301-redirects here)",
+         "claims": "unidentified clients 10 req/min, compliant-User-Agent bots 200 req/min; at most 3 concurrent; Retry-After on 429/503; without it wait at least 5 s or back off exponentially"},
+        {"url": "https://www.mediawiki.org/wiki/API:Etiquette", "read": "2026-10-21", "inspection": "summarizing fetch",
+         "claims": "send requests serially; descriptive User-Agent with contact (username, email or URL)"}
+      ],
+      "_note": "rate 2/s = 120/min, under 200/min, which needs the compliant User-Agent (config/encyclopedia_source.json user_agent carries a project URL, no email). Serial per the etiquette page. base_cooldown_s 5 = the documented no-Retry-After wait."
+    },
+    "groq": {
+      "hosts": ["api.groq.com"],
+      "rate_per_s": 0.5,
+      "burst": 2,
+      "max_concurrency": 2,
+      "daily_cap": null,
+      "throttle_statuses": [429],
+      "failure_statuses": [500, 502, 503, 504],
+      "base_cooldown_s": 2.0,
+      "max_cooldown_s": 60.0,
+      "retry_after_max_s": 120.0,
+      "max_wait_s": 1.0,
+      "remaining_headers": [
+        {"remaining": "x-ratelimit-remaining-requests", "reset": "x-ratelimit-reset-requests", "reset_format": "duration", "reserve": 0, "pace": true},
+        {"remaining": "x-ratelimit-remaining-tokens", "reset": "x-ratelimit-reset-tokens", "reset_format": "duration", "reserve": 0, "pace": false}
+      ],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://console.groq.com/docs/rate-limits", "read": "2026-10-21", "inspection": "summarizing fetch",
+         "claims": "429 with retry-after (seconds); headers x-ratelimit-limit/remaining/reset-requests (per day) and -tokens (per minute), reset as durations such as 2m59.56s / 7.66s; free-tier numbers for the configured model NOT on the public page (account limits page needs login)"}
+      ],
+      "_note": "prior: 0.5/s (30/min) because the free-tier numbers were not readable; the headers then pace the real quota. Covers every OpenAI-SDK client pointed at api.groq.com (provider chain, claim check)."
+    },
+    "openrouter": {
+      "hosts": ["openrouter.ai"],
+      "rate_per_s": 0.333333,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": 50,
+      "throttle_statuses": [429],
+      "remaining_headers": [
+        {"remaining": "X-RateLimit-Remaining", "reset": "X-RateLimit-Reset", "reset_format": "auto", "reserve": 0, "pace": true}
+      ],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://openrouter.ai/docs/api-reference/limits", "read": "2026-10-21", "inspection": "summarizing fetch",
+         "claims": ":free models 20 req/min; 50 req/day with under 10 credits purchased (1000/day with 10+); X-RateLimit-* only on 429; Retry-After when providers give a hint"}
+      ],
+      "_note": "INACTIVE in config/ask-provider-chain.json (openrouter_example only). Values are the documented ceilings for :free models with no purchased credits."
+    }
+  }
+}

@@ -2,9 +2,10 @@
 
 Why: error analysis needs the full request, the sources shown, the answer and its cost, one JSONL
 record per question, so later passes (open coding, checks) read evidence and not summaries.
-Two variants: `baseline` sends exactly what /ask sends; `grounded_v1` adds search results and a
-cite-only system prompt. The chat and search callables are injected so tests use fakes and the
-live run is a separate, orchestrator-owned step.
+Three variants: `baseline` is the historical bare model call; `grounded_v1` adds search results and a
+cite-only system prompt; `ask_api` (TRACEEVAL-1022) posts each question to VERA-DAR's real /ask route,
+over HTTP or in-process, so the trace is what a user gets. The chat, search and ask callables are
+injected so tests use fakes and the live run is a separate, owner-authorized step.
 """
 from __future__ import annotations
 
@@ -21,7 +22,18 @@ from vera.pricing.config import PricingRecord
 # Why: recorded in every trace so a later prompt change cannot be confused with this one.
 PROMPT_VERSION_BASELINE = "baseline-v1"
 PROMPT_VERSION_GROUNDED = "grounded-v1"
-PROMPT_VERSIONS = {"baseline": PROMPT_VERSION_BASELINE, "grounded_v1": PROMPT_VERSION_GROUNDED}
+# Why: ask_api sends no prompt of its own; the server owns the prompt, so the version names the route instead.
+PROMPT_VERSION_ASK_API = "ask-api-route"
+PROMPT_VERSIONS = {"baseline": PROMPT_VERSION_BASELINE, "grounded_v1": PROMPT_VERSION_GROUNDED,
+                   "ask_api": PROMPT_VERSION_ASK_API}
+VARIANTS = tuple(PROMPT_VERSIONS)
+
+# Why: the categories the v1 checks are gated on (vera.trace_eval.checks); a case set without them is adapted
+# by explicit, config-held rules (config/trace_eval_guidance.json "case_sets"), never by guessing.
+CHECK_CATEGORIES = ("in_scope_synthesis", "multi_part", "false_premise", "out_of_scope", "ambiguous_or_underspecified")
+
+# Why: /ask fields copied into a trace source; the response carries no passage text by design (no abstracts).
+ASK_SOURCE_FIELDS = ("n", "url", "title", "published", "source_type")
 
 # Why: the questions file is only evidence once frozen; a draft may still change under us.
 REQUIRED_STATUS = "FROZEN"
@@ -47,6 +59,57 @@ GROUNDED_SYSTEM_PROMPT_V1 = (
 
 ChatFn = Callable[[str, list[dict]], "tuple[str, int, int]"]
 SearchFn = Callable[[str], "list[dict]"]
+AskFn = Callable[[str], dict]  # question -> parsed /ask JSON body; raises AskHTTPError on a non-200 status
+
+
+class AskHTTPError(RuntimeError):
+    """A non-200 /ask status. Carries the status code only (never the body, URL or headers)."""
+
+    def __init__(self, status: int):
+        super().__init__(f"/ask returned HTTP {status}")
+        self.status = status
+
+
+# Why: these statuses mean the route cannot answer ANY question (bad key, misconfigured server); stop the run.
+ASK_ABORT_STATUSES = frozenset({401, 403, 500, 503})
+
+
+def load_case_set(path: str | Path, case_set: str, cfg: dict | None = None) -> tuple[dict, str]:
+    """Return (questions document in capture shape, sha256 of the file bytes).
+
+    `frozen`: the v1 trace question file (FROZEN status required; categories and splits as authored; the dev-split
+    labels in docs/trace_eval/ were made on it). Any other name: an un-frozen set adapted by the rules in
+    cfg["case_sets"][name] (first matching rule wins), recorded as not validated for the checks."""
+    if case_set == "frozen":
+        doc, sha = load_questions(path)
+        return {**doc, "case_set": "frozen", "checks_validated": True}, sha
+    rules = ((cfg or {}).get("case_sets") or {}).get(case_set)
+    if not rules:
+        raise ValueError(f"no case_sets rules for {case_set!r} in the guidance config")
+    raw = Path(path).read_bytes()
+    src = json.loads(raw)
+    items = []
+    for q in src.get(rules["items_key"], []):
+        cat = next((r["category"] for r in rules["rules"]
+                    if all(str(v).lower() in str(q.get(k, "")).lower() for k, v in r.get("match", {}).items())),
+                   rules["default_category"])
+        if cat not in CHECK_CATEGORIES:
+            raise ValueError(f"case_sets rule maps to unknown category {cat!r}")
+        items.append({"id": q["id"], "text": q["text"], "category": cat, "split": rules.get("split", "dev")})
+    if not items:
+        raise ValueError(f"case set {case_set!r} has no questions under {rules['items_key']!r}")
+    return {"status": "ADAPTED", "items": items, "case_set": case_set, "checks_validated": False}, \
+        hashlib.sha256(raw).hexdigest()
+
+
+def ask_record_fields(body: dict) -> dict:
+    """Trace fields from one /ask JSON body: answer, numbered sources (no passage text), cost, outcome."""
+    sources = [{k: s.get(k) for k in ASK_SOURCE_FIELDS} | {"snippet": ""} for s in body.get("sources") or []]
+    tokens = body.get("tokens_used")
+    return {"answer": body.get("answer"), "sources": sources, "cost_usd": body.get("cost_usd"),
+            "prompt_tokens": None, "completion_tokens": None, "tokens_used": tokens,
+            "result_kind": body.get("result_kind"), "outcome": body.get("outcome"),
+            "source_text_available": False, "model": body.get("model") or ""}
 
 
 def load_questions(path: str | Path) -> tuple[dict, str]:
@@ -86,8 +149,9 @@ def _cost(pricing: PricingRecord, prompt_tokens: int, completion_tokens: int) ->
     return round(prompt_tokens / 1_000_000 * pricing.input + completion_tokens / 1_000_000 * pricing.output, 6)
 
 
-def capture_one(q_item: dict, variant: str, *, chat: ChatFn, search: SearchFn, pricing: PricingRecord | None = None,
-                model: str = "", questions_sha256: str = "") -> dict:
+def capture_one(q_item: dict, variant: str, *, chat: ChatFn | None = None, search: SearchFn | None = None,
+                pricing: PricingRecord | None = None, model: str = "", questions_sha256: str = "",
+                ask: AskFn | None = None) -> dict:
     """One trace record. Per-question failures are recorded; only authentication errors propagate."""
     question = q_item["text"]
     rec = {
@@ -97,6 +161,18 @@ def capture_one(q_item: dict, variant: str, *, chat: ChatFn, search: SearchFn, p
         "completion_tokens": None, "cost_usd": None, "latency_s": None, "search_meta": None, "error": None,
     }
     start = time.monotonic()
+    if variant == "ask_api":
+        rec["messages"] = baseline_messages(question)  # what the route receives (the user turn only)
+        try:
+            rec.update(ask_record_fields(ask(question)))
+        except AskHTTPError as e:
+            if e.status in ASK_ABORT_STATUSES:
+                raise
+            rec["error"] = f"AskHTTPError: HTTP {e.status}"
+        except Exception as e:  # noqa: BLE001  (recorded per question, type only: a message may carry a host)
+            rec["error"] = type(e).__name__
+        rec["latency_s"] = round(time.monotonic() - start, 3)
+        return rec
     try:
         if variant == "baseline":
             messages = baseline_messages(question)
@@ -122,10 +198,10 @@ def capture_one(q_item: dict, variant: str, *, chat: ChatFn, search: SearchFn, p
     return rec
 
 
-def run_capture(questions: dict, variant: str, out_path: str | Path, *, chat: ChatFn, search: SearchFn,
-                pricing: PricingRecord, model: str, max_cost_usd: float = DEFAULT_MAX_COST_USD,
-                splits: set[str] | list[str] | None = None, questions_sha256: str = "",
-                limit: int | None = None) -> dict:
+def run_capture(questions: dict, variant: str, out_path: str | Path, *, chat: ChatFn | None = None,
+                search: SearchFn | None = None, pricing: PricingRecord | None = None, model: str = "",
+                max_cost_usd: float = DEFAULT_MAX_COST_USD, splits: set[str] | list[str] | None = None,
+                questions_sha256: str = "", limit: int | None = None, ask: AskFn | None = None) -> dict:
     """Append one JSONL record per question; stop verbosely before the cost guard would be exceeded."""
     items = [q for q in questions["items"] if not splits or q.get("split") in set(splits)]
     if limit is not None:
@@ -141,7 +217,9 @@ def run_capture(questions: dict, variant: str, out_path: str | Path, *, chat: Ch
                            f"would exceed ${max_cost_usd:.2f}; stopped before {q['id']}")
                 break
             rec = capture_one(q, variant, chat=chat, search=search, pricing=pricing, model=model,
-                              questions_sha256=questions_sha256)
+                              questions_sha256=questions_sha256, ask=ask)
+            rec["case_set"] = questions.get("case_set", "frozen")
+            rec["checks_validated"] = questions.get("checks_validated", True)
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
             fh.flush()
             done += 1
@@ -178,3 +256,35 @@ def default_search(question: str) -> list[dict]:
         _CHAIN_CACHE["chain"], _CHAIN_CACHE["min"] = default_chain_and_min()
     return search_question(question, num_results=5, providers=_CHAIN_CACHE["chain"],
                            min_candidates=_CHAIN_CACHE["min"])
+
+
+def http_ask(base_url: str, api_key: str, timeout: int | None = None) -> AskFn:
+    """POST /ask over HTTP through vera.public_mode.post_ask (the UI's own client). The base URL and key are
+    closed over and never recorded, printed or raised."""
+    from vera.public_mode import ASK_TIMEOUT_S, post_ask
+
+    def ask(question: str) -> dict:
+        r = post_ask(base_url, question, "normal", api_key, timeout=timeout or ASK_TIMEOUT_S)
+        if r.status_code != 200:
+            raise AskHTTPError(r.status_code)
+        return r.json()
+
+    return ask
+
+
+def inprocess_ask(api_key: str) -> AskFn:
+    """POST /ask in-process through FastAPI's TestClient on main.app: the real route, provider chain and grounding,
+    with no listening socket. Importing main loads its configuration; LLM calls go through its provider chain."""
+    from fastapi.testclient import TestClient
+
+    import main  # noqa: PLC0415  (deliberately lazy: only an authorized run imports the API)
+
+    client = TestClient(main.app)
+
+    def ask(question: str) -> dict:
+        r = client.post("/ask", json={"question": question, "mode": "normal"}, headers={"X-API-Key": api_key})
+        if r.status_code != 200:
+            raise AskHTTPError(r.status_code)
+        return r.json()
+
+    return ask

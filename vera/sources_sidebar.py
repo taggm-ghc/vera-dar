@@ -33,7 +33,28 @@ def _read(path: Path) -> dict | None:
 
 def plain(text: str) -> str:
     """Escape Markdown so a source title renders as literal text."""
-    return _MD_SPECIAL.sub(r"\\\1", str(text))
+    return _MD_SPECIAL.sub(r"\\\1", _CTRL.sub(" ", str(text)).strip())  # control chars (newlines) never survive (SEC U2)
+
+
+_URLISH = re.compile(r"https?://\S+", re.I)  # use fullmatch: `$` would also accept a trailing newline (SEC U2)
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+_CITE_N = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def cited_numbers(answer):
+    """Source numbers cited by the displayed answer text ([n] and [n, m] markers), not by citation rows (SEC U1).
+    None (unknown: every passage counts as cited) when the answer is not text."""
+    if not isinstance(answer, str):
+        return None
+    return {int(x) for m in _CITE_N.finditer(answer) for x in re.findall(r"\d+", m.group(1))}
+_MD_URL_SPECIAL = re.compile(r"([\\`*\[\]<>])")
+
+
+def plain_url(text: str) -> str:
+    """Like plain(), but a URL-looking text keeps its dots, underscores and hyphens unescaped (escaped URLs showed
+    backslashes and broke copy/paste); only characters that could open Markdown/HTML constructs are escaped."""
+    t = str(text)
+    return _MD_URL_SPECIAL.sub(r"\\\1", t) if _URLISH.fullmatch(t) and not _CTRL.search(t) else plain(t)
 
 
 def scope_text(path: Path = SCOPE_PATH) -> str | None:
@@ -42,7 +63,7 @@ def scope_text(path: Path = SCOPE_PATH) -> str | None:
 
 
 # K3.I: UI labels for the page links (labels, not data). Order is the order shown.
-NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Example report"), ("pages/trace_eval.py", "Trace Eval"))
+NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"))
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at"})
@@ -176,9 +197,13 @@ def render_sources_sidebar(st) -> None:
 
 def _link(title: str, url: str) -> str:
     safe_url = str(url or "")
-    if not safe_url.lower().startswith(("https://", "http://")) or any(c in safe_url for c in " ()<>\"'"):
-        return plain(title)
-    return f"[{plain(title)}]({safe_url})"
+    if (not safe_url.lower().startswith(("https://", "http://")) or any(c in safe_url for c in " ()<>\"'")
+            or _CTRL.search(safe_url)):
+        t = str(title or "")
+        if _URLISH.fullmatch(t) and not _CTRL.search(t) and not any(c in t for c in " ()<>\"'"):  # the title is itself a clean URL: make it a link
+            return f"[{plain_url(t)}]({t})"
+        return plain_url(title)
+    return f"[{plain_url(title)}]({safe_url})"
 
 
 def _row_n(s: dict, i: int):
@@ -186,8 +211,30 @@ def _row_n(s: dict, i: int):
     return n if isinstance(n, int) and not isinstance(n, bool) else i
 
 
+def _doc_key(s: dict, i: int):
+    for k in ("canonical_source_id", "document_id", "url"):
+        if s.get(k):
+            return (k, str(s[k]))
+    return ("row", i)
+
+
+def group_sources(sources: list[dict], cited=None) -> list[dict]:
+    """One entry per document: first row supplies title/year/url; `cited` / `other` hold (n, span) of its passages.
+    `cited` None = unknown, so every passage counts as cited. Documents with a cited passage come first."""
+    groups: dict = {}
+    for i, s in enumerate(sources, 1):
+        g = groups.setdefault(_doc_key(s, i), {"row": s, "cited": [], "other": []})
+        n = _row_n(s, i)
+        g["cited" if cited is None or n in cited else "other"].append((n, s.get("span")))
+    return sorted(groups.values(), key=lambda g: not g["cited"])  # stable: cited documents first
+
+
+def _ranges(items) -> str:
+    return ", ".join(plain(str(sp)) for _, sp in items if sp)
+
+
 def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dict | None = None,
-                   fulldoc: bool | None = None) -> None:
+                   fulldoc: bool | None = None, cited=None) -> None:
     """Sources under an Ask answer (main answer area, not the sidebar): numbered (used) and traced originals without a
     free abstract (not used). Abstract wording only for abstract-grounded rows; full-document rows say inspected passages."""
     from vera import ui_evidence
@@ -202,11 +249,23 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
         else:
             st.markdown("**Sources** (published records whose abstracts"
                         f"{f', up to {cap:,} characters each,' if cap else ''} the answer was grounded in)")
-        for i, s in enumerate(sources, 1):
+        announced = False
+        for g in (group_sources(sources, cited) if fulldoc else [
+                {"row": s, "cited": [(_row_n(s, i), s.get("span"))], "other": [], "single": True} for i, s in enumerate(sources, 1)]):
+            s = g["row"]
+            if fulldoc and not g["cited"] and not announced:
+                announced = True
+                st.markdown("**Also admitted, not cited** (documents whose passages were admitted but not used in a cited claim)")
+            nums = ", ".join(str(n) for n, _ in (g["cited"] or g["other"]))
             date = f" ({plain(s['published'])})" if s.get("published") else ""
-            st.markdown(f"[{_row_n(s, i)}] {_link(s.get('title') or s.get('url') or 'source', s.get('url'))}{date}")
+            st.markdown(f"[{nums}] {_link(s.get('title') or s.get('url') or 'source', s.get('url'))}{date}")
             # K3.I (RF2): provider, retrieved_at and licence_decision are not shown publicly (owner-gated view later).
-            meta = " · ".join(plain(str(s[k])) for k in ("identifier", "span") if s.get(k))
+            if g.get("single"):
+                meta = " · ".join(plain_url(str(s[k])) for k in ("identifier", "span") if s.get(k))
+            else:
+                meta = " · ".join(x for x in (plain_url(str(s["identifier"])) if s.get("identifier") else "",
+                                              f"passages used: {_ranges(g['cited'])}" if g["cited"] and _ranges(g["cited"]) else "",
+                                              f"also admitted, not cited: {_ranges(g['other'])}" if g["other"] and _ranges(g["other"]) else "") if x)
             if meta:
                 st.caption(meta)
         if any(s.get("licence_decision") for s in sources):

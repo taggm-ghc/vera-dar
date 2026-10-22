@@ -203,7 +203,18 @@
     "unchecked_note": "Note: parts of the draft that did not cite a passage could not be checked and were left out.",
     "insufficient_marker": "INSUFFICIENT_EVIDENCE",
     "attribution_changes_text": "Short excerpt; the full text was converted from {format} to plain text with no other change.",
-    "max_total_quote_chars": 700,
+    "max_total_quote_chars": 1200,
+    "premise_check": {
+      "_note": "DAR-PREMISE-1022: lets the model flag a false/unsupported/ill-posed question premise as a first-line PREMISE reply; the cited correction goes through the same claim check, and an unverified flag shows only a fixed fallback. UNCALIBRATED on live models (stub-tested only): set enabled=false to restore the previous behaviour. The prefix and fallback wording are fixed in code, not configurable.",
+      "enabled": true
+    },
+    "responsiveness": {
+      "_note": "RESP-1022 (I-05; FMEA F17/F27): the existing claim-check call (no extra call) also returns responsive yes|partial|no per claim, judged from the claim and the question only. 'no' claims are removed and counted (claim_check.nonresponsive_removed); if none is left the answer falls back to the 'nonresponsive' token (reading list / insufficient notice). If no kept claim is 'yes' the answer is labelled partial. The per-claim support, verbatim and quote rules are unchanged; a missing or invalid 'responsive' value is treated as responsive (today's behaviour) and counted as claim_check.responsive_missing; only an explicit 'no' removes and only all-explicit 'partial' labels partial. A missing support verdict still fails closed. Monotone: it can only remove or down-label.",
+      "_calibration_note": "UNCALIBRATED on live Groq models (stub-tested only, 2026-10-21). No precision/recall or false-removal rate measured. Measure in A3.2 (reviewer on-question judgement per row) before claiming the F27 residual is reduced. Rollback: enabled=false (prompt, payload and parsing return to the pre-RESP behaviour).",
+      "enabled": true,
+      "removed_note": "Note: sentences that did not address your question were left out.",
+      "partial_statement": "This is a partial answer: the passages VERA-DAR found address only part of your question."
+    },
     "require_supported_claim": true,
     "verbatim": {
       "_note": "Substantially-verbatim accounting against the FULL text of every bundle document. enabled=false restores the pre-C2 passage-window check only.",
@@ -277,7 +288,8 @@
     "checker_unavailable": "checker_unavailable",
     "claim_check_insufficient": "claim_check_insufficient",
     "claim_check_disabled": "claim_check_disabled",
-    "model_insufficient": "model_insufficient"
+    "model_insufficient": "model_insufficient",
+    "nonresponsive": "nonresponsive"
   },
   "db_bounds": {
     "db_load_deadline_s": 30,

@@ -11,7 +11,7 @@ from vera.discovery_panel import render_discovery
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera.public_mode import is_public_mode, post_ask, upstream_base_url
-from vera.sources_sidebar import render_nav, render_sources, render_sources_sidebar
+from vera.sources_sidebar import cited_numbers, render_nav, render_sources, render_sources_sidebar
 from vera.ui_evidence import (is_fulldoc, render_answer_scope_note, render_citations, render_evidence_scope,
                               render_fallback_reason)
 from vera.ui_safety import safe_markdown
@@ -108,7 +108,8 @@ if st.button("Ask", type="primary"):
                         full = is_fulldoc(data)
                         render_evidence_scope(st, data)  # AE-1020 D3: N documents inspected, M passages admitted
                         render_sources(st, data.get("sources") or [], data.get("traced_sources") or [],
-                                       data.get("claim_check"), fulldoc=full)
+                                       data.get("claim_check"), fulldoc=full,
+                                       cited=cited_numbers(data.get("answer")))
                         render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
                         if full:
                             render_answer_scope_note(st)

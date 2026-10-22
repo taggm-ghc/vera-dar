@@ -1,0 +1,29 @@
+{
+  "_doc": "WIKIREF-1022: English Wikipedia as a DISCOVERY PORTAL ONLY (owner 2026-10-22: \"ignore wikipedia for information, it is usable only as a portal to search for urls to sources\"). Read only by vera/wiki_ref_portal.py. The module extracts scholarly identifiers (DOI, PMCID, PMID, arXiv) cited by the matching articles and emits acquisition candidates; Wikipedia text is never evidence, never stored, never logged, never in a candidate. OFF unless `enabled` is exactly true. Not wired in until an integrator applies work/wikiref-1022/INTEGRATION.md. No key, no secret, no env read.",
+  "_calibration_note": "max_articles, max_refs, timeout_s and the budget are planner priors, not decision thresholds: every decision gate (resolve, licence, injection, relevance, admission) is the unchanged acquisition gate the candidates go through. Live shape check 2026-10-22 (work/wikiref-1022/INTEGRATION.md, section Observed shapes): field names only; not a latency calibration. Calibrate from 'autoacq wikiref' log lines.",
+  "enabled": true,
+  "api_url": "https://en.wikipedia.org/w/api.php",
+  "allowed_hosts": ["en.wikipedia.org"],
+  "user_agent": "VERA-DAR-wiki-ref-portal/0.1 (non-commercial educational research assistant; identifier discovery only; https://github.com/taggm-ghc/vera-dar)",
+  "max_articles": 3,
+  "max_refs": 20,
+  "max_links": 10,
+  "timeout_s": 3,
+  "budget": {
+    "max_requests_per_question": 4,
+    "max_response_bytes": 4000000,
+    "_note": "per question: ONE generator=search request returns the matching articles' wikitext (prop=revisions); continuation requests (the API splits large results) are allowed while the budget lasts. No retry: a failed request ends the portal for that question (the other providers stand). Bodies over max_response_bytes are refused before parsing."
+  },
+  "query": {
+    "strip_terms": ["what", "which", "who", "whom", "whose", "when", "where", "why", "how", "is", "are", "was", "were", "be", "do", "does", "did", "the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "with", "between", "about", "there", "can", "you", "me", "i", "please", "key", "main", "major", "differences", "difference", "different", "types", "type", "kinds", "kind", "explain", "describe", "tell", "give", "list", "vs", "versus"],
+    "max_terms": 8,
+    "max_query_chars": 300
+  },
+  "rank": {
+    "use_citing_sentence": true,
+    "stem_len": 5,
+    "max_context_chars": 400,
+    "_note": "the sentence before each <ref> is compared to the question (stem overlap) IN MEMORY to order the identifiers, then discarded. Citations outside a sentence (bibliography lists) score 0 and keep article order."
+  },
+  "skip_disambiguation": true
+}

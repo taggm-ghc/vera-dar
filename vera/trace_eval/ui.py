@@ -1,6 +1,7 @@
 """Streamlit renderer for the TRACE results (item #70; decision guidance added 2026-10-07). Reads only the committed JSON files; no API, DB or env."""
 import copy
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -8,19 +9,33 @@ import streamlit as st
 
 RESULTS_PATH = "eval_results/trace_eval_v1.json"
 VALIDATION_PATH = "eval_results/trace_eval_v1_validation.json"
+# Why: a capture run writes its results to a work/ path; these optional env vars (paths, not secrets) point the page at
+# it without editing code. Unset means the default paths above.
+RESULTS_ENV, VALIDATION_ENV = "VERA_TRACE_EVAL_RESULTS", "VERA_TRACE_EVAL_VALIDATION"
 ARXIV_PREFIX = "https://arxiv.org/"  # Why: the only links the page ever shows, and only if the file supplies them.
 
 # K3.P2: fixed public texts. Nothing from the data (error text, labeller, paths, exceptions) is ever formatted into them.
 CAPTURE_ERROR_TEXT = ("Capture error: this answer could not be captured, so it counts as a failure. "
                       "Details are kept off the public page.")
-MISSING_RESULTS_TEXT = "Results are not available yet."
+MISSING_RESULTS_TEXT = "No trace evaluation results yet."
+# Fixed how-to for the empty state (no paths, hosts or script names on the public page).
+HOW_TO_PRODUCE_TEXT = (
+    "**How to produce them.** An authorized operator (1) captures answers to the frozen evaluation questions from "
+    "VERA-DAR's answer route, (2) scores every answer with the rule-based checks, and (3) points this page at the "
+    "results file that step writes. Capturing makes paid or rate-limited model calls, so it runs only with the "
+    "owner's authorization; scoring is offline. The repository's trace-capture script documents the exact commands, "
+    "including a dry run that makes no calls.")
+VALIDATION_VERSION_TEXT = ("Check trust below was measured on an earlier version of the checks and on the "
+                           "frozen question set's historical answers; treat it as indicative for this run.")
+NO_BASELINE_TEXT = ("This run has a single variant, so no paired comparison is computed; the tables below report its "
+                    "pass rates per check, per dimension and per question category.")
 GUIDANCE_UNAVAILABLE_TEXT = "Decision guidance is unavailable right now."
 RENDER_ERROR_TEXT = "This section could not be shown."
 LABELLER_TEXT = "an independent AI agent, blind to the automated verdicts"
 
 # Public display names (OD-SIDEBAR-2, deny by default): raw variant and check identifiers never render.
 # Names not in these maps become "Variant N" / "Check N" (sorted order), so a new raw name cannot reach the page.
-VARIANT_NAMES = {"baseline": "Baseline", "grounded_v1": "Grounded"}
+VARIANT_NAMES = {"baseline": "Baseline", "grounded_v1": "Grounded", "ask_api": "Live answers"}
 CHECK_NAMES = {"A1_citation_present": "Citation present", "A2_citations_resolve": "Citations resolve",
                "A3_numbers_grounded": "Numbers grounded", "A4_phantom_evidence": "No phantom evidence",
                "A5_window": "Time window", "A6_support": "Support", "A7_premise_corrected": "False premise corrected",
@@ -54,6 +69,15 @@ def _public_labels(res: dict, val: dict | None, cfg: dict | None):
                 c["name"] = cm[str(c["name"])]
     if val:
         val["per_check"] = {cm[str(n)]: c for n, c in val.get("per_check", {}).items()}
+    for d in res["variants"].values():
+        dims = {}
+        for dim, c in (d.get("per_dimension") or {}).items():
+            shown = cm.get(str(dim), str(dim)) if str(dim) in cm else str(dim)
+            dims[shown] = {**c, "checks": [cm.get(str(n), str(n)) for n in c.get("checks", [])]}
+        d["per_dimension"] = dims
+    if cfg:
+        descs = cfg.get("variant_descriptions") or {}
+        cfg["variant_descriptions"] = {vm[str(k)]: v for k, v in descs.items() if str(k) in vm}
     if cfg and cfg.get("baseline_variant") is not None:
         cfg["baseline_variant"] = vm[str(cfg["baseline_variant"])]
     return res, val, cfg
@@ -138,16 +162,33 @@ def _cfg():
         return None
 
 
-def _context(res: dict) -> None:
+def _context(res: dict, cfg: dict | None = None) -> None:
     """1. Context: a short setup only (what was evaluated, which system, when); detail lives in Elaboration."""
     captured = str(res.get("generated_at") or "")[:10] or "unknown"
     n_q = len({t.get("id") for t in res.get("traces", []) if t.get("id")})
-    variants = ", ".join(res.get("variants", {}))
-    st.markdown(f"**Context.** {n_q} frozen agent-authored questions, each answered by: {variants}. Baseline is VERA-DAR's "
-                "answer service as it was at capture time (a single call to a third-party hosted language model, with "
-                "no search; the service may have changed since); Grounded adds VERA-DAR's arXiv search, numbered abstracts "
-                "and a cite-only rule. Rule-based checks score every answer.")
+    descs = (cfg or {}).get("variant_descriptions") or {}
+    parts = [f"{v} ({descs[v]})" if v in descs else v for v in res.get("variants", {})]
+    run = res.get("run") or {}
+    kind = "frozen agent-authored" if run.get("checks_validated", True) else "un-frozen, adapted"
+    st.markdown(f"**Context.** {n_q} {kind} questions, each answered by: {'; '.join(parts)}. "
+                "Rule-based checks score every answer; the system may have changed since capture.")
     st.caption(f"Snapshot captured {captured} (UTC); re-running the evaluation replaces these results and this date.")
+
+
+def _run_caveats(res: dict) -> list[str]:
+    """Caveats computed from the results file's run facts (absent facts = no caveat; never a fixed conclusion)."""
+    run, out = res.get("run") or {}, []
+    if run.get("checks_validated") is False:
+        out.append("The checks were validated only on the frozen question set, not on this one.")
+    if run.get("source_text_unavailable"):
+        out.append(f"{run['source_text_unavailable']} answers came without source text, so the number and support "
+                   "checks did not apply to them.")
+    errors = run.get("capture_errors")
+    if errors is None:  # older results files carry no run facts; count from the traces themselves
+        errors = sum(1 for tr in res.get("traces", []) if tr.get("error"))  # truth test only
+    if errors:
+        out.append(f"{errors} answers could not be captured; they count as failures.")
+    return out
 
 
 def _tldr(res: dict, overall, checks, trust, cfg: dict) -> None:
@@ -156,7 +197,7 @@ def _tldr(res: dict, overall, checks, trust, cfg: dict) -> None:
     text = g.tldr(overall, checks, trust, cfg)
     n_q = len({t.get("id") for t in res.get("traces", []) if t.get("id")})
     st.info(f"**TL;DR (computed from the results below)**\n\n{text}\n\n**Main caveat:** {n_q} agent-authored "
-            "questions (small n, self-preference risk); checks are heuristics; grounding used abstracts only.")
+            "questions (small n, self-preference risk); checks are heuristics. " + " ".join(_run_caveats(res)))
     st.caption("Assembled from the paired tests and check validation on this page; not a new model judgement.")
 
 
@@ -190,7 +231,7 @@ def _decisioning(overall, checks, trust, cfg) -> None:
         "- **Re-run after each change** and compare the paired tables, not just the headline.")
 
 
-def _elaboration(cfg, val: dict | None) -> None:
+def _elaboration(cfg, val: dict | None, res: dict | None = None) -> None:
     """5. Elaboration: the math, check validation detail and the full caveats."""
     from vera.trace_eval import guidance as g
     st.subheader("Elaboration")
@@ -217,10 +258,9 @@ def _elaboration(cfg, val: dict | None) -> None:
         st.info("Check validation not yet available")
     else:
         _validation(val)
-    st.warning("Caveats: questions are agent-authored (self-preference risk); a single agent coded the checks "
-               "and labelled the validation set, both from the same model family; n is small; checks are "
-               "heuristics validated on dev only; grounding uses abstracts only; search rate limits caused "
-               "capture errors, which count as failures.")
+    st.warning(" ".join(["Caveats: questions are agent-authored (self-preference risk); a single agent coded the checks "
+                         "and labelled the validation set, both from the same model family; n is small; checks are "
+                         "heuristics validated on dev only."] + _run_caveats(res or {})))
 
 
 def _data(res: dict) -> None:
@@ -234,7 +274,25 @@ def _data(res: dict) -> None:
     st.dataframe(table, hide_index=True)
     if not chart.empty:
         st.bar_chart(chart)
+    st.markdown("**Per dimension** (checks pooled by what they measure)")
+    st.dataframe(_per_group(res, "per_dimension", "dimension"), hide_index=True)
+    st.markdown("**Per question category** (share of answers that passed every applicable check)")
+    st.dataframe(_per_group(res, "per_category", "category"), hide_index=True)
     _browser(res)
+
+
+def _per_group(res: dict, key: str, label: str) -> pd.DataFrame:
+    rows = []
+    for v, d in res.get("variants", {}).items():
+        for name, c in (d.get(key) or {}).items():
+            den = c.get("applies", c.get("n"))
+            num = c.get("passed", c.get("all_pass"))
+            row = {"variant": v, label: str(name), "passed": f"{num}/{den}", "rate": _pct(c.get("rate")),
+                   "Wilson 95%": _ci(c.get("wilson95"))}
+            if "checks" in c:
+                row["checks"] = ", ".join(c["checks"])
+            rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _browser(res: dict) -> None:
@@ -265,12 +323,17 @@ def _browser(res: dict) -> None:
         st.markdown(f"- [{title}]({url})" if url.startswith(ARXIV_PREFIX) else f"- {title}")
 
 
-def render_trace_eval(results_path=RESULTS_PATH, validation_path=VALIDATION_PATH) -> None:
+def _resolve_paths(results_path, validation_path):
+    return (results_path or os.environ.get(RESULTS_ENV) or RESULTS_PATH,
+            validation_path or os.environ.get(VALIDATION_ENV) or VALIDATION_PATH)
+
+
+def render_trace_eval(results_path=None, validation_path=None) -> None:
     """Order (literature-checked): context, TL;DR with caveat, computed determinations, decisioning,
     elaboration, data. Any exception in the body shows one fixed line (no type, text or traceback)."""
     st.title("VERA-DAR Trace Eval")
     try:
-        _render_body(results_path, validation_path)
+        _render_body(*_resolve_paths(results_path, validation_path))
     except Exception:  # noqa: BLE001  (Streamlit's rerun/stop signals derive from BaseException and pass through)
         st.error(RENDER_ERROR_TEXT)
 
@@ -278,20 +341,25 @@ def render_trace_eval(results_path=RESULTS_PATH, validation_path=VALIDATION_PATH
 def _render_body(results_path, validation_path) -> None:
     from vera.trace_eval import guidance as g
     res = _load(results_path)
-    if res is None:
+    if res is None or not res.get("traces"):
         st.warning(MISSING_RESULTS_TEXT)
+        st.info(HOW_TO_PRODUCE_TEXT)
         return
     val, cfg = _load(validation_path), _cfg()
     res, val, cfg = _public_labels(res, val, cfg)
-    _context(res)
+    _context(res, cfg)
     if cfg is None:
         st.info(GUIDANCE_UNAVAILABLE_TEXT)
         _data(res)
         return
     overall, checks = g.compare_overall(res, cfg), g.compare_checks(res, cfg)
     trust = _trust_rows(val, cfg)
+    if val and val.get("checks_version") != res.get("checks_version"):
+        st.caption(VALIDATION_VERSION_TEXT)
+    if cfg.get("baseline_variant") not in res.get("variants", {}):
+        st.info(NO_BASELINE_TEXT)
     _tldr(res, overall, checks, trust, cfg)
     _determinations(overall, checks, trust)
     _decisioning(overall, checks, trust, cfg)
-    _elaboration(cfg, val)
+    _elaboration(cfg, val, res)
     _data(res)
