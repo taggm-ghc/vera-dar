@@ -130,6 +130,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     if not decision.accepted:
         trig = None
         inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
+        ia: dict = {"status": "off"} if acq is None else {}  # P0-B1b: inline outcome for a declined non-answer (Report)
         if acq is not None:
             from vera import acq_config
             if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
@@ -142,11 +143,14 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                         pre = acq_config.override_answer_prefix(acq)
                         return replace(out, answer=f"{pre} {out.answer}" if pre else out.answer, accepted=False,
                                        contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
+                    info: dict = {}
                     inl = _inline(question, model, pricing, decision, chained, grounding, acq,
-                                  tried=_doc_keys(used.get("acq")))
+                                  tried=_doc_keys(used.get("acq")), info=info)
                     if isinstance(inl, AskResult):
                         return inl
                     inline_note = inl
+                    ia = info.get("outcome") or {}
+        iac = {"inline_acquisition": ia} if ia else {}
         # DAR-1021 (FIX1 + P1.7): a qualifying layer-2 out-of-scope verdict shows the FIX1 notice + scholarly reading
         # list AND keeps P1.7's background acquisition trigger (same trig as the refusal would carry). The list itself
         # never admits anything (sources=()); acquired documents never answer a declined question unless
@@ -154,15 +158,16 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
         if off is not None:
             if not trig:
-                return off
+                return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
             from vera import acq_config
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
             return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer,
-                           contract={**(off.contract or {}), **_inline_trace(inline_note)} if _inline_trace(inline_note) else off.contract,
+                           contract={**(off.contract or {}), **_inline_trace(inline_note), **iac} if (_inline_trace(inline_note) or iac) else off.contract,
                            acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
                            **_spent(inline_note))
         return replace(AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
-                                 result_kind="decline", acquire_trigger=trig if inline_note is None else None),
+                                 result_kind="decline", acquire_trigger=trig if inline_note is None else None,
+                                 **({"contract": iac} if iac and acq is not None else {})),  # feature off: the bare refusal stays byte-identical
                        **_spent(inline_note))
     from vera import answer_contract as contract
 
@@ -174,7 +179,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         return _reading_list(question, model, pricing, decision, chained, grounding, contract)
     ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
     inline_note = None
-    if acq is not None and _layer1_clean(question):  # DAR-INLINE-1021-R2 must-have 1: in-scope, nothing answered
+    ia: dict = {}  # P0-B1: the inline outcome for a non-answer, so the Report can say whether a search was made
+    if acq is None:
+        ia = {"status": "off"}  # automatic acquisition effectively off (flag, kill switch or DB env): not attempted
+    elif _layer1_clean(question):  # DAR-INLINE-1021-R2 must-have 1: in-scope, nothing answered
         from vera import inline_acquire
         from vera import fulldoc_corpus
         ft = fulldoc_corpus.load_config()["fallback_tokens"]
@@ -183,16 +191,18 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         # is nonresponsive too, it returns a notice and the request falls through to the reading list (no loop).
         retry_tokens = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"))
         if inline_acquire.icfg_of(acq).get("in_scope") is True and token and token in retry_tokens:
+            info: dict = {}
             inl = _inline(question, model, pricing, decision, chained, grounding, acq, tried=_doc_keys(used_in.get("acq")),
-                          in_scope=True)
+                          in_scope=True, info=info)
             if isinstance(inl, AskResult):
                 return inl
             inline_note = inl
+            ia = info.get("outcome") or {}
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
                    contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
-                             **_inline_trace(inline_note)}, **trig,
+                             **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
                    **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
 
 
@@ -238,15 +248,21 @@ def _inline_trace(note) -> dict:
     return {"inline_fallback": tok} if tok else {}
 
 
-def _inline(question, model, pricing, decision, chained, grounding, acq, tried=None, in_scope=False):
+def _inline(question, model, pricing, decision, chained, grounding, acq, tried=None, in_scope=False, info=None):
     """DAR-INLINE-1021: acquire inline (vera.inline_acquire) and answer from an EPHEMERAL corpus of exactly the
     just-admitted documents through the unchanged admission, answer writer and claim check. Returns an AskResult (an
-    answer), else the honest reading-list notice (str) when a search was made, else None (no search: today's path)."""
+    answer), else the honest reading-list notice (str) when a search was made, else None (no search: today's path).
+    P0-B1: `info` (a dict) receives "outcome", the public inline outcome ({"status": ...}), for the non-answer contract."""
     from vera import acq_config, fulldoc_corpus, inline_acquire
 
     if not fulldoc_corpus.flag_enabled(fulldoc_corpus.load_config()):  # VER L6: no answer path -> never acquire inline
+        if info is not None:
+            info["outcome"] = {"status": "off"}
         return None
     o = inline_acquire.acquire(question, acq, served=tried)  # R2: only documents actually tried are skipped
+    if info is not None:
+        st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
+        info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
     if o.corpus is None:
         return inline_acquire.notice(acq, o.status)
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)

@@ -214,3 +214,18 @@ def test_page_offline_suite_section():
     t = (ROOT / "eval_results" / "trace_eval_offline_public.json").read_text()
     for bad in ("http", "Synthetic", "prompt", "messages"):
         assert bad not in t
+
+
+def test_base_url_must_be_loopback(monkeypatch, capsys):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("trace_run_t", Path(__file__).resolve().parent.parent / "scripts" / "trace_run.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m._loopback("http://127.0.0.1:8001") and m._loopback("http://localhost:8001/") and not m._loopback("https://example.org")
+    assert not m._loopback("http://127.0.0.1@evil.example") and not m._loopback("ftp://127.0.0.1")
+    monkeypatch.setenv(m.CONFIRM_ENV, m.CONFIRM_VALUE)
+    argv = ["--live", "--base-url", "https://example.org", "--max-cases", "1", "--max-cost", "0.05", "--min-interval-s", "1",
+            "--timeout-s", "60", "--total-timeout-s", "300"]
+    assert m.main(argv) == 2
+    assert "loopback" in capsys.readouterr().err

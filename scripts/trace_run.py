@@ -51,6 +51,8 @@ def _parse(argv):
     ap.add_argument("--min-interval-s", type=float, help="minimum seconds between /ask calls (rate)")
     ap.add_argument("--timeout-s", type=float, help="per-call timeout (http target)")
     ap.add_argument("--total-timeout-s", type=float, help="whole-run wall-clock limit")
+    ap.add_argument("--base-url", help="http target only: explicit API base URL; must be loopback (127.0.0.1, localhost, [::1]). "
+                    "Overrides VERA_API_BASE_URL, which the project env loader may set from a file.")
     ap.add_argument("--private-dir", default=str(auto.PRIVATE_DIR), help="per-case results (gitignored)")
     ap.add_argument("--public-out", default=str(auto.PUBLIC_OUT), help="public aggregate file (--live; --offline with --publish)")
     ap.add_argument("--publish", action="store_true", help="offline only: also write the public file (default: private dir only)")
@@ -80,6 +82,15 @@ def _limits(a) -> tuple[dict | None, str]:
         if vals[k] > c:
             return None, f"--{k.replace('_', '-')} exceeds the ceiling {c}"
     return vals, ""
+
+
+def _loopback(url: str) -> bool:
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+        return u.scheme in ("http", "https") and (u.hostname or "") in ("127.0.0.1", "localhost", "::1") and not u.username
+    except ValueError:
+        return False
 
 
 def _load_live(a):
@@ -135,6 +146,9 @@ def main(argv=None) -> int:
     if lim is None:
         print(f"REFUSED: {why}", file=sys.stderr)
         return 2
+    if a.base_url is not None and not _loopback(a.base_url):
+        print("REFUSED: --base-url must be a loopback address (127.0.0.1, localhost or [::1])", file=sys.stderr)
+        return 2
     if os.environ.get(CONFIRM_ENV) != CONFIRM_VALUE:
         print(f"REFUSED: {CONFIRM_ENV} is not set to the owner confirmation phrase (live runs are owner-triggered)", file=sys.stderr)
         return 2
@@ -153,7 +167,8 @@ def main(argv=None) -> int:
         raw_ask = capture.inprocess_ask(key)
     else:
         from vera.public_mode import upstream_base_url
-        raw_ask = capture.http_ask(upstream_base_url(local_url_file=ROOT / ".vera-local-url"), key, timeout=int(lim["timeout_s"]))
+        base = a.base_url.rstrip("/") if a.base_url else upstream_base_url(local_url_file=ROOT / ".vera-local-url")
+        raw_ask = capture.http_ask(base, key, timeout=int(lim["timeout_s"]))
     ask = auto.guarded_ask(raw_ask, min_interval_s=lim["min_interval_s"], total_timeout_s=lim["total_timeout_s"])
     res = auto.execute_run(doc=doc, source_sha=sha, ask=ask, mode="live", trigger=a.trigger, private_dir=Path(a.private_dir),
                            run_id=_run_id(), limit=lim["max_cases"], max_cost=lim["max_cost"], provider="vera-ask-route",

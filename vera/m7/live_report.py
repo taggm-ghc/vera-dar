@@ -64,6 +64,11 @@ DOC_OUTCOME = {"persisted": "added to VERA-DAR's collection", "below_persist_min
 STAGE_LABEL = {"search": "search", "reuse": "reuse of stored documents", "evaluate": "document checks",
                "write": "storing documents", "corpus": "collection rebuild", "total": "acquisition total"}
 OTHER = "other"
+SCOPE_OVERRIDE_NOTE = ("Scope policy: this question is outside VERA-DAR's curated scope. An answer was allowed only from "
+                       "documents VERA-DAR acquired after licence, content and relevance checks. A supported claim means "
+                       "its source says so; it does not show the answer is complete or on point.")
+SCOPE_DECLINED_NOTE = ("Scope policy: this question is outside VERA-DAR's curated scope and no answer was authorized. "
+                       "Any search or listing that followed was a reading list only, not evidence for an answer.")
 
 
 # --- server-side resolution (never rendered) -------------------------------------------------------------------
@@ -113,12 +118,54 @@ def _str(v, limit: int) -> str:
     return ui_evidence._clean(v, limit) if isinstance(v, str) else ""
 
 
+def _source_key(s: dict, i: int):
+    """B2-1022: one key per document, so several admitted passages of one publication group together."""
+    for k in ("identifier", "url", "title"):
+        v = s.get(k)
+        if isinstance(v, str) and v.strip():
+            return (k, v.strip().lower())
+    return ("row", i)
+
+
+def _scope_policy(contract: dict, is_answer: bool) -> str:
+    """B2-1022: say what the scope policy decided and whether later work authorized an answer or was only listing."""
+    if contract.get("offtopic") is not True:
+        return ""
+    if is_answer:
+        return SCOPE_OVERRIDE_NOTE
+    return SCOPE_DECLINED_NOTE
+
+
 def _tally(values, labels: dict) -> dict:
     out: dict = {}
     for v in values:
         lab = labels.get(v, OTHER) if isinstance(v, str) else "not recorded"
         out[lab] = out.get(lab, 0) + 1
     return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def docs_inline(inline: dict) -> list:
+    return ui_evidence._list(inline.get("documents"))
+
+
+def _pipeline(data: dict, cc: dict, contract: dict, is_answer: bool, n_cands: int, n_fetched: int) -> list[str]:
+    """B2-1022: one line per stage, kept apart: discovered, fetched, inspected, admitted, claims, authorization, answer.
+    A stage the response does not report is said to be not reported, never inferred."""
+    adm = data.get("admitted_evidence")
+    m = ui_evidence._count(adm)
+    k = ui_evidence._distinct_docs(adm) if isinstance(adm, list) else 0
+    n = ui_evidence._distinct_docs(data.get("examined_full_documents"))
+    checked, supported = ui_evidence._count(cc.get("checked")), ui_evidence._count(cc.get("supported"))
+    authorized = m > 0 and (contract.get("offtopic") is not True or is_answer)  # admitted, so the writer ran
+    return [f"Listed as candidates (found, not read): {n_cands}.",
+            f"Documents fetched for this question: {n_fetched}." if n_fetched else
+            "Documents fetched for this question: not reported separately.",
+            f"Documents inspected: {n}.",
+            f"Passages admitted as evidence: {m}" + (f", from {k} document{'s' if k != 1 else ''}." if m and k else "."),
+            f"Claims checked: {checked}; supported by their source passage: {supported}." if cc else
+            "Claims checked: none.",
+            "Evidence authorized for answer generation: " + ("yes." if authorized else "no."),
+            "Answer generated: " + ("yes." if is_answer else "no.")]
 
 
 def build_live_report(data, question: str, latency_s: float) -> dict:
@@ -143,20 +190,28 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
                        "passage": _str(c.get("quote_span") or c.get("span") or "", REF_MAX),
                        "quote": _str(c.get("quote"), cap)})
 
-    groups, by_n = [], {}
+    groups, by_n, by_doc = [], {}, {}
     for i, s in enumerate(sources, 1):
         n = _int(s.get("n")) or i
-        g = {"n": n, "title": _str(s.get("title") or s.get("url") or "source", 300), "url": _str(s.get("url"), 2000),
-             "published": _str(s.get("published"), 40), "identifier": _str(s.get("identifier"), 120),
-             "licence": _str(s.get("licence"), 120), "excerpts": [], "attribution": None}
-        groups.append(g)
+        g = by_doc.get(_source_key(s, i))
+        if g is None:
+            g = {"n": n, "ns": [], "passages": [], "title": _str(s.get("title") or s.get("url") or "source", 300),
+                 "url": _str(s.get("url"), 2000), "published": _str(s.get("published"), 40),
+                 "identifier": _str(s.get("identifier"), 120), "licence": _str(s.get("licence"), 120),
+                 "excerpts": [], "attribution": None}
+            groups.append(g)
+            by_doc[_source_key(s, i)] = g
+        g["ns"].append(n)
+        if _str(s.get("span"), REF_MAX):
+            g["passages"].append(_str(s.get("span"), REF_MAX))
         by_n.setdefault(n, g)
     for c, row in zip(cites, claims):
         g = by_n.get(row["n"])
         at = _d(c.get("attribution"))
         if g is None:  # a citation whose source row is absent: group it under its attribution
-            g = {"n": row["n"], "title": _str(at.get("title") or "source", 300), "url": _str(at.get("source"), 2000),
-                 "published": "", "identifier": "", "licence": "", "excerpts": [], "attribution": None}
+            g = {"n": row["n"], "ns": [row["n"]], "passages": [], "title": _str(at.get("title") or "source", 300),
+                 "url": _str(at.get("source"), 2000), "published": "", "identifier": "", "licence": "", "excerpts": [],
+                 "attribution": None}
             groups.append(g)
             by_n[row["n"]] = g
         g["excerpts"].append({"claim": row["claim"], "verdict": row["verdict"], "quote": row["quote"],
@@ -170,7 +225,8 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
                   "candidate_spans": _int(d.get("candidate_spans")), "admitted_spans": _int(d.get("admitted_spans"))}
                  for d in examined]
 
-    found = sources + cands + traced
+    uniq_sources = list({_source_key(x, i): x for i, x in reversed(list(enumerate(sources, 1)))}.values())[::-1]
+    found = uniq_sources + cands + traced  # distinct documents, not one entry per admitted passage
     docs = ui_evidence._list(inline.get("documents"))
     ms = _d(inline.get("ms"))
     search = {
@@ -201,6 +257,8 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
                                                "url": _str(c.get("url"), 2000),
                                                "published": _str(c.get("published"), 40)}
                                               for c in cands[:CANDIDATES_SHOWN_MAX]],
+        "scope_policy": _scope_policy(contract, is_answer),
+        "pipeline": _pipeline(data, cc, contract, is_answer, len(cands), len(docs_inline(inline))),
         "scope": ui_evidence.evidence_scope_line(data) or "",
         "scope_source": ui_evidence.evidence_source_line(data) or "",
         "search": search,
@@ -234,6 +292,9 @@ def render_live_report(st, rep: dict, r=None) -> None:
     else:
         st.info(r(rep.get("no_answer_reason")))
 
+    if rep.get("scope_policy"):
+        st.caption(r(rep["scope_policy"]))
+
     st.header("2. Claim check")
     if rep.get("claim_check"):
         st.caption(r(rep["claim_check"]))
@@ -247,7 +308,10 @@ def render_live_report(st, rep: dict, r=None) -> None:
     st.header("3. Sources and short excerpts, by document")
     for g in rep.get("groups") or []:
         date = f" ({plain(r(g['published']))})" if g.get("published") else ""
-        st.markdown(f"**[{g['n']}]** {_ln(r, g['title'], g['url'])}{date}")
+        nums = ", ".join(str(x) for x in (g.get("ns") or [g["n"]]))
+        st.markdown(f"**[{nums}]** {_ln(r, g['title'], g['url'])}{date}")
+        if len(g.get("ns") or []) > 1 and g.get("passages"):
+            st.caption("Admitted passages: " + "; ".join(plain(r(p)) for p in g["passages"]))
         if g.get("identifier"):
             st.caption(plain(r(g["identifier"])))
         # INT-1022-B disposition: each source's own licence as reported in its record (never a fixed "CC BY"); the
@@ -286,6 +350,8 @@ def render_live_report(st, rep: dict, r=None) -> None:
     st.caption(r(rep.get("scope") or "This report carries no full-document evidence fields."))
     if rep.get("scope_source"):
         st.caption(r(rep["scope_source"]))
+    for line in rep.get("pipeline") or []:
+        st.caption(r(line))
 
     st.header("5. Search and acquisition")
     s = rep.get("search") or {}

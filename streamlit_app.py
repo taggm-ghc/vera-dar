@@ -82,6 +82,11 @@ question = st.text_input(
     help=ask_help_text()
 )
 
+METRICS_SCOPE_NOTE = ("Counts the answer-writing and scope-check model calls for this request, plus the answer checker's "
+                      "cost when it is priced. It excludes the checker's tokens and any background indexing. "
+                      "0 means no counted model call ran.")
+
+
 def _send_question(question: str, force_bad: bool) -> None:
     """Send one /ask (after the wake-up) and render the result."""
     with st.spinner("🤔 Thinking..."):
@@ -123,6 +128,7 @@ def _send_question(question: str, force_bad: bool) -> None:
                     st.metric("Tokens Used", f"{int(data.get('tokens_used') or 0):,}")
                 with col2:
                     st.metric("Cost", f"${float(data.get('cost_usd') or 0):.6f}")
+                st.caption(METRICS_SCOPE_NOTE)
 
                 # K5.2.I: raw JSON is a dev-mode (owner debug) view only; public mode renders none.
                 if not PUBLIC:

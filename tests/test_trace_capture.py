@@ -110,3 +110,23 @@ def test_per_question_error_recorded_and_run_continues(tmp_path):
     rows = [json.loads(x) for x in out.read_text().splitlines()]
     assert s["n"] == 2 and s["errors"] == 1
     assert rows[0]["error"].startswith("TimeoutError") and rows[1]["error"] is None
+
+
+def test_ask_detail_kept_in_trace_never_in_public():
+    import json
+    from vera import trace_viz
+    from vera.trace_eval import capture, measure
+    body = {"answer": "A [1].", "model": "m", "tokens_used": 5, "cost_usd": 0.0, "result_kind": "answer", "outcome": "answer",
+            "sources": [{"n": 1, "url": "https://x.org/a", "title": "T", "published": "2025", "source_type": "paper"}],
+            "citations": [{"claim_id": 1, "n": 1, "span_id": "SPAN_SENTINEL", "verdict": "supported", "quote": "q"}],
+            "admitted_evidence": [{"span_id": "SPAN_SENTINEL"}], "examined_full_documents": [{"document_id": "d"}],
+            "claim_check": {"kept": 1}, "evidence_status": "ok", "contract": {"layers": []}}
+    rec = capture.ask_record_fields(body)
+    d = rec["ask_detail"]
+    assert set(d) == set(capture.ASK_DETAIL_FIELDS) and d["citations"][0]["verdict"] == "supported"
+    assert "ask_detail" not in capture.ask_record_fields({"answer": "x"}) or capture.ask_record_fields({"answer": "x"})["ask_detail"] == {}
+    full = {"id": "q1", "split": "dev", "category": "in_scope_synthesis", "variant": "ask_api", "error": None, **rec}
+    row = measure.trace_row(full)
+    assert "ask_detail" not in row
+    res = {"generated_at": "t", "traces": [row], "variants": {}}
+    assert "SPAN_SENTINEL" not in json.dumps(trace_viz.build_public(res, [full], run_meta=None))

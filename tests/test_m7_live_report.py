@@ -238,3 +238,55 @@ def test_each_source_shows_its_own_licence_not_a_fixed_cc_by():
     joined = "\n".join(texts).replace("\\", "")  # drop markdown escapes
     assert "CC BY-NC 4.0" in joined and "cc by-nc-sa" in joined and "CC0 1.0" in joined
     assert "CC BY 4.0" not in joined
+
+
+# --- B2-1022: out-of-scope override answer; one entry per document; stage vocabulary ----------------------------
+
+def _b2_body(**over):
+    rows = [{"n": i, "title": "Same Paper", "url": "https://example.org/p", "identifier": "doi:10.1/p",
+             "span": f"chars={i}0-{i}9", "provider": "full_document"} for i in (1, 2, 3)]
+    rows.append({"n": 4, "title": "Other Paper", "url": "https://example.org/q", "identifier": "doi:10.1/q",
+                 "span": "chars=1-9", "provider": "full_document"})
+    b = _body(sources=rows, candidates=[], contract={"layers": ["L0"], "fallback": None, "offtopic": True,
+                                                     "acquired_only": True},
+              claim_check={"outcome": "checked", "checked": 1, "supported": 1, "partial": 0, "removed": 0},
+              admitted_evidence=[{"span_id": f"s{i}", "document_id": "d1" if i < 4 else "d2"} for i in range(1, 5)],
+              citations=[{"claim_id": 1, "n": 1, "span_id": "s1", "document_id": "d1", "verdict": "supported",
+                          "quote": "q", "span": "chars=10-19"}])
+    b.update(over)
+    return b
+
+
+def test_b2_same_publication_is_one_entry_and_distinct_passages_are_kept():
+    rep = lr.build_live_report(_b2_body(), "what did humpty dumpty do?", 1.0)
+    assert [g["ns"] for g in rep["groups"]] == [[1, 2, 3], [4]]
+    assert rep["groups"][0]["passages"] == ["chars=10-19", "chars=20-29", "chars=30-39"]
+    assert rep["search"]["results"] == 2  # documents, not passages
+
+
+def test_b2_scope_policy_and_stage_lines():
+    rep = lr.build_live_report(_b2_body(), "q", 1.0)
+    assert rep["scope_policy"] == lr.SCOPE_OVERRIDE_NOTE
+    assert "Evidence authorized for answer generation: yes." in rep["pipeline"]
+    assert "Answer generated: yes." in rep["pipeline"]
+    assert "Passages admitted as evidence: 4, from 2 documents." in rep["pipeline"]
+    assert "Claims checked: 1; supported by their source passage: 1." in rep["pipeline"]
+    rl = lr.build_live_report(_body("reading_list", contract={"layers": ["L0"], "fallback": TOKEN, "offtopic": True}),
+                              "q", 1.0)
+    assert rl["scope_policy"] == lr.SCOPE_DECLINED_NOTE
+    assert "Evidence authorized for answer generation: no." in rl["pipeline"] and "Answer generated: no." in rl["pipeline"]
+    assert lr.build_live_report(_body(), "q", 1.0)["scope_policy"] == ""  # in-scope: no policy note
+
+
+def test_b2_render_shows_grouped_entry_and_policy(monkeypatch, public_env):
+    text = _tree_text(_run(monkeypatch, _ok(_b2_body(), [])))
+    assert "[1, 2, 3]" in text and "Scope policy: this question is outside" in text
+    assert "Evidence authorized for answer generation: yes." in text
+
+
+def test_b2_in_scope_admitted_but_no_answer_is_still_authorized():
+    body = _body("reading_list", claim_check={"outcome": "checked", "checked": 2, "supported": 0, "partial": 0,
+                                              "removed": 2})
+    rep = lr.build_live_report(body, "q", 1.0)
+    assert "Evidence authorized for answer generation: yes." in rep["pipeline"]
+    assert "Answer generated: no." in rep["pipeline"] and rep["scope_policy"] == ""

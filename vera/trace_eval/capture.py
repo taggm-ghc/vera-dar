@@ -102,6 +102,11 @@ def load_case_set(path: str | Path, case_set: str, cfg: dict | None = None) -> t
         hashlib.sha256(raw).hexdigest()
 
 
+# Why: the /ask fields that show citation and evidence behaviour. Kept in the private trace only (traces.jsonl);
+# trace_row and the closed public projection never copy them. Quotes are already short (per-response budget).
+ASK_DETAIL_FIELDS = ("citations", "admitted_evidence", "examined_full_documents", "claim_check", "evidence_status", "contract")
+
+
 def ask_record_fields(body: dict) -> dict:
     """Trace fields from one /ask JSON body: answer, numbered sources (no passage text), cost, outcome."""
     sources = [{k: s.get(k) for k in ASK_SOURCE_FIELDS} | {"snippet": ""} for s in body.get("sources") or []]
@@ -109,7 +114,8 @@ def ask_record_fields(body: dict) -> dict:
     return {"answer": body.get("answer"), "sources": sources, "cost_usd": body.get("cost_usd"),
             "prompt_tokens": None, "completion_tokens": None, "tokens_used": tokens,
             "result_kind": body.get("result_kind"), "outcome": body.get("outcome"),
-            "source_text_available": False, "model": body.get("model") or ""}
+            "source_text_available": False, "model": body.get("model") or "",
+            "ask_detail": {k: body[k] for k in ASK_DETAIL_FIELDS if body.get(k) is not None}}
 
 
 def load_questions(path: str | Path) -> tuple[dict, str]:
