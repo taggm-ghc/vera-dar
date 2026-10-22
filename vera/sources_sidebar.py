@@ -109,10 +109,28 @@ def answer_providers(chain_path: Path = CHAIN_PATH, selection_path: Path = SELEC
     return names
 
 
-def snapshot_summary(path: Path = SNAPSHOT_PATH) -> dict | None:
+def _public_snapshot() -> dict | None:
+    """P0-2: the aggregate file the Trace Eval page displays (published run, else the shipped historical file)."""
+    for name in ("trace_eval_public.json", "trace_eval_historical_public.json"):
+        d = _read(ROOT / "eval_results" / name)
+        if d and d.get("schema") == "vera-trace-public-v1" and d.get("variants"):
+            q = d.get("n_questions")
+            if isinstance(q, int) and not isinstance(q, bool) and q > 0:
+                g = str(d.get("generated_at") or "")[:10]
+                return {"count": None, "years": None, "questions": q,
+                        "captured": g if re.match(r"^\d{4}-\d\d-\d\d$", g) else None}
+    return None
+
+
+def snapshot_summary(path: Path | None = None) -> dict | None:
     """Aggregate facts about the Trace Eval snapshot: distinct-source count, arXiv id year span, question count, date.
 
     Deliberately returns no per-source field (title, URL, id); see SNAPSHOT_FIELDS."""
+    if path is None:
+        pub = _public_snapshot()
+        if pub:
+            return pub
+        path = SNAPSHOT_PATH
     res = _read(path)
     if not res:
         return None
@@ -186,6 +204,10 @@ def render_sources_sidebar(st) -> None:
         st.caption(f"**Scope:** {plain(scope)}" if scope else "**Scope:** not available")
         st.caption(how_answers_text() + " " + MODEL_LINE)
         snap = snapshot_summary()
+        if snap and snap["count"] is None:  # aggregate-only run summary: no per-source count is published
+            when = f", captured {snap['captured']}" if snap["captured"] else ""
+            st.caption(f"**Trace Eval sources:** per-source counts are not published; the latest posted run covered {snap['questions']} test questions{when}.")
+            return
         if not snap or not snap["count"]:
             st.caption("**Trace Eval sources:** not available")
             return

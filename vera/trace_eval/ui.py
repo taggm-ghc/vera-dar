@@ -478,12 +478,15 @@ def render_trace_eval(results_path=None, validation_path=None, public_path=None,
     key-gated detail. Any exception in a section shows one fixed line (no type, text or traceback)."""
     st.title("VERA-DAR Trace Eval")
     from vera import trace_viz
+    public_has_run = False
     try:
-        _render_public(trace_viz.public_view(results_path, validation_path, public_path))
+        view = trace_viz.public_view(results_path, validation_path, public_path)
+        public_has_run = bool(view.get("run"))
+        _render_public(view)
     except Exception:  # noqa: BLE001
         st.error(RENDER_ERROR_TEXT)
     try:
-        _render_body(*_resolve_paths(results_path, validation_path))
+        _render_body(*_resolve_paths(results_path, validation_path), public_has_run=public_has_run)
     except Exception:  # noqa: BLE001  (Streamlit's rerun/stop signals derive from BaseException and pass through)
         st.error(RENDER_ERROR_TEXT)
     try:
@@ -492,10 +495,12 @@ def render_trace_eval(results_path=None, validation_path=None, public_path=None,
         st.error(RENDER_ERROR_TEXT)
 
 
-def _render_body(results_path, validation_path) -> None:
+def _render_body(results_path, validation_path, public_has_run: bool = False) -> None:
     from vera.trace_eval import guidance as g
     res = _load(results_path)
     if res is None or not res.get("traces"):
+        if public_has_run:  # P0-2: the public view above already shows a run; no contradictory empty state
+            return
         st.warning(MISSING_RESULTS_TEXT)
         st.info(HOW_TO_PRODUCE_TEXT)
         return

@@ -374,7 +374,7 @@ def render_live_report(st, rep: dict, r=None) -> None:
     a.metric("Tokens used", f"{int(u.get('tokens') or 0):,}")
     b.metric("Cost (USD)", f"${float(u.get('cost_usd') or 0):.6f}")
     c.metric("Latency (s)", f"{float(u.get('latency_s') or 0):.2f}")
-    st.caption("Latency is the round trip measured by this page. Cost is as reported by the service.")
+    st.caption("Latency is the round trip measured by this page. Cost is as reported by the service; calls to the free-tier provider are recorded at $0.")
     if s.get("stages_ms"):
         st.dataframe([{"Stage": k, "Time (ms)": v} for k, v in s["stages_ms"].items()], hide_index=True,
                      use_container_width=True)

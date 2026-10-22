@@ -8,6 +8,7 @@ import streamlit as st
 from vera.disclosure import ask_help_text, render_disclosure
 from vera.env_files import load_vera_env
 from vera.discovery_panel import render_discovery
+from vera.m7.live_report import INLINE_STATUS
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera import ui_wake
@@ -84,7 +85,7 @@ question = st.text_input(
 
 METRICS_SCOPE_NOTE = ("Counts the answer-writing and scope-check model calls for this request, plus the answer checker's "
                       "cost when it is priced. It excludes the checker's tokens and any background indexing. "
-                      "0 means no counted model call ran.")
+                      "Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.")
 
 
 def _send_question(question: str, force_bad: bool) -> None:
@@ -120,6 +121,10 @@ def _send_question(question: str, force_bad: bool) -> None:
                 else:
                     render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
                     render_discovery(st, data)
+                    _ia = (data.get("contract") if isinstance(data.get("contract"), dict) else {}).get("inline_acquisition")
+                    if isinstance(_ia, dict) and _ia:  # P0-2: same status wording as the Report (live_report.INLINE_STATUS)
+                        st.caption("**New search for this question:** " + INLINE_STATUS.get(
+                            _ia.get("status"), "A new search was considered (outcome: other)."))
 
                 # Display metrics
                 st.markdown("### 💰 Metrics")
