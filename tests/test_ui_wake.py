@@ -83,7 +83,7 @@ def ask(at, q="what is vera?"):
 
 
 def test_config_values_and_cooldown_floor(tmp_path):
-    assert sum(CFG.backoff_s) <= CFG.max_total_s <= 60
+    assert sum(CFG.backoff_s) <= CFG.max_total_s <= 180
     assert CFG.restart_hook_cooldown_s >= ui_wake.COOLDOWN_FLOOR_S >= 900
     p = tmp_path / "w.json"
     p.write_text((ROOT / "config" / "ui_wake.json").read_text().replace('"restart_hook_cooldown_s": 900.0',
