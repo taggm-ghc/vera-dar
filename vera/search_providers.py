@@ -16,6 +16,7 @@ money, uses a key, or can be selected by config (an unknown provider name is a S
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -870,6 +871,31 @@ def _wiki_cfg() -> dict:
     return wiki_ref_portal.load_config()
 
 
+PORTALS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_portals", default=None)
+
+
+def record_portal(name: str, status: str, results: int = 0) -> None:
+    """FRESH-1023 C3: append one portal attempt {"portal","status","results"} to the active portal_scope() list.
+    No-op without a scope; never raises."""
+    try:
+        lst = PORTALS.get()
+        if lst is not None:
+            lst.append({"portal": str(name), "status": str(status), "results": int(results or 0)})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@contextlib.contextmanager
+def portal_scope():
+    """Set a fresh portal-attempt list for this context and yield it."""
+    lst: list = []
+    tok = PORTALS.set(lst)
+    try:
+        yield lst
+    finally:
+        PORTALS.reset(tok)
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
@@ -926,8 +952,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             pool.shutdown(wait=False)
         counts = {}
         base, base_err = [], None
+        st_oa = "completed"
         if _QUOTA.blocked(clock()):  # a recent OpenAlex 429/quota error: unavailable, no call (no retry storm)
             counts["openalex_skipped_quota"] = 1
+            st_oa = "skipped_quota"
             base_err = ProviderUnavailable("openalex quota cooldown")
         else:
             tok = OPENALEX_OA_FIELDS.set(True)
@@ -935,10 +963,13 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 base = list(base_search(question, n, timeout_s) or [])
             except Exception as e:  # noqa: BLE001
                 base_err = e
+                st_oa = "timeout" if isinstance(e, TimeoutError) else "failed"
                 if _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1
+                    st_oa = "skipped_quota"
                 elif _is_quota_error(e):
                     counts["openalex_429"] = 1
+                    st_oa = "quota"
                     # INT-1022-B: kept as a FALLBACK (spec D1 option 1) for injected searches that bypass the adapter;
                     # on the live path the adapter cools down from Retry-After/headers as well.
                     _QUOTA.block(clock(), float(s.get("openalex_quota_cooldown_s", 900)))
@@ -946,14 +977,21 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 OPENALEX_OA_FIELDS.reset(tok)
         got = {}
         epmc_ok = False
+        st_f = {}
         for k, f in futs.items():
             try:
                 got[k] = list(f.result(timeout=max(0.1, t_end - clock())) or [])
                 epmc_ok = epmc_ok or k == "epmc"
+                st_f[k] = "completed"
             except Exception as e:  # noqa: BLE001  (timeout, transport or parse error: the other sources stand)
                 got[k] = []
                 if _is_quota_error(e):
                     counts[f"{k}_429"] = 1
+                    st_f[k] = "quota"
+                elif isinstance(e, (cf.TimeoutError, TimeoutError)):
+                    st_f[k] = "timeout"
+                else:
+                    st_f[k] = "failed"
         sfx = str(ecfg.get("query_suffix") or "")
         if (use_epmc and epmc_ok and not got.get("epmc") and not got.get("ddg") and lookup_left >= 1
                 and t_end - clock() > 1 and _or_differs(question, terms, profile, sfx)):
@@ -973,6 +1011,17 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             ddg, dcounts = ddg_to_candidates(got["ddg"], ecfg, dcfg, deadline=t_end, clock=clock,
                                             calls_left=lookup_left, transport=transport, get=get, url_check=url_check)
             counts.update(dcounts)
+        try:  # FRESH-1023 C3: each configured portal exactly once, from this (the main) thread
+            record_portal("openalex", st_oa, len(base))
+            for key, name, enabled_cfg, used in (("ddg", "ddg", dcfg.get("enabled") is True, use_ddg),
+                                                 ("epmc", "europepmc", ecfg.get("enabled") is True, use_epmc),
+                                                 ("wiki", "wikipedia", wiki_ref_portal.enabled(wcfg), use_wiki)):
+                if used:
+                    record_portal(name, st_f.get(key, "failed"), len(got.get(key) or ()))
+                elif enabled_cfg:
+                    record_portal(name, "skipped_budget", 0)
+        except Exception:  # noqa: BLE001
+            pass
         if base_err is not None and not ddg and not got.get("epmc") and not got.get("wiki"):
             raise base_err
         merged = merge_sources(ddg, base, got.get("epmc"), got.get("wiki"))  # DDG first; portal refs last

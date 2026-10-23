@@ -195,6 +195,44 @@ def _pipeline(data: dict, cc: dict, contract: dict, is_answer: bool, n_cands: in
             "Answer generated: " + ("yes." if is_answer else "no.")]
 
 
+RESEARCH_TRIGGER_LABEL = {"insufficient": "evidence insufficient", "stale": "evidence older than 24 hours",
+                          "freshness_unknown": "evidence date not verifiable"}
+RESEARCH_PORTAL_LABEL = {"openalex": "scholarly index", "europepmc": "scholarly index", "ddg": "web search",
+                         "wikipedia": "reference portal"}
+RESEARCH_STATUS_LABEL = {"completed": "completed", "quota": "rate limit reached", "skipped_quota": "skipped (rate limit)",
+                         "skipped_budget": "skipped (search budget)", "failed": "failed", "timeout": "timed out"}
+RESEARCH_OUTCOME_LABEL = {"dropped": "not considered", "reused": "reused from the collection",
+                          "reuse_rejected": "stored copy not used", "admitted": "acquired and checked",
+                          "rejected": "checked and rejected", "not_evaluated": "not reached",
+                          "not_used": "acquired but not needed"}
+RESEARCH_CANDIDATES_MAX = 20  # named constant: candidate rows shown in the Research outcome section
+RESEARCH_SUMMARY_MAX = 600  # named constant: max chars of the research outcome sentence
+
+
+def _research(contract: dict):
+    """FRESH-1023 C3: allowlist-only projection of contract.research (None when absent). No portal names, reason
+    codes or candidate URLs pass through."""
+    from vera.discovery_panel import REASON_GENERIC, REASON_TEXT
+    rs = contract.get("research")
+    if not isinstance(rs, dict):
+        return None
+    portals = [{"label": RESEARCH_PORTAL_LABEL.get(p.get("portal"), "other"),
+                "status": RESEARCH_STATUS_LABEL.get(p.get("status"), "other")}
+               for p in (rs.get("portals") if isinstance(rs.get("portals"), list) else []) if isinstance(p, dict)]
+    cands = []
+    for c in (rs.get("candidates") if isinstance(rs.get("candidates"), list) else [])[:RESEARCH_CANDIDATES_MAX]:
+        if not isinstance(c, dict):
+            continue
+        code = c.get("reason")
+        cands.append({"identifier": _str(c.get("doi") or c.get("pmcid") or c.get("arxiv_id") or "", 120),
+                      "outcome": RESEARCH_OUTCOME_LABEL.get(c.get("outcome"), "other"),
+                      "reason": (REASON_TEXT.get(code, REASON_GENERIC) if isinstance(code, str) and code else "")})
+    return {"outcome_text": _str(rs.get("user_text") or rs.get("summary"), RESEARCH_SUMMARY_MAX),
+            "triggers": [RESEARCH_TRIGGER_LABEL[t] for t in (rs.get("triggers") if isinstance(rs.get("triggers"), list) else [])
+                         if isinstance(t, str) and t in RESEARCH_TRIGGER_LABEL],
+            "portals": portals, "complete": (rs.get("complete") if "complete" in rs else rs.get("all_portals_completed")) is True, "candidates": cands}
+
+
 def build_live_report(data, question: str, latency_s: float) -> dict:
     """Allowlisted, display-ready projection of one /ask body. Never raises on malformed input."""
     data = _d(data)
@@ -288,6 +326,7 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
         "scope": ui_evidence.evidence_scope_line(data) or "",
         "scope_source": ui_evidence.evidence_source_line(data) or "",
         "search": search,
+        "research": _research(contract),
         "usage": {"tokens": ui_evidence._count(data.get("tokens_used")), "cost_usd": _num(data.get("cost_usd")),
                   "latency_s": round(_num(latency_s), 2)},
     }
@@ -393,6 +432,20 @@ def render_live_report(st, rep: dict, r=None) -> None:
                    f"reused from the collection: {inl['reused']}."
                    + ("" if not inl.get("documents") else " Per document: "
                       + "; ".join(f"{k}: {v}" for k, v in inl["documents"].items()) + "."))
+
+    rs = rep.get("research")
+    if rs:  # FRESH-1023 C3: fixed labels only; portal names, reason codes and candidate URLs never rendered
+        st.markdown("**Research outcome**")
+        if rs.get("outcome_text"):
+            st.caption(r(rs["outcome_text"]))
+        if rs.get("triggers"):
+            st.caption("Research was run because: " + r("; ".join(rs["triggers"])) + ".")
+        if rs.get("portals"):
+            st.caption("Search services: " + r("; ".join(f"{p['label']}: {p['status']}" for p in rs["portals"]))
+                       + (". All completed." if rs.get("complete") else ". Not all completed."))
+        if rs.get("candidates"):
+            st.dataframe([{"Source": r(c["identifier"]), "Outcome": r(c["outcome"]), "Why": r(c["reason"])}
+                          for c in rs["candidates"]], hide_index=True, use_container_width=True)
 
     st.header("6. Cost and latency")
     u = rep.get("usage") or {}

@@ -671,7 +671,7 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
     return len(ev.admitted or ())
 
 
-def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count) -> list:
+def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count, drops: dict | None = None) -> list:
     """Stage (shared by the background job and DAR-INLINE-1021): DOI or PMCID required (PLAN-NONDOI-1022), not already
     served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
     from vera import search_providers
@@ -685,24 +685,34 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
         pmcid = None if doi else _pmcid(c)
         if not doi and not pmcid:
             count(acq_config.reason(cfg, "no_doi"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "no_doi")
             continue
         ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
         why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
         if why:
             count(acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence")
             continue
         isbn = candidate_isbn(c)
         keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
         if ident in seen or keys & served:
             count(acq_config.reason(cfg, "in_corpus"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "in_corpus")
             continue
         seen.add(ident)
         ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))
     # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
     # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).
     ranked.sort(key=lambda x: (search_providers.acq_rank_tier(x[2]), -x[0], x[4]))
+    n_cut = int(acq_config.bound(cfg, "max_candidates_resolved"))
+    if drops is not None:  # FRESH-1023 C3: candidates beyond the cut are deferred (not counted)
+        for r in ranked[n_cut:]:
+            drops[id(r[2])] = acq_config.reason(cfg, "defer_cap")
     ranked = [r[:4] for r in ranked]
-    cut = ranked[: int(acq_config.bound(cfg, "max_candidates_resolved"))]
+    cut = ranked[:n_cut]
     by: dict = {}
     for _s, _d, c, _i in cut:
         by[search_providers.acq_source(c)] = by.get(search_providers.acq_source(c), 0) + 1

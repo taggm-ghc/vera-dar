@@ -226,7 +226,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     used_in: dict = {}
     fd = _fulldoc(question, model, pricing, decision, chained, grounding, used=used_in)  # D-055; None = not configured
     if isinstance(fd, AskResult):  # grounded in admitted passages of inspected, verified full documents
-        return fd
+        fcfg = _fresh_cfg(acq)  # FRESH-1023: a retrieved, grounded answer is not by itself a reason to stop researching
+        if fcfg is None or fd.evidence is None:
+            return fd
+        return _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in,
+                                   budget)
     if fd is None:
         return _reading_list(question, model, pricing, decision, chained, grounding, contract)
     ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
@@ -257,15 +261,16 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                 inl = _inline(question, model, pricing, decision, chained, grounding, acq,
                               tried=_doc_keys(used_in.get("acq")), in_scope=True, info=info)
                 if isinstance(inl, AskResult):
-                    return inl
+                    return _research_on_insufficient(inl, ev, acq, info.get("outcome"), answered=True)
                 inline_note = inl
                 ia = info.get("outcome") or {}
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
-    return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
-                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
-                             **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
-                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
+    out = replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
+                  contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
+                            **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
+                  **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
+    return _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
 
 
 class _InlineNotice(str):
@@ -524,6 +529,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                     used["acq"] = acq_corpus
                 if acq_corpus is not None:
                     ev2 = admit(question, acq_corpus, cfg)
+                    if used is not None:
+                        used["ev_acq"] = ev2  # FRESH-1023: the stored acquired documents' retrieval, for freshness
                     if contract.result_kind_for((ev2,)) == "answer":
                         ev = ev2
     except Exception as exc:  # noqa: BLE001  (fail closed: unusable corpus, no answer; class only in the log)
@@ -599,3 +606,275 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
                          claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind)
     return AskResult(answer=text, tokens_used=tokens, cost_usd=cost, sources=tuple(sources), accepted=True,
                      result_kind=kind)
+
+
+# ---------------------------------------------------------------------------------------------- FRESH-1023
+def _fresh_cfg(acq):
+    """config/auto_acquire.json freshness block when enabled (also when acquisition itself is off: the freshness
+    limitation must still be disclosed), else None (feature off: today's behaviour exactly). Never raises."""
+    from vera import research_record as rr
+    try:
+        if acq is not None:
+            return rr.cfg_of(acq)
+        from vera import acq_config
+        return rr.cfg_of(acq_config.load_config())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _source_freshness(sources, fr: dict) -> list:
+    """Per cited source number: the freshness of its document and whether it was found by this request's search."""
+    by = {str(d.get("document_id")): d for d in (fr or {}).get("documents") or ()}
+    out = []
+    for s in sources or ():
+        if not isinstance(s, dict):
+            continue
+        d = by.get(str(s.get("document_id")), {})
+        out.append({"n": s.get("n"), "document_id": s.get("document_id"), "freshness": d.get("freshness", "unknown"),
+                    "new_this_request": bool(d.get("new_this_request"))})
+    return out
+
+
+def _with_research(res, rec: dict, suffix: str | None = None):
+    text = res.answer
+    if suffix:
+        text = f"{text}\n\n{suffix}" if text else suffix
+    return replace(res, answer=text, contract={**(res.contract or {}), "research": rec})
+
+
+def _fresh_line(texts: dict, fr2: dict, n_new: int) -> str:
+    c = fr2["counts"]
+    t = texts.get("fresh_new") or ""
+    try:
+        return t.format(n_new=n_new, n_fresh=c["fresh"], n_stale=c["stale"], n_unknown=c["unknown"])
+    except (KeyError, IndexError, ValueError):
+        return ""
+
+
+def _merge_evidence(base, new, cfg):
+    """Combined admitted evidence: the base bundle's admitted passages, then the new bundle's (each admitted by the
+    unchanged vera.fulldoc_admission.admit), de-duplicated by (document, text hash), within the existing admission caps
+    max_spans_total / max_admitted_chars. When both cannot fit, the new evidence keeps at least half of the slots (or
+    every free slot), so recent evidence is not crowded out and older evidence is not discarded wholesale."""
+    from vera.fulldoc_evidence import EvidenceBundle
+    adm = (cfg.get("admission") or {}) if isinstance(cfg, dict) else {}
+    max_total = int(adm.get("max_spans_total") or 6)
+    max_chars = adm.get("max_admitted_chars")
+    seen, b, n = set(), [], []
+    for src, dst in ((base.admitted, b), (new.admitted, n)):
+        for a in src or ():
+            k = (str(a.get("canonical_source_id") or a.get("document_id")), a.get("text_sha256"))
+            if k not in seen:
+                seen.add(k)
+                dst.append(a)
+    n_new = min(len(n), max(max_total - len(b), max_total // 2))
+    picked = b[: max_total - n_new] + n[:n_new]
+    if max_chars is not None:
+        kept, tot = [], 0
+        for a in picked:
+            if tot + len(a.get("text") or "") <= int(max_chars):
+                kept.append(a)
+                tot += len(a.get("text") or "")
+        picked = kept
+    ids = {str(a.get("document_id")) for a in picked}
+    examined = tuple(d for d in tuple(base.examined_full_documents) + tuple(new.examined_full_documents))
+    return EvidenceBundle(question=base.question, examined_full_documents=examined, admitted=tuple(picked),
+                          unusable=tuple(base.unusable) + tuple(new.unusable),
+                          rejected=tuple(base.rejected) + tuple(new.rejected),
+                          status="admitted" if picked else "insufficient", corpus_source=base.corpus_source,
+                          trace={**dict(base.trace or {}), "combined": {"base": sum(1 for a in picked if a in b),
+                                                                        "new": sum(1 for a in picked if a in n),
+                                                                        "documents": len(ids)}})
+
+
+def _reference_texts(ev, corpora) -> dict | None:
+    """Full text of every document in the combined evidence (claim-check verbatim reference), from whichever corpus
+    holds it. None (the weaker admitted-passage fallback) when any document cannot be read."""
+    out = {}
+    for a in ev.admitted:
+        did = a.get("document_id")
+        if str(did) in out:
+            continue
+        txt = None
+        for c in corpora:
+            if c is None:
+                continue
+            try:
+                t = c.text(did)
+            except Exception:  # noqa: BLE001
+                t = None
+            if isinstance(t, str) and t:
+                txt = t
+                break
+        if txt is None:
+            return None
+        out[str(did)] = txt
+    return out
+
+
+def _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in, budget):
+    """FRESH-1023 requirement 1 on the ANSWER path: assess sufficiency and the 24-hour source-content freshness of the
+    admitted passages (vera.research_record -> vera.freshness); on either trigger run ONE inline acquisition (existing
+    caps, kill switch, request-deadline guard and every gate unchanged), admit the new full-text passages, combine them
+    with the base passages and write ONE new claim-checked answer in this request. Without usable new evidence the
+    grounded base answer is returned, qualified by the research outcome (vera.research_outcome)."""
+    from vera import research_record as rr
+    at = rr.now()
+    texts = fcfg.get("texts") or {}
+    fr = rr.assess(fd.evidence.admitted, fcfg, at)
+    trig = rr.triggers(rr.sufficient(fd, fcfg), fr)
+    if not trig:
+        return _with_research(_annotate(fd, fr), rr.summarize(triggers=[], inline=None, used_new=False,
+                                                              older_available=True, fr_before=fr,
+                                                              citations=_source_freshness(fd.sources, fr)))
+    pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
+    new_res, failed = None, False
+    if o is not None and getattr(o, "corpus", None) is not None:
+        new_res, failed = _combined_answer(question, model, pricing, chained, grounding, acq, fd, o)
+    if new_res is not None:
+        base_keys = {(a.get("document_id"), a.get("text_sha256")) for a in fd.evidence.admitted}
+        new_ids = {str(a.get("document_id")) for a in new_res.evidence.admitted
+                   if (a.get("document_id"), a.get("text_sha256")) not in base_keys}
+        fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
+        rec = rr.summarize(triggers=trig, inline=pub, used_new=True, older_available=True, fr_before=fr, fr_after=fr2,
+                           citations=_source_freshness(new_res.sources, fr2))
+        suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), _mixed_line(texts, fr2), rec["user_text"])
+                          if t)
+        return _with_research(_annotate(new_res, fr2), rec, suffix or None)
+    rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
+                       citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
+                       failed_text=texts.get("new_evidence_unanswered"))
+    base = _annotate(fd, fr)
+    if failed:  # the failed combined writer/claim-check spend is still reported
+        base = replace(base, tokens_used=failed.tokens, cost_usd=round(failed.cost, 6))
+    if pub is not None and pub.get("status") not in (None, "off"):
+        base = replace(base, contract={**(base.contract or {}), "inline_acquisition": pub})
+    return _with_research(base, rec, rec["user_text"] or None)
+
+
+def _research_attempt(question, grounding, acq, fcfg, used_in, budget):
+    """(public inline outcome dict, Outcome or None): at most ONE inline acquisition per request, under the same
+    guards as the in-scope inline retry. A refusal is reported (status), never treated as 'nothing found'."""
+    if acq is None:
+        return {"status": "off"}, None
+    if not _layer1_clean(question):
+        return {"status": "off"}, None
+    from vera import fulldoc_corpus, inline_acquire
+    if inline_acquire.icfg_of(acq).get("in_scope") is not True \
+            or not fulldoc_corpus.flag_enabled(fulldoc_corpus.load_config()):
+        return {"status": "off"}, None
+    if budget.inline_used:
+        return {"status": "busy"}, None
+    need = inline_need_s(acq, grounding)
+    remaining = budget.deadline - time.monotonic()
+    if need is None or remaining < need:
+        return {"status": "budget_unknown" if need is None else "deadline"}, None
+    budget.inline_used = True
+    from vera import acq_discovered
+    kw = {}
+    if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):
+        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
+    if fcfg.get("rank_prefer_recent") is True:
+        kw["prefer_recent"] = True
+    o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
+    st = str(getattr(o, "status", "error"))
+    return (o.public() if st != "off" and hasattr(o, "public") else {"status": st}), o
+
+
+class _Spend:
+    """A truthy 'combined answer failed' marker that carries the spend of the failed writer/claim-check run."""
+
+    def __init__(self, tokens, cost):
+        self.tokens, self.cost = int(tokens or 0), float(cost or 0.0)
+
+
+def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
+    """(AskResult or None, failure marker or False): new passages admitted from the inline corpus by the unchanged
+    admission, merged with the base passages, then ONE answer through the unchanged writer and claim check."""
+    from vera import answer_contract as contract
+    from vera import fulldoc_answer, fulldoc_corpus, inline_acquire
+    from vera.fulldoc_admission import admit
+    try:
+        cfg = fulldoc_corpus.load_config()
+        ev_new = admit(question, o.corpus, cfg)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("vera").warning("combined admission failed (%s)", type(exc).__name__)
+        return None, False
+    if not ev_new.admitted:
+        return None, False
+    merged = _merge_evidence(fd.evidence, ev_new, cfg)
+    base_corpus = None
+    if not _base_warming():
+        try:
+            base_corpus = fulldoc_corpus.get_corpus(cfg)
+        except Exception:  # noqa: BLE001
+            base_corpus = None
+    try:
+        acq_corpus = fulldoc_corpus.get_acquired_corpus(cfg)
+    except Exception:  # noqa: BLE001
+        acq_corpus = None
+    ref = _reference_texts(merged, (o.corpus, base_corpus, acq_corpus))
+    out = fulldoc_answer.answer(question, merged, model, pricing, chained=chained,
+                                grounding_cfg=grounding[1] if grounding else None, cfg=cfg,
+                                base_tokens=fd.tokens_used, base_cost=fd.cost_usd, reference_texts=ref)
+    if out.result is None or out.result.result_kind != "answer":
+        logging.getLogger("vera").info("combined answer fallback token=%s", out.fallback)
+        return None, _Spend(out.tokens_used, out.cost_usd)
+    note = inline_acquire.answer_note(acq, o)
+    return replace(out.result, answer=f"{note} {out.result.answer}" if note else out.result.answer, evidence=merged,
+                   accepted=True, contract={"layers": contract.layers(), "fallback": None,
+                                            "inline_acquisition": o.public()}), False
+
+
+_RECENCY = {"fresh": "recent", "stale": "older", "unknown": "unknown"}
+
+
+def _annotate(res, fr: dict):
+    """Per cited source: evidence_recency (recent | older | unknown) from its document's source-content freshness."""
+    by = {str(d.get("document_id")): d.get("freshness") for d in (fr or {}).get("documents") or ()}
+    srcs = tuple(dict(s, evidence_recency=_RECENCY.get(by.get(str(s.get("document_id"))), "unknown"))
+                 if isinstance(s, dict) else s for s in (res.sources or ()))
+    return replace(res, sources=srcs)
+
+
+def _mixed_line(texts: dict, fr2: dict) -> str:
+    docs = (fr2 or {}).get("documents") or ()
+    if any(d.get("new_this_request") for d in docs) and any(not d.get("new_this_request") for d in docs):
+        return texts.get("mixed_ages") or ""
+    return ""
+
+
+def _relevant_docs(*evs) -> list:
+    """Retrieved documents with at least one candidate passage for this question (freshness of the RETRIEVED relevant
+    chunks when nothing was admitted), as admitted-like rows carrying the document's own date fields."""
+    out = []
+    for ev in evs:
+        for d in (getattr(ev, "examined_full_documents", ()) or ()):
+            if isinstance(d, dict) and (d.get("candidate_spans") or 0) > 0:
+                out.append(d)
+    return out
+
+
+def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev=None):
+    """FRESH-1023 on the NON-answer path (the existing in-scope inline retry is the insufficiency trigger): attach the
+    research record and the concise outcome. No freshness block = unchanged result."""
+    # acquisition off, or no inline attempt possible (status off): non-answers stay exactly as before
+    off = acq is None or not isinstance(inline_pub, dict) or inline_pub.get("status") in (None, "off")
+    fcfg = None if off and not answered else _fresh_cfg(acq)
+    if fcfg is None:
+        return res
+    from vera import research_record as rr
+    at = rr.now()
+    texts = fcfg.get("texts") or {}
+    fr = rr.assess(getattr(ev, "admitted", ()) or _relevant_docs(ev, extra_ev), fcfg, at)
+    trig = rr.triggers(False, fr)
+    if answered:
+        adm = res.evidence.admitted if res.evidence is not None else ()
+        new_ids = {str(a.get("document_id")) for a in adm}
+        fr2 = rr.assess(adm, fcfg, at, new_ids=new_ids)
+        rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=True, older_available=False, fr_before=fr,
+                           fr_after=fr2, citations=_source_freshness(res.sources, fr2))
+        suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), rec["user_text"]) if t)
+        return _with_research(_annotate(res, fr2), rec, suffix or None)
+    rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr)
+    return replace(res, contract={**(res.contract or {}), "research": rec})

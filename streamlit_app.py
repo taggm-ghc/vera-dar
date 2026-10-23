@@ -13,7 +13,7 @@ from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera import ui_wake
 from vera.public_mode import is_public_mode, post_ask, upstream_base_url
-from vera.sources_sidebar import cited_numbers, render_nav, render_sources, render_sources_sidebar
+from vera.sources_sidebar import cited_numbers, plain, render_nav, render_sources, render_sources_sidebar
 from vera.ui_evidence import (is_fulldoc, render_answer_scope_note, render_citations, render_evidence_scope,
                               render_fallback_reason)
 from vera.ui_safety import safe_markdown
@@ -128,6 +128,9 @@ def _send_question(question: str, force_bad: bool) -> None:
                     if isinstance(_ia, dict) and _ia:  # P0-2: same status wording as the Report (live_report.INLINE_STATUS)
                         st.caption("**New search for this question:** " + INLINE_STATUS.get(
                             _ia.get("status"), "A new search was considered (outcome: other)."))
+                    _rs = (data.get("contract") if isinstance(data.get("contract"), dict) else {}).get("research")
+                    if isinstance(_rs, dict) and isinstance(_rs.get("user_text") or _rs.get("summary"), str) and (_rs.get("user_text") or _rs.get("summary")).strip():
+                        st.caption("**Research outcome:** " + plain(_rs.get("user_text") or _rs.get("summary")))  # FRESH-1023 C3
 
                 # Display metrics
                 st.markdown("### 💰 Metrics")

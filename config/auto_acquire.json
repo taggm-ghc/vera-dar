@@ -76,6 +76,20 @@
     "timeout_s": 20,
     "max_calls_per_provider_per_job": 1
   },
+  "freshness": {
+    "_note": "FRESH-1023 (owner P0 requirement 1, 2026-10-23, verbatim threshold): freshness_max_age_hours 24 is OWNER-SPECIFIED, not a calibrated value. Every other value here is an UNCALIBRATED planner prior (calibration rule): freshness_future_skew_seconds 300 (a source dated more than 5 min after the check time is untrustworthy -> freshness unknown), freshness_year_only_trusted true (a bare year/month resolves to its LATEST instant: 2019 -> stale, the current year -> future -> unknown, never fresh), sufficiency.partial_is_insufficient true (a claim-checked answer labelled partial leaves a material subquestion unanswered). Freshness = source-content time only (vera.freshness: a chunk-level date wins, else the source-version update/publication date); ingest/embedding/retrieval/fetch/acquisition/last-checked times are never freshness (vera.freshness: acquired_at/last_checked_at are copied through, never used for status). Stored documents carry a publication YEAR only, so a current-year source is 'unknown' (too coarse) and triggers external search like a stale one: with 24 h nearly every answered question now triggers inline acquisition (latency, provider quota, jobs_per_hour/day and INSERT exposure). What would change the priors: live research.outcome and freshness counts. enabled=false restores the previous behaviour.",
+    "enabled": true,
+    "freshness_max_age_hours": 24,
+    "freshness_future_skew_seconds": 300,
+    "freshness_year_only_trusted": true,
+    "rank_prefer_recent": true,
+    "sufficiency": {"partial_is_insufficient": true},
+    "texts": {
+      "fresh_new": "Freshness: {n_new} cited document(s) were found by a new search for this question; cited documents published within the last 24 hours: {n_fresh}; older: {n_stale}; publication time not verifiable: {n_unknown}. Older documents are dated by publication, not by when VERA-DAR obtained them.",
+      "mixed_ages": "Older and newly found sources are both cited and labelled by publication date; where they differ, the more recent publication is not automatically correct, and an older publication is not current because VERA-DAR obtained it today.",
+      "new_evidence_unanswered": "A new search found admissible full-text sources, but no checked answer could be written from the combined evidence, so the answer below uses the earlier evidence only."
+    }
+  },
   "bounds": {
     "queue_max": 4,
     "jobs_per_hour": 6,

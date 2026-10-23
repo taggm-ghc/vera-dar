@@ -36,9 +36,9 @@ def test_irrelevant_stored_documents_do_not_use_up_the_fresh_budget(rig):
     seen = []
     orig = inline_acquire._evaluate_parallel
 
-    def spy(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms):
+    def spy(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms, **kw):  # FRESH-1023: per=
         seen.append(budget)
-        return orig(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms)
+        return orig(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms, **kw)
     import pytest
     mp = pytest.MonkeyPatch()
     mp.setattr(inline_acquire, "_evaluate_parallel", spy)

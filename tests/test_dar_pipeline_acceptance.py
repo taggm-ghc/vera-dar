@@ -61,6 +61,9 @@ def test_A_corpus_miss_runs_discovery_search(rig):
 
 
 def test_A_neg_corpus_hit_does_not_run_discovery_or_acquisition(rig):
+    # FRESH-1023: a stale or undated corpus hit now triggers research by design (owner P0); this guard keeps its
+    # original meaning with the freshness step off. Fresh hits: tests/test_fresh_acceptance_c4.py::test_A_*.
+    rig.mp.setattr(ask_service, "_fresh_cfg", lambda acq: None)
     rig.h.bundle()  # default synthetic bundle contains the epidemiology paper -> a base-corpus hit
     ds = DiscSearch([discovered()])
     _decide(rig.mp, True, "layer1", "ok")

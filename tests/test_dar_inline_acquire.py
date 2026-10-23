@@ -344,6 +344,9 @@ def test_finished_outcome_is_reused_within_ttl(direct):
 def test_in_scope_request_never_calls_inline(h, monkeypatch):
     calls = []
     monkeypatch.setattr(inline_acquire, "acquire", lambda *a, **k: calls.append(a) or REAL(*a, **k))
+    # FRESH-1023: a stale or undated corpus hit now triggers research by design (owner P0); this guard keeps its
+    # original meaning with the freshness step off. Fresh hits: tests/test_fresh_acceptance_c4.py::test_A_*.
+    monkeypatch.setattr(ask_service, "_fresh_cfg", lambda acq: None)
     h.bundle()
     h.install()
     _decide(monkeypatch, True, "layer1", "ok")

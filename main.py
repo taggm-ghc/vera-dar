@@ -165,6 +165,16 @@ class AskSource(BaseModel):
     span_id: str | None = None  # DAR stored-corpus chunk id (absent for web sources)
     disposition: str | None = None  # evidence disposition of a stored source (e.g. "proposed")
     licence: str | None = None  # declared licence id of a stored source (from its stored provenance)
+    # FRESH-1023 (additive): "recent" (published within freshness_max_age_hours), "older", or "unknown" (publication
+    # time not verifiable). Set only when the freshness step ran; absent otherwise.
+    evidence_recency: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_recency(self, handler):
+        d = handler(self)
+        if d.get("evidence_recency") is None:
+            d.pop("evidence_recency", None)
+        return d
 
 
 class AskCandidate(BaseModel):
@@ -260,6 +270,15 @@ class RecalledNote(BaseModel):
     saved_at: str | None = None
 
 
+def _research_fields(result) -> dict:
+    """FRESH-1023: additive top-level fields from contract.research (never raises; {} = fields absent)."""
+    try:
+        from vera import research_record
+        return research_record.public_fields((result.contract or {}).get("research"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 class AskResponse(BaseModel):
     answer: str
     model: str
@@ -287,10 +306,19 @@ class AskResponse(BaseModel):
     examined_full_documents: list[ExaminedDocument] = []
     admitted_evidence: list[AdmittedEvidence] = []
     citations: list[EvidenceCitation] = []
+    # FRESH-1023 (additive; absent unless the freshness/research step ran): which research triggers fired
+    # ("insufficient" | "stale" | "freshness_unknown"), source-content freshness of the cited evidence, and the
+    # research outcome (kind, concise user_text, complete, per-portal and per-candidate records).
+    triggers: list[str] | None = None
+    freshness: dict | None = None
+    research_outcome: dict | None = None
 
     @model_serializer(mode="wrap")
     def _drop_absent_evidence_fields(self, handler):
         d = handler(self)  # web-only responses keep their exact K2 key set: the D-055 keys appear only with evidence
+        for k in ("triggers", "freshness", "research_outcome"):
+            if d.get(k) is None:
+                d.pop(k, None)
         if d.get("evidence_status") is None:
             for k in ("evidence_status", "examined_full_documents", "admitted_evidence", "citations"):
                 d.pop(k, None)
@@ -555,7 +583,8 @@ def _fulldoc_sources(result) -> list[dict]:
                     "identifier": s.get("canonical_source_id"), "retrieved_at": None,
                     "licence_decision": decided.get(s.get("document_id")), "span": s.get("span"), "span_id": s.get("span_id"),
                     "admission_passed": True, "acquisition": answer_contract.ACQ_ACQUIRED,
-                    "disposition": "admitted", "licence": s.get("licence")})
+                    "disposition": "admitted", "licence": s.get("licence"),
+                    **({"evidence_recency": s["evidence_recency"]} if s.get("evidence_recency") else {})})
     return out
 
 
@@ -732,4 +761,5 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         contract=result.contract,
         recalled_discovery=recalled_discovery,
         discovery_note_submitted=1 if discovery else 0,
+        **_research_fields(result),
     )
