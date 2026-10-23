@@ -229,7 +229,9 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
                 part = fresh[j:j + per_job]
                 _prune(_S.jobs_hour, now, 3600.0)
                 _prune(_S.jobs_day, now, 86400.0)
-                if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
+                # P0DTA-PRIO D4: queue only while BG_MIN_FREE_HOURLY_JOBS hourly jobs remain, so a later request can
+                # still search (no cap is raised; the hand-off spends less, never more).
+                if int(acq_config.bound(cfg, "jobs_per_hour")) - len(_S.jobs_hour) < BG_MIN_FREE_HOURLY_JOBS or \
                         len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
                     why = acq_config.reason(cfg, "rate")
                 else:
@@ -263,6 +265,9 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
         out["status"] = "R-ACQ-ERROR"
         out["refused"] = [i for i in range(len(cands or ())) if i not in out["queued"]]
         return out
+
+
+BG_MIN_FREE_HOURLY_JOBS = 2  # P0DTA-PRIO D4: background hand-off needs >= 2 free hourly jobs (leaves >= 1 for search)
 
 
 def _worker_loop(cfg, env, clock, deps_factory) -> None:
@@ -320,7 +325,7 @@ class Deps:
     stored_rows: object = None  # DAR-INLINE-1021-R2 (inline only): (canonical_urls) -> (sources, spans) already stored
 
 
-def make_search(cfg: dict, chain_fn=None, search_fn=None):
+def make_search(cfg: dict, chain_fn=None, search_fn=None, clock=time.monotonic):
     """The job's search: the REAL vera.search_and_fetch.search_question over the shared /ask provider instances named in
     config (shared rate gates and budgets), one attempt per provider, then this job's route record is removed.
     chain_fn / search_fn are injectable so a test drives the real search through a fake provider transport."""
@@ -328,6 +333,7 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None):
 
     def search(question, n, timeout_s):
         from vera import search_and_fetch
+        t_end = clock() + float(timeout_s)  # P0DTA-PRIO D3: the AND call and the OR retry share ONE timeout
         chain = (chain_fn or (lambda: search_and_fetch.cached_chain()[0]))()
         provs = [p for p in chain if getattr(p, "name", None) in names]
         if not provs:
@@ -342,9 +348,12 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None):
             if out or profile is None:
                 return out
             # DAR-INLINE-1021-R2: the AND profile found nothing -> retry ONCE with the plain OR query (profile None).
+            left = min(float(timeout_s), t_end - clock())  # P0DTA-PRIO D3: the remainder, never a fresh timeout
+            if left <= 0:
+                return out
             search_providers.OPENALEX_PROFILE.reset(tok)
             tok = search_providers.OPENALEX_PROFILE.set(None)
-            return search_and_clear(fn, provs, question, n, timeout_s)
+            return search_and_clear(fn, provs, question, n, left)
         finally:
             search_providers.OPENALEX_PROFILE.reset(tok)
     return search
@@ -483,6 +492,24 @@ def _pmcid(c: dict) -> str | None:
     from vera.search_providers import _pmcid_of
     oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
     return _pmcid_of(c.get("pmcid") or oa.get("pmcid"))
+
+
+def routable_fulltext(c, cfg: dict) -> bool:
+    """P0DTA-PRIO: True when the candidate carries an OA signal the code already gathers that routes to full text:
+    Europe PMC full text (oa.epmc_ft) or a PMCID; an arXiv id the arXiv route accepts (arxiv_fulltext, route on); or
+    the OA metadata's is_oa / has_oa_location True. A URL-only candidate is read through follow_url (a PMC or arXiv
+    URL). Metadata only (no request); never invents OA evidence."""
+    if not isinstance(c, dict):
+        return False
+    c = follow_url(c)
+    oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
+    if oa.get("epmc_ft") or _pmcid(c) or oa.get("is_oa") is True or oa.get("has_oa_location") is True:
+        return True
+    try:
+        from vera import arxiv_fulltext
+        return isinstance(c.get("arxiv"), dict) or arxiv_fulltext.search_candidate(c, _doi(c), cfg) is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ------------------------------------------------------------------------------------------------ resolve + fetch
@@ -843,7 +870,9 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
         ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))
     # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
     # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).
-    ranked.sort(key=lambda x: (search_providers.acq_rank_tier(x[2]), -x[0], x[4]))
+    # P0DTA-PRIO D1: routable full text (an OA signal the code already gathers) before records with no OA evidence, so
+    # those only fill the max_candidates_resolved slots that remain; tier, pre-rank and position order within each.
+    ranked.sort(key=lambda x: (not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0], x[4]))
     n_cut = int(acq_config.bound(cfg, "max_candidates_resolved"))
     if drops is not None:  # FRESH-1023 C3: candidates beyond the cut are deferred (not counted)
         for r in ranked[n_cut:]:

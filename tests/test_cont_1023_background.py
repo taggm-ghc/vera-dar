@@ -216,7 +216,7 @@ def test_caps_and_gates_apply_when_the_background_jobs_run(bg):
 
 
 def test_hourly_job_cap_limits_what_is_queued_and_refused_ones_stay_eligible(bg):
-    cfg = A.cfg(jobs_per_hour=2)  # the inline run reserves 1: room for ONE continuation job (2 candidates)
+    cfg = A.cfg(jobs_per_hour=3)  # inline reserves 1; P0DTA-PRIO D4 keeps 1 free: room for ONE job (2 candidates)
     dois = _dois(4, "h")
     cands = [A.cand(x) for x in dois]
     clock = Clock()
@@ -229,7 +229,7 @@ def test_hourly_job_cap_limits_what_is_queued_and_refused_ones_stay_eligible(bg)
     o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=clock, deps_factory=lambda a, e: d)
     assert o.background == {"status": "R-ACQ-RATE", "queued": 2, "already_queued": 0, "refused": 2}
     assert len(_queued_cands()) == 2
-    assert sorted(c["background"] for c in o.candidates) == ["R-ACQ-RATE", "R-ACQ-RATE", "queued", "queued"]
+    assert sorted(c["background"] for c in o.candidates) == ["queued", "queued", "skipped_quota", "skipped_quota"]
     later = auto_acquire.enqueue_candidates(Q, cands, cfg=A.cfg(jobs_per_hour=10), env=A.ENV_ON,
                                             clock=Clock(clock.t + 1), start_worker=False)  # cap raised, same window
     assert len(later["queued"]) == 2 and len(later["already"]) == 2  # refused ones were never marked pending

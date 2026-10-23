@@ -284,6 +284,9 @@ def _continue(question, acq, env, clock, recs: list, cands: list, deps_factory=N
     for i, r in enumerate(recs):
         if i not in pick and r.get("outcome") in ("dropped", "rejected"):
             r["background"] = "no_route" if ro.reason_from_code(r.get("reason")) == "no_route" else "terminal"
+    # P0DTA-PRIO D4: within the hourly reserve (auto_acquire.BG_MIN_FREE_HOURLY_JOBS) routable full text is queued
+    # first, then the rest (URL-only follow_url unchanged); only those the reserve blocks are skipped for quota
+    pick = sorted(pick, key=lambda i: not aa.routable_fulltext(cands[i], acq))
     if not pick:
         return None
     res = aa.enqueue_candidates(question, [cands[i] for i in pick], cfg=acq, env=env, clock=clock,
@@ -295,6 +298,8 @@ def _continue(question, acq, env, clock, recs: list, cands: list, deps_factory=N
             r["background"] = "queued" if j in res.get("queued", ()) else "already_queued"
             if r.get("reason") == acq_config.reason(acq, "no_doi"):
                 r["route"] = "follow_url"  # no identifier yet: the job follows the URL (auto_acquire.follow_url)
+        elif res.get("status") == acq_config.reason(acq, "rate"):
+            r["background"] = "skipped_quota"  # P0DTA-PRIO D4: blocked by the hourly/daily job cap or its reserve
         else:
             r["background"] = res.get("status")
     return {"status": res.get("status"), "queued": len(res.get("queued", ())),
@@ -411,8 +416,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         with search_providers.portal_scope() as portals_l:
             st["portals"] = portals_l
             try:
+                # P0DTA-PRIO D3: the search phase ends a fetch reserve (per_doc_timeout_s) before the inline deadline
                 cands = list(deps.search(question, int(s.get("results_per_provider", 10)),
-                                         max(1.0, min(float(s.get("timeout_s", 20)), deadline - clock()))) or [])
+                                         max(1.0, min(float(s.get("timeout_s", 20)),
+                                                      deadline - clock() - _b(acq, "per_doc_timeout_s", 25)))) or [])
                 if not portals_l:  # FRESH-1023: a search callable that records no portals counts as ONE portal
                     search_providers.record_portal("acquisition_search", "completed", len(cands))
             except Exception:  # noqa: BLE001
@@ -471,8 +478,15 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         t = clock()
         per: dict = {}  # FRESH-1023 C3: always collected (per-candidate records); entries stay disc-only
         sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
-        plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,
-                                   ms, per=per, skips=sk) if fresh_budget > 0 else []
+        if fresh_budget > 0 and ranked and deadline - clock() < _b(acq, "per_doc_timeout_s", 25):
+            # P0DTA-PRIO D3: one full fetch no longer fits: nothing starts; each candidate is a deadline skip
+            # (P0DTA-INTEG: recorded through the DIAG skip map, so done() and annotate_diag give skipped/deadline)
+            count(acq_config.reason(acq, "deadline"))
+            sk.update({i: acq_config.reason(acq, "deadline") for i in range(len(ranked))})
+            plans = []
+        else:
+            plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,
+                                       ms, per=per, skips=sk) if fresh_budget > 0 else []
         if fresh_budget <= 0:  # nothing evaluated: the daily document quota (budget 0) or the per-job document limit
             sk.update({i: acq_config.reason(acq, "daily_cap" if budget <= 0 else "doc_budget") for i in range(len(ranked))})
         by_plan: dict = {}

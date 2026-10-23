@@ -1136,7 +1136,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             tok = OPENALEX_OA_FIELDS.set(True)
             futs_order.append("openalex")  # ROUTE-R3: called after the concurrent portals started
             try:
-                base = list(base_search(question, n, timeout_s) or [])
+                base = list(base_search(question, n, max(0.1, t_end - clock())) or [])  # P0DTA-PRIO D3: capped at t_end
             except Exception as e:  # noqa: BLE001
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"

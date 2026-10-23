@@ -222,7 +222,10 @@ def test_hop04_selection_ddg_ranked_before_competing_openalex(happy):
     _, world, spy = happy
     assert sp.acq_rank_tier(spy["ddg_out"][0][0]) == 0 < sp.acq_rank_tier({"doi": ODOI, "provider": "openalex"})
     resolves = [u for u in world.rig.web.urls if "/search?query=DOI" in u]
-    assert resolves and HDOI.replace("/", "%2F") in resolves[0], resolves  # the DDG candidate is resolved first
+    # P0DTA-PRIO D1: the competitor carries a PMCID (routable signal) and the DDG row no OA evidence, so the competitor
+    # ranks first; both are evaluated in parallel (resolve order is not deterministic) and the DDG one is admitted (hop06)
+    for x in (ODOI, HDOI):
+        assert any(x.replace("/", "%2F") in u for u in resolves), resolves
 
 
 def test_hop05_route_europepmc_jats_and_allowlisted_fetch(happy):

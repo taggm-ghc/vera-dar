@@ -214,7 +214,8 @@ def test_ac6_served_pmcid_document_is_skipped_by_its_landing_url():
 def test_ac6_sort_never_compares_none_with_a_doi_on_a_tie():
     cands = [pmc_cand("PMC3333333"), A.cand("10.9999/acq.tie"), pmc_cand("PMC4444444")]
     out, _ = _rank(cands)  # equal titles and snippets: tier and score tie
-    assert [d for _s, d, _c, _i in out] == [None, "10.9999/acq.tie", None]
+    # P0DTA-PRIO D1: the PMCID candidates (routable full text) rank before the DOI-only one; no None/DOI comparison
+    assert [d for _s, d, _c, _i in out] == [None, None, "10.9999/acq.tie"]
 
 
 def test_ac6_doi_candidate_wins_over_pmcid_when_both_present():
