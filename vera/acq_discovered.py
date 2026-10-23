@@ -174,7 +174,7 @@ def _entry(s: dict, preprint: bool) -> dict:
     return e
 
 
-def discovered_candidates(sources, acq, question: str | None = None) -> tuple[list, list]:
+def discovered_candidates(sources, acq) -> tuple[list, list]:
     """(acquisition candidates, held entries). Stored-corpus items are skipped (already evidence). Candidates carry
     doi/pmcid/url/title/snippet plus `discovery` (service, record id, url, epistemic) and acq_source "discovered";
     the index licence and stored_text_kind are DROPPED (never copied). Held entries are discovered records that cannot
@@ -183,15 +183,6 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
     from vera.search_providers import _pmcid_of
     cands, held = [], []
     n = discovered_max(acq)
-    off = lambda s: False  # noqa: E731
-    if question:  # DDFIX-1023/REL: off-topic records (no key concept of the question) never use a discovered_max place
-        from vera import search_query
-        kc = search_query.key_concepts(question, extra_generic=(((acq or {}).get("search") or {}).get(
-            "openalex_profile") or {}).get("generic_terms") or ())
-        pool = [s for s in sources or () if isinstance(s, dict)]
-        flags = dict(zip(map(id, pool), search_query.off_topic_flags(
-            kc, [f"{s.get('title') or ''} {s.get('snippet') or ''}" for s in pool])))
-        off = lambda s: flags.get(id(s), False)  # noqa: E731
     for s in sources or ():
         if not isinstance(s, dict) or any(s.get(k) for k in _STORED_KEYS):
             continue
@@ -199,12 +190,6 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
         pmcid = None if doi else _pmcid_of(s.get("pmcid"))
         kind = _preprint_kind(s, doi)
         e = _entry(s, kind is not None)
-        if off(s):  # DDFIX-1023/REL: dropped before any cap or slot (lexical false positive of the discovery search)
-            held.append({**e, "gate_a": {"decision": "reject", "factors": {
-                "relevance": "no key concept of the question in the title or abstract (deterministic, lexical)"},
-                "uncertainty": ["judged on the listed title and abstract only"]},
-                "outcome": "dropped", "reason": acq_config.reason(acq, "irrelevant")})
-            continue
         from vera import arxiv_fulltext  # ARX-A2: arXiv records (no journal DOI) -> arXiv route when enabled
         ac = arxiv_fulltext.discovered_candidate(s, doi, kind, e, acq)
         if ac is None and (kind == "record" or (kind == "arxiv" and not doi)):  # D1: no route reads the paper's own licence
@@ -243,7 +228,7 @@ def digest(cands) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ Gate A (D2)
-def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops: dict | None = None) -> dict:
+def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict) -> dict:
     """{id(candidate): entry} for every discovered candidate: a deterministic fetch / defer / reject decision from
     existing metadata and the existing ranking stage's result, with factors and uncertainty. No score is recorded."""
     from vera import auto_acquire as aa
@@ -263,15 +248,11 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         unc = ["the article's own licence and full-text availability are unknown until resolution"]
         if not oa:
             unc.append("no open-access metadata on the discovery record")
-        irrelevant = acq_config.reason(acq, "irrelevant")
         if id(c) in in_ranked:
             f["relevance"] = "within the existing pre-rank cut (title and abstract overlap; lexical)"
             dec, reason = "fetch", None
         elif id(c) not in in_merged:
             dec, reason = "reject", acq_config.reason(acq, "duplicate")
-        elif (drops or {}).get(id(c)) == irrelevant:  # DDFIX-1023/REL: off-topic before the cut (title + abstract)
-            f["relevance"] = "no key concept of the question in the title or abstract (deterministic, lexical)"
-            dec, reason = "reject", irrelevant
         else:
             why = search_providers.acq_prefilter(c)
             if why:

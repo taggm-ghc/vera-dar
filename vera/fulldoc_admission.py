@@ -58,22 +58,10 @@ def _stems(text: str, icfg: dict, n: int) -> set:
         return set()
 
 
-def coverage_ok(covered: set, q_stems: set, min_cov: float) -> bool:
-    """DDFIX-1023/REL: THE per-document question-coverage rule of the legacy signal (admission.min_question_coverage):
-    the document's admitted passages cover at least `min_cov` of the question's content stems. The one place a
-    later, approved threshold or rule change touches (the idf_weighted signal keeps its own rule below)."""
-    return bool(q_stems) and len(set(covered) & set(q_stems)) / len(q_stems) >= min_cov
-
-
 def _q_stems(question: str, icfg: dict, n: int) -> set:
     """DAR-TRACE-1022: the question's CONTENT stems: its stems minus the stems of relevance.question_generic_terms
     (question words and generic wording such as "did", "key", "types", "different"). Absent key = all stems (the
     previous behaviour). A question left with no content stem has none (it is never grounded)."""
-    # DDFIX-1023/REL: the SAME generic idioms and words the discovery queries drop (vera.search_query.drop_generic:
-    # "de facto", "status quo", "best practices", ...) are removed from the question text first, so a relevant paper is
-    # not judged on whether it also says "status quo". Unchanged when nothing else would remain.
-    from vera.search_query import drop_generic
-    question = drop_generic(question)
     gen = icfg.get("question_generic_terms") if isinstance(icfg, dict) else None
     if not isinstance(gen, list) or not gen:
         return _stems(question, icfg, n)
@@ -494,7 +482,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         cover = {}
         for a in admitted:
             cover.setdefault(str(a["document_id"]), set()).update(_stems(a["text"], icfg, stem_n) & q_stems)
-        weak = {k for k, v in cover.items() if not coverage_ok(v, q_stems, min_cov)}
+        weak = {k for k, v in cover.items() if not q_stems or len(v) / len(q_stems) < min_cov}
         if weak:
             rejected.extend({"span_id": a["span_id"], "document_id": a["document_id"], "reason": "question_coverage"}
                             for a in admitted if str(a["document_id"]) in weak)

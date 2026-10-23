@@ -161,13 +161,6 @@ def _legacy_arxiv_body(question: str, q: Mapping) -> str:
     return "(" + f" {q['operator']} ".join(f"all:{t}" for t in terms) + ")"
 
 
-def _compound_anchor(qt) -> bool:
-    """DDFIX-1023/REL: a question with no configured core phrase but a run of adjacent distinctive terms holding a
-    hyphenated compound ("multi-agent orchestration") ANDs that run instead of OR-ing every term, so one isolated word
-    ("archetypes", "track") cannot match on its own. Questions without such a run keep the previous query."""
-    return len(qt.anchor) > 1 and any("-" in t for t in qt.anchor)
-
-
 def build_arxiv_query_info(question: str, q: Mapping, terms_cfg: Mapping | None = None, *,
                            relaxed: bool = False) -> tuple[str, str]:
     """Prose -> (arXiv `search_query`, mode). With `terms_cfg` (config search.query_terms) the query is
@@ -184,10 +177,6 @@ def build_arxiv_query_info(question: str, q: Mapping, terms_cfg: Mapping | None 
     if terms_cfg is not None:
         qt = build_query_terms(question, terms_cfg)
         mode = qt.mode
-        if not qt.empty and not qt.core and _compound_anchor(qt):  # DDFIX-1023/REL
-            rest = [t for t in qt.extra if t not in qt.anchor]
-            parts = [f"all:{t}" for t in qt.anchor] + (["(" + " OR ".join(f"all:{t}" for t in rest) + ")"] if rest else [])
-            return "(" + " AND ".join(parts) + ")" + _date_clause(q), qt.mode + "+anchor"
         if not qt.empty:
             parts = [f'all:"{c}"' for c in qt.core]
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
@@ -341,17 +330,12 @@ OPENALEX_OA_SELECT_EXTRA = "open_access,best_oa_location,locations,ids"
 OPENALEX_PMC_SOURCE_ID = "S2764455111"  # PubMed Central (where Europe PMC full text comes from)
 
 
-def _profile_extra_and(extra, profile: Mapping, anchor=()) -> str:
+def _profile_extra_and(extra, profile: Mapping) -> str:
     """Acquisition: a question with no core phrase gives an all-OR query that ranks any one common token (the
     ambiguous 'mma' matched alpha-gal papers). Instead AND the distinctive terms: drop the profile's generic terms
     (unless that leaves none) and keep at most `and_extra_max` in question order. Deterministic, no model call."""
     generic = {str(g).lower() for g in profile.get("generic_terms") or ()}
     terms = [t for t in extra if str(t).lower() not in generic] or list(extra)
-    # DDFIX-1023/REL: when the question has a run of adjacent distinctive terms (e.g. "multi-agent orchestration"), AND
-    # that concept instead of the first terms of the question (which ANDed "de AND facto AND status AND quo").
-    run = [t for t in anchor if str(t).lower() not in generic]
-    if len(run) > 1:
-        terms = run
     return " AND ".join(terms[: max(1, int(profile.get("and_extra_max") or 4))])
 
 
@@ -362,10 +346,7 @@ def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: 
         qt = build_query_terms(question, terms_cfg)
         if not qt.empty:
             if profile and not qt.core and qt.extra and profile.get("and_extra_max"):
-                return _profile_extra_and(qt.extra, profile, qt.anchor), qt.mode + "+and"
-            if not qt.core and _compound_anchor(qt):  # DDFIX-1023/REL
-                rest = [t for t in qt.extra if t not in qt.anchor]
-                return " AND ".join([*qt.anchor, *(["(" + " OR ".join(rest) + ")"] if rest else [])]), qt.mode + "+anchor"
+                return _profile_extra_and(qt.extra, profile), qt.mode + "+and"
             parts = [f'"{c}"' for c in qt.core]
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
                 parts = ["(" + " OR ".join(parts) + ")"]

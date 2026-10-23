@@ -191,7 +191,7 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         if discovered is not None:
             from vera import acq_discovered
             if acq_discovered.use_discovered(acq):
-                disc = acq_discovered.discovered_candidates(discovered, acq, question)
+                disc = acq_discovered.discovered_candidates(discovered, acq)
         key = _cache_key(question, served, disc) if disc is not None else _cache_key(question, served)
         now = clock()
         with _I.lock:
@@ -454,7 +454,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             if cid in rec_by:
                 rec_by[cid]["outcome"], rec_by[cid]["reason"] = "dropped", why
         if disc is not None:
-            entries.update(acq_discovered.gate_a(disc[0], cands, ranked, skip, acq, drops))
+            entries.update(acq_discovered.gate_a(disc[0], cands, ranked, skip, acq))
         # DAR-INLINE-1021-R2: ranked candidates ALREADY stored as acquired documents are answered from their stored rows
         # (read-only) instead of being skipped as R-ACQ-KNOWN while lower-ranked documents are acquired in their place
         # (the run-2 failure: a new process, the served acquired corpus still loading in the background).
@@ -519,8 +519,6 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 got = per.get(i)
                 if got is None:
                     e["outcome"] = "not_evaluated"  # deadline or the document budget was reached first
-                    if i in sk:  # DDFIX-1023/REL: the recorded skip reason, not the generic outcome text
-                        e["reason"] = sk[i]
                 elif isinstance(got, str):
                     e["outcome"], e["reason"] = "rejected", got
                     if got in (acq_config.reason(acq, "irrelevant"), acq_config.reason(acq, "few_spans")):
