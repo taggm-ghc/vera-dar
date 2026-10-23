@@ -26,7 +26,7 @@ Rules 1 to 4 are partly checked by the test suite that the release gate runs. No
 ## Before you change code
 
 - New feature: write the plan entry first, then the code.
-- Run `pytest tests` and `python scripts/release_gate.py` before any deploy.
+- Run the offline suite through the project runner (`.venv/bin/python -I scripts/vera_test_runner.py -- tests -q`, see `docs/development.md`) and `python scripts/release_gate.py` before any deploy. Plain `pytest` is for live-stage tests only.
 - Integration tests touch the shared production database. Write only through the app path.
 - Record any known shortfall as an accepted divergence. Do not hide it.
 

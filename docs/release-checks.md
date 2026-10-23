@@ -69,7 +69,9 @@ run, or from an unclean worktree is stale: release_gate (a2) FAILs, and the pref
 is valid only for the 9c3dd56 fallback candidate. Changing `live_catalog_check.py` or the checker changes the pins
 and needs a guarded, owner-approved edit to `release_gate.py`.
 
-## Current status (2026-10-19, uncommitted reconciled tree)
+## Current status (2026-10-19, uncommitted reconciled tree; historical)
+
+Status as of 2026-10-22: the table below was last recorded 2026-10-19 and has not been re-run in this documentation pass (untested, assumed unchanged). The tree has since had commits (HEAD 50767a2 on 2026-10-21 per local git) and uncommitted edits, so G6 and G7 must be re-evaluated for any candidate.
 
 G1, G2, G3, G4 PASS; G5 fulldoc.enabled was false as of 2026-10-19 (shipped true at 8b16bf3; see G5 row above) and G6 dirty worktree are OWNER-REQUIRED; G7 has no evidence for the
 new script hash, so catalog evidence is stale/missing and OWNER-REQUIRED; G8 SKIPPED unless `--with-tests`.
