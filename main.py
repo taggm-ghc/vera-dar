@@ -596,19 +596,22 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         grounding, cache = None, {}
         if GROUNDING is not None:
 
+            def _restricted_key():  # RL-REL-1021-C: keyed by the active profile (AND vs OR never share); derived once
+                import json as _json
+
+                from vera.search_providers import OPENALEX_PROFILE
+
+                prof = OPENALEX_PROFILE.get()
+                return ("r", None if prof is None else _json.dumps(prof, sort_keys=True, default=str))
+
             def sources_fn(restricted=False):  # one search per request, reused if the provider chain falls through
                 if restricted:  # FIX1-1021: off-topic reading list: scholarly providers only, no link following, no stored branch
-                    import json as _json
-
-                    from vera.search_providers import OPENALEX_PROFILE
-
-                    prof = OPENALEX_PROFILE.get()  # RL-REL-1021-C: keyed by the active profile (AND vs OR never share)
-                    key = ("r", None if prof is None else _json.dumps(prof, sort_keys=True, default=str))
+                    key = _restricted_key()
                     if key not in cache:
                         from vera.scope_router import offtopic_providers
 
                         rcfg = {**GROUNDING, "providers": offtopic_providers(), "resolve": {"enabled": False}}
-                        cache[key] = retrieve_all(req.question, rcfg)[0]
+                        cache[key], cache[("u",) + key] = retrieve_all(req.question, rcfg)
                     return cache[key]
                 if "s" not in cache:
                     from vera.dar_runtime import get_corpus  # lazy; flag-gated, returns None when DAR is off
@@ -618,6 +621,12 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
                                                                **({"dar_corpus": dar} if dar is not None else {}))
                 return cache["s"]
 
+            def _unused_fn(restricted=False):  # abstract-less originals of the same cached search (acquisition candidates only)
+                if restricted:  # empty by design today: the off-topic search runs with resolve off
+                    return cache.get(("u",) + _restricted_key()) or []
+                return cache.get("unused") or []
+
+            sources_fn.unused = _unused_fn
             grounding = (sources_fn, GROUNDING)
         _tok = REQUEST_BUDGET.set(budget)  # shared by every provider tried in the chain; never restarted
         try:

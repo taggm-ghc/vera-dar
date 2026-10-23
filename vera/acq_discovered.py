@@ -76,8 +76,10 @@ def discovery_results(grounding, restricted: bool):
         fn = grounding[0] if grounding else None
         if not callable(fn):
             return []
+        extra = getattr(fn, "unused", None)  # abstract-less originals: acquisition candidates only, never evidence
         if not restricted:
-            return list(fn() or [])
+            got = list(fn() or [])
+            return got + _unused_of(extra, False)
         from vera import scope_router as sr
         from vera import search_providers
         profile = sr.offtopic_openalex_profile()
@@ -88,9 +90,18 @@ def discovery_results(grounding, restricted: bool):
                 search_providers.OPENALEX_PROFILE.reset(tok)
                 tok = search_providers.OPENALEX_PROFILE.set(None)
                 got = list(fn(restricted=True) or [])
+            got += _unused_of(extra, True)
         finally:
             search_providers.OPENALEX_PROFILE.reset(tok)
         return got
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _unused_of(extra, restricted: bool) -> list:
+    """The abstract-less originals of the cached search; a failure here costs only these extras, never the main results."""
+    try:
+        return list(extra(restricted) or []) if callable(extra) else []
     except Exception:  # noqa: BLE001
         return []
 

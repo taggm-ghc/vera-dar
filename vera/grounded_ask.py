@@ -173,7 +173,8 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                 seen.add(key)
                 unused.append({"title": clean_text(r.get("title"), 300) or url, "url": url,
                                "published": (str(r.get("published"))[:10] if r.get("published") else None),
-                               "discovered_via": str(r["discovered_via"])})
+                               "discovered_via": str(r["discovered_via"]),
+                               **{k: r[k] for k in ("doi", "pmcid", "openalex_id", "doaj_id", "provider") if r.get(k)}})  # identifiers for acquisition only; traced_sources shows title/url/published
             continue
         seen.add(key)
         src = {"n": len(out) + 1, "title": clean_text(r.get("title"), 300) or url, "url": url,
@@ -181,7 +182,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                "snippet": snippet, "source_type": r.get("source_type")}
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
-        for k in ("licence", "stored_text_kind", "doi", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet; never in the response
+        for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet; never in the response
             if r.get(k):
                 src[k] = r[k]
         src.update(provenance(r))

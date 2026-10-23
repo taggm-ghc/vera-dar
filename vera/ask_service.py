@@ -323,7 +323,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         return None
     from vera import acq_discovered
     kw = {}  # P0-5 (inline.use_discovered, default off): the request's own cached discovery results; off = unchanged call
-    if acq_discovered.use_discovered(acq):  # the off-topic path lists the restricted search, in-scope the full one
+    if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):  # E5: no discovery search when acquire() is off; the off-topic path lists the restricted search, in-scope the full one
         kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=not in_scope)
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     if info is not None:

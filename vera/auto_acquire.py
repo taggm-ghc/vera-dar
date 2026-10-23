@@ -532,6 +532,9 @@ def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url
     meta.update({"document_id": None, "raw_sha256": hashlib.sha256(raw).hexdigest(),
                  "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "raw_file": None})
     jm = meta.get("meta") or {}
+    jdoi = _doi({"doi": jm.get("doi")})
+    if doi and jdoi and jdoi != doi:  # DAR-B-1023: the fetched document must not state another paper's DOI (any route)
+        raise _Stop(acq_config.reason(cfg, "identity_mismatch"))
     if not doi:  # PLAN-NONDOI-1022 rule 6: a DOI stated in the JATS article-id gives the DOI identity (one paper, one URL)
         doi = _doi({"doi": jm.get("doi")})
     did = "acq-" + hashlib.sha256((doi if doi else "pmcid:" + res["pmcid"]).encode("utf-8")).hexdigest()[:16]
