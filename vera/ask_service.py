@@ -334,8 +334,10 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
+    bg = inline_acquire.background_note(acq, o)  # CONT-1023: "" unless candidates were queued for background acquisition
     if o.corpus is None:
-        return inline_acquire.notice(acq, o.status)
+        t = inline_acquire.notice(acq, o.status)
+        return f"{t} {bg}".strip() if t is not None and bg else t
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
@@ -352,10 +354,10 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         note.token = tok
         return note
     if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer
-        note = inline_acquire.answer_note(acq, o)
+        note = " ".join(t for t in (inline_acquire.answer_note(acq, o), bg) if t)
         return replace(out, answer=f"{note} {out.answer}" if note else out.answer,
                        contract={**(out.contract or {}), "acquired_only": True, "inline_acquisition": o.public()})
-    lead = " ".join(t for t in (acq_config.override_answer_prefix(acq), inline_acquire.answer_note(acq, o)) if t)
+    lead = " ".join(t for t in (acq_config.override_answer_prefix(acq), inline_acquire.answer_note(acq, o), bg) if t)
     return replace(out, answer=f"{lead} {out.answer}" if lead else out.answer, accepted=False,
                    contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
                              "inline_acquisition": o.public()})

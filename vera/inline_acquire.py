@@ -77,6 +77,9 @@ class Outcome:
     # record per candidate [{portal,doi,pmcid,openalex_id,arxiv_id,url,published,outcome,reason[,persisted,persist_reason]}]
     portals: list | None = None
     candidates: list | None = None
+    # CONT-1023 (additive; None = nothing was eligible): the background hand-off of this request's unfinished
+    # candidates {"status": code, "queued": n, "already_queued": n, "refused": n}
+    background: dict | None = None
 
     @property
     def n_answer_eligible(self) -> int:
@@ -96,7 +99,12 @@ class Outcome:
                 "n_persisted": self.n_persisted, "documents": [dict(d) for d in self.documents], "ms": dict(self.ms),
                 **({"discovered": [dict(d) for d in self.discovered]} if self.discovered is not None else {}),
                 **({"portals": [dict(d) for d in self.portals]} if self.portals is not None else {}),
-                **({"candidates": [{k: v for k, v in d.items() if k != "pmcid"} for d in self.candidates]} if self.candidates is not None else {})}
+                **({"candidates": [{k: v for k, v in d.items() if k != "pmcid"} for d in self.candidates]} if self.candidates is not None else {}),
+                **({"background": dict(self.background)} if self.background is not None else {})}
+
+    @property
+    def queued(self) -> int:
+        return int((self.background or {}).get("queued") or 0) + int((self.background or {}).get("already_queued") or 0)
 
 
 class _Inline:
@@ -239,6 +247,56 @@ def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer
                          **({"prefer_recent": True} if prefer_recent else {}))
 
 
+QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the background acquisition queue
+
+
+def _transient(acq, code) -> bool:
+    """CONT-1023: a per-candidate failure that may succeed later (timeout, 5xx/non-200, quota, connection error)."""
+    c = str(code or "")
+    if c in {acq_config.reason(acq, k) for k in ("unreachable", "rate_limited", "deadline")}:
+        return True
+    return c.startswith("R-ACQ-ERR-") and any(w in c for w in ("Timeout", "Connection"))
+
+
+def continue_eligible(acq, rec: dict) -> bool:
+    """CONT-1023: True when the request ended this candidate's acquisition for a reason that can change (the inline
+    deadline, the per-request candidate cut or document budget, a transient failure). Terminal reasons (licence, ND,
+    injection, abstract-only, irrelevant, no route, already held) are never eligible."""
+    o, why = rec.get("outcome"), rec.get("reason")
+    if o in ("not_evaluated", "not_used"):
+        return True
+    if o == "dropped":  # the cut; or (owner) a URL-only candidate: its URL may lead to the source (follow_url)
+        return why == acq_config.reason(acq, "defer_cap") or (why == acq_config.reason(acq, "no_doi")
+                                                               and bool(rec.get("url")))
+    return o == "rejected" and _transient(acq, why)
+
+
+def _continue(question, acq, env, clock, recs: list, cands: list, deps_factory=None) -> dict | None:
+    """CONT-1023: enqueue the eligible unfinished candidates as BEST-EFFORT background jobs (in-memory queue: lost on
+    restart or spin-down, never retried; vera.auto_acquire.enqueue_candidates);
+    mark each record queued_background (keeping why it was unfinished) or with the refusal. None = none eligible."""
+    from vera import research_outcome as ro
+    pick = [i for i, r in enumerate(recs) if continue_eligible(acq, r)]
+    for i, r in enumerate(recs):
+        if i not in pick and r.get("outcome") in ("dropped", "rejected"):
+            r["background"] = "no_route" if ro.reason_from_code(r.get("reason")) == "no_route" else "terminal"
+    if not pick:
+        return None
+    res = aa.enqueue_candidates(question, [cands[i] for i in pick], cfg=acq, env=env, clock=clock,
+                                deps_factory=deps_factory)  # None (production): the worker's own live wiring
+    for j, i in enumerate(pick):
+        r = recs[i]
+        if j in res.get("queued", ()) or j in res.get("already", ()):
+            r["unfinished"], r["outcome"] = r.get("outcome"), QUEUED
+            r["background"] = "queued" if j in res.get("queued", ()) else "already_queued"
+            if r.get("reason") == acq_config.reason(acq, "no_doi"):
+                r["route"] = "follow_url"  # no identifier yet: the job follows the URL (auto_acquire.follow_url)
+        else:
+            r["background"] = res.get("status")
+    return {"status": res.get("status"), "queued": len(res.get("queued", ())),
+            "already_queued": len(res.get("already", ())), "refused": len(res.get("refused", ()))}
+
+
 def _cand_year(c) -> int | None:
     for k in ("year", "published", "publication_date"):
         m = re.match(r"\s*(\d{4})", str(c.get(k) or ""))
@@ -273,7 +331,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         codes[code] = codes.get(code, 0) + 1
 
     entries: dict = {}  # P0-5: id(discovered candidate) -> its public entry (disc only)
-    st: dict = {"portals": None, "recs": []}  # FRESH-1023 C3: portal attempts + per-candidate records
+    st: dict = {"portals": None, "recs": [], "cands": []}  # FRESH-1023 C3: portal attempts + per-candidate records
 
     def done(o: Outcome) -> Outcome:
         if st["portals"] is not None:
@@ -283,6 +341,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 if r["outcome"] is None:
                     r["outcome"] = "not_evaluated"
                     r["reason"] = acq_config.reason(acq, "deadline") if late else acq_config.reason(acq, "defer_cap")
+            o.background = _continue(question, acq, env, clock, st["recs"], st["cands"], deps_factory)  # CONT-1023
             o.candidates = [dict(r) for r in st["recs"]]
         if disc is not None:
             o.discovered = [entries.get(id(c)) or {**c["discovery"], "outcome": "not_reached"} for c in disc[0]] + \
@@ -349,6 +408,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             if isinstance(c, dict):
                 rec_by[id(c)] = _cand_record(c)
                 st["recs"].append(rec_by[id(c)])
+                st["cands"].append(c)
         drops: dict = {}
         ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count, drops=drops)
         for cid, why in drops.items():
@@ -655,6 +715,19 @@ def notice(acq: dict | None, status: str) -> str | None:
                 "search_failed": "inline_notice_search_failed", "ok": "inline_notice_unanswered",
                 "unanswered": "inline_notice_unanswered"}[status])
     return t if isinstance(t, str) else ""
+
+
+BACKGROUND_NOTE = ("Further sources VERA-DAR found for this question may be acquired in the background on a best-effort "
+                   "basis; any that are added must first pass its licence, content and relevance checks.")
+
+
+def background_note(acq: dict | None, o) -> str:
+    """CONT-1023: one honest sentence when this request queued candidates for background acquisition (best-effort: no
+    claim they will run or succeed); "" otherwise. Override: scope_expansion.inline_notice_background."""
+    if not getattr(o, "queued", 0):
+        return ""
+    t = ((acq or {}).get("scope_expansion") or {}).get("inline_notice_background")
+    return t if isinstance(t, str) and t else BACKGROUND_NOTE
 
 
 def answer_note(acq: dict | None, o: Outcome) -> str:

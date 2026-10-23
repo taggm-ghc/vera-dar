@@ -83,11 +83,16 @@ def _stale_world(world, fc):
     _install_cap_clock(world, fc)
 
 
-def _ask_n(world, fc, n, step_s):
+def _ask_n(world, fc, n, step_s, drained=None):
     bodies = []
     for i in range(n):
         fc.t += step_s
         bodies.append(world.ask())  # same question: result_ttl_s 0 defeats outcome reuse
+        # CONT-1023: continuation jobs (the request's unfinished candidates) run here, deterministically, in this thread
+        # (tests/conftest.py never starts the background worker)
+        out = auto_acquire.drain_for_tests(world.rig.cfg, world.rig.deps, clock=fc, env=A.ENV_ON)
+        if drained is not None:
+            drained.extend(out)
     return bodies
 
 
@@ -112,10 +117,14 @@ def test_shipped_bounds_and_budget_values():
 def test_cap_storm_ten_stale_asks_in_one_hour(world):
     fc = FakeClock()
     _stale_world(world, fc)
-    bodies = _ask_n(world, fc, 10, 300.0)  # 10 asks over 45 min
+    drained = []
+    bodies = _ask_n(world, fc, 10, 300.0, drained)  # 10 asks over 45 min
     assert all(_need(b, "triggers") == ["stale"] for b in bodies)  # the stale trigger fires every time ...
     assert len(_jobs_run(world)) <= 6, [o.status for o in world.rig.outcomes]  # ... but at most jobs_per_hour jobs run
-    assert len(_jobs_run(world)) == 6
+    # CONT-1023: continuation jobs (a request's unfinished candidates, background queue) share the SAME cap, so the cap
+    # is reached by inline runs + continuation jobs together
+    assert len(_jobs_run(world)) + len(drained) == 6 == len(auto_acquire._S.jobs_hour)
+    assert all(r["stored"] <= 2 and r["trigger"] == "continue" for r in drained)
     plans_after_6 = len(world.rig.store.plans)
     assert plans_after_6 <= 6 * 2  # <= max_docs_per_job per job
     for b in bodies[6:]:
@@ -134,13 +143,15 @@ def test_cap_storm_ten_stale_asks_in_one_hour(world):
 def test_cap_storm_across_a_simulated_day(world):
     fc = FakeClock()
     _stale_world(world, fc)
-    bodies = _ask_n(world, fc, 40, 1500.0)  # 40 asks spaced 25 min: <= 3 per hour, 16.7 h in total (inside one 24 h window)
+    drained = []
+    bodies = _ask_n(world, fc, 40, 1500.0, drained)  # 40 asks spaced 25 min: <= 3 per hour, 16.7 h in total (inside one 24 h window)
     assert all(_need(b, "triggers") == ["stale"] for b in bodies)
     run = _jobs_run(world)
-    assert len(run) <= 30 and len(run) == 30, [o.status for o in world.rig.outcomes]  # jobs_per_day
+    assert len(run) + len(drained) == 30 == len(auto_acquire._S.jobs_day), [o.status for o in world.rig.outcomes]  # jobs_per_day (CONT-1023: inline + continuation jobs share it)
+    assert all(r["stored"] <= 2 and r["trigger"] == "continue" for r in drained)
     assert len(world.rig.store.plans) <= 30 * 2
-    assert [o.status for o in world.rig.outcomes[30:]] == ["rate"] * 10
-    for b in bodies[30:]:
+    assert [o.status for o in world.rig.outcomes[len(run):]] == ["rate"] * (40 - len(run))
+    for b in bodies[len(run):]:
         ro = _need(b, "research_outcome")
         assert ro["kind"] == "incomplete_search" and ro["complete"] is False
     fc.t += 24 * 3600.0  # the window rolls: acquisition is possible again (caps are limits, not a lock-out)

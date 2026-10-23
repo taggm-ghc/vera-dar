@@ -15,12 +15,15 @@ TERMINAL_REASONS = (
     "provenance_rejected", "injection_rejected", "relevance_rejected",
     "credibility_rejected", "freshness_rejected", "abstract_only",
     "budget_exhausted", "admitted", "already_in_corpus",
+    "queued_background",  # CONT-1023 (additive): handed to the background acquisition queue, outcome pending
 )
 ID_KEYS = ("doi", "pmcid", "openalex_id", "arxiv_id", "url")
 KINDS = ("answered_with_new", "qualified_older_only", "no_valuable_source",
          "incomplete_search", "abstain")
 
 NO_VALUABLE_SENTENCE = "No sufficiently valuable source was found across the portals searched."
+BACKGROUND_SENTENCE = ("Further sources found by this search may be acquired in the background on a best-effort basis; "
+                       "any that are added must first pass the licence, content and relevance checks.")
 
 # Acquisition problems: a source may exist but could not be used.
 _ACQ_FAILURES = ("no_route", "fetch_failed", "extraction_failed", "abstract_only")
@@ -116,16 +119,25 @@ _CAUSE_TEXT = {
     "quota": "a portal's request limit was reached",
     "error": "a portal had a service failure",
     "budget": "the search budget ran out",
+    "awaiting_route": "some sources found have no usable identifier yet",  # CONT-1023: URL-only, queued to follow
 }
 
 
-def _causes(attempts, budget_exhausted: bool) -> list[str]:
+def _awaiting_route(candidates) -> bool:
+    """CONT-1023: a URL-only candidate (no identifier yet) was queued to be followed in the background."""
+    return any(c.terminal_reason == "queued_background" and reason_from_code(c.detail) == "no_route"
+               for c in candidates)
+
+
+def _causes(attempts, budget_exhausted: bool, awaiting: bool = False) -> list[str]:
     out: list[str] = []
     for a in attempts:
         if a.status in ("timeout", "quota", "error") and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")
+    if awaiting:
+        out.append("awaiting_route")
     return out
 
 
@@ -157,9 +169,10 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                       new_evidence_admitted: bool) -> ResearchOutcome:
     attempts, candidates = list(attempts), list(candidates)
     applicable = [a for a in attempts if a.status != "skipped"]
+    awaiting = _awaiting_route(candidates)
     complete = bool(applicable) and all(a.status == "completed" for a in applicable) \
-        and not budget_exhausted
-    causes = _causes(attempts, budget_exhausted)
+        and not budget_exhausted and not awaiting
+    causes = _causes(attempts, budget_exhausted, awaiting)
     if not applicable and not budget_exhausted:
         causes = ["none_searched"]
     admitted = new_evidence_admitted or any(c.terminal_reason == "admitted" for c in candidates)
@@ -198,5 +211,7 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                         "the admission criteria.")
             else:
                 text = NO_VALUABLE_SENTENCE + " No candidates were found."
+    if any(c.terminal_reason == "queued_background" for c in candidates):  # CONT-1023: no claim they will succeed
+        text = f"{text} {BACKGROUND_SENTENCE}".strip()
     return ResearchOutcome(kind=kind, user_text=text, complete=complete,
                            report_detail=_detail(attempts, candidates, kind, complete, causes))

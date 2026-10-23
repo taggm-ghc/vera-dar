@@ -49,6 +49,9 @@ class Job:
     trigger: str
     job_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created: float = 0.0
+    # CONT-1023: candidates a request found but could not finish (inline deadline / candidate cut / transient
+    # failure). None = the ordinary job (it searches); a list = evaluate exactly these, no search (memory only).
+    cands: list | None = None
 
 
 class _State:
@@ -61,6 +64,7 @@ class _State:
         self.docs_day: deque = deque()
         self.docs_reserved = 0  # DAR-INLINE-1021-R2 (VER L5): documents reserved by in-progress inline jobs
         self.recent: dict = {}  # salted HMAC of the normalised question -> monotonic time (memory only)
+        self.pending: dict = {}  # CONT-1023: salted HMAC of a candidate identity key -> time queued (memory only)
         self.salt = os.urandom(32)
 
 
@@ -133,6 +137,134 @@ def enqueue(question: str, trigger: str, *, cfg: dict | None = None, env=os.envi
         return "R-ACQ-ERROR"
 
 
+def cand_keys(c: dict) -> set:
+    """CONT-1023: identity keys of one candidate (DOI, PMCID, OpenAlex id, arXiv id, URL), lower-cased."""
+    out = set()
+    if not isinstance(c, dict):
+        return out
+    doi, pmcid = _doi(c), _pmcid(c)
+    for k, v in (("doi", doi), ("pmc", pmcid), ("oa", c.get("openalex_id")),
+                 ("arxiv", c.get("arxiv_id") or c.get("arxiv")), ("url", c.get("url"))):
+        v = str(v or "").strip().lower().rstrip("/")
+        if v:
+            out.add(f"{k}:{v}")
+    return out
+
+
+def follow_url(c):
+    """CONT-1023 (owner: "a candidate URL may indicate that it may need to be followed to find the actual source"): a
+    candidate with no DOI/PMCID but a URL gets the identifier the URL itself carries (search_providers.ddg_identifier:
+    DOI in the URL, PMC article URL, arXiv id; no request is made), so the unchanged Europe PMC route can resolve it.
+    No new host, no landing fetch (landing_route stays security-gated). Returns a copy, or the candidate unchanged
+    (it is then dropped R-ACQ-NODOI as before: awaiting a route)."""
+    if not isinstance(c, dict) or _doi(c) or _pmcid(c):
+        return c
+    from vera import search_providers
+    for u in (c.get("url"), c.get("discovered_url")):
+        ident = search_providers.ddg_identifier(str(u or ""))
+        if ident is None or ident["kind"] == "pmid":  # a PMID needs a lookup request: not followed here
+            continue
+        if ident["kind"] == "pmcid":
+            return {**c, "pmcid": ident["value"], "followed_from": "url"}
+        doi = ident["value"] if ident["kind"] == "doi" else f"10.48550/arxiv.{ident['value']}"
+        return {**c, "doi": doi, "followed_from": "url"}
+    return c
+
+
+def _pkey(k: str) -> str:
+    """CONT-1023 (AC-8 spirit): pending candidate identities are kept only as salted HMACs, like questions."""
+    return hmac.new(_S.salt, k.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, env=os.environ,
+                       clock=time.monotonic, start_worker: bool = True, deps_factory=None) -> dict:
+    """CONT-1023: hand candidates a request found but could not finish to the EXISTING background queue and worker, so
+    returned search results do not end the acquisition effort. Never raises, never blocks.
+
+    BEST-EFFORT ONLY: the queue and the de-duplication set live in this process's memory; queued jobs are lost on a
+    restart, deploy or spin-down, a failed job is not retried, and nothing is persisted. No guaranteed follow-up.
+
+    Same switches and caps as enqueue(): kill switch + flag + both DB env vars (acq_config.enabled; no write account =
+    refused, nothing queued), the shared jobs_per_hour / jobs_per_day caps (one job per max_docs_per_job candidates,
+    so a job can store every candidate it carries), queue_max. De-duplicated by identity (cand_keys) against every
+    candidate queued in the last dedupe_window_s, so repeated requests never queue a candidate twice. The jobs run the
+    unchanged run_job stages (rank, resolve, fetch, licence, injection, relevance, persist minimum) without a search;
+    they answer nobody and only add admitted documents to the corpus.
+
+    Returns {"status": "ACQ-QUEUED" | refusal code, "queued": [i...], "already": [i...], "refused": [i...]} (indexes
+    into cands)."""
+    out = {"status": "ACQ-QUEUED", "queued": [], "already": [], "refused": []}
+    try:
+        cfg = cfg if cfg is not None else acq_config.load_config()
+        idx = [i for i, c in enumerate(cands or ()) if isinstance(c, dict)]
+        if not idx:
+            out["status"] = "none"
+            return out
+        if not acq_config.enabled(cfg, env):
+            out["status"] = acq_config.reason(cfg or {}, "disabled" if (acq_config.killed(cfg, env) or not
+                                                                         acq_config.flag_on(cfg)) else "no_write_db")
+            out["refused"] = idx
+            return out
+        from vera import scope_router
+        if not str(question or "").strip() or not scope_router.intent_clean(str(question)):
+            out["status"], out["refused"] = acq_config.reason(cfg, "intent_denied"), idx
+            return out
+        now = clock()
+        per_job = max(1, int(acq_config.bound(cfg, "max_docs_per_job")))
+        with _S.lock:
+            win = float(acq_config.bound(cfg, "dedupe_window_s"))
+            for k in [k for k, t in _S.pending.items() if now - t >= win]:
+                del _S.pending[k]
+            fresh, seen = [], set()
+            for i in idx:
+                ks = {_pkey(k) for k in cand_keys(cands[i])}
+                if ks & (set(_S.pending) | seen):
+                    out["already"].append(i)
+                else:
+                    seen |= ks
+                    fresh.append(i)
+            if _S.queue is None:
+                _S.queue = queue.Queue(maxsize=int(acq_config.bound(cfg, "queue_max")))
+            for j in range(0, len(fresh), per_job):
+                part = fresh[j:j + per_job]
+                _prune(_S.jobs_hour, now, 3600.0)
+                _prune(_S.jobs_day, now, 86400.0)
+                if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
+                        len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
+                    why = acq_config.reason(cfg, "rate")
+                else:
+                    try:
+                        _S.queue.put_nowait(Job(question=str(question), trigger="continue", created=now,
+                                                cands=[cands[i] for i in part]))
+                        why = None
+                    except queue.Full:
+                        why = acq_config.reason(cfg, "queue_full")
+                if why:  # not queued: NOT marked pending, so a later request may queue it
+                    out["refused"].extend(fresh[j:])
+                    out["status"] = why
+                    break
+                _S.jobs_hour.append(now)
+                _S.jobs_day.append(now)
+                out["queued"].extend(part)
+                for i in part:
+                    for k in cand_keys(cands[i]):
+                        _S.pending[_pkey(k)] = now
+            if out["queued"] and start_worker and (_S.worker is None or not _S.worker.is_alive()):
+                _S.worker = threading.Thread(target=_worker_loop, args=(cfg, env, clock, deps_factory),
+                                             name=THREAD_NAME, daemon=True)
+                _S.worker.start()
+        if not out["queued"] and not out["refused"]:
+            out["status"] = "already_queued"
+        _log("continue", status=out["status"], queued=len(out["queued"]), already=len(out["already"]),
+             refused=len(out["refused"]))
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("autoacq enqueue_candidates failed (%s)", type(e).__name__)
+        out["status"] = "R-ACQ-ERROR"
+        out["refused"] = [i for i in range(len(cands or ())) if i not in out["queued"]]
+        return out
+
+
 def _worker_loop(cfg, env, clock, deps_factory) -> None:
     q = _S.queue
     while True:
@@ -151,7 +283,7 @@ def _worker_loop(cfg, env, clock, deps_factory) -> None:
         except Exception as e:  # noqa: BLE001  (class only: never the message, which may quote a URL)
             logger.warning("autoacq job failed (%s)", type(e).__name__)
         finally:
-            job.question = ""  # drop the visitor's text
+            job.question, job.cands = "", None  # drop the visitor's text (and CONT-1023 candidates)
             try:
                 if deps is not None and deps.close is not None:
                     deps.close()
@@ -169,7 +301,7 @@ def drain_for_tests(cfg, deps, clock=time.monotonic, env=None) -> list:
         try:
             out.append(run_job(job, cfg, deps, clock=clock, env=env))
         finally:
-            job.question = ""
+            job.question, job.cands = "", None
             q.task_done()
     return out
 
@@ -905,8 +1037,11 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         t = clock()
         try:
             n_calls = int(acq_config.bound(cfg, "max_search_calls_per_job"))
-            cands = list(deps.search(job.question, int(s.get("results_per_provider", 10)),
-                                     float(s.get("timeout_s", 20))) or []) if n_calls > 0 else []
+            if job.cands is not None:  # CONT-1023: a request's unfinished candidates; no search
+                cands = [follow_url(c) for c in job.cands]
+            else:
+                cands = list(deps.search(job.question, int(s.get("results_per_provider", 10)),
+                                         float(s.get("timeout_s", 20))) or []) if n_calls > 0 else []
         except Exception:  # noqa: BLE001
             count(acq_config.reason(cfg, "search_failed"))
             return done()

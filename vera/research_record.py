@@ -138,6 +138,8 @@ def _terminal(c: dict) -> str:
         return "admitted"
     if o in ("not_evaluated", "not_used"):
         return "budget_exhausted"
+    if o == "queued_background":  # CONT-1023: unfinished in this request, handed to the background queue
+        return "queued_background"
     return ro.reason_from_code(c.get("reason"))
 
 
@@ -154,7 +156,8 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
     outs = [ro.CandidateOutcome(f"c{i + 1}", _ids(c), _terminal(c), str(c.get("reason") or ""))
             for i, c in enumerate(cands)]
     budget = (status in _BUDGET_STATUSES or any(p.get("status") == "skipped_budget" for p in raw_portals)
-              or any(o.terminal_reason == "budget_exhausted" for o in outs))
+              or any(o.terminal_reason == "budget_exhausted" or (o.terminal_reason == "queued_background"  # CONT-1023
+                     and ro.reason_from_code(o.detail) != "no_route") for o in outs))  # URL-only: awaiting_route cause
     if not triggers:
         kind, text, complete, detail = "not_needed", "", False, {}
     else:

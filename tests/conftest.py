@@ -270,3 +270,13 @@ def _ui_wake_default_healthy(monkeypatch):
     ui_wake.reset_hook_cooldown()
     yield
     ui_wake.reset_hook_cooldown()
+
+
+@pytest.fixture(autouse=True)
+def _no_continuation_worker(monkeypatch):
+    """CONT-1023 (verification D1): an inline run hands unfinished candidates to auto_acquire.enqueue_candidates, which
+    would start the REAL daemon worker; in tests it never starts (no thread outlives a test). Tests that need the jobs
+    run them deterministically with auto_acquire.drain_for_tests."""
+    from vera import auto_acquire
+    real = auto_acquire.enqueue_candidates
+    monkeypatch.setattr(auto_acquire, "enqueue_candidates", lambda *a, **k: real(*a, **{**k, "start_worker": False}))

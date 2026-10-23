@@ -68,7 +68,9 @@ def test_inline_outcome_has_independent_candidate_records_and_portals(monkeypatc
     assert pub["portals"] == [{"portal": "openalex", "status": "completed", "results": 2}]
     by = {c["doi"]: c for c in pub["candidates"]}
     assert len(pub["candidates"]) == 2
-    assert by[None]["outcome"] == "dropped" and by[None]["reason"] == acq_config.reason(cfg, "no_doi")
+    # CONT-1023 (owner): a URL-only candidate is followable, not terminal: queued for background acquisition
+    assert by[None]["outcome"] == "queued_background" and by[None]["unfinished"] == "dropped"
+    assert by[None]["reason"] == acq_config.reason(cfg, "no_doi") and by[None]["route"] == "follow_url"
     assert by["10.9999/acq.epi4"]["outcome"] in ("admitted", "rejected", "reused")
     assert by["10.9999/acq.epi4"]["published"] == 2024
     auto_acquire.reset_for_tests()
