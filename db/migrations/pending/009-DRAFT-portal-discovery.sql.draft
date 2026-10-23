@@ -2,7 +2,12 @@
 -- VERA-DAR pre-stage DRAFT. NOT EXECUTED. Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql`
 -- glob (as 007); rename only at owner approval. Never run via db/apply_migrations.py (its --dry-run executes DDL on the
 -- production admin engine, HZ-DAR-1). ADMIN-RUN ONLY, owner-approved, isolated DB first.
--- REQUIRED ORDER: roles (db/accounts/create_vera_accounts.sql), migrations 001-005, 007 (research_domains), the pinned bootstrap 008_vera_schema_migrations.sql (db/migration_guard.py), then 009. Id 009 = next free after the pinned 008.
+-- REQUIRED ORDER: roles (db/accounts/create_vera_accounts.sql), migrations 001-005, then pending draft 007 (research_domains),
+-- then this file. Id 009, not 008: db/migration_guard.py reserves the name 008 (BOOTSTRAP_NAME); no 008 file exists under
+-- the project root as of 2026-10-23 and this migration does not depend on one (PG16 rehearsal 2026-10-23: 009 applied after
+-- 001-005 + 007).
+-- APPEND-ONLY: the app writer (wo) can only INSERT (no UPDATE privilege, so no upsert). Re-recorded outcomes are
+-- new document_outcome rows; readers take the latest row per (request_id, doc_key) by outcome_id (view below).
 -- Additive and idempotent. Insert-only for the app writer (wo); SELECT for ro. No UPDATE/DELETE/TRUNCATE granted.
 -- No document content is stored: sources/canonical sources are referenced by id; candidate identity is identifiers only.
 -- Search time (discovery_event.searched_at), acquisition time (document_outcome.acquired_at) and source freshness
@@ -114,8 +119,14 @@ CREATE TABLE IF NOT EXISTS vera_vjay.document_outcome (
     acquired_at       TIMESTAMPTZ,
     source_date       DATE,
     recorded_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (request_id, doc_key)
+    outcome_id        BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY
 );
+CREATE INDEX IF NOT EXISTS document_outcome_req_doc_idx ON vera_vjay.document_outcome (request_id, doc_key, outcome_id);
+
+-- Aggregation input: the latest outcome event per (request, document). Read-only view (ro SELECT).
+CREATE OR REPLACE VIEW vera_vjay.document_outcome_latest AS
+    SELECT DISTINCT ON (request_id, doc_key) * FROM vera_vjay.document_outcome
+    ORDER BY request_id, doc_key, outcome_id DESC;
 
 GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo, vera_vjay_ro;
 GRANT INSERT ON vera_vjay.portal, vera_vjay.portal_domain, vera_vjay.discovery_event, vera_vjay.document_identity,
@@ -123,4 +134,4 @@ GRANT INSERT ON vera_vjay.portal, vera_vjay.portal_domain, vera_vjay.discovery_e
 GRANT SELECT (event_id) ON vera_vjay.discovery_event TO vera_vjay_wo;
 GRANT SELECT (doc_key) ON vera_vjay.document_identity TO vera_vjay_wo;
 GRANT SELECT ON vera_vjay.portal, vera_vjay.portal_domain, vera_vjay.discovery_event, vera_vjay.document_identity,
-    vera_vjay.candidate_attribution, vera_vjay.document_outcome TO vera_vjay_ro;
+    vera_vjay.candidate_attribution, vera_vjay.document_outcome, vera_vjay.document_outcome_latest TO vera_vjay_ro;

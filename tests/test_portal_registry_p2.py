@@ -349,3 +349,23 @@ def test_record_ask_is_queued_bounded_and_swallows(monkeypatch, tmp_path):
         s1.add_event(request_id="r", portal_key="ddg", status="completed")
     assert time.monotonic() - t0 < 1.0
     lock.execute("ROLLBACK")
+
+
+# ------------------------------------------------------------------------------------------- PG16 rehearsal follow-ups
+def test_store_and_draft_are_insert_only():
+    store = ds.SQLiteDiscoveryStore()
+    ev = store.add_event(request_id="r", portal_key="ddg", status="completed", n_results=1)
+    key = store.add_attribution(event_id=ev, ids={"doi": "10.7/x"})
+    store.add_outcome(request_id="r", doc_key=key, definitions_version=1, relevance_qualified=False, valuable=False)
+    store.add_outcome(request_id="r", doc_key=key, definitions_version=1, relevance_qualified=True, valuable=True)
+    assert store.rows("SELECT COUNT(*) n FROM document_outcome")[0]["n"] == 2  # appended, not replaced
+    assert store.unique_totals()["valuable"] == 1 and store.portal_tallies()["ddg"]["relevance_qualified"] == 1
+    src = (ROOT / "vera" / "portal_store.py").read_text(encoding="utf-8").upper()
+    assert "OR REPLACE INTO" not in src and "UPDATE DOCUMENT" not in src and "DELETE FROM" not in src
+    mig = (ROOT / "db" / "migrations" / "pending" / "009-DRAFT-portal-discovery.sql.draft").read_text(encoding="utf-8")
+    assert "PRIMARY KEY (request_id, doc_key)" not in mig and "DO UPDATE" not in mig.upper()
+    assert "document_outcome_latest" in mig and "GRANT UPDATE" not in mig
+    order = [ln for ln in mig.splitlines() if "REQUIRED ORDER" in ln][0]
+    assert "008" not in order and "007" in order  # no reference to a prerequisite file that does not exist
+    rb = (ROOT / "db" / "migrations" / "rollback" / "009-DRAFT-portal-discovery-rollback.sql.draft").read_text(encoding="utf-8")
+    assert rb.index("DROP VIEW IF EXISTS vera_vjay.document_outcome_latest") < rb.index("DROP TABLE IF EXISTS vera_vjay.document_outcome;")

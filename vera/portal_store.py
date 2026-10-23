@@ -7,7 +7,10 @@ Data model (mirrors the draft migration):
   discovery_event      one row per (request, portal) search attempt: status, n_results, latency, cost, search time
   document_identity    one row per document identity (DOI > PMCID > OpenAlex > arXiv > normalized URL)
   candidate_attribution  append-only: event -> document (many portals may credit one document; full history kept)
-  document_outcome     one row per (request, document): pipeline stage outcomes under a versioned definition set
+  document_outcome     append-only outcome events per (request, document) under a versioned definition set; readers
+                       use the latest event per (request, document) (document_outcome_latest)
+INSERT-only throughout (the production writer account has no UPDATE): no upsert; identity rows use insert-if-absent
+(SQLite INSERT OR IGNORE = Postgres ON CONFLICT DO NOTHING, both plain inserts).
 No document content is stored; source/span rows are referenced by id only (source_id, canonical_source_id).
 Search time (discovery_event.searched_at), acquisition time (document_outcome.acquired_at) and source freshness
 (document_outcome.source_date) are separate columns.
@@ -53,6 +56,9 @@ def document_key(ids: Mapping) -> str | None:
 
 
 class DiscoveryStore(Protocol):
+    """INSERT-only contract (the production wo account has INSERT, no UPDATE/DELETE): every method appends; a corrected
+    outcome is a new add_outcome row and readers use the latest per (request, document)."""
+
     def add_event(self, *, request_id: str, portal_key: str, status: str, n_results: int = 0, query_hash: str = "",
                   domain: str | None = None, latency_ms: int | None = None, cost_usd: float | None = None,
                   cost_basis: str | None = None, searched_at: float | None = None) -> int: ...
@@ -79,7 +85,11 @@ CREATE TABLE IF NOT EXISTS document_outcome (
   acq_attempted INTEGER, acq_succeeded INTEGER, admitted_chunks INTEGER, cited INTEGER,
   freshness_qualified INTEGER, contradictory INTEGER, terminal_reason TEXT,
   source_id INTEGER, canonical_source_id INTEGER, acquired_at TEXT, source_date TEXT, recorded_at REAL NOT NULL,
-  PRIMARY KEY (request_id, doc_key));
+  outcome_id INTEGER PRIMARY KEY AUTOINCREMENT);
+CREATE INDEX IF NOT EXISTS document_outcome_req_doc_idx ON document_outcome (request_id, doc_key, outcome_id);
+CREATE VIEW IF NOT EXISTS document_outcome_latest AS
+  SELECT o.* FROM document_outcome o WHERE o.outcome_id = (SELECT MAX(x.outcome_id) FROM document_outcome x
+                                                          WHERE x.request_id = o.request_id AND x.doc_key = o.doc_key);
 """
 _STAGES = ("relevance_qualified", "valuable", "acq_attempted", "acq_succeeded", "admitted_chunks", "cited",
            "freshness_qualified", "contradictory", "terminal_reason", "source_id", "canonical_source_id",
@@ -87,8 +97,8 @@ _STAGES = ("relevance_qualified", "valuable", "acq_attempted", "acq_succeeded", 
 
 
 class SQLiteDiscoveryStore:
-    """Thread-safe SQLite store (":memory:" for tests; a file under work/ for dev). Append-only except the
-    per-(request, document) outcome row, which is written once per request."""
+    """Thread-safe SQLite store (":memory:" for tests; a file under work/ for dev). Append-only (INSERT only), matching
+    the Postgres writer's privileges; aggregation reads the latest outcome per (request, document)."""
 
     def __init__(self, path: str = ":memory:", clock=time.time, busy_timeout_s: float = 0.2):
         # short busy timeout: a locked database fails fast (the recorder swallows it) instead of the 5 s default
@@ -127,7 +137,7 @@ class SQLiteDiscoveryStore:
     def add_outcome(self, *, request_id, doc_key, definitions_version, **stages) -> None:
         vals = [stages.get(k) for k in _STAGES]
         vals = [int(v) if isinstance(v, bool) else v for v in vals]
-        self._x(f"INSERT OR REPLACE INTO document_outcome (request_id, doc_key, definitions_version, "
+        self._x(f"INSERT INTO document_outcome (request_id, doc_key, definitions_version, "
                 f"{', '.join(_STAGES)}, recorded_at) VALUES ({', '.join('?' * (len(_STAGES) + 4))})",
                 (request_id, doc_key, int(definitions_version), *vals, self._clock()))
 
@@ -206,11 +216,11 @@ _AGG = ("COUNT(DISTINCT p.doc_key) {first}, "
         "COUNT(DISTINCT CASE WHEN o.terminal_reason IN ('no_route','fetch_failed','extraction_failed','abstract_only',"
         "'budget_exhausted') THEN p.doc_key END) failed")
 _STAGE_SQL = ("SELECT p.portal_key, " + _AGG.format(first="deduplicated_documents") + " FROM (" + _PAIRS +
-              ") p LEFT JOIN document_outcome o ON o.request_id=p.request_id AND o.doc_key=p.doc_key "
+              ") p LEFT JOIN document_outcome_latest o ON o.request_id=p.request_id AND o.doc_key=p.doc_key "
               "GROUP BY p.portal_key")
 # unique totals: collapse portals first, so a document found by several portals in one request counts once
 _STAGE_SQL_UNIQUE = ("SELECT " + _AGG.format(first="documents") + " FROM (SELECT DISTINCT doc_key, request_id FROM (" +
-                     _PAIRS + ")) p LEFT JOIN document_outcome o ON o.request_id=p.request_id AND o.doc_key=p.doc_key")
+                     _PAIRS + ")) p LEFT JOIN document_outcome_latest o ON o.request_id=p.request_id AND o.doc_key=p.doc_key")
 
 
 def _empty_tally() -> dict:
