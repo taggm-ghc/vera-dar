@@ -124,6 +124,9 @@ def acc(rig, monkeypatch):  # noqa: F811
 
 
 def _ask(rig, cands, web, q=Q):
+    # INTEG (livechk-real finding): the reading-list seam returns records NUMBERED as production's retrieve_all does
+    # (grounded_ask.py:180 assigns int n to every source); unnumbered fakes made the HTTP route fail AskResponse.
+    cands = [{**c, "n": i} for i, c in enumerate(cands, 1)]
     rig.setup(web=web, cands=cands)
     ds = DiscSearch(cands)  # discovery returns the same records (same providers)
     r = ask_service.answer_in_scope(q, "m", PRICING, grounding=(ds, GROUND[1]))
@@ -318,3 +321,30 @@ def test_p5_no_verifiable_evidence_gives_a_justified_abstention(acc, failure):
     if failure == "fetch_and_licence":
         nd = _cand_for(ia, REL_MARK[1])
         assert nd.get("status_reason") == "licence_rejected", nd
+
+
+# ------------------------------------------------------------------------------------------------ point 5 over HTTP
+@pytest.mark.parametrize("failure", ["fetch_and_licence", "all_unreachable"])
+def test_p5_http_route_returns_a_valid_abstention(acc, monkeypatch, failure):
+    """The real /ask route (TestClient on main.app, AskResponse validation) with the same fakes: HTTP 200, a non-answer,
+    no admitted evidence and no citations (livechk-real saw HTTP 500 with unnumbered fake candidates)."""
+    import main
+    from fastapi.testclient import TestClient
+    from tests import test_fulldoc_e2e as e2e
+    from vera import grounded_ask
+    if failure == "fetch_and_licence":
+        web = _web(licence_url="https://creativecommons.org/licenses/by-nd/4.0/",
+                   over={f"/{REL[0][2]}/fullTextXML": A.Resp(status=503)})
+    else:
+        web = _web(over={"fullTextXML": A.Resp(status=503)})
+    cands = [{**_rel_cand(*x), "n": i} for i, x in enumerate(REL, 1)]
+    acc.setup(web=web, cands=cands)
+    monkeypatch.setattr(main, "retrieve_all", lambda question, cfg, **k: ([dict(c) for c in cands], []))
+    monkeypatch.setattr(main, "GROUNDING", {**(grounded_ask.load_grounding() or {}), **e2e.GROUNDING})
+    resp = TestClient(main.app).post("/ask", json={"question": Q}, headers={"X-API-Key": "k" * 20})
+    assert resp.status_code == 200, resp.text[:500]
+    body = resp.json()
+    assert body["result_kind"] != "answer" and not body.get("admitted_evidence") and not body.get("citations"), body
+    assert ANSWER not in (body.get("answer") or "")
+    assert all(isinstance(c.get("n"), int) for c in body.get("candidates") or ())
+    assert acc.store.plans == []
