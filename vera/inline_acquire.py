@@ -99,7 +99,7 @@ class Outcome:
                 "n_persisted": self.n_persisted, "documents": [dict(d) for d in self.documents], "ms": dict(self.ms),
                 **({"discovered": [dict(d) for d in self.discovered]} if self.discovered is not None else {}),
                 **({"portals": [dict(d) for d in self.portals]} if self.portals is not None else {}),
-                **({"candidates": [{k: v for k, v in d.items() if k != "pmcid"} for d in self.candidates]} if self.candidates is not None else {}),
+                **({"candidates": [dict(d) for d in self.candidates]} if self.candidates is not None else {}),  # PMCID-PUBLIC-1023
                 **({"background": dict(self.background)} if self.background is not None else {})}
 
     @property
@@ -310,7 +310,8 @@ def _cand_record(c: dict) -> dict:
     from vera import search_providers
     oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
     try:
-        portal = search_providers.acq_source(c)
+        portal = search_providers.acq_portals(c)  # ROUTE-R3: every finding portal
+        portal = portal[0] if len(portal) == 1 else portal
     except Exception:  # noqa: BLE001
         portal = c.get("provider")
     return {"portal": portal or c.get("provider"), "doi": aa._doi(c),

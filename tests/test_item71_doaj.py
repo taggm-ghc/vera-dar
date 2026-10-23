@@ -152,7 +152,7 @@ def test_doaj_registered_in_chain_and_config():
     assert "doaj" in CFG["providers"]
     on = {**CFG, "doaj": {**DOAJ, "enabled": True}}  # shipped config has DOAJ switched off
     chain = build_chain(on, repo_root=ROOT)
-    assert [p.name for p in chain] == ["arxiv", "openalex", "doaj", "duckduckgo_lite"]
+    assert [p.name for p in chain] == ["duckduckgo_lite", "openalex", "doaj", "arxiv"]  # ROUTE-R3: DDG first, arXiv last
     assert DOAJ["min_interval_s"] == 0.6 and DOAJ["daily_search_budget"] == 200 and (DOAJ["year_from"], DOAJ["year_to"]) == (2023, 2026)
     off = real_run()["search"]
     off["doaj"]["enabled"] = False
@@ -304,6 +304,6 @@ def test_challenge_is_never_cached(tmp_path):
 
 
 def test_no_cache_dir_means_no_cache_files(tmp_path):
-    p = DuckDuckGoLiteProvider(DDG, transport=lambda *a: R(text=PAGE), query_terms=QT, sleep=lambda s: None)
+    p = DuckDuckGoLiteProvider({**DDG, "memory_cache_ttl_s": 0}, transport=lambda *a: R(text=PAGE), query_terms=QT, sleep=lambda s: None)
     p.parse(p.call(Q, 10, 5.0), 10)
-    assert p.cache_dir is None and not p.gate_exempt(Q)
+    assert p.cache_dir is None and not p.gate_exempt(Q)  # ROUTE-R3: memory cache off here; see test_route_r3

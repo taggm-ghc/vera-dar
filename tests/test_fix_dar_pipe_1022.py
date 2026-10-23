@@ -35,12 +35,13 @@ def test_unused_entry_without_abstract_carries_identifiers_only_internally():
     assert out == [] and unused[0]["doi"] == "10.1/abc" and unused[0]["pmcid"] == "PMC123456"
 
 
-def test_pmcid_is_copied_to_the_numbered_source_and_not_to_the_public_candidate():
+def test_pmcid_is_copied_to_the_numbered_source_and_to_the_public_candidate():
     cfg = {"num_results": 5, "snippet_max_chars": 1500, "providers": [], "deadline_s": 10, "resolve": {"enabled": False}}
     raw = [{"title": "T", "url": "https://example.org/a", "snippet": "abs", "pmcid": "PMC123456", "provider": "openalex"}]
     out, _ = grounded_ask.retrieve_all("q", cfg, search=lambda q: raw)
     assert out[0]["pmcid"] == "PMC123456"
-    assert "pmcid" not in str(grounded_ask.public_candidates(out)).lower()
+    pub = grounded_ask.public_candidates(out)  # PMCID-PUBLIC-1023: public identifier (former G23 strip retired)
+    assert pub[0]["pmcid"] == "PMC123456" and "abs" not in [str(v) for v in pub[0].values()]
 
 
 def test_handoff_requires_inline_acquisition_enabled(monkeypatch):

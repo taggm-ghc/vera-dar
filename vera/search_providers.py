@@ -784,7 +784,36 @@ def acq_rank_tier(c: Mapping) -> int:
         return 2 if c.get("ddg_id_kind") == "arxiv" else 0
     if c.get("acq_source") == "wikipedia_portal":  # WIKIREF-1022 edit 2: arXiv refs last, others scholarly tier
         return 2 if c.get("ref_id_kind") == "arxiv" else 1
+    if _arxiv_identified(c) and not _cand_pmcid(c):  # ROUTE-R3 (D3): discovered/OpenAlex/arXiv-listed arXiv records have
+        return 2  # no full-text route yet (Europe PMC refuses preprints; ARX-A2 pending): behind routable candidates
     return 1
+
+
+_ARXIV_MARK = re.compile(r"arxiv\.org/(?:abs|pdf)/|10\.48550/arxiv\.|\barxiv:", re.I)
+
+
+def _arxiv_identified(c: Mapping) -> bool:
+    d = c.get("discovery") if isinstance(c.get("discovery"), Mapping) else {}
+    if c.get("arxiv_id") or "arxiv" in (str(c.get("provider") or "").lower(), str(d.get("service") or "").lower()):
+        return True
+    return bool(_ARXIV_MARK.search(" ".join(str(x or "") for x in (c.get("doi"), c.get("url"), d.get("url"),
+                                                                    d.get("record_id")))))
+
+
+def _cand_pmcid(c: Mapping):
+    oa = c.get("oa") if isinstance(c.get("oa"), Mapping) else {}
+    return _pmcid_of(c.get("pmcid") or oa.get("pmcid"))
+
+
+def acq_portal(c: Mapping) -> str:
+    """ROUTE-R3: the portal that found one candidate (acq_source, but arXiv/DOAJ-listed records keep their own name)."""
+    prov = str(c.get("provider") or "").lower()
+    return prov if prov in ("arxiv", "doaj") and acq_source(c) == "openalex" else acq_source(c)
+
+
+def acq_portals(c: Mapping) -> list:
+    """ROUTE-R3: every portal that found this candidate, first finder first (merge_sources keeps the list)."""
+    return list(c.get("portals") or [acq_portal(c)])
 
 
 def merge_sources(*lists) -> list:
@@ -811,9 +840,10 @@ def merge_sources(*lists) -> list:
                 oa["epmc_ft"] = True
             if oa:
                 hit["oa"] = oa
-            for k in ("snippet", "title"):
+            for k in ("snippet", "title", "doi", "pmcid", "openalex_id", "arxiv_id", "doaj_id"):  # ROUTE-R3: ids kept
                 if not hit.get(k) and c.get(k):
                     hit[k] = c[k]
+            hit["portals"] = list(dict.fromkeys(acq_portals(hit) + acq_portals(c)))  # ROUTE-R3: provenance kept
             for k in ids:
                 index.setdefault(k, hit)
     return out
@@ -896,6 +926,19 @@ def portal_scope():
         PORTALS.reset(tok)
 
 
+def _submit_in_order(pool, fn, *a, **kw):
+    """ROUTE-R3: submit fn in a copy of this context and wait (<= 1 s) until its worker has STARTED, so the portals
+    start in submission order (DDG first, owner rule YIELD-1021) and still run concurrently."""
+    ev, ctx = threading.Event(), contextvars.copy_context()
+
+    def run():
+        ev.set()
+        return ctx.run(fn, *a, **kw)
+    f = pool.submit(run)
+    ev.wait(1.0)
+    return f
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
@@ -934,24 +977,23 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
             if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context (the inline rate-limit deadline)
-                futs["ddg"] = pool.submit(contextvars.copy_context().run, ddg_search or _default_ddg_search(cfg),
-                                          question, n, timeout_s)
+                futs["ddg"] = _submit_in_order(pool, ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
             if use_epmc:
                 try:
                     terms, profile = (terms_fn or (lambda: _default_terms_and_profile(cfg)))()
                 except Exception:  # noqa: BLE001
                     terms, profile = None, None
-                futs["epmc"] = pool.submit(contextvars.copy_context().run, europepmc_search, question,
+                futs["epmc"] = _submit_in_order(pool, europepmc_search, question,
                                            int(ecfg.get("page_size", n)), float(timeout_s),
                                            ecfg, terms_cfg=terms, profile=profile, transport=transport)
             if use_wiki:
-                futs["wiki"] = pool.submit(contextvars.copy_context().run,
-                                           wiki_ref_portal.make_portal_search(wcfg, http_get=wiki_get),
+                futs["wiki"] = _submit_in_order(pool, wiki_ref_portal.make_portal_search(wcfg, http_get=wiki_get),
                                            question, n, timeout_s)
         finally:
             pool.shutdown(wait=False)
         counts = {}
         base, base_err = [], None
+        futs_order = list(futs)  # ROUTE-R3: actual start order (dict insertion = submission = start order)
         st_oa = "completed"
         if _QUOTA.blocked(clock()):  # a recent OpenAlex 429/quota error: unavailable, no call (no retry storm)
             counts["openalex_skipped_quota"] = 1
@@ -959,6 +1001,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             base_err = ProviderUnavailable("openalex quota cooldown")
         else:
             tok = OPENALEX_OA_FIELDS.set(True)
+            futs_order.append("openalex")  # ROUTE-R3: called after the concurrent portals started
             try:
                 base = list(base_search(question, n, timeout_s) or [])
             except Exception as e:  # noqa: BLE001
@@ -1011,15 +1054,18 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             ddg, dcounts = ddg_to_candidates(got["ddg"], ecfg, dcfg, deadline=t_end, clock=clock,
                                             calls_left=lookup_left, transport=transport, get=get, url_check=url_check)
             counts.update(dcounts)
-        try:  # FRESH-1023 C3: each configured portal exactly once, from this (the main) thread
-            record_portal("openalex", st_oa, len(base))
-            for key, name, enabled_cfg, used in (("ddg", "ddg", dcfg.get("enabled") is True, use_ddg),
-                                                 ("epmc", "europepmc", ecfg.get("enabled") is True, use_epmc),
-                                                 ("wiki", "wikipedia", wiki_ref_portal.enabled(wcfg), use_wiki)):
-                if used:
-                    record_portal(name, st_f.get(key, "failed"), len(got.get(key) or ()))
-                elif enabled_cfg:
-                    record_portal(name, "skipped_budget", 0)
+        try:  # FRESH-1023 C3: each configured portal exactly once, from this (the main) thread. ROUTE-R3: in actual
+            # start order; an enabled portal left without a search-call slot is not_attempted (never "completed")
+            names = {"ddg": "ddg", "epmc": "europepmc", "wiki": "wikipedia", "openalex": "openalex"}
+            stat = {**st_f, "openalex": st_oa}
+            nres = {**{k: len(got.get(k) or ()) for k in futs}, "openalex": len(base)}
+            for key in futs_order + ([] if "openalex" in futs_order else ["openalex"]):
+                record_portal(names[key], stat.get(key, "failed"), nres.get(key, 0))
+            for key, enabled_cfg, used in (("ddg", dcfg.get("enabled") is True, use_ddg),
+                                           ("epmc", ecfg.get("enabled") is True, use_epmc),
+                                           ("wiki", wiki_ref_portal.enabled(wcfg), use_wiki)):
+                if enabled_cfg and not used:
+                    record_portal(names[key], "not_attempted", 0)
         except Exception:  # noqa: BLE001
             pass
         if base_err is not None and not ddg and not got.get("epmc") and not got.get("wiki"):
@@ -1379,6 +1425,9 @@ class DuckDuckGoLiteProvider:
         self.max_bytes = int(settings["max_response_bytes"])
         self.gate = RateGate(float(settings["min_interval_s"]))
         self.cache_dir = Path(cache_dir) if cache_dir else None  # None = no cache (tests inject a tmp dir)
+        # ROUTE-R3 (D2): with no cache_dir, an in-process cache (url + title only) for memory_cache_ttl_s (0/absent = off)
+        self._mem_ttl_s = float(settings.get("memory_cache_ttl_s") or 0) if self.cache_dir is None else 0.0
+        self._mem: dict = {}
         self._ttl_s = float(settings.get("cache_ttl_hours", 72)) * 3600.0
         self._wall = wall_clock or time.time
         self.last_call_cached = False
@@ -1396,7 +1445,7 @@ class DuckDuckGoLiteProvider:
         if day != self._day:
             self._day, self._used = day, 0
         if self._used >= self._cap:
-            raise ProviderUnavailable(f"duckduckgo_lite daily query cap of {self._cap} spent for {day} "
+            raise ProviderUnavailable(f"duckduckgo_lite daily query cap (quota) of {self._cap} spent for {day} "
                                       "(per-process guard; non-retryable)")
         self._used += 1
 
@@ -1410,7 +1459,10 @@ class DuckDuckGoLiteProvider:
     def _cache_get(self, q: Mapping) -> list[dict] | None:
         path = self._cache_path(q)
         if path is None:
-            return None
+            hit = self._mem.get(q["query"]) if self._mem_ttl_s > 0 else None
+            if hit is None or not (0 <= self._wall() - hit[0] <= self._mem_ttl_s):
+                return None
+            return [dict(i) for i in hit[1]]
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
             stored_at, items = float(doc["stored_at"]), doc["items"]
@@ -1431,6 +1483,10 @@ class DuckDuckGoLiteProvider:
     def _cache_put(self, q: Mapping, items: list[dict]) -> None:
         path = self._cache_path(q)
         if path is None:
+            if self._mem_ttl_s > 0:
+                if len(self._mem) >= 256:  # bounded: drop the oldest entry
+                    self._mem.pop(next(iter(self._mem)), None)
+                self._mem[q["query"]] = (self._wall(), [{"url": i["url"], "title": i["title"]} for i in items])
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

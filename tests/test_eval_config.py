@@ -31,7 +31,7 @@ def test_loads_real_files():
     # the OpenAI-family entries the judge guard tests rely on
     assert c.model_families["gpt-4.1-nano"]["family"] == c.model_families["openai/gpt-oss-20b"]["family"] == "openai"
     assert c.question == real_freeze()["question"] and len(c.requirements) == 8 and len(c.objections) == 5
-    assert c.judge.providers == ("groq",) and c.run_config_version == "3"
+    assert c.judge.providers == ("groq",) and c.run_config_version == "4"
 
 
 def test_freeze_file_is_not_merged_with_run_config():

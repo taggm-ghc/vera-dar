@@ -182,7 +182,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                "snippet": snippet, "source_type": r.get("source_type")}
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
-        for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet; never in the response
+        for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet (pmcid is published only via public_sources/_pmcid_of, PMCID-PUBLIC-1023)
             if r.get(k):
                 src[k] = r[k]
         src.update(provenance(r))
@@ -223,6 +223,12 @@ def _resolve_links(linked: list[dict], rcfg: dict, resolver=None) -> list[dict]:
 _ARXIV_ID = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?)", re.I)
 
 
+def _public_pmcid(r: dict) -> str | None:
+    """PMCID-PUBLIC-1023: the record's PMCID in validated form (search_providers._pmcid_of), else None (omitted)."""
+    from vera.search_providers import _pmcid_of
+    return _pmcid_of(r.get("pmcid")) if r.get("pmcid") else None
+
+
 def provenance(r: dict) -> dict:
     """Per-citation provenance (R1 criterion): provider, identifier, retrieval time, licence decision."""
     from datetime import datetime, timezone
@@ -231,7 +237,9 @@ def provenance(r: dict) -> dict:
 
     url = str(r.get("url") or "")
     m = _ARXIV_ID.search(url)
-    ident = (f"doi:{str(r['doi']).lower()}" if r.get("doi") else f"arXiv:{m.group(1)}" if m else url)
+    pmc = _public_pmcid(r)  # PMCID-PUBLIC-1023: a public identifier (validated format), after the DOI
+    ident = (f"doi:{str(r['doi']).lower()}" if r.get("doi") else f"pmcid:{pmc}" if pmc else f"arXiv:{m.group(1)}" if m
+             else url)
     provider = r.get("provider") or ("openalex" if r.get("discovered_via") else None)
     if r.get("abstract_source"):
         provider = f"{provider or 'openalex'}+{r['abstract_source']}"
@@ -306,6 +314,8 @@ def public_sources(sources: list[dict]) -> list[dict]:
 
     def one(s):
         out = {k: s.get(k) for k in PUBLIC_FIELDS}
+        if _public_pmcid(s):  # PMCID-PUBLIC-1023 (owner 2026-10-23): public identifier, validated, shown when known
+            out["pmcid"] = _public_pmcid(s)
         if s.get("span"):  # stored-corpus source: provenance of the quoted chunk and its acquisition state (from stored provenance)
             s = {**s, "acquisition": contract.acquisition_state(s)}
             out.update({k: s[k] for k in STORED_PUBLIC_FIELDS if s.get(k) is not None})
@@ -332,6 +342,8 @@ def public_candidates(sources: list[dict]) -> tuple:
     out = []
     for s in sources:
         c = {k: s.get(k) for k in PUBLIC_CANDIDATE_FIELDS}
+        if _public_pmcid(s):  # PMCID-PUBLIC-1023 (owner 2026-10-23): public identifier, validated, shown when known
+            c["pmcid"] = _public_pmcid(s)
         c["acquisition"] = contract.acquisition_state(s)
         if c["acquisition"] == contract.ACQ_NOT_ACQUIRED and (s.get("span") or s.get("in_corpus")):
             c["acquisition"] = contract.ACQ_IN_CORPUS  # WED-ACQ A1: stored in the collection (not "not acquired")

@@ -15,6 +15,7 @@ routes failed or fell short; its use is recorded in meta["fallback_used"].
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -325,6 +326,52 @@ def apply_max_share(items: list, max_share: dict) -> tuple[list, int]:
     return out, dropped
 
 
+_ID_FIELDS = ("doi", "pmcid", "openalex_id", "arxiv_id", "doaj_id")
+
+
+def _neutral_order(groups: list) -> list:
+    """ROUTE-R3: order by RRF score, then best rank; within a tie the portal with fewer items already placed goes first
+    (diversity, round-robin), then a provider-neutral key (sha256 of the normalised URL). The chain position of the
+    provider is never used, so the first-listed portal does not win ties."""
+    groups = sorted(groups, key=lambda g: (-g["score"], g["best"][0]))
+    out, used, i = [], {}, 0
+    while i < len(groups):
+        j, key = i, (groups[i]["score"], groups[i]["best"][0])
+        while j < len(groups) and (groups[j]["score"], groups[j]["best"][0]) == key:
+            j += 1
+        bucket = groups[i:j]
+        while bucket:
+            g = min(bucket, key=lambda x: (min(used.get(p, 0) for p in x["providers"]),
+                                           hashlib.sha256(normalize_url(str(x["item"].get("url") or "")).encode()).hexdigest()))
+            bucket.remove(g)
+            out.append(g)
+            for p in g["providers"]:
+                used[p] = used.get(p, 0) + 1
+        i = j
+    return out
+
+
+def apply_soft_share(items: list, soft: dict | None) -> list:
+    """ROUTE-R3: per-portal soft limit (config search.soft_max_share, `_default` for unlisted portals). An item found
+    ONLY by a portal already at its limit moves to the END (kept, order preserved), so it is shown only when no other
+    eligible result exists. Items also found by another portal are never limited."""
+    if not soft:
+        return items
+    lim = {k: v for k, v in soft.items() if isinstance(v, int) and not isinstance(v, bool)}
+    keep, later, used = [], [], {}
+    for it in items:
+        found = set(it.get("found_by_providers") or [it.get("provider")])
+        if len(found) == 1:
+            p = next(iter(found))
+            cap = lim.get(p, lim.get("_default"))
+            if cap is not None and used.get(p, 0) >= cap:
+                later.append(it)
+                continue
+            used[p] = used.get(p, 0) + 1
+        keep.append(it)
+    return keep + later
+
+
 def rrf_merge(per_provider: dict, k: int, n: int):
     """Reciprocal rank fusion over per-provider ranked lists (ranks only: scores of different engines are never
     compared). score = sum over providers of 1/(k + rank). Equal items (any dedupe key) are one group; the
@@ -335,21 +382,27 @@ def rrf_merge(per_provider: dict, k: int, n: int):
             hit = dd.find(it)
             if hit is None:
                 gi = len(groups)
-                groups.append({"item": it, "score": 0.0, "best": (rank, order), "providers": [], "merges": []})
+                groups.append({"item": it, "score": 0.0, "best": (rank, order), "providers": [], "merges": [], "ids": {}})
             else:
                 gi = hit[0]
                 groups[gi]["merges"] += list(it.get("merged_from") or []) + [_merge_note(it, hit[1], pname)]
             g = groups[gi]
             dd.add(it, gi)
             g["score"] += 1.0 / (k + rank)
+            for f in _ID_FIELDS:  # ROUTE-R3: an identifier found by any member survives the merge
+                if it.get(f) and not g["ids"].get(f):
+                    g["ids"][f] = it[f]
             if pname not in g["providers"]:
                 g["providers"].append(pname)
             if (rank, order) < g["best"]:
                 g["item"], g["best"] = it, (rank, order)
-    groups.sort(key=lambda g: (-g["score"], g["best"]))
+    groups = _neutral_order(groups)  # ROUTE-R3: provider position never breaks a tie
     out = []
     for g in groups[:n]:
         rec = {**g["item"], "found_by_providers": g["providers"], "rrf_score": round(g["score"], 6)}
+        for f, v in g["ids"].items():
+            if not rec.get(f):
+                rec[f] = v
         merges = list(g["item"].get("merged_from") or []) + g["merges"]
         if merges:
             rec["merged_from"] = merges
@@ -403,12 +456,12 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
                     min_candidates: int | None = None, max_retries: int = 3, backoff_s: float = 1.0,
                     deadline_s: float = 60.0, timeout_s: float = 20.0, sleep=time.sleep,
                     clock=time.monotonic, mode: str | None = None, rrf_k: int | None = None,
-                    max_share: dict | None = None) -> SearchResults:
+                    max_share: dict | None = None, soft_max_share: dict | None = None) -> SearchResults:
     if not question or not question.strip():
         raise ValueError("question must be non-empty")
     if num_results < 1:
         raise ValueError("num_results must be >= 1")
-    cfg_mode, cfg_k, cfg_share = "first_sufficient", 60, dict(DEFAULT_MAX_SHARE)
+    cfg_mode, cfg_k, cfg_share, cfg_soft = "first_sufficient", 60, dict(DEFAULT_MAX_SHARE), None
     if providers is None:
         # G2 (fixed, item #71): the chain is cached per process and config, so each provider's RateGate persists
         # across calls and `min_interval_s` holds across questions. `providers=` injection still works.
@@ -417,6 +470,7 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
             chain, cfg_min, cfg_mode = cached_chain(s)
             cfg_k = int(s.get("rrf_k", 60))
             cfg_share = dict(s["max_share"]) if s.get("max_share") is not None else dict(DEFAULT_MAX_SHARE)
+            cfg_soft = dict(s.get("soft_max_share") or {}) or None  # ROUTE-R3
         except SearchConfigError:
             raise
         except _SCE as e:
@@ -441,7 +495,8 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
               timeout_s=timeout_s, sleep=sleep, clock=clock)
     if mode == "fan_out":
         return _fan_out(chain, question, num_results, minimum, rrf_k, kw,
-                        cfg_share if max_share is None else max_share)
+                        cfg_share if max_share is None else max_share,
+                        cfg_soft if soft_max_share is None else soft_max_share)
     notes, tried, best = [], [], None
     for i, p in enumerate(chain):
         try:
@@ -472,7 +527,15 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
     return SearchResults(items, meta)
 
 
-def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None):
+def _failure_status(notes) -> str:
+    """ROUTE-R3: quota (daily cap, budget, 429, rate limit) | timeout | error, from a failed provider's notes."""
+    t = " ".join(notes).lower()
+    if re.search(r"\b429\b|quota|daily query cap|budget|rate.?limit", t):
+        return "quota"
+    return "timeout" if re.search(r"deadline|timed? ?out", t) else "error"
+
+
+def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_share=None):
     """Call every live provider (each under its own gate and the shared deadline), tolerate individual failures
     (recorded), merge by reciprocal rank fusion. The seed provider is used only if no live provider returned
     anything."""
@@ -486,15 +549,16 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None):
             raise SearchConfigError(f"{p.name}: {e}") from None
         except _ProviderFailed as f:
             notes += [f"{p.name}: {x}" for x in f.notes]
-            tried.append({"provider": p.name, "outcome": "failed"})
+            tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(f.notes)})
             continue
         items = _finalize(raw, p.name, n)
         per[p.name] = items
-        tried.append({"provider": p.name, "outcome": "ok", "count": len(items)})
+        tried.append({"provider": p.name, "outcome": "ok", "count": len(items), "status": "completed"})
     merged = rrf_merge(per, rrf_k, max(n * len(per), n)) if per else []
     share_dropped = 0
     if merged and max_share:  # after RRF, before the top-n cut: discovery cannot crowd out scholarly results
         merged, share_dropped = apply_max_share(merged, max_share)
+    merged = apply_soft_share(merged, soft_max_share)  # ROUTE-R3: no one portal fills the top-n while others have results
     used = [pn for pn, its in per.items() if its]
     fallback = False
     if not merged and seeds:
@@ -522,7 +586,11 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None):
             "provider_failures": [t["provider"] for t in tried if t["outcome"] == "failed"],
             "rrf_k": rrf_k, "queries": _route_queries(chain), "relaxed": _relaxed_flags(chain),
             "dedupe_merges": _dedupe_merges(items),
-            "max_share": dict(max_share or {}), "share_dropped": share_dropped}
+            "max_share": dict(max_share or {}), "share_dropped": share_dropped,
+            "soft_max_share": dict(soft_max_share or {}),
+            # ROUTE-R3: portal records in call order (completed with zero results is distinct from quota/timeout/error)
+            "portals": [{"portal": t["provider"], "status": t.get("status", "completed" if t["outcome"] == "ok" else "error"),
+                         "n_results": int(t.get("count", 0))} for t in tried]}
     if notes:
         meta["notes"] = notes
     if fallback:

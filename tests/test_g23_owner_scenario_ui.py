@@ -76,12 +76,16 @@ def test_owner_scenario_abstains_with_nine_inspected_zero_admitted_four_not_acqu
     assert len(disc) == 4 and all(e["outcome"] in ("rejected", "deferred") and e.get("reason") for e in disc), disc
 
 
-def test_owner_scenario_no_pmcid_or_abstract_leak_in_the_response(rig, monkeypatch, tmp_path):
+def test_owner_scenario_pmcid_public_and_no_abstract_leak_in_the_response(rig, monkeypatch, tmp_path):
+    """PMCID-PUBLIC-1023 (owner 2026-10-23, inverts the former G23 rule): a known PMCID is a public identifier and is
+    shown with the record's other ids; abstract text is still never in the response."""
     body = _body(rig, monkeypatch, tmp_path)
     dump = json.dumps(body)
     assert ABSTRACT_SENTINEL not in dump
-    assert not re.search(r"PMC\d{5,}", dump), re.findall(r"PMC\d{5,}", dump)
-    assert '"pmcid"' not in dump
+    known = [c for c in (body.get("research_outcome") or {}).get("candidates") or [] if (c.get("ids") or {}).get("pmcid")]
+    assert {c["ids"]["pmcid"] for c in known} <= set(PMCS.values())
+    for pmc in re.findall(r"PMC\d{5,}", dump):  # any PMC id shown is a real, known id of a listed record
+        assert pmc in PMCS.values(), pmc
 
 
 def test_owner_scenario_ui_each_of_the_four_has_its_own_reason_not_banner_only(rig, monkeypatch, tmp_path):

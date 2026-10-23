@@ -15,7 +15,10 @@ from vera import research_outcome as ro
 TRIGGER_INSUFFICIENT, TRIGGER_STALE, TRIGGER_UNKNOWN = "insufficient", "stale", "freshness_unknown"
 _BUDGET_STATUSES = frozenset({"rate", "daily_cap", "deadline", "budget_unknown", "busy"})
 _PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota",
-                  "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped"}
+                  "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped",
+                  "not_attempted": "skipped"}
+# ROUTE-R3: public statuses (contract completed|timeout|quota|error|skipped|not_attempted)
+_PUBLIC_STATUS = {**_PORTAL_STATUS, "skipped_budget": "not_attempted", "not_attempted": "not_attempted"}
 
 
 def cfg_of(acq: dict | None) -> dict | None:
@@ -121,15 +124,13 @@ def triggers(is_sufficient: bool, fr: dict | None) -> list:
 
 
 def _public_cand(c: dict) -> dict:
-    """G23 guard: PMC ids never appear in the /ask response (kept in the stored provenance and the server log only)."""
-    c.pop("pmcid", None)
-    if isinstance(c.get("ids"), dict):
-        c["ids"] = {k: v for k, v in c["ids"].items() if k != "pmcid"}
+    """PMCID-PUBLIC-1023 (owner 2026-10-23): the PMCID is a public identifier like the DOI and stays in the response
+    (the former G23 strip is retired). Abstract text is never part of a candidate record."""
     return c
 
 
 def _ids(c: dict) -> dict:
-    return {k: c.get(k) for k in ro.ID_KEYS if k != "pmcid"}  # G23 guard: no PMC id in the /ask response
+    return {k: c.get(k) for k in ro.ID_KEYS}  # PMCID-PUBLIC-1023: pmcid is public, like doi
 
 
 def _terminal(c: dict) -> str:
@@ -155,7 +156,7 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
     cands = [c for c in ((inline or {}).get("candidates") or []) if isinstance(c, dict)]
     outs = [ro.CandidateOutcome(f"c{i + 1}", _ids(c), _terminal(c), str(c.get("reason") or ""))
             for i, c in enumerate(cands)]
-    budget = (status in _BUDGET_STATUSES or any(p.get("status") == "skipped_budget" for p in raw_portals)
+    budget = (status in _BUDGET_STATUSES or any(p.get("status") in ("skipped_budget", "not_attempted") for p in raw_portals)
               or any(o.terminal_reason == "budget_exhausted" or (o.terminal_reason == "queued_background"  # CONT-1023
                      and ro.reason_from_code(o.detail) != "no_route") for o in outs))  # URL-only: awaiting_route cause
     if not triggers:
@@ -167,7 +168,9 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
         if answer_failed and failed_text:
             text = f"{failed_text} {text}".strip()
     return {"triggered": bool(triggers), "triggers": list(triggers), "kind": kind, "user_text": text,
-            "complete": complete, "inline_status": status, "portals": [dict(p) for p in raw_portals],
+            "complete": complete, "inline_status": status,
+            "portals": [dict(p, status=_PUBLIC_STATUS.get(p.get("status"), "error"),
+                             n_results=int(p.get("n_results", p.get("results")) or 0)) for p in raw_portals],
             "candidates": [_public_cand(dict(c, candidate_id=o.candidate_id, ids=dict(o.ids),
                                              terminal_reason=o.terminal_reason)) for c, o in zip(cands, outs)],
             "report_detail": detail, "freshness": {"before": _public_fr(fr_before), "after": _public_fr(fr_after)},

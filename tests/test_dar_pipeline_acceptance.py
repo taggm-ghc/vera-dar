@@ -336,11 +336,13 @@ def test_FIX_PMCID_only_record_becomes_an_acquisition_candidate_end_to_end():
     assert [c.get("pmcid") for c in cands] == [PMC] and held == []
 
 
-def test_FIX_PMCID_guard_public_candidates_never_expose_the_pmcid():
-    """Guard for the fix (DELTA: confirm the public response strips it). Expected: PASS before and after."""
+def test_FIX_PMCID_public_candidates_expose_the_pmcid_but_never_the_abstract():
+    """PMCID-PUBLIC-1023 (owner 2026-10-23, inverts the former G23 guard): the PMCID is a public identifier like the
+    DOI and is shown when known; the abstract/snippet text is still never exposed."""
     pub = grounded_ask.public_candidates([{"n": 1, "title": "T", "url": "https://example.org/a", "pmcid": PMC,
-                                           "snippet": "s", "provider": "openalex"}])
-    assert "pmcid" not in json.dumps(pub, default=str).lower()
+                                           "snippet": "SNIPPET-SENTINEL", "provider": "openalex"}])
+    assert pub[0]["pmcid"] == PMC
+    assert "SNIPPET-SENTINEL" not in json.dumps(pub, default=str)
 
 
 # --- BR-4 / L-b: abstract-less originals become acquisition candidates

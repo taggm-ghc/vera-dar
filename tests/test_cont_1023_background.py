@@ -251,7 +251,7 @@ def test_research_outcome_shows_queued_background_and_user_text_discloses_it(bg)
                                     older_available=False, fr_before=None)
     pub = research_record.public_fields(rec)["research_outcome"]
     assert [c["terminal_reason"] for c in pub["candidates"]] == ["queued_background"] * 4
-    assert all("pmcid" not in c for c in pub["candidates"])
+    assert all("pmcid" in (c.get("ids") or {}) for c in pub["candidates"])  # INTEG-1023: PMCIDPUBLIC-1023 retired the strip
     assert research_outcome.BACKGROUND_SENTENCE in pub["user_text"]
     assert pub["complete"] is False  # unfinished in the request: never reported as a complete search
     none = research_record.summarize(triggers=["insufficient"], inline={"status": "none", "candidates": [],
