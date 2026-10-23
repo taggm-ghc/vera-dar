@@ -305,6 +305,11 @@ def _cand_year(c) -> int | None:
     return None
 
 
+def _canonical_ref(url) -> str | None:
+    from vera.portal_store import canonical_ref  # PORT-P2: additive match key
+    return canonical_ref(url)
+
+
 def _cand_record(c: dict) -> dict:
     """FRESH-1023 C3: one candidate's public record from what the candidate dict actually carries (None if absent)."""
     from vera import search_providers
@@ -318,7 +323,7 @@ def _cand_record(c: dict) -> dict:
             "pmcid": aa._pmcid(c) or None, "openalex_id": c.get("openalex_id") or None,
             "arxiv_id": c.get("arxiv_id") or c.get("arxiv") or None, "url": c.get("url") or None,
             "published": c.get("published") or c.get("publication_date") or c.get("year") or None,
-            "outcome": None, "reason": None}
+            "outcome": None, "reason": None, "found_by": list(c.get("found_by") or [portal or c.get("provider")])}
 
 
 def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False) -> Outcome:
@@ -453,6 +458,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 rc["outcome"], rc["reason"] = "rejected", got
             elif id(got) in kept_ids:
                 rc["outcome"] = "admitted"
+                rc["n_chunks"] = len(got.get("spans") or ())  # PORT-P2: additive (url and ids unchanged)
+                rc["canonical_url"], rc["canonical_ref"] = got.get("canonical_url"), _canonical_ref(got.get("canonical_url"))
                 rec_plan[id(got)] = rc
             else:
                 rc["outcome"], rc["reason"] = "not_used", None

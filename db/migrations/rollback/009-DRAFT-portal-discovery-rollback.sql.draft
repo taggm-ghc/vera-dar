@@ -1,0 +1,9 @@
+-- 009_vera_portal_discovery ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the portal registry snapshot and all
+-- discovery/attribution history. Requires the owner's separate, same-turn approval and an admin account; export first.
+-- Non-destructive rollback: set config/portal_registry.json store.enabled false (the recorder becomes a no-op).
+DROP TABLE IF EXISTS vera_vjay.document_outcome;
+DROP TABLE IF EXISTS vera_vjay.candidate_attribution;
+DROP TABLE IF EXISTS vera_vjay.document_identity;
+DROP TABLE IF EXISTS vera_vjay.discovery_event;
+DROP TABLE IF EXISTS vera_vjay.portal_domain;
+DROP TABLE IF EXISTS vera_vjay.portal;

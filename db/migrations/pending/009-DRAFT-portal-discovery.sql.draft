@@ -1,0 +1,126 @@
+-- 009_vera_portal_discovery.sql  (PORT-P2, 2026-10-23)
+-- VERA-DAR pre-stage DRAFT. NOT EXECUTED. Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql`
+-- glob (as 007); rename only at owner approval. Never run via db/apply_migrations.py (its --dry-run executes DDL on the
+-- production admin engine, HZ-DAR-1). ADMIN-RUN ONLY, owner-approved, isolated DB first.
+-- REQUIRED ORDER: roles (db/accounts/create_vera_accounts.sql), migrations 001-005, 007 (research_domains), the pinned bootstrap 008_vera_schema_migrations.sql (db/migration_guard.py), then 009. Id 009 = next free after the pinned 008.
+-- Additive and idempotent. Insert-only for the app writer (wo); SELECT for ro. No UPDATE/DELETE/TRUNCATE granted.
+-- No document content is stored: sources/canonical sources are referenced by id; candidate identity is identifiers only.
+-- Search time (discovery_event.searched_at), acquisition time (document_outcome.acquired_at) and source freshness
+-- (document_outcome.source_date) are separate columns. Python mirror: vera/portal_store.py (SQLite, tests/dev).
+-- Rollback (destructive, separate approval): db/migrations/rollback/009-DRAFT-portal-discovery-rollback.sql.draft
+
+\set ON_ERROR_STOP on
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_wo')
+     OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_ro') THEN
+    RAISE EXCEPTION '009 requires roles vera_vjay_wo and vera_vjay_ro.';
+  END IF;
+  IF to_regclass('vera_vjay.research_domains') IS NULL OR to_regclass('vera_vjay.sources') IS NULL
+     OR to_regclass('vera_vjay.canonical_sources') IS NULL THEN
+    RAISE EXCEPTION '009 requires vera_vjay.research_domains (007), vera_vjay.sources and vera_vjay.canonical_sources.';
+  END IF;
+END $$;
+
+-- Registry snapshot: one row per (portal, registry version); status levels are COMPUTED, never stored.
+CREATE TABLE IF NOT EXISTS vera_vjay.portal (
+    portal_key        TEXT NOT NULL CHECK (length(btrim(portal_key)) > 0),
+    registry_version  INTEGER NOT NULL,
+    name              TEXT NOT NULL,
+    canonical_url     TEXT NOT NULL,
+    host              TEXT NOT NULL,
+    category          TEXT NOT NULL CHECK (category IN ('search_discovery_portal','scholarly_index',
+                        'institutional_repository','publisher_journal_platform','government_research_institution',
+                        'reference_resource_not_searchable','other')),
+    enabled           BOOLEAN NOT NULL DEFAULT false,
+    adapter           TEXT,
+    acquisition       TEXT,
+    formats           TEXT[] NOT NULL DEFAULT '{}',
+    identifiers       TEXT[] NOT NULL DEFAULT '{}',
+    access            TEXT NOT NULL DEFAULT 'unknown',
+    auth              TEXT NOT NULL DEFAULT 'unknown',
+    licence_notes     TEXT NOT NULL DEFAULT '',
+    security_notes    TEXT NOT NULL DEFAULT '',
+    provenance        TEXT[] NOT NULL,
+    verified_at       TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (portal_key, registry_version)
+);
+
+-- Many-to-many: portal <-> research domain (007).
+CREATE TABLE IF NOT EXISTS vera_vjay.portal_domain (
+    portal_key        TEXT NOT NULL,
+    registry_version  INTEGER NOT NULL,
+    domain_id         BIGINT NOT NULL REFERENCES vera_vjay.research_domains (domain_id) ON DELETE RESTRICT,
+    PRIMARY KEY (portal_key, registry_version, domain_id),
+    FOREIGN KEY (portal_key, registry_version) REFERENCES vera_vjay.portal (portal_key, registry_version) ON DELETE RESTRICT
+);
+
+-- One row per (request, portal) search attempt. request_id is a random per-request id (no caller identity).
+CREATE TABLE IF NOT EXISTS vera_vjay.discovery_event (
+    event_id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    request_id        TEXT NOT NULL,
+    portal_key        TEXT NOT NULL,
+    query_hash        TEXT NOT NULL,
+    domain_id         BIGINT REFERENCES vera_vjay.research_domains (domain_id) ON DELETE RESTRICT,
+    searched_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    latency_ms        INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+    cost_usd          NUMERIC(12,6),
+    cost_basis        TEXT,
+    n_results         INTEGER NOT NULL DEFAULT 0 CHECK (n_results >= 0),
+    status            TEXT NOT NULL CHECK (status IN ('completed','timeout','quota','error','skipped','not_attempted'))
+);
+CREATE INDEX IF NOT EXISTS discovery_event_portal_idx ON vera_vjay.discovery_event (portal_key, searched_at);
+CREATE INDEX IF NOT EXISTS discovery_event_request_idx ON vera_vjay.discovery_event (request_id);
+
+-- Document identity (identifiers only; DOI > PMCID > OpenAlex > arXiv > normalized URL).
+CREATE TABLE IF NOT EXISTS vera_vjay.document_identity (
+    doc_key           TEXT PRIMARY KEY,
+    doi               TEXT,
+    pmcid             TEXT,
+    openalex_id       TEXT,
+    arxiv_id          TEXT,
+    url               TEXT,
+    canonical_source_id BIGINT REFERENCES vera_vjay.canonical_sources (canonical_source_id) ON DELETE RESTRICT,
+    first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Append-only attribution history: many portals (events) may credit one document.
+CREATE TABLE IF NOT EXISTS vera_vjay.candidate_attribution (
+    attribution_id    BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    event_id          BIGINT NOT NULL REFERENCES vera_vjay.discovery_event (event_id) ON DELETE RESTRICT,
+    doc_key           TEXT NOT NULL REFERENCES vera_vjay.document_identity (doc_key) ON DELETE RESTRICT,
+    rank              INTEGER,
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS candidate_attribution_doc_idx ON vera_vjay.candidate_attribution (doc_key);
+
+-- Per (request, document) stage outcomes under a versioned metric-definition set (config/portal_registry.json).
+CREATE TABLE IF NOT EXISTS vera_vjay.document_outcome (
+    request_id        TEXT NOT NULL,
+    doc_key           TEXT NOT NULL REFERENCES vera_vjay.document_identity (doc_key) ON DELETE RESTRICT,
+    definitions_version INTEGER NOT NULL,
+    relevance_qualified BOOLEAN,
+    valuable          BOOLEAN,
+    acq_attempted     BOOLEAN,
+    acq_succeeded     BOOLEAN,
+    admitted_chunks   INTEGER,
+    cited             BOOLEAN,
+    freshness_qualified BOOLEAN,
+    contradictory     BOOLEAN,
+    terminal_reason   TEXT,
+    source_id         BIGINT REFERENCES vera_vjay.sources (source_id) ON DELETE RESTRICT,
+    canonical_source_id BIGINT REFERENCES vera_vjay.canonical_sources (canonical_source_id) ON DELETE RESTRICT,
+    acquired_at       TIMESTAMPTZ,
+    source_date       DATE,
+    recorded_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (request_id, doc_key)
+);
+
+GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo, vera_vjay_ro;
+GRANT INSERT ON vera_vjay.portal, vera_vjay.portal_domain, vera_vjay.discovery_event, vera_vjay.document_identity,
+    vera_vjay.candidate_attribution, vera_vjay.document_outcome TO vera_vjay_wo;
+GRANT SELECT (event_id) ON vera_vjay.discovery_event TO vera_vjay_wo;
+GRANT SELECT (doc_key) ON vera_vjay.document_identity TO vera_vjay_wo;
+GRANT SELECT ON vera_vjay.portal, vera_vjay.portal_domain, vera_vjay.discovery_event, vera_vjay.document_identity,
+    vera_vjay.candidate_attribution, vera_vjay.document_outcome TO vera_vjay_ro;

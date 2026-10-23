@@ -840,6 +840,10 @@ def merge_sources(*lists) -> list:
                 oa["epmc_ft"] = True
             if oa:
                 hit["oa"] = oa
+            try:  # PORT-P2: keep every portal that found this document (attribution only; order/source unchanged)
+                hit["found_by"] = list(dict.fromkeys([*(hit.get("found_by") or [acq_source(hit)]), acq_source(c)]))
+            except Exception:  # noqa: BLE001
+                pass
             for k in ("snippet", "title", "doi", "pmcid", "openalex_id", "arxiv_id", "doaj_id"):  # ROUTE-R3: ids kept
                 if not hit.get(k) and c.get(k):
                     hit[k] = c[k]

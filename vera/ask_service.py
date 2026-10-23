@@ -131,6 +131,7 @@ def request_budget() -> RequestBudget:
 # The budget travels with the request in a context variable (set once by main.ask, around answer_via_chain), so the
 # chain loop and every provider attempt see the SAME deadline and inline flag without changing any signature.
 REQUEST_BUDGET: contextvars.ContextVar = contextvars.ContextVar("cmf_request_budget", default=None)
+_QUESTION: contextvars.ContextVar = contextvars.ContextVar("port_p2_question", default=None)  # PORT-P2: query hash only
 
 
 # Post-inline LLM calls that can follow an inline search, per the auto_acquire.json _calibration_note: one answer writer,
@@ -172,6 +173,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
+    _QUESTION.set(question)  # PORT-P2: the discovery recorder hashes it (text never stored)
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
@@ -639,7 +641,17 @@ def _source_freshness(sources, fr: dict) -> list:
     return out
 
 
+def _record_discovery(rec, res, question=None) -> None:
+    """PORT-P2: discovery events + portal attributions for this request (no-op unless enabled; never raises)."""
+    try:
+        from vera import portal_recorder
+        portal_recorder.record_ask(rec, question=question or "", result=res)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _with_research(res, rec: dict, suffix: str | None = None):
+    _record_discovery(rec, res, _QUESTION.get())
     text = res.answer
     if suffix:
         text = f"{text}\n\n{suffix}" if text else suffix
@@ -915,4 +927,5 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
         return _with_research(_annotate(res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr,
                        backfill=bf)
+    _record_discovery(rec, res, _QUESTION.get())
     return replace(res, contract={**(res.contract or {}), "research": rec})
