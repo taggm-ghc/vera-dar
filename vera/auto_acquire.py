@@ -838,8 +838,17 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
     from vera import search_providers
     from vera.dar_corpus import doc_key_set
+    from vera import search_query
     ranked, seen = [], set()
     rq = rank_question(question, cfg)
+    # DDFIX-1023/REL: the question's key concepts (generic words such as "de facto", "status quo", "best practices" and
+    # the profile's generic_terms removed) judge each candidate's title + abstract BEFORE the cut below: an off-topic
+    # candidate (no key concept, or none of the compound anchor; search_query.off_topic) is dropped as irrelevant.
+    kc = search_query.key_concepts(question, extra_generic=((cfg.get("search") or {}).get("openalex_profile")
+                                                                   or {}).get("generic_terms") or ())
+    pool = [c for c in cands or () if isinstance(c, dict)]
+    off = dict(zip(map(id, pool), search_query.off_topic_flags(
+        kc, [f"{c.get('title') or ''} {c.get('snippet') or ''}" for c in pool])))
     for pos, c in enumerate(cands or ()):
         if not isinstance(c, dict):
             continue
@@ -867,6 +876,13 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
                 drops[id(c)] = dup
             continue
         seen.add(ident)
+        if off.get(id(c)):
+            # DDFIX-1023/REL (owner 2026-10-23: lexical false positives must not consume inline slots): dropped BEFORE
+            # the cut as irrelevant (metadata only; terminal, never queued for the background)
+            count(acq_config.reason(cfg, "irrelevant"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "irrelevant")
+            continue
         ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))
     # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
     # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).

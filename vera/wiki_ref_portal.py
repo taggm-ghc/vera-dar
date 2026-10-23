@@ -239,7 +239,8 @@ def to_candidate(ids: Mapping, rank: int) -> dict | None:
 def build_query(question: str, cfg: Mapping) -> str:
     q = cfg["query"]
     strip = {str(t).lower() for t in q.get("strip_terms") or ()}
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", str(question or ""))
+    from vera.search_query import drop_generic  # DDFIX-1023/REL: idioms such as "de facto", "status quo"
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", drop_generic(str(question or "")))
     keep = [w for w in words if w.lower() not in strip][: int(q["max_terms"])]
     return (" ".join(keep) if keep else " ".join(str(question or "").split()))[: int(q["max_query_chars"])]
 
