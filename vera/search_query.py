@@ -214,7 +214,7 @@ def matched_concepts(kc: tuple, text: str) -> set:
     return got
 
 
-# A title + abstract with fewer words is not judged (neutral: never dropped, never demoted). CALIBRATION NOTE: planner
+# A title + abstract with fewer words is not judged off topic (never dropped; tier 1 unless it matches a central concept). CALIBRATION NOTE: planner
 # prior, UNCALIBRATED against live data. Seen only on the owner's five live false positives of 2026-10-23 (titles of
 # 7-17 words, no abstract) and offline fixtures. Change it when live R-ACQ-IRRELEVANT pre-fetch drops are reviewed
 # against their titles (a relevant short-titled record dropped -> raise; off-topic short titles taking slots -> lower).
@@ -225,7 +225,7 @@ def relevance_tiers(kc: tuple, texts) -> list:
     """DDFIX-1023/REL D4, per text: 0 = relevant, 1 = weak, 2 = off topic (title + abstract match NONE of the question's
     key concepts). Weak = only lower-weight concepts matched while the question has a central concept (weight > 1),
     e.g. "Pedestrian Archetypes" for an agent-orchestration question; with no central concept every match is 0.
-    Texts under MIN_JUDGE_WORDS words are 0 (not judged). Relative to the pool: when no text in it matches any
+    Texts under MIN_JUDGE_WORDS words are never dropped: 0 if they match a central concept, else 1 (D6). Relative to the pool: when no text in it matches any
     concept, every text is 0 (the previous behaviour; the full-text relevance gate still decides). Tiers ORDER
     candidates before the caps (0, then 1); only tier 2 is dropped (R-ACQ-IRRELEVANT) by the callers."""
     concepts, w = kc
@@ -236,7 +236,11 @@ def relevance_tiers(kc: tuple, texts) -> list:
     out, any_hit = [], False
     for t in texts:
         if len(_TOKEN.findall(t)) < MIN_JUDGE_WORDS:
-            out.append(0)
+            # DDFIX-1023/INTEG D6: an unjudged short text is never dropped, but it is tier 0 only when it matches a
+            # central concept as a long text would; otherwise tier 1, so a 3-word weak or off-topic title ("Status Quo
+            # Bias") can no longer sort with the relevant records ahead of them (both cuts use these tiers).
+            m = matched_concepts(kc, t)
+            out.append(0 if m and (top <= 1 or max(w[c] for c in m) >= top) else 1)
             continue
         m = matched_concepts(kc, t)
         any_hit = any_hit or bool(m)
