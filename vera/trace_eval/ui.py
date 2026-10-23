@@ -386,8 +386,17 @@ def _render_public(view: dict) -> None:
         rows = [{"variant": v, "check": c, "passed/applies": f"{_pv(x.get('passed'), '{:g}')}/{_pv(x.get('applies'), '{:g}')}",
                  "rate": _pv(x.get("rate"))}
                 for v, d in (run.get("variants") or {}).items() for c, x in (d.get("per_check") or {}).items()]
+        # DDFIX-1023 TEVAL: overall pass rates and A1-A9 as static HTML tables (st.dataframe draws on a <canvas>, so its
+        # text cannot be copied or read by text tools). Same labels as the run: HISTORICAL banner and run build above.
+        overall = [{"variant": v, "split": sp, "n": _pv(x.get("n"), "{:g}"), "capture errors": _pv(x.get("errors"), "{:g}"),
+                    "all checks passed": _pv(x.get("all_pass"), "{:g}"), "rate": _pv(x.get("all_pass_rate"))}
+                   for v, d in (run.get("variants") or {}).items() for sp, x in (d.get("by_split") or {}).items()]
+        if overall:
+            st.markdown("**Overall: answers that passed every applicable check**")
+            st.table(pd.DataFrame(overall).set_index("variant"))
         if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True)
+            st.markdown("**Per check (A1-A9)**")
+            st.table(pd.DataFrame(rows).set_index("variant"))
         lat, tot = run.get("latency_s"), run.get("totals")
         if lat:
             st.markdown(f"Latency: median {_pv(lat.get('p50'), '{:.1f}')} s, 95th percentile {_pv(lat.get('p95'), '{:.1f}')} s (n={lat.get('n')}).")
@@ -408,9 +417,9 @@ def _render_public(view: dict) -> None:
         st.info("Check validation is not available on this deployment.")
     else:
         st.caption(f"Evidence dated {view.get('validation_file_date') or 'unknown'} (UTC). Positive class = FAIL. {CHECK_ACCURACY_TEXT} {TNR_NOTE}")
-        st.dataframe(pd.DataFrame([{"check": c, "n": x.get("n"), "TP": x.get("tp"), "TN": x.get("tn"), "FP": x.get("fp"),
+        st.table(pd.DataFrame([{"check": c, "n": x.get("n"), "TP": x.get("tp"), "TN": x.get("tn"), "FP": x.get("fp"),
                                     "FN": x.get("fn"), "TPR": _pv(x.get("tpr")), "TNR": _tnr_cell(x.get("tn"), x.get("fp"), x.get("tnr"))}
-                                   for c, x in val["checks"].items()]), hide_index=True)
+                                   for c, x in val["checks"].items()]).set_index("check"))
 
 
 def fetch_private(base_url: str, key: str, timeout: int = 15):

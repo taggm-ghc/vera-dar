@@ -131,6 +131,16 @@ def _send_question(question: str, force_bad: bool) -> None:
                     _rs = (data.get("contract") if isinstance(data.get("contract"), dict) else {}).get("research")
                     if isinstance(_rs, dict) and isinstance(_rs.get("user_text") or _rs.get("summary"), str) and (_rs.get("user_text") or _rs.get("summary")).strip():
                         st.caption("**Research outcome:** " + plain(_rs.get("user_text") or _rs.get("summary")))  # FRESH-1023 C3
+                    _st = _rs.get("steps") if isinstance(_rs, dict) else None  # TEVAL: aggregate steps only
+                    if isinstance(_st, dict) and _rs.get("triggered"):
+                        _ans = {"generated_new_evidence": "generated from newly admitted evidence",
+                                "generated_existing_only": "generated from the existing collection only",
+                                "abstained": "abstained", "not_attempted": "not attempted"}
+                        st.caption("**Search steps:** " + f"{int(_st.get('discovered') or 0)} found; search "
+                                   + ("ran" if _st.get("search") == "ran" else "not run")
+                                   + "; retrieval " + str(_st.get("acquisition", "not_attempted")).replace("_", " ")
+                                   + f"; {int(_st.get('admitted') or 0)} admitted; answer "
+                                   + _ans.get(_st.get("answer"), "not attempted") + ".")
                     _dc = _rs.get("diag_status_counts") if isinstance(_rs, dict) else None  # P0DTA-DIAG: aggregate counts only
                     if isinstance(_dc, dict) and any(isinstance(v, int) and v > 0 for v in _dc.values()):
                         from vera.research_outcome import DIAG_LABELS

@@ -21,6 +21,56 @@ _PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quot
 _PUBLIC_STATUS = {**_PORTAL_STATUS, "skipped_budget": "not_attempted", "not_attempted": "not_attempted"}
 
 
+ANSWER_BASES = ("generated_new_evidence", "generated_existing_only", "abstained", "not_attempted")
+# inline statuses that return before any search or fetch ran (ask_service.py:807/811, inline_acquire.py:406)
+_NOT_ATTEMPTED_REASON = {None: "no_search_record", "off": "disabled", "busy": "busy", "deadline": "deadline",
+                         "budget_unknown": "budget_unknown", "rate": "rate_limit", "daily_cap": "daily_cap"}
+
+
+# Statuses that prove a search ran. "deadline" is NOT here: the pre-search guard also returns it (ask_service.py:258/811);
+# a deadline after a search shows up as candidates or queried portals instead.
+_SEARCHED = frozenset({"ok", "none", "search_failed", "unanswered"})
+
+
+# Reason code -> was an HTTP request sent for the candidate's source? (code, evidence file:line). Decided per code, not per
+# diag bucket (R-ACQ-ROBOTS/CYCLE/HOST/FORMAT_UNSUPPORTED land in selected_not_fetched but follow requests).
+_FETCH_YES = frozenset({
+    "R-ACQ-UNREACHABLE",         # acq_discovered.py:402 (http_get raised), :410/:416 (after response)
+    "R-ACQ-FETCH_TIMEOUT",       # :383 (loop top, after >=1 hop in practice), :430 (while streaming a response)
+    "R-ACQ-HOST",                # :385/:388 (after a redirect hop; first-URL host refusal is pre-request: overcount), :513
+    "R-ACQ-CYCLE",               # :390/:407 (a revisit implies an earlier request)
+    "R-ACQ-ROBOTS",              # :392 (robots.txt itself was fetched)
+    "R-ACQ-ENCODING",            # :419 (response headers read)
+    "R-ACQ-FORMAT_UNSUPPORTED",  # :422, :508 (content-type of a response)
+    "R-ACQ-LARGE",               # :427 (streaming body)
+    "R-ACQ-CONVERT",             # :521 (conversion of fetched body)
+    "R-ACQ-IDENTITY_MISMATCH",   # :524 (fetched document identity)
+    "R-ACQ-LICENCE_ABSENT", "R-ACQ-LICENCE_MISMATCH",  # :561-575 (licence read from the fetched document)
+    "R-ACQ-INJECT", "R-ACQ-IRRELEVANT", "R-ACQ-FEWSPANS",  # auto_acquire.py:948/958 (fetched text checks)
+    "R-ACQ-WRITE",               # store write after fetch
+})
+# Everything else is NOT counted (no request proven): R-ACQ-NODOI/NOTOA/NOLIC(prefilter)/DUPLICATE/KNOWN/DEFER_CAP
+# (pre-fetch filters; auto_acquire.py:159/863, acq_discovered.py:245-255), R-ACQ-RATELIMITED (nothing sent,
+# acq_discovered.py:400), R-ACQ-DEADLINE/DOC_BUDGET/RATE/DAILY/SERVECAP/CRAWL_DELAY (stop before request), R-ACQ-REUSE-*
+# (stored text), R-ACQ-PREPRINT_*/ARXIV_* (policy holds), R-ACQ-PUBTYPE/R-ABSTRACT (not proven), R-DB*/R-BUNDLE etc.
+_FETCH_STATUSES = frozenset({"fetched_rejected", "selected_not_fetched", "acquired_not_admitted", "admitted"})
+
+
+def _fetch_made(c: dict) -> bool:
+    """True when a fetch request was made for this candidate: by outcome for admitted / acquired text (not reused
+    stored text), otherwise by terminal reason code (_FETCH_YES). discovered_not_selected and skipped never count."""
+    if not isinstance(c, dict):
+        return False
+    st = c.get("status")
+    if st == "admitted":
+        return c.get("status_reason") != "reused_stored"
+    if st == "acquired_not_admitted":
+        return c.get("outcome") != "reuse_rejected"
+    if st not in _FETCH_STATUSES:
+        return False
+    return str(c.get("reason") or "").strip().upper() in _FETCH_YES
+
+
 def cfg_of(acq: dict | None) -> dict | None:
     """config/auto_acquire.json freshness block when enabled with a positive freshness_max_age_hours, else None."""
     f = (acq or {}).get("freshness") if isinstance(acq, dict) else None
@@ -154,7 +204,8 @@ _SKIP_CAUSE = {"deadline_reached": "deadline_reached", "candidate_cap": "candida
 
 def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_available: bool, fr_before: dict | None,
               fr_after: dict | None = None, citations=None, answer_failed: bool = False,
-              failed_text: str | None = None, backfill: dict | None = None) -> dict:
+              failed_text: str | None = None, backfill: dict | None = None,
+              answer_basis: str | None = None) -> dict:
     """contract["research"]: the full record (report detail) for one request."""
     inline = inline if isinstance(inline, dict) else None
     status = (inline or {}).get("status")
@@ -194,7 +245,33 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
         kind, text, complete, detail = res.kind, res.user_text, res.complete, res.report_detail
         if answer_failed and failed_text:
             text = f"{failed_text} {text}".strip()
-    return {"triggered": bool(triggers), "triggers": list(triggers), "kind": kind, "user_text": text,
+    dc = ro.diag_counts(cands)
+    # DDFIX-1023 TEVAL: discovery, acquisition, admission and answer generation are separate aggregate facts.
+    # answer: what the answer was actually based on. Conservative: "generated_new_evidence" only when new evidence
+    # was both flagged used (used_new) and counted admitted; an explicit answer_basis cannot upgrade beyond that.
+    if answer_basis in ANSWER_BASES:
+        answer_state = answer_basis
+    elif answer_failed or not triggers:
+        answer_state = "generated_existing_only" if older_available else "abstained"
+    elif used_new:
+        answer_state = "generated_new_evidence"
+    else:
+        answer_state = "generated_existing_only" if older_available else "abstained"
+    if answer_state == "generated_new_evidence" and not (used_new and int(dc.get("admitted") or 0) > 0):
+        answer_state = "generated_existing_only" if older_available else "abstained"
+    # Four distinct stages. search: a search actually ran (candidates, a portal queried, or a status in
+    # inline_acquire.SEARCHED = ok|none|deadline|search_failed|unanswered, inline_acquire.py:51). Pre-search guards
+    # (off/busy/budget_unknown/rate/daily_cap with nothing found) mean not_run.
+    search_ran = bool(cands) or status in _SEARCHED or any(
+        p.get("status") in ("completed", "timeout", "error", "failed") for p in raw_portals)
+    search_reason = None if search_ran else _NOT_ATTEMPTED_REASON.get(status, "no_search_record")
+    # acquisition: attempted only when a fetch request was made for at least one candidate (see _fetch_made).
+    fetched = sum(1 for c in cands if _fetch_made(c))
+    steps = {"discovered": len(cands), "search": "ran" if search_ran else "not_run", "search_reason": search_reason,
+             "acquisition": "attempted" if fetched else "not_attempted",
+             "acquisition_reason": None if fetched else (search_reason or "no_fetch_made"),
+             "fetch_requests": fetched, "admitted": int(dc.get("admitted") or 0), "answer": answer_state}
+    return {"triggered": bool(triggers), "triggers": list(triggers), "kind": kind, "steps": steps, "user_text": text,
             "complete": complete, "inline_status": status,
             "portals": [dict(p, status=_PUBLIC_STATUS.get(p.get("status"), "error"),
                              n_results=int(p.get("n_results", p.get("results")) or 0)) for p in raw_portals],
@@ -227,4 +304,5 @@ def public_fields(rec: dict | None) -> dict:
                                  "complete": bool(rec.get("complete")), "portals": list(rec.get("portals") or []),
                                  "candidates": list(rec.get("candidates") or []),
                                  "diag_status_counts": dict(rec.get("diag_status_counts") or {}),
+                                 "steps": dict(rec.get("steps") or {}),
                                  "citations": list(rec.get("citations") or [])}}
