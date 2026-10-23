@@ -49,6 +49,8 @@ _FETCH_YES = frozenset({
     "R-ACQ-IDENTITY_MISMATCH",   # :524 (fetched document identity)
     "R-ACQ-LICENCE_ABSENT", "R-ACQ-LICENCE_MISMATCH",  # :561-575 (licence read from the fetched document)
     "R-ACQ-INJECT", "R-ACQ-IRRELEVANT", "R-ACQ-FEWSPANS",  # auto_acquire.py:948/958 (fetched text checks)
+    # (DDFIX-1023/REL pre-fetch R-ACQ-IRRELEVANT drops carry outcome "dropped" -> discovered_not_selected, which
+    # _fetch_made excludes before this set is consulted: they never count as a request.)
     "R-ACQ-WRITE",               # store write after fetch
 })
 # Everything else is NOT counted (no request proven): R-ACQ-NODOI/NOTOA/NOLIC(prefilter)/DUPLICATE/KNOWN/DEFER_CAP
