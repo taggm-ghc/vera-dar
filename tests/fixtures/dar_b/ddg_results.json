@@ -1,0 +1,11 @@
+{"results": [
+  {"url": "https://journals.example.org/doi/10.9999/DARB.Doi1/full", "title": "DDG doi in url", "discovery_group": "portals"},
+  {"url": "https://doi.org/10.9999/darb.doi2", "title": "DDG doi.org link", "discovery_group": "portals"},
+  {"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9000009/", "title": "DDG pmc article", "discovery_group": "portals"},
+  {"url": "https://europepmc.org/article/PMC/PMC9000010", "title": "DDG europepmc article", "discovery_group": "portals"},
+  {"url": "https://www.reuters.com/science/synthetic-outbreak-2024/", "title": "DDG news, not scholarly", "discovery_group": "news"}
+ ],
+ "europepmc_lookup": {"resultList": {"result": [
+  {"pmcid": "PMC9000009", "pmid": "90000009", "doi": "10.9999/DARB.PMC9"},
+  {"pmcid": "PMC9000010", "pmid": "90000010", "doi": "10.9999/darb.pmc10"}]}}
+}

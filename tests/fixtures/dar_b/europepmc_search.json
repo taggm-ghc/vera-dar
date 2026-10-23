@@ -1,0 +1,8 @@
+{"version": "6.9", "hitCount": 5, "request": {"queryString": "synthetic", "resultType": "lite", "pageSize": 25},
+ "resultList": {"result": [
+  {"id": "90000001", "source": "MED", "pmid": "90000001", "pmcid": "PMC9000001", "doi": "10.9999/darb.all3", "title": "SYNTHETIC all three identifiers outbreak study", "authorString": "Synth A.", "pubYear": "2024", "isOpenAccess": "Y", "inEPMC": "Y", "inPMC": "Y", "hasPDF": "Y", "license": "cc by"},
+  {"id": "PMC9000005", "source": "PMC", "pmcid": "PMC9000005", "title": "SYNTHETIC pmcid only record (no DOI)", "pubYear": "2024", "isOpenAccess": "Y", "inEPMC": "Y", "inPMC": "Y", "hasPDF": "N"},
+  {"id": "90000006", "source": "MED", "pmid": "90000006", "doi": "https://doi.org/10.9999/darb.nopmc", "title": "SYNTHETIC no PMCID", "pubYear": "2024", "isOpenAccess": "Y", "inEPMC": "N", "hasPDF": "N"},
+  {"id": "PPR90000007", "source": "PPR", "pmcid": "PMC9000007", "doi": "10.9999/darb.pre", "title": "SYNTHETIC preprint", "pubYear": "2024", "isOpenAccess": "Y", "inEPMC": "Y"},
+  {"id": "90000008", "source": "MED", "pmid": "90000008", "pmcid": "PMC9000008", "doi": "10.9999/darb.closed", "title": "SYNTHETIC not open access", "pubYear": "2024", "isOpenAccess": "N", "inEPMC": "Y"}
+ ]}}
