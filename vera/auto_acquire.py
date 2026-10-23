@@ -838,8 +838,17 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
     from vera import search_providers
     from vera.dar_corpus import doc_key_set
+    from vera import search_query
     ranked, seen = [], set()
     rq = rank_question(question, cfg)
+    # DDFIX-1023/REL: the question's key concepts (generic words such as "de facto", "status quo", "best practices" and
+    # the profile's generic_terms removed) judge each candidate's title + abstract BEFORE the cut below: a candidate
+    # matching none of them is dropped as irrelevant; weak matches are ordered after relevant ones.
+    kc = search_query.key_concepts(question, extra_generic=((cfg.get("search") or {}).get("openalex_profile")
+                                                                   or {}).get("generic_terms") or ())
+    pool = [c for c in cands or () if isinstance(c, dict)]
+    tier = dict(zip(map(id, pool), search_query.relevance_tiers(
+        kc, [f"{c.get('title') or ''} {c.get('snippet') or ''}" for c in pool])))
     for pos, c in enumerate(cands or ()):
         if not isinstance(c, dict):
             continue
@@ -867,12 +876,22 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
                 drops[id(c)] = dup
             continue
         seen.add(ident)
-        ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))
+        if tier.get(id(c)) == 2:
+            # DDFIX-1023/REL (owner 2026-10-23: lexical false positives must not consume inline slots): dropped BEFORE
+            # the cut as irrelevant (metadata only; terminal, never queued for the background)
+            count(acq_config.reason(cfg, "irrelevant"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "irrelevant")
+            continue
+        ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos, tier.get(id(c), 0)))
     # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
     # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).
     # P0DTA-PRIO D1: routable full text (an OA signal the code already gathers) before records with no OA evidence, so
     # those only fill the max_candidates_resolved slots that remain; tier, pre-rank and position order within each.
-    ranked.sort(key=lambda x: (not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0], x[4]))
+    # DDFIX-1023/REL D4: relevance tier first (relevant, then weak: search_query.relevance_tiers), so a weak lexical match
+    # with full text never takes a slot ahead of a relevant candidate; the P0DTA order applies within each tier.
+    ranked.sort(key=lambda x: (x[5], not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0],
+                               x[4]))
     n_cut = int(acq_config.bound(cfg, "max_candidates_resolved"))
     if drops is not None:  # FRESH-1023 C3: candidates beyond the cut are deferred (not counted)
         for r in ranked[n_cut:]:

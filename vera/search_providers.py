@@ -330,13 +330,21 @@ OPENALEX_OA_SELECT_EXTRA = "open_access,best_oa_location,locations,ids"
 OPENALEX_PMC_SOURCE_ID = "S2764455111"  # PubMed Central (where Europe PMC full text comes from)
 
 
-def _profile_extra_and(extra, profile: Mapping) -> str:
+def _profile_extra_and(extra, profile: Mapping, qt=None) -> str:
     """Acquisition: a question with no core phrase gives an all-OR query that ranks any one common token (the
     ambiguous 'mma' matched alpha-gal papers). Instead AND the distinctive terms: drop the profile's generic terms
-    (unless that leaves none) and keep at most `and_extra_max` in question order. Deterministic, no model call."""
+    (unless that leaves none) and keep at most `and_extra_max`. Deterministic, no model call.
+    DDFIX-1023/REL D1: with `qt`, one term per concept run first (search_query.and_terms: anchor run first, filler words
+    such as "affect" never), so no concept of the question is lost to the first words of the question."""
     generic = {str(g).lower() for g in profile.get("generic_terms") or ()}
+    k = max(1, int(profile.get("and_extra_max") or 4))
+    if qt is not None:
+        from vera.search_query import and_terms
+        picked = and_terms(qt, k, exclude=generic)
+        if picked:
+            return " AND ".join(picked)
     terms = [t for t in extra if str(t).lower() not in generic] or list(extra)
-    return " AND ".join(terms[: max(1, int(profile.get("and_extra_max") or 4))])
+    return " AND ".join(terms[:k])
 
 
 def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: bool = False,
@@ -346,7 +354,7 @@ def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: 
         qt = build_query_terms(question, terms_cfg)
         if not qt.empty:
             if profile and not qt.core and qt.extra and profile.get("and_extra_max"):
-                return _profile_extra_and(qt.extra, profile), qt.mode + "+and"
+                return _profile_extra_and(qt.extra, profile, qt), qt.mode + "+and"
             parts = [f'"{c}"' for c in qt.core]
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
                 parts = ["(" + " OR ".join(parts) + ")"]
