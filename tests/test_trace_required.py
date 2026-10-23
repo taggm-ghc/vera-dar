@@ -55,7 +55,7 @@ def test_page_no_secrets_no_run_shows_shipped_historical_aggregates():
     assert "Method and limitations" in text and "Check accuracy, not answer pass rates" in text
     # the offline summary is optional: shown only when its static file ships (asserted in test_trace_auto.py)
     assert ("Offline suite" in text) == (ROOT / "eval_results" / "trace_eval_offline_public.json").is_file()
-    assert len(at.dataframe) >= 1  # aggregates shown without any key, secret or live run
+    assert len(at.dataframe) + len(at.table) >= 1  # aggregates shown without any key, secret or live run (DDFIX-1023 TEVAL: st.table)
     for q in QUESTION_TEXTS:
         assert q not in text
 def test_page_never_blank_with_nothing_at_all():
@@ -68,7 +68,7 @@ def test_tnr_shown_as_counts_with_few_labels_note():
     at = _render("/nonexistent/p.json", ROOT / "eval_results" / "trace_eval_historical_public.json", val=ROOT / "eval_results" / "trace_eval_v1_validation.json")
     text = _page(at)
     assert TNR_SECTION in text and "not answer pass rates" in text and TNR_NOTE.split(".")[0] in text
-    cells = [str(v) for df in at.dataframe for v in df.value.get("TNR", [])] if at.dataframe else []
+    cells = [str(v) for df in [*at.dataframe, *at.table] for v in df.value.get("TNR", [])]  # DDFIX-1023 TEVAL: st.table
     assert cells and all(re.match(r"^(n/a|\d+/\d+( \(\d+%\))?)$", c) for c in cells), cells
 def test_shipped_historical_metadata():
     m = json.loads((ROOT / "eval_results" / "trace_eval_historical_public.json").read_text())["run_meta"]
