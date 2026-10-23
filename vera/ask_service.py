@@ -3,8 +3,10 @@ extraction, and cost calculation. OpenAI SDK exceptions intentionally
 propagate to the routing layer, where main.py translates provider failures
 into HTTP responses — this module has no knowledge of HTTP.
 """
+import contextvars
 import json
 import logging
+import time
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -112,8 +114,54 @@ def complete(messages: list[dict], model: str, pricing: PricingRecord, client: O
     )
 
 
+@dataclass
+class RequestBudget:
+    """CMF-1022: ONE request-level deadline and inline-use flag shared by the whole provider chain (never restarted per
+    provider). `deadline` is time.monotonic() at the /ask handler entry + public_mode.ASK_TIMEOUT_S (the client's wait).
+    The server does NOT terminate a request at the deadline (client-side enforcement only; reported residual gap)."""
+    deadline: float
+    inline_used: bool = False
+
+
+def request_budget() -> RequestBudget:
+    from vera.public_mode import ASK_TIMEOUT_S
+    return RequestBudget(time.monotonic() + ASK_TIMEOUT_S)
+
+
+# The budget travels with the request in a context variable (set once by main.ask, around answer_via_chain), so the
+# chain loop and every provider attempt see the SAME deadline and inline flag without changing any signature.
+REQUEST_BUDGET: contextvars.ContextVar = contextvars.ContextVar("cmf_request_budget", default=None)
+
+
+# Post-inline LLM calls that can follow an inline search, per the auto_acquire.json _calibration_note: one answer writer,
+# one claim check, and a second claim-check call (the note reserves room for it). Each is bounded by the chain timeout_s.
+POST_INLINE_LLM_CALLS = 3
+# The reading-list fallback after a failed retry runs the grounding search twice at most (rl3 AND, then OR), each bounded
+# by grounding.deadline_s (calibration note: "<= 2 x 10 s").
+READING_LIST_SEARCHES = 2
+
+
+def inline_need_s(acq: dict, grounding) -> float | None:
+    """Seconds one inline retry may need: inline deadline_s + POST_INLINE_LLM_CALLS x chain timeout_s + the reading-list
+    tail (READING_LIST_SEARCHES x grounding deadline_s; 0 when ungrounded). Every term is an existing config value.
+    None when any term cannot be read (the caller then skips the retry: fail closed)."""
+    ct = _chain_timeout_s()
+    from vera import inline_acquire
+    dl = inline_acquire._b(acq, "deadline_s", 45)  # the value inline_acquire itself applies (its own default 45 when absent)
+    if ct is None or isinstance(dl, bool) or not isinstance(dl, (int, float)):
+        return None
+    tail = 0.0
+    if grounding is not None:
+        from vera.grounded_ask import load_grounding  # the shipped grounding block (config/ask-provider-chain.json)
+        gd = (load_grounding() or {}).get("deadline_s")
+        if isinstance(gd, bool) or not isinstance(gd, (int, float)):
+            return None
+        tail = READING_LIST_SEARCHES * float(gd)
+    return float(dl) + POST_INLINE_LLM_CALLS * ct + tail
+
+
 def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: OpenAI | None = None,
-                    extra_body: dict | None = None, grounding=None) -> AskResult:
+                    extra_body: dict | None = None, grounding=None, budget: RequestBudget | None = None) -> AskResult:
     """The /ask entry point (item #72 W1): the scope router runs first; a declined question never reaches the
     answering model and gets the fixed decline template. answer_question stays the bare model call (the trace
     harness's baseline shape)."""
@@ -124,6 +172,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
+    budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
@@ -144,8 +193,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                         return replace(out, answer=f"{pre} {out.answer}" if pre else out.answer, accepted=False,
                                        contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
                     info: dict = {}
-                    inl = _inline(question, model, pricing, decision, chained, grounding, acq,
-                                  tried=_doc_keys(used.get("acq")), info=info)
+                    inl = None
+                    if not budget.inline_used:  # CMF-1022 CR-3: at most one _inline per request across the chain
+                        budget.inline_used = True
+                        inl = _inline(question, model, pricing, decision, chained, grounding, acq,
+                                      tried=_doc_keys(used.get("acq")), info=info)
                     if isinstance(inl, AskResult):
                         return inl
                     inline_note = inl
@@ -189,15 +241,25 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         # INT-1022-B (orchestrator-approved): a base-corpus 'nonresponsive' result (RESP-1022: every verified claim was
         # off-question) also starts inline acquisition. _inline is called at most ONCE per request: if its own answer
         # is nonresponsive too, it returns a notice and the request falls through to the reading list (no loop).
-        retry_tokens = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"))
-        if inline_acquire.icfg_of(acq).get("in_scope") is True and token and token in retry_tokens:
-            info: dict = {}
-            inl = _inline(question, model, pricing, decision, chained, grounding, acq, tried=_doc_keys(used_in.get("acq")),
-                          in_scope=True, info=info)
-            if isinstance(inl, AskResult):
-                return inl
-            inline_note = inl
-            ia = info.get("outcome") or {}
+        # CMF-1022 R1: also three post-writer failure tokens (premise, claim_check_disabled and checker_unavailable stay out: HITL-CMF-6, OD-CMF-1022g).
+        retry_tokens = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"), ft.get("no_valid_citations"),
+                        ft.get("claim_check_insufficient"), ft.get("model_insufficient"))
+        if inline_acquire.icfg_of(acq).get("in_scope") is True and token and token in retry_tokens \
+                and not budget.inline_used:  # CMF-1022 CR-3: one _inline per request
+            need = inline_need_s(acq, grounding)
+            remaining = budget.deadline - time.monotonic()
+            if need is None or remaining < need:  # fail closed: unknown budget or too little time -> skip the retry
+                ia = {"status": "budget_unknown" if need is None else "deadline"}
+                logging.getLogger("vera").info("inline retry skipped: %s", ia["status"])
+            else:
+                budget.inline_used = True
+                info: dict = {}
+                inl = _inline(question, model, pricing, decision, chained, grounding, acq,
+                              tried=_doc_keys(used_in.get("acq")), in_scope=True, info=info)
+                if isinstance(inl, AskResult):
+                    return inl
+                inline_note = inl
+                ia = info.get("outcome") or {}
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     return replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,

@@ -56,7 +56,7 @@ def test_prompt_asks_for_category_and_shipped_gate_is_off_topic_only():
     for c in sr.LAYER2_CATEGORIES:
         assert f'\\"{c}\\"' in json.dumps(prompt)
     se = acq_config.load_config()["scope_expansion"]
-    assert se["layer2_categories_allowed"] == ["off_topic"]
+    assert se["layer2_categories_allowed"] == ["off_topic", "in_scope"]  # CMF-1022 R2-topic (INTENDED-CHANGE)
     assert se["override_layer2_declines"] in (False, True)  # owner choice (OWNER-RELEASE.md); both states tested below
 
 

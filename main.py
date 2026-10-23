@@ -561,6 +561,8 @@ def _fulldoc_sources(result) -> list[dict]:
 
 @app.post("/ask", response_model=AskResponse, dependencies=[Depends(verify_api_key), Depends(enforce_caps)])  # W2 caps (public mode)
 def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
+    from vera.ask_service import REQUEST_BUDGET, request_budget
+    budget = request_budget()  # CMF-1022: the request-level deadline starts ONCE, here, at handler entry
     if req.mode is DemoMode.force_bad:
         # Guardrail demo: inject one identified synthetic fault, rejected by real
         # schema validation. No OpenAI call is made — the demo is free and deterministic.
@@ -617,7 +619,11 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
                 return cache["s"]
 
             grounding = (sources_fn, GROUNDING)
-        result, answered_by = answer_via_chain(req.question, ASK_CHAIN, grounding)
+        _tok = REQUEST_BUDGET.set(budget)  # shared by every provider tried in the chain; never restarted
+        try:
+            result, answered_by = answer_via_chain(req.question, ASK_CHAIN, grounding)
+        finally:
+            REQUEST_BUDGET.reset(_tok)
     except RuntimeError as exc:
         # empty chain (no free provider key) or the default-client latch: provider-neutral, never a paid call
         if not (isinstance(exc, OpenAIFallbackDisabled) or str(exc).startswith("no provider available")):

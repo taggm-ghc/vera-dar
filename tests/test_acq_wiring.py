@@ -233,6 +233,8 @@ def test_production_composition_default_deps_end_to_end_through_fake_transports(
     monkeypatch.setattr(search_and_fetch, "cached_chain", lambda *a, **k: ([prov], 1, "fan_out"))
     web, _ = A.epi_setup()
     monkeypatch.setattr(requests, "get", lambda url, **kw: web(url, **kw))
+    from vera import selective_fetch  # CMF-1022-I2: the production transport is now the pinned getter
+    monkeypatch.setattr(selective_fetch, "pinned_get", lambda url, **kw: web(url, **kw))
     import socket
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("193.62.193.80", 443))])
     engines = {}

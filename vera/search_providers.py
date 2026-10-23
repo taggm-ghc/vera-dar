@@ -647,9 +647,8 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                 clock: Callable | None = None) -> str | None:
     """ONE cheap GET of a journal landing page (public-address check on every hop, at most 2 redirects, size-capped,
     short timeout) -> its citation_doi meta tag, or None. Never raises."""
-    if get is None:
-        import requests
-        get = requests.get
+    if get is None:  # CMF-1022-I2 (E1/A4): connect only to the address validated for this hop
+        from vera.selective_fetch import pinned_get as get
     if url_check is None:
         from vera.selective_fetch import is_public_url as url_check
     import time as _t

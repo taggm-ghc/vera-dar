@@ -218,6 +218,11 @@ def override_layer2_declines(cfg: dict | None) -> bool:
     return isinstance(cfg, dict) and se.get("enabled") is True and se.get("override_layer2_declines") is True
 
 
+def _refuse_categories() -> frozenset:
+    from vera.scope_router import REFUSE_CATEGORIES
+    return REFUSE_CATEGORIES
+
+
 def layer2_category_ok(cfg: dict | None, decision) -> bool:
     """DAR-1021: a decline may acquire (and, with the override, answer) only for a well-formed layer-2 LLM verdict whose
     closed-enum category is in scope_expansion.layer2_categories_allowed. Missing/invalid config or category = False."""
@@ -226,7 +231,8 @@ def layer2_category_ok(cfg: dict | None, decision) -> bool:
     if not isinstance(allowed, list) or not all(isinstance(a, str) for a in allowed):
         return False
     cat = getattr(decision, "category", "")
-    return getattr(decision, "layer", "") == "layer2_llm" and isinstance(cat, str) and bool(cat) and cat in allowed
+    return getattr(decision, "layer", "") == "layer2_llm" and isinstance(cat, str) and bool(cat) and cat in allowed \
+        and cat not in _refuse_categories()  # CMF-1022 R2: refusal categories never pass, even if listed in config
 
 
 def override_answer_prefix(cfg: dict | None) -> str:

@@ -264,8 +264,6 @@ def served_doc_keys(fulldoc_corpus, warm_state=None) -> set:
 
 
 def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by tests/test_acq_wiring.py
-    import requests
-
     from sqlalchemy import create_engine
 
     from vera import fulldoc_corpus, search_and_fetch, selective_fetch
@@ -289,8 +287,9 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
         wo.dispose()
         ro.dispose()
 
+    # CMF-1022-I2 (E1/A4): pinned transport (connects only to the address is_public_url validated for the hop).
     # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); other hosts pass through.
-    return Deps(search=search, http_get=rate_limit.limited_by_url(requests.get), lookup=RoLookup(ro, cfg),
+    return Deps(search=search, http_get=rate_limit.limited_by_url(selective_fetch.pinned_get), lookup=RoLookup(ro, cfg),
                 store=WoStore(wo, ro, cfg),
                 corpus_keys=keys, url_check=selective_fetch.is_public_url, refresh=refresh, close=close)
 
@@ -602,15 +601,17 @@ def jats_licences(raw: bytes) -> list:
 def licence_elements_decision(elements: list, declared: str, icfg: dict) -> None:
     """Raises Refused: any reject marker (ND, no educational use, fee only) in any element's href, type, ref or text ->
     reject; an element with no recognisable family, more than one family, or a family that differs from the declared
-    licence -> hold (unclear = hold). No licence element at all: the declared licence governs (returns)."""
+    licence -> hold (unclear = hold). No licence element at all (CMF-1022 L1, fail closed): hold, never admitted on index metadata alone."""
     from vera import fulltext_loader as fl
     from vera.licence_gate import reject_reason
     codes = icfg["reason_codes"]
     why = reject_reason(declared, None)  # a rejecting declared licence is a reject, never only a hold
     if why:
         raise fl.Refused(codes["licence_reject"], f"declared licence is {why}")
+    if not elements:  # CMF-1022 L1: no verified article-level licence evidence -> held (OD-CMF-1022c decision 2)
+        raise fl.Refused(codes["licence_hold"], "no licence element in the document: held")
     fams = set()
-    for e in elements or ():
+    for e in elements:
         why = reject_reason(" ".join(x for x in (e.get("type"), e.get("text")) if x),
                             " ".join(x for x in (e.get("href"), e.get("ref")) if x))
         if why:

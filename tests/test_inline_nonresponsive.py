@@ -49,6 +49,6 @@ def test_nonresponsive_base_result_starts_one_inline_attempt_then_reading_list(w
 
 
 def test_other_fallback_tokens_still_do_not_start_inline(wired, monkeypatch):
-    monkeypatch.setattr(ask_service, "_fulldoc", _fd(wired, "claim_check_insufficient", RESP_FALLBACK))
+    monkeypatch.setattr(ask_service, "_fulldoc", _fd(wired, "claim_check_disabled", RESP_FALLBACK))  # CMF-1022 R1 (INTENDED-CHANGE): claim_check_insufficient now retries; claim_check_disabled stays out
     r = ask_service.answer_in_scope("What is X?", "m", SimpleNamespace(input=0, output=0))
     assert wired["acquire"] == 0 and wired["fulldoc"] == ["base"] and r.result_kind == "reading_list"

@@ -501,12 +501,18 @@ def test_d7_whole_fetch_wall_clock_limit_and_response_closed():
     ("cc by-nc", "https://creativecommons.org/licenses/by-nc/4.0/"),
     ("cc by-nc-sa", "https://creativecommons.org/licenses/by-nc-sa/4.0/"),
     ("cc0", "https://creativecommons.org/publicdomain/zero/1.0/"),
-    ("cc by", None),  # no embedded licence: the declared licence governs
 ])
 def test_the_six_allow_classes_are_still_allowed(declared, embedded_url):
     web, _ = A.epi_setup(rec_kw={"licence": declared}, jats_kw={"licence_url": embedded_url})
     out, store, _ = _run(web=web)
     assert out["stored"] == 1 and store.plans[0]["source"]["provenance"]["licence_decision"] == "allow", out
+
+
+def test_no_embedded_licence_element_is_held():
+    """CMF-1022 L1 (OD-CMF-1022c, INTENDED-CHANGE): was 'the declared licence governs'; now fail closed, held."""
+    web, _ = A.epi_setup(rec_kw={"licence": "cc by"}, jats_kw={"licence_url": None})
+    out, store, _ = _run(web=web)
+    assert out["stored"] == 0 and store.plans == [] and out["codes"] == {"R-LIC-HOLD": 1}, out
 
 
 @pytest.mark.parametrize("embedded_url", [
