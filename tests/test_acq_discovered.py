@@ -406,19 +406,47 @@ def _norm(o, store, web):
             pr["acquisition"].pop(k, None)
         pr["item"].pop("fetched_at", None)
         pr.pop("fetched_at", None)
+        pr.pop("retrieved_at", None)  # wall-clock, 1 s resolution (fulltext_loader)
+        if isinstance(pr.get("bundle"), dict):
+            pr["bundle"].pop("manifest_sha256", None)  # hashes a manifest whose item embeds fetched_at (same now_iso value as retrieved_at)
     return p, plans, [(u, h, k) for u, h, k in web.calls]
 
 
 def test_flags_off_identity_discovered_input_is_ignored_and_no_new_calls():
+    _flags_off_identity_check()
+
+
+def test_flags_off_identity_holds_when_runs_straddle_a_second_boundary(monkeypatch):
+    """P0-7 regression guard: the two runs get clocks t and t+1.1 s (no real sleep); only wall-clock-derived
+    provenance fields differ, web.calls must still be equal."""
+    import datetime as _dt
+    from vera import fulltext_loader
+    base = _dt.datetime(2026, 10, 22, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    run_idx = [-1]
+
+    class FakeDT(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base + _dt.timedelta(seconds=1.1 * max(run_idx[0], 0))
+    monkeypatch.setattr(auto_acquire, "datetime", FakeDT)
+    monkeypatch.setattr(fulltext_loader, "datetime", FakeDT)
+    stamps = _flags_off_identity_check(on_run=lambda: run_idx.__setitem__(0, run_idx[0] + 1), raw_hook=True)
+    assert stamps[0] != stamps[1], "the straddle was not exercised: raw retrieved_at identical across runs"
+
+
+def _flags_off_identity_check(on_run=None, raw_hook=False):
     off = A.cfg()
     assert off["inline"]["use_discovered"] is False and off["inline"]["landing_route"] is False
-    res = []
+    res, raw_stamps = [], []
     for passed in (False, True):
+        if on_run:
+            on_run()
         auto_acquire.reset_for_tests()
         inline_acquire.reset_for_tests()
         web, _raw = epmc_web()
         o, store = run(copy.deepcopy(off), [oa_src(doi="10.9999/other"), arxiv_src()], web, own=[A.cand(DOI)],
                        pass_discovered=passed)
+        raw_stamps.append([pl["source"]["provenance"].get("retrieved_at") for pl in store.plans])
         res.append(_norm(o, store, web))
     assert res[0] == res[1]
     assert "discovered" not in res[0][0]
@@ -426,6 +454,7 @@ def test_flags_off_identity_discovered_input_is_ignored_and_no_new_calls():
     assert not set(prov) & {"discovery", "url_chain", "gate_a", "gate_b", "retention"}
     assert all(set(h) == {"User-Agent"} for _u, h, _k in res[0][2])  # the unchanged header set on existing paths
     assert not any("10.9999/other" in u for u, _h, _k in res[0][2])
+    return raw_stamps
 
 
 def test_flags_off_ask_service_calls_acquire_exactly_as_before(rig, monkeypatch):
