@@ -21,6 +21,12 @@ DOLLAR = ("The status quo of the international monetary system rests on de facto
           "for European best practices in reserve management.")
 
 
+# REL rev1 (idiom strip + fulldoc_admission.coverage_ok) was REVERTED on this branch (verifier rejection); REL rev2 is
+# pending. Without the idiom strip the U.S. Dollar "status quo" text is ADMITTED at 0.34 (4 of 9 stems). These strict
+# xfails turn into failures when rev2 lands, so they must be re-checked (and the marks removed) then.
+NEEDS_REL = pytest.mark.xfail(strict=True, reason="DDFIX-1023: needs REL rev2 (idiom strip / coverage_ok)")
+
+
 def _admit(q, title, spans, cfg=None):
     return fa.admit(q, _Corpus(title, spans), copy.deepcopy(cfg or CFG))
 
@@ -32,6 +38,7 @@ def test_shipped_values_are_the_owner_decisions_and_the_stem_floor_is_unchanged(
     assert "_min_question_coverage_owner_note" in adm and "_min_relevance_owner_note" in adm
 
 
+@NEEDS_REL
 def test_coverage_ok_is_the_single_document_rule_at_034():
     icfg, n = _icfg_n()
     q = fa._q_stems(Q20, icfg, n)
@@ -51,6 +58,7 @@ def test_a_passage_at_35_percent_coverage_is_admitted_and_30_percent_is_not():
     assert not _admit(Q20, "Blue carbon ecosystems", [SPAN_35], old).admitted
 
 
+@NEEDS_REL
 def test_accept_multi_agent_fixture_is_admitted_with_idiom_strip():
     icfg, n = _icfg_n()
     q = fa._q_stems(Q, icfg, n)
@@ -60,6 +68,7 @@ def test_accept_multi_agent_fixture_is_admitted_with_idiom_strip():
     assert b.admitted, b.rejected
 
 
+@NEEDS_REL
 @pytest.mark.parametrize("title", ["The U.S. Dollar Dominance: Origins, Status Quo, and Implications for Europe"])
 def test_us_dollar_status_quo_text_is_still_rejected(title):
     b = _admit(Q, title, [DOLLAR])

@@ -402,7 +402,8 @@ _UNCHECKED_REASONS = ("ranked_below_cap",)  # discovered_not_selected cut by the
 def _notice_class(r) -> str:
     """DDFIX-1023/INTEG item 9: what happened to one candidate, for the notice. checked = retrieved/read and rejected;
     licence = dropped before retrieval by the licence/open-access prefilter (judged on its listed licence);
-    irrelevant = judged not relevant (R-ACQ-IRRELEVANT, pre-fetch or full text); unchecked = only cap, deadline, quota
+    irrelevant = judged not relevant before any fetch (R-ACQ-IRRELEVANT pre-fetch drop; a full-text relevance rejection
+    is "checked"); unchecked = only cap, deadline, quota
     or rate skips (never judged); other = excluded for another recorded reason; unknown = no recorded status."""
     from vera.research_outcome import DIAG_STATUSES
     if not isinstance(r, dict) or r.get("status") not in DIAG_STATUSES:
@@ -411,9 +412,9 @@ def _notice_class(r) -> str:
     code = str(r.get("reason") or "").strip().upper()
     if st == "admitted":
         return "admitted"
-    if code == "R-ACQ-IRRELEVANT" or why == "relevance_rejected":
-        return "irrelevant"
     if st == "discovered_not_selected":
+        if code == "R-ACQ-IRRELEVANT":  # judged not relevant on its listed title/abstract before any fetch
+            return "irrelevant"
         if code in ("R-ACQ-NOTOA", "R-ACQ-NOLIC") or why in _PREFILTER_LICENCE:
             return "licence"
         if why in _UNCHECKED_REASONS or code == "R-ACQ-DEFER_CAP" or (why is None and not code):

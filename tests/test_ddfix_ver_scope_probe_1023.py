@@ -179,9 +179,11 @@ def test_notice_all_irrelevant_says_judged_not_relevant():
     assert "not checked" not in t and "no document was judged" not in t
 
 
-def test_notice_full_text_irrelevant_counts_as_judged_not_relevant():
+def test_notice_full_text_irrelevant_counts_as_checked():
+    none_text = ACQ["scope_expansion"]["inline_notice_none"]
+    assert ask_service._inline_notice(ACQ, _o([_rec("rejected", "R-ACQ-IRRELEVANT")])) == none_text
     t = ask_service._inline_notice(ACQ, _o([_rec("rejected", "R-ACQ-IRRELEVANT"), _rec("deferred", "R-ACQ-DEFER_CAP")]))
-    assert "1 judged not relevant" in t and "1 not checked in this request" in t, t
+    assert t.startswith(none_text) and "1 other document found was not checked" in t, t
 
 
 def test_notice_all_cap_is_not_checked():

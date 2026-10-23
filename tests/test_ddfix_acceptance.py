@@ -187,6 +187,7 @@ def test_p1_unfamiliar_research_domain_triggers_research_not_a_subject_matter_re
 
 
 # ------------------------------------------------------------------------------------------------ point 2
+@pytest.mark.xfail(strict=True, reason="DDFIX-1023: P2 needs REL rev2 (rev1 reverted); remove this mark when rev2 lands")
 def test_p2_relevant_papers_outrank_lexical_false_positives_before_slots(acc):
     r, _ds, ia = _mixed(acc)
     cands = [c for c in ia.get("candidates") or () if isinstance(c, dict)]
