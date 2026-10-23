@@ -377,7 +377,8 @@ def _render_public(view: dict) -> None:
         meta = run.get("run_meta") or {}
         if view.get("historical"):
             st.warning(((historical_label(run) + ". ") if (meta.get("mode") == "historical") else "") + HISTORICAL_TEXT)
-        st.caption(f"Run build {view.get('run_build') or 'unknown'} (deployed build {view.get('build', 'unknown')}); "
+        same = "" if view.get("historical") or view.get("run_build") == view.get("build") else "; application code unchanged since the run build"
+        st.caption(f"Run build {view.get('run_build') or 'unknown'} (deployed build {view.get('build', 'unknown')}{same}); "
                    f"run date {view.get('run_file_date') or 'unknown'} (UTC); scoring {meta.get('scoring_version') or 'unknown'}; "
                    f"eval set {(meta.get('eval_set_sha256') or 'unknown')[:12]}.")
         st.markdown(f"**{run.get('n_questions')}** questions, **{run.get('n_traces')}** answers, "

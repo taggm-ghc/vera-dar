@@ -219,3 +219,86 @@ def _no_shipped_fallbacks(tmp_path, monkeypatch):
     from vera import trace_viz as _tv
     monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
     monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")
+
+
+# --- P0-4: results-only publication commit keeps a run current only with proven code equivalence --------------------
+
+RUN, LATER = "a" * 40, "d" * 40
+
+
+def _tree(root):
+    for rel, body in {"main.py": "app", "vera/x.py": "v=1", "config/c.json": "{}", "eval_results/r.json": "1",
+                      "tests/t.py": "t", "docs/d.md": "d"}.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(body)
+    return root
+
+
+def _marker(path, build=RUN, fp="0" * 64, schema=trace_viz.PUBLICATION_SCHEMA):
+    path.write_text(json.dumps({"evaluated_build": build, "code_fingerprint": fp, "schema": schema}))
+    return path
+
+
+def test_code_fingerprint_deterministic_and_ignores_results_and_tests(tmp_path):
+    t = _tree(tmp_path / "t")
+    fp = trace_viz.code_fingerprint(t)
+    assert fp == trace_viz.code_fingerprint(t) and len(fp) == 64
+    for rel in ("eval_results/r.json", "eval_results/new.json", "tests/t.py", "docs/d.md", "vera/__pycache__/x.pyc"):
+        (t / rel).parent.mkdir(parents=True, exist_ok=True)
+        (t / rel).write_text("changed")
+    assert trace_viz.code_fingerprint(t) == fp
+    (t / "vera/x.py").write_text("v=2")
+    assert trace_viz.code_fingerprint(t) != fp
+
+
+def test_is_historical_results_only_commit(tmp_path):
+    t = _tree(tmp_path / "t")
+    live = {"mode": "live", "offline": False, "deployed_version": RUN}
+    good = _marker(tmp_path / "m.json", fp=trace_viz.code_fingerprint(t))
+    hist = lambda meta, dep, m: trace_viz.is_historical(meta, dep, m, t)
+    assert hist(live, RUN[:7], tmp_path / "none.json") is False          # same build: current, no marker needed
+    assert hist(live, LATER[:7], good) is False                          # results-only commit, same code: current
+    assert hist({**live, "offline": True}, LATER[:7], good) is True      # offline: always historical
+    assert hist({**live, "deployed_version": None}, LATER[:7], good) is True  # unknown run build
+    assert hist(live, "unknown", good) is True                           # unknown deployed build
+    assert hist(live, LATER[:7], tmp_path / "none.json") is True         # marker missing
+    (tmp_path / "bad.json").write_text("{not json")
+    assert hist(live, LATER[:7], tmp_path / "bad.json") is True          # marker malformed
+    assert hist(live, LATER[:7], _marker(tmp_path / "s.json", fp=trace_viz.code_fingerprint(t), schema="x")) is True
+    assert hist(live, LATER[:7], _marker(tmp_path / "e.json", build="c" * 40, fp=trace_viz.code_fingerprint(t))) is True
+    assert hist(live, LATER[:7], _marker(tmp_path / "f.json", fp="zz")) is True  # malformed fingerprint
+    (t / "vera/x.py").write_text("v=2")
+    assert hist(live, LATER[:7], good) is True                           # application code changed: historical
+
+
+def _eq_app(pub, marker, root):
+    import functools
+    from vera import trace_viz as tv
+    from vera.trace_eval.ui import render_trace_eval
+    orig = tv.public_view
+    tv.public_view = functools.partial(orig, commit="d" * 40, publication_path=marker, code_root=root,
+                                       historical_path="/nonexistent/h.json", offline_path="/nonexistent/o.json")
+    try:
+        render_trace_eval("/nonexistent/r.json", "/nonexistent/v.json", pub)
+    finally:
+        tv.public_view = orig
+
+
+def test_page_results_only_commit_current_with_build_lines(tmp_path):
+    t = _tree(tmp_path / "t")
+    pub = {"schema": trace_viz.SCHEMA, "variants": {"baseline": {"per_check": {}}}, "n_questions": 1, "n_traces": 1,
+           "n_errors": 0, "run_meta": {"mode": "live", "offline": False, "deployed_version": RUN, "commit": RUN}}
+    (tmp_path / "pub.json").write_text(json.dumps(pub))
+    _marker(tmp_path / "m.json", fp=trace_viz.code_fingerprint(t))
+    v = trace_viz.public_view(public_path=tmp_path / "pub.json", commit=LATER, publication_path=tmp_path / "m.json",
+                              code_root=t, historical_path=tmp_path / "h.json", offline_path=tmp_path / "o.json")
+    assert v["historical"] is False and v["run_build"] == RUN[:7] and v["build"] == LATER[:7]
+    (t / "main.py").write_text("changed app")
+    v = trace_viz.public_view(public_path=tmp_path / "pub.json", commit=LATER, publication_path=tmp_path / "m.json",
+                              code_root=t, historical_path=tmp_path / "h.json", offline_path=tmp_path / "o.json")
+    assert v["historical"] is True
+    (t / "main.py").write_text("app")
+    at = AppTest.from_function(_eq_app, args=(str(tmp_path / "pub.json"), str(tmp_path / "m.json"), str(t)), default_timeout=30).run()
+    text = "\n".join([*(c.value for c in at.caption), *(w.value for w in at.warning)])
+    assert not at.exception and "HISTORICAL" not in text
+    assert f"Run build {RUN[:7]} (deployed build {LATER[:7]}; application code unchanged since the run build)" in text

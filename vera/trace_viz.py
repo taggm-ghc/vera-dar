@@ -3,6 +3,7 @@
 Public tier: aggregates and structure only, from a closed allowlist of fields. Private tier: per-trace detail, served only
 by the API behind VERA_TRACE_VIZ_KEY (X-Viz-Key). Nothing here reads a database, the network or a secret file.
 """
+import hashlib
 import hmac
 import json
 import math
@@ -25,6 +26,16 @@ PUBLIC_PATH = ROOT / "eval_results" / "trace_eval_public.json"
 HISTORICAL_PATH = ROOT / "eval_results" / "trace_eval_historical_public.json"
 OFFLINE_PATH = ROOT / "eval_results" / "trace_eval_offline_public.json"
 SCHEMA = "vera-trace-public-v1"
+# P0-4: a results-only publication commit keeps a run current only when the application code is provably unchanged.
+PUBLICATION_PATH = ROOT / "eval_results" / "trace_eval_publication.json"
+PUBLICATION_SCHEMA = "vera-trace-publication-v1"
+# Behaviour-determining files present in the runtime image (Dockerfile `COPY . .` minus .dockerignore). Excludes
+# eval_results/, tests/, docs/, scripts/ and env/host templates, so publishing results never changes the fingerprint.
+FP_FILES = ("main.py", "streamlit_app.py", "start.sh", "requirements.txt")
+FP_DIRS = ("vera", "pages", "safety", "config", ".streamlit")
+_FP_SKIP_DIRS = {"__pycache__", "bundle", "bundles", "env"}  # config/env/ holds env files: never read
+_FP_SKIP = re.compile(r"(\.py[cod]$|\.log$|:Zone\.Identifier$|\.meta\.json$|\.SHA256SUMS$|^manifest-filled|-prv(\.|$)|^\.env|"
+                      r"^live-hosts)")
 FAIL_LIMIT, FAIL_WINDOW_S = 10, 600  # failed key attempts per client per window before 429 (generic)
 
 _STAGE_ORDER = ("A1_citation_present", "A2_citations_resolve", "A3_numbers_grounded", "A4_phantom_evidence",
@@ -186,16 +197,61 @@ def run_build(meta: dict | None) -> str:
     return "unknown"
 
 
-def is_historical(meta: dict | None, deployed_build: str) -> bool:
-    """HISTORICAL unless the run's build is known and equals the deployed build (an unknown on either side is historical)."""
+def is_historical(meta: dict | None, deployed_build: str, publication=None, code_root=None) -> bool:
+    """HISTORICAL unless the run's build is known and equals the deployed build (an unknown on either side is historical),
+    or, for a later results-only commit, the publication marker proves the deployed code equals the evaluated code."""
     if (meta or {}).get("offline"):
         return True  # an offline fixture run evaluates no deployed build
     rb = run_build(meta)
-    return rb == "unknown" or deployed_build == "unknown" or rb != deployed_build
+    if rb == "unknown" or deployed_build == "unknown":
+        return True
+    return rb != deployed_build and not _same_code(meta, publication, code_root)
+
+
+def _fp_paths(root: Path) -> list[str]:
+    out = [f for f in FP_FILES if (root / f).is_file() and not (root / f).is_symlink()]
+    for d in FP_DIRS:
+        for dp, dns, fns in os.walk(root / d):  # os.walk does not follow directory symlinks
+            dns[:] = [n for n in dns if n not in _FP_SKIP_DIRS and not n.endswith("-prv")]
+            for n in fns:
+                f = Path(dp) / n
+                rel = f.relative_to(root).as_posix()
+                if _FP_SKIP.search(n) or (Path(dp).name == "texts" and n.endswith(".txt")) or f.is_symlink() or not f.is_file():
+                    continue
+                out.append(rel)
+    return sorted(out)
+
+
+def code_fingerprint(root=None) -> str:
+    """sha256 over the sorted (relative path, file sha256) of the behaviour-determining files under `root` (FP_FILES,
+    FP_DIRS). Deterministic; identical for a clean checkout of a commit and that commit's runtime image. Publisher:
+    python -I -c "from vera.trace_viz import code_fingerprint; print(code_fingerprint('.'))" """
+    root = Path(root or ROOT).resolve()
+    h = hashlib.sha256(b"vera-code-fp-v1\n")
+    for rel in _fp_paths(root):
+        h.update(rel.encode("utf-8") + b"\0" + hashlib.sha256((root / rel).read_bytes()).hexdigest().encode() + b"\n")
+    return h.hexdigest()
+
+
+def _same_code(meta: dict | None, publication, code_root) -> bool:
+    """True only if a valid publication marker names this run's build and its code fingerprint equals ours. Any doubt: False."""
+    try:
+        m = _load(publication or PUBLICATION_PATH)
+        if not m or m.get("schema") != PUBLICATION_SCHEMA:
+            return False
+        eb, fp = str(m.get("evaluated_build") or ""), str(m.get("code_fingerprint") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", eb) or not re.fullmatch(r"[0-9a-f]{64}", fp):
+            return False
+        rv = next((str(meta[k]).lower() for k in ("deployed_version", "commit") if (meta or {}).get(k) not in (None, "", "unknown")), "")
+        if not re.fullmatch(r"[0-9a-f]{7,40}", rv) or not (eb == rv if len(rv) == 40 else eb.startswith(rv)):
+            return False
+        return hmac.compare_digest(code_fingerprint(code_root), fp)
+    except Exception:  # noqa: BLE001 - unreadable tree or marker: cannot establish equivalence
+        return False
 
 
 def public_view(results_path=None, validation_path=None, public_path=None, commit: str | None = None,
-                historical_path=None, offline_path=None) -> dict:
+                historical_path=None, offline_path=None, publication_path=None, code_root=None) -> dict:
     """Always returns a dict with the structure and a `status`. Source order for `run`: the newest published run file, then a
     local results file, then the shipped historical file; if none exist the method and validation sections still render."""
     from vera.version_info import deployed_commit, short_commit
@@ -222,7 +278,7 @@ def public_view(results_path=None, validation_path=None, public_path=None, commi
     off = _load(off_p)
     off = _project(off) if off and off.get("schema") == SCHEMA else None
     return {"schema": SCHEMA, "status": "ok" if summary else "no_run_results", "build": build, "source": source,
-            "run_build": run_build(meta), "historical": (True if source == "historical_file" else is_historical(meta, build)) if summary else None,
+            "run_build": run_build(meta), "historical": (True if source == "historical_file" else is_historical(meta, build, publication_path, code_root)) if summary else None,
             "stages": stage_flow(), "run": summary, "run_file_date": src_date if summary else None, "offline_suite": off,
             "check_validation": _validation_public(val), "validation_file_date": _date(val_p) if val else None}
 
