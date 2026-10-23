@@ -56,6 +56,8 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-PREPRINT_NOT_PERMITTED": "licence_rejected",
     "R-LIC-REJECT": "licence_rejected", "R-LIC-HOLD": "licence_rejected",
     "R-LIC-MISMATCH": "licence_rejected",
+    "R-ACQ-ARXIV_LICENCE_HOLD": "licence_rejected",  # ARX-A2 (INTEG-1023): arXiv default/unknown licence held
+    "R-ACQ-ARXIV_HTML_POLICY": "licence_rejected",  # ARX-A2 (INTEG-1023): refused at the current gate (D-ARX-1 pending)
     # provenance / identity / integrity
     "R-ACQ-IDENTITY_MISMATCH": "provenance_rejected",
     "R-ACQ-DUPLICATE": "provenance_rejected",
