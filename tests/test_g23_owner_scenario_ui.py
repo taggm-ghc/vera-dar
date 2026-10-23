@@ -22,6 +22,7 @@ WANT_TEXT = {"nd": "The licence does not permit reuse of the full text.", "nooa"
              "unr": "Source unreachable.", "fail": "Not relevant enough to your question."}   # literals, not read from the panel
 TITLES = {"nd": "Owner Cand One ND", "nooa": "Owner Cand Two NoOA", "unr": "Owner Cand Three Unreachable",
           "fail": "Owner Cand Four Irrelevant"}
+LISTED = ("nd", "nooa", "unr")  # DDFIX-1023/INTEG item 6: "fail" (R-ACQ-IRRELEVANT) is no longer listed
 NINE = tuple((f"syn_c{i}", "clim" if i % 2 else "repro", f"10.9999/syn.c{i}") for i in range(9))
 
 
@@ -71,7 +72,9 @@ def test_owner_scenario_abstains_with_nine_inspected_zero_admitted_four_not_acqu
     exam = body["examined_full_documents"]
     assert len(exam) == 9 and sum(d["admitted_spans"] for d in exam) == 0           # 9 stored documents inspected, 0 passages admitted
     assert rig.store.plans == [] and not rig.h.answer_calls                      # nothing stored, the writer never ran
-    assert len(body["candidates"]) == 4 and all(c["acquisition"] == "not_acquired" for c in body["candidates"])
+    # DDFIX-1023/INTEG item 6 (owner 2026-10-23): the R-ACQ-IRRELEVANT record is not listed while relevant ones remain
+    assert len(body["candidates"]) == 3 and all(c["acquisition"] == "not_acquired" for c in body["candidates"])
+    assert TITLES["fail"] not in json.dumps(body["candidates"])
     disc = disc_entries(mock.Mock(contract=body["contract"]))
     assert len(disc) == 4 and all(e["outcome"] in ("rejected", "deferred") and e.get("reason") for e in disc), disc
 
@@ -94,16 +97,17 @@ def test_owner_scenario_ui_each_of_the_four_has_its_own_reason_not_banner_only(r
     st = mock.MagicMock()
     dp.render_discovery(st, body)
     rows = _rows(st)
-    assert len(rows) == 4
+    assert len(rows) == 3  # DDFIX-1023/INTEG item 6: the irrelevant record is not listed
+    assert not [r for r in rows if TITLES["fail"] in r[0]]
     reasons = {}
-    for k in TITLES:
+    for k in LISTED:
         (row,) = [r for r in rows if TITLES[k] in r[0]]
         want = WANT_TEXT[k]
         assert dp._reason_line(by_url[f"https://doi.org/{DOIS[k]}"]) == want      # panel maps this entry to the literal text
         assert want != dp.REASON_GENERIC
         assert any(want in c for c in row[1]), (k, want, row)           # in THIS candidate's own caption
         reasons[k] = want
-    assert len(set(reasons.values())) == 4                                   # distinct causes are distinguishable
+    assert len(set(reasons.values())) == 3                                   # distinct causes are distinguishable
     text = json.dumps(st.method_calls)
     assert not re.search(r"R-ACQ-|R-LIC-|PMC\d{5,}|%s" % ABSTRACT_SENTINEL, text)
 
@@ -113,9 +117,10 @@ def test_owner_scenario_ui_apptest_renders_reasons_and_leaks_nothing(rig, monkey
     at = _app(monkeypatch, body)
     assert not at.exception
     main_t = " | ".join([m.value for m in at.markdown] + [c.value for c in at.caption] + [i.value for i in at.info] + [w.value for w in at.warning])
-    for k in TITLES:
+    for k in LISTED:
         assert TITLES[k] in main_t
         assert WANT_TEXT[k] in main_t, k
+    assert TITLES["fail"] not in main_t  # DDFIX-1023/INTEG item 6
     assert not re.search(r"R-ACQ-|R-LIC-|PMC\d{5,}|%s" % ABSTRACT_SENTINEL, main_t)
     assert main_t.count(dp.REASON_GENERIC) == 0
     side = " | ".join([m.value for m in at.sidebar.markdown] + [c.value for c in at.sidebar.caption])

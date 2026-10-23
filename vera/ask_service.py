@@ -132,6 +132,8 @@ def request_budget() -> RequestBudget:
 # chain loop and every provider attempt see the SAME deadline and inline flag without changing any signature.
 REQUEST_BUDGET: contextvars.ContextVar = contextvars.ContextVar("cmf_request_budget", default=None)
 _QUESTION: contextvars.ContextVar = contextvars.ContextVar("port_p2_question", default=None)  # PORT-P2: query hash only
+# DDFIX-1023/INTEG item 6: this request's inline-acquisition outcome (its R-ACQ-IRRELEVANT marks), reset per request
+_INLINE_OUT: contextvars.ContextVar = contextvars.ContextVar("ddfix_inline_outcome", default=None)
 
 
 # Post-inline LLM calls that can follow an inline search, per the auto_acquire.json _calibration_note: one answer writer,
@@ -173,6 +175,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
+    _INLINE_OUT.set(None)
     _QUESTION.set(question)  # PORT-P2: the discovery recorder hashes it (text never stored)
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
@@ -211,6 +214,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         # list AND keeps P1.7's background acquisition trigger (same trig as the refusal would carry). The list itself
         # never admits anything (sources=()); acquired documents never answer a declined question unless
         # override_layer2_declines is true (ships false).
+        _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
         off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
         if off is not None:
             if not trig:
@@ -268,6 +272,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                     return _research_on_insufficient(inl, ev, acq, info.get("outcome"), answered=True)
                 inline_note = inl
                 ia = info.get("outcome") or {}
+    _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     out = replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
@@ -484,11 +489,11 @@ def _offtopic_reading_list(decision, grounding):
 
         profile = sr.offtopic_openalex_profile()
         tok = search_providers.OPENALEX_PROFILE.set(profile)  # RL-REL-1021 (None = unchanged)
-        cands = public_candidates(sources_fn(restricted=True) or [])
+        cands = public_candidates(_relevant(sources_fn(restricted=True) or [], _QUESTION.get()))
         if not cands and profile is not None:  # RL-REL-1021-B: AND query empty -> ONE more call, old OR query, off-topic only
             search_providers.OPENALEX_PROFILE.reset(tok)
             tok = search_providers.OPENALEX_PROFILE.set(None)
-            cands = public_candidates(sources_fn(restricted=True) or [])
+            cands = public_candidates(_relevant(sources_fn(restricted=True) or [], _QUESTION.get()))
     except Exception as exc:  # noqa: BLE001  (fail closed: the fixed refusal; class only in the log)
         import logging
 
@@ -501,6 +506,13 @@ def _offtopic_reading_list(decision, grounding):
     res = contract.reading_list_result(cands, decision.tokens_used, decision.cost_usd, accepted=False)
     return replace(res, answer=notice if cands else f"{notice} {res.answer}", sources=(),
                    contract={**(res.contract or {}), "offtopic": True})
+
+
+def _relevant(sources, question=None) -> list:
+    """DDFIX-1023/INTEG item 6: the reading list without the records this request's inline acquisition marked
+    R-ACQ-IRRELEVANT (grounded_ask.drop_irrelevant). Unchanged when none would remain or nothing was marked."""
+    from vera.grounded_ask import drop_irrelevant
+    return drop_irrelevant(sources, _INLINE_OUT.get())
 
 
 def _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=None,
@@ -516,6 +528,7 @@ def _reading_list(question, model, pricing, decision, chained, grounding, contra
         return contract.reading_list_result((), tokens, cost, empty_text=cfg.get("no_sources_text"))
     from vera.grounded_ask import public_candidates
 
+    sources = _relevant(sources, question)  # DDFIX-1023/INTEG item 6 (never empties a non-empty list)
     candidates = public_candidates(sources)
     if contract.result_kind_for(candidates) == "answer":  # unreachable: dict candidates never satisfy the L3 seam
         return _answer_grounded(question, model, pricing, sources, cfg, decision, chained)  # (only a grounded

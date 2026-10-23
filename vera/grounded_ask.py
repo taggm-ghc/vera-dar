@@ -330,6 +330,47 @@ def count_valid_citations(answer: str, n_sources: int) -> int:
 
 
 STORED_CANDIDATE_FIELDS = ("span", "span_id", "disposition", "canonical_source_id", "source_id", "admission_passed")
+def _keys_of(r: dict) -> set:
+    """URL (trailing slash dropped) and lower-case DOI identity keys of a record or an inline-acquisition entry."""
+    out = set()
+    ids = r.get("ids") if isinstance(r.get("ids"), dict) else {}
+    for u in (r.get("url"), r.get("discovered_url"), ids.get("url")):
+        if isinstance(u, str) and u.strip():
+            out.add(("url", u.strip().rstrip("/")))
+    for d in (r.get("doi"), ids.get("doi")):
+        if isinstance(d, str) and d.strip():
+            out.add(("doi", d.strip().lower()))
+    return out
+
+
+def irrelevant_marks(inline, code: str = "R-ACQ-IRRELEVANT") -> set:
+    """Identity keys of every inline-acquisition entry (discovered + candidates) whose reason is R-ACQ-IRRELEVANT."""
+    out: set = set()
+    if not isinstance(inline, dict):
+        return out
+    for e in [*(inline.get("discovered") or ()), *(inline.get("candidates") or ())]:
+        if isinstance(e, dict) and str(e.get("reason") or "") == code:
+            out |= _keys_of(e)
+    return out
+
+
+def drop_irrelevant(sources, inline=None) -> list:
+    """DDFIX-1023/INTEG item 6 (owner objected to unrelated records in the reading list): remove every record this
+    request's inline acquisition marked R-ACQ-IRRELEVANT (pre-fetch relevance drop or full-text admission), matched by
+    URL or DOI, but ONLY when at least one other record remains; otherwise the list is returned unchanged. Stored-corpus
+    items are never removed. Keys on the recorded status only (no separate judgement here). Never raises (fails open to
+    the input list: the previous behaviour)."""
+    srcs = [s for s in sources or () if isinstance(s, dict)]
+    try:
+        marks = irrelevant_marks(inline)
+        if not marks:
+            return srcs
+        keep = [s for s in srcs if s.get("span") or s.get("in_corpus") or not (_keys_of(s) & marks)]
+        return keep if keep else srcs
+    except Exception:  # noqa: BLE001
+        return srcs
+
+
 PUBLIC_CANDIDATE_FIELDS = ("n", "title", "url", "published", "identifier", "provider", "licence_decision")
 
 
