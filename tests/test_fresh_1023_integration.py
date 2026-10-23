@@ -51,7 +51,7 @@ def test_incomplete_coverage_never_claims_all_portals():
 def test_budget_refusal_is_reported_not_equated_with_no_research():
     rec = rr.summarize(triggers=["stale"], inline={"status": "rate"}, used_new=False, older_available=True,
                        fr_before=None)
-    assert rec["kind"] == "incomplete_search" and "budget" in rec["user_text"]
+    assert rec["kind"] == "incomplete_search" and "limit on new searches" in rec["user_text"]  # P0DTA-DIAG: explicit quota sentence
     assert "found no qualifying" not in rec["user_text"]
 
 

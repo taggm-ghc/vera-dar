@@ -490,7 +490,7 @@ def test_d7_whole_fetch_wall_clock_limit_and_response_closed():
     d = A.deps([A.cand(DOI)], web)
     out = auto_acquire.run_job(A.job(), A.cfg(job_deadline_s=10_000, fetch_timeout_s=20), d,
                                clock=lambda: float(next(t)), env=A.ENV_ON)
-    assert out["stored"] == 0 and out["codes"].get("R-ACQ-DEADLINE") == 1 and closed == [True]
+    assert out["stored"] == 0 and out["codes"].get("R-ACQ-FETCH_TIMEOUT") == 1 and closed == [True]
 
 
 

@@ -39,6 +39,9 @@ REASON_TEXT = {
     "R-ACQ-UNREACHABLE": "Source unreachable.",
     "R-ACQ-RATELIMITED": "Source temporarily unavailable (too many requests).",
     "R-ACQ-DEADLINE": "Not checked in time.",
+    "R-ACQ-FETCH_TIMEOUT": "Source unreachable.",  # P0DTA-DIAG: the per-fetch wall clock
+    "R-ACQ-DOC_BUDGET": "Not checked: the limit on documents read for one request was reached.",
+    "R-ACQ-CRAWL_DELAY": "Not checked in time: the source asks crawlers to wait.",
     "R-ACQ-HOST": "Blocked by network safety check.",
     "R-ACQ-ROBOTS": "Blocked by network safety check.",
     "R-ACQ-CYCLE": "Blocked by network safety check.",

@@ -515,7 +515,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
 
     def late():
         if clock() > end:
-            raise _Stop(acq_config.reason(cfg, "deadline"))
+            # P0DTA-DIAG: status recording only. The request/job deadline stays "deadline"; the per-fetch wall clock
+            # (timeout_s) is its own code, so a slow source is not reported as the search budget running out.
+            raise _Stop(acq_config.reason(cfg, "deadline" if deadline is not None and clock() > deadline
+                                          else "fetch_timeout"))
 
     current, hops, resp = url, 0, None
     visited = set()
@@ -830,9 +833,11 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
         isbn = candidate_isbn(c)
         keys = doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn"))
         if ident in seen or keys & served:
-            count(acq_config.reason(cfg, "in_corpus"))
+            # P0DTA-DIAG: an in-request duplicate is R-ACQ-DUPLICATE; only a served/stored match is R-ACQ-KNOWN
+            dup = acq_config.reason(cfg, "duplicate" if ident in seen else "in_corpus")
+            count(dup)
             if drops is not None:
-                drops[id(c)] = acq_config.reason(cfg, "in_corpus")
+                drops[id(c)] = dup
             continue
         seen.add(ident)
         ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos))

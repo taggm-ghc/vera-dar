@@ -131,6 +131,11 @@ def _send_question(question: str, force_bad: bool) -> None:
                     _rs = (data.get("contract") if isinstance(data.get("contract"), dict) else {}).get("research")
                     if isinstance(_rs, dict) and isinstance(_rs.get("user_text") or _rs.get("summary"), str) and (_rs.get("user_text") or _rs.get("summary")).strip():
                         st.caption("**Research outcome:** " + plain(_rs.get("user_text") or _rs.get("summary")))  # FRESH-1023 C3
+                    _dc = _rs.get("diag_status_counts") if isinstance(_rs, dict) else None  # P0DTA-DIAG: aggregate counts only
+                    if isinstance(_dc, dict) and any(isinstance(v, int) and v > 0 for v in _dc.values()):
+                        from vera.research_outcome import DIAG_LABELS
+                        st.caption("**Sources found:** " + "; ".join(f"{int(_dc[k])} {lab}" for k, lab in DIAG_LABELS.items()
+                                                                  if isinstance(_dc.get(k), int) and _dc[k] > 0))
 
                 # Display metrics
                 st.markdown("### 💰 Metrics")

@@ -379,7 +379,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
     visited, cur, hops = set(), url, 0
     while True:
         if clock() > end:
-            raise aa._Stop(acq_config.reason(acq, "deadline"))
+            raise aa._Stop(acq_config.reason(acq, "deadline" if deadline is not None and clock() > deadline
+                                                 else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
         if not _host_ok(cur, hosts):
             raise aa._Stop(acq_config.reason(acq, "host"))
         ok = check(cur)
@@ -425,7 +426,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                 if size > max_bytes:
                     raise aa._Stop(acq_config.reason(acq, "too_large"))
                 if clock() > end:
-                    raise aa._Stop(acq_config.reason(acq, "deadline"))
+                    raise aa._Stop(acq_config.reason(acq, "deadline" if deadline is not None and clock() > deadline
+                                                 else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
                 buf.append(chunk)
             return b"".join(buf), cur, resp.status_code
         finally:

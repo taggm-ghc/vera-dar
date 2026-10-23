@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 
 from vera import acq_config, rate_limit
 from vera import auto_acquire as aa
-from vera import search_providers
+from vera import research_outcome, search_providers
 
 logger = logging.getLogger("vera.autoacq")
 
@@ -100,6 +100,8 @@ class Outcome:
                 **({"discovered": [dict(d) for d in self.discovered]} if self.discovered is not None else {}),
                 **({"portals": [dict(d) for d in self.portals]} if self.portals is not None else {}),
                 **({"candidates": [dict(d) for d in self.candidates]} if self.candidates is not None else {}),  # PMCID-PUBLIC-1023
+                **({"diag_status_counts": research_outcome.diag_counts(self.candidates)}
+                   if self.candidates is not None else {}),  # P0DTA-DIAG: aggregate per status
                 **({"background": dict(self.background)} if self.background is not None else {})}
 
     @property
@@ -255,6 +257,8 @@ def _transient(acq, code) -> bool:
     c = str(code or "")
     if c in {acq_config.reason(acq, k) for k in ("unreachable", "rate_limited", "deadline", "crawl_delay")}:
         return True
+    if c == acq_config.reason(acq, "fetch_timeout"):  # P0DTA-DIAG: the per-fetch wall clock (was R-ACQ-DEADLINE)
+        return True
     return c.startswith("R-ACQ-ERR-") and any(w in c for w in ("Timeout", "Connection"))
 
 
@@ -354,15 +358,29 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             for r in st["recs"]:
                 if r["outcome"] is None:
                     r["outcome"] = "not_evaluated"
-                    r["reason"] = acq_config.reason(acq, "deadline") if late else acq_config.reason(acq, "defer_cap")
+                    r["reason"] = r.pop("skip", None) or (  # P0DTA-DIAG: the reason recorded at the skip; else legacy flag
+                        acq_config.reason(acq, "deadline") if late else acq_config.reason(acq, "defer_cap"))
+            # P0DTA-DIAG: one terminal status per candidate (status only)
+            for r in st["recs"]:
+                research_outcome.annotate_diag(r)
             o.background = _continue(question, acq, env, clock, st["recs"], st["cands"], deps_factory)  # CONT-1023
             o.candidates = [dict(r) for r in st["recs"]]
+        if disc is not None and disc[1]:  # P0DTA-DIAG: held discovered records (preprint, no identifier) are candidates too
+            held = [research_outcome.annotate_diag({
+                "portal": h.get("service"), "doi": None, "pmcid": None, "openalex_id": None, "arxiv_id": None,
+                "url": h.get("url") or None, "record_id": h.get("record_id"), "published": None,
+                "outcome": h.get("outcome"), "reason": h.get("reason"), "found_by": [h.get("service")], "held": True})
+                for h in disc[1]]
+            o.candidates = (o.candidates or []) + held
         if disc is not None:
             o.discovered = [entries.get(id(c)) or {**c["discovery"], "outcome": "not_reached"} for c in disc[0]] + \
                 [dict(h) for h in disc[1]]
             if disc[1]:
                 for h in disc[1]:
                     count(h["reason"])
+            # P0DTA-DIAG: same status vocabulary on the discovered entries
+            for d in o.discovered:
+                research_outcome.annotate_diag(d)
         ms["total"] = int((clock() - t0) * 1000)
         o.codes, o.ms = dict(sorted(codes.items())), ms
         aa._log("inline", status=o.status, admitted=o.admitted, stored=o.stored, persist_failed=o.persist_failed,
@@ -452,8 +470,11 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         fresh_budget = max(0, min(budget, job_max - len(reused[0])))
         t = clock()
         per: dict = {}  # FRESH-1023 C3: always collected (per-candidate records); entries stay disc-only
+        sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
         plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,
-                                   ms, per=per) if fresh_budget > 0 else []
+                                   ms, per=per, skips=sk) if fresh_budget > 0 else []
+        if fresh_budget <= 0:  # nothing evaluated: the daily document quota (budget 0) or the per-job document limit
+            sk.update({i: acq_config.reason(acq, "daily_cap" if budget <= 0 else "doc_budget") for i in range(len(ranked))})
         by_plan: dict = {}
         kept_ids = {id(p) for p in plans}
         rec_plan: dict = {}
@@ -461,6 +482,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             rc = rec_by.get(id(r[2]))
             got = per.get(i)
             if rc is None or got is None:
+                if rc is not None and i in sk:
+                    rc["skip"] = sk[i]
                 continue  # unfinished: done() marks it not_evaluated
             if isinstance(got, str):
                 rc["outcome"], rc["reason"] = "rejected", got
@@ -637,7 +660,7 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
 
 
 def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms,
-                       per: dict | None = None) -> list:
+                       per: dict | None = None, skips: dict | None = None) -> list:
     """Every ranked candidate through the job's evaluate stage in a small pool; per-document timeout capped by the
     inline deadline; stops at `budget` admitted documents. Returns the admitted row plans (rank order). per (P0-5,
     flag on only): filled with rank index -> plan or reason code for each finished evaluation."""
@@ -645,6 +668,8 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
     if not ranked or clock() >= deadline:
         if ranked:
             count(acq_config.reason(acq, "deadline"))
+            if skips is not None:
+                skips.update({i: acq_config.reason(acq, "deadline") for i in range(len(ranked))})
         return []
     per_doc = _b(acq, "per_doc_timeout_s", 25)
     pool = ThreadPoolExecutor(max_workers=max(1, int(_b(acq, "fetch_workers", 4))), thread_name_prefix="vera-inline")
@@ -689,6 +714,9 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
                     got[idx] = plan
                 else:
                     count(code)
+        if pending and skips is not None:  # P0DTA-DIAG: per-candidate skip reason at the moment of stopping
+            why = acq_config.reason(acq, "doc_budget" if len(got) >= budget else "deadline")
+            skips.update({i: why for i in range(len(ranked)) if i not in (per or {})})
         if pending and len(got) < budget:
             count(acq_config.reason(acq, "deadline"))
     finally:

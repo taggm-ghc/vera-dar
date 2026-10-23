@@ -137,11 +137,19 @@ def _terminal(c: dict) -> str:
     o = c.get("outcome")
     if o in ("admitted", "reused"):
         return "admitted"
-    if o in ("not_evaluated", "not_used"):
-        return "budget_exhausted"
+    if o == "not_used":  # P0DTA-DIAG: passed the checks but the per-request document limit was reached first
+        return "doc_budget_reached"
+    if o == "not_evaluated":  # P0DTA-DIAG: the recorded stop reason, each with its own terminal reason
+        k = ro.skip_class(c.get("reason"))
+        return k if k and k not in ("fetch_timeout", "crawl_delay") else "budget_exhausted"
     if o == "queued_background":  # CONT-1023: unfinished in this request, handed to the background queue
         return "queued_background"
     return ro.reason_from_code(c.get("reason"))
+
+
+_SKIP_CAUSE = {"deadline_reached": "deadline_reached", "candidate_cap": "candidate_cap",
+               "doc_budget_reached": "doc_budget_reached", "quota": "job_quota", "fetch_timeout": "fetch_timeout",
+               "crawl_delay": "crawl_delay"}
 
 
 def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_available: bool, fr_before: dict | None,
@@ -159,14 +167,30 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
     # DDGFIX-1023 DF-4: a candidate queued because its source could not be reached (unreachable, rate-limited,
     # transport error) has that cause, not "the search budget ran out"; URL-only ones have the awaiting_route cause.
     unreachable = [o for o in outs if o.terminal_reason == "queued_background" and ro.queued_unreachable(o.detail)]
-    budget = (status in _BUDGET_STATUSES or any(p.get("status") in ("skipped_budget", "not_attempted") for p in raw_portals)
+    # P0DTA-DIAG: specific stop causes. A queued candidate keeps why it was unfinished in .detail.
+    extra: list = []
+    for o in outs:
+        k = ro.skip_class(o.detail) if o.terminal_reason == "queued_background" else \
+            (o.terminal_reason if o.terminal_reason in _SKIP_CAUSE else None)
+        if k in _SKIP_CAUSE and _SKIP_CAUSE[k] not in extra:
+            extra.append(_SKIP_CAUSE[k])
+    if status in ("rate", "daily_cap") and "job_quota" not in extra:  # the quota refused the whole run: say so
+        extra.append("job_quota")
+    if status == "deadline" and "deadline_reached" not in extra:
+        extra.append("deadline_reached")
+    if status in ("busy", "budget_unknown") and status not in extra:  # each gets its own truthful sentence
+        extra.append(status)
+    budget = (status in _BUDGET_STATUSES - {"rate", "daily_cap", "deadline", "busy", "budget_unknown"}
+              or any(p.get("status") in ("skipped_budget", "not_attempted") for p in raw_portals)
               or any(o.terminal_reason == "budget_exhausted" or (o.terminal_reason == "queued_background"  # CONT-1023
-                     and ro.reason_from_code(o.detail) != "no_route" and o not in unreachable) for o in outs))
+                     and ro.skip_class(o.detail) is None and ro.reason_from_code(o.detail) != "no_route"
+                     and o not in unreachable) for o in outs))
     if not triggers:
         kind, text, complete, detail = "not_needed", "", False, {}
     else:
         res = ro.summarize_outcome(attempts, outs, budget_exhausted=budget, older_evidence_available=older_available,
-                                   new_evidence_admitted=used_new, source_unreachable=bool(unreachable))
+                                   new_evidence_admitted=used_new, source_unreachable=bool(unreachable),
+                                   extra_causes=extra)
         kind, text, complete, detail = res.kind, res.user_text, res.complete, res.report_detail
         if answer_failed and failed_text:
             text = f"{failed_text} {text}".strip()
@@ -176,6 +200,7 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
                              n_results=int(p.get("n_results", p.get("results")) or 0)) for p in raw_portals],
             "candidates": [_public_cand(dict(c, candidate_id=o.candidate_id, ids=dict(o.ids),
                                              terminal_reason=o.terminal_reason)) for c, o in zip(cands, outs)],
+            "diag_status_counts": ro.diag_counts(cands),  # P0DTA-DIAG: aggregate per status (UI shows only this)
             "report_detail": detail, "freshness": {"before": _public_fr(fr_before), "after": _public_fr(fr_after)},
             "citations": list(citations or []),
             **({"corpus_added_backfill": backfill} if backfill else {})}
@@ -201,4 +226,5 @@ def public_fields(rec: dict | None) -> dict:
             "research_outcome": {"kind": rec.get("kind"), "user_text": rec.get("user_text") or "",
                                  "complete": bool(rec.get("complete")), "portals": list(rec.get("portals") or []),
                                  "candidates": list(rec.get("candidates") or []),
+                                 "diag_status_counts": dict(rec.get("diag_status_counts") or {}),
                                  "citations": list(rec.get("citations") or [])}}

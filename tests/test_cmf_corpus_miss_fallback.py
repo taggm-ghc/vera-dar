@@ -175,8 +175,8 @@ def test_B_eligible_doi_jats_candidate_is_resolved_and_acquired(inline_env):
 
 
 # ------------------------------------------------------------------------------------------------ E: per-candidate status
-STATUSES = {"inaccessible", "unlicensed", "unsupported_format", "irrelevant", "admitted"}
-PREFILTER_OK = STATUSES | {"prefilter_skipped", "duplicate", "already_stored"}  # SEAM-TBD(D2): names of skip statuses
+from vera import research_outcome as _ro  # noqa: E402  (P0DTA-DIAG: the status vocabulary is research_outcome.DIAG_STATUSES)
+STATUSES = set(_ro.DIAG_STATUSES)
 
 
 def _ident(c):
@@ -184,7 +184,6 @@ def _ident(c):
 
 
 # level: L2
-@pytest.mark.xfail(reason="RED: Outcome.public() carries no per-candidate list (inline_acquire.py:87-91)", strict=False)
 def test_E_every_candidate_gets_exactly_one_terminal_status_with_reason(inline_env):
     from tests import fulltext_synth as fs
     dois = {n: f"10.9999/cmf.e{n}" for n in range(1, 8)}
@@ -200,14 +199,24 @@ def test_E_every_candidate_gets_exactly_one_terminal_status_with_reason(inline_e
     cands = [A.cand(dois[n]) for n in range(1, 6)] + [A.cand(dois[1]),          # 6 duplicate of 1 (dedup skip)
                                                       {"title": "no identifier", "url": "https://x.org/a", "snippet": "s"}]  # 7 prefilter skip
     out, _ = _acquire(inline_env, cands, web)
-    listed = out.public().get("candidates")
+    pub = out.public()
+    listed = pub.get("candidates")
     assert isinstance(listed, list) and len(listed) == len(cands), "one entry per candidate, skips included"
     for e in listed:
-        st = e.get("status") or e.get("outcome")  # SEAM-TBD(D2): key name
-        assert st in PREFILTER_OK and e.get("reason"), e
-    by = {_ident(e): (e.get("status") or e.get("outcome")) for e in listed}
-    assert by[dois[1]] == "admitted" and by[dois[2]] == "unlicensed" and by[dois[3]] == "inaccessible"
-    assert by[dois[4]] == "irrelevant" and by[dois[5]] == "unsupported_format"
+        assert e.get("status") in STATUSES and e.get("status_reason") and e.get("public_id"), e
+    assert sum(pub["diag_status_counts"].values()) == len(cands)
+    # real vocabulary: the pipeline's outcome + R-code, with the diagnostic status / stage derived from them
+    row = [(e["outcome"], e["reason"], e["status"], e["stage"]) for e in listed]
+    assert row[0] == ("admitted", None, "admitted", "admission")
+    assert row[1][:1] == ("rejected",) and row[1][1].startswith("R-LIC") and row[1][2:] == ("fetched_rejected", "licence")
+    # rows 2, 4, 6 are deterministic here (fakes, no clock): a 404 is unreachable and queued for the background worker
+    assert listed[2]["status_reason"] == "fetch_failed"
+    assert row[2] == ("queued_background", "R-ACQ-UNREACHABLE", "fetched_rejected", "fetch")                # no JATS (404)
+    assert row[3] == ("rejected", "R-ACQ-IRRELEVANT", "acquired_not_admitted", "relevance")
+    assert row[4] == ("rejected", "R-ACQ-CONVERT", "fetched_rejected", "fetch")                              # PDF served
+    assert listed[4]["status_reason"] == "extraction_failed"
+    assert row[5] == ("dropped", "R-ACQ-DUPLICATE", "discovered_not_selected", "resolve")             # in-request duplicate
+    assert row[6] == ("queued_background", "R-ACQ-NODOI", "discovered_not_selected", "resolve")           # URL-only: follow_url queue
 
 
 # ------------------------------------------------------------------------------------------------ R3: no licence element = HOLD

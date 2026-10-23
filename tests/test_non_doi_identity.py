@@ -203,7 +203,7 @@ def test_ac6_two_pmcid_only_kept_duplicate_dropped_neither_is_nodoi():
              {"title": "no identifiers", "url": "https://example.org/x"}]
     out, codes = _rank(cands)
     assert [c["pmcid"] for _s, d, c, _i in out] == ["PMC1111111", "PMC2222222"] and all(d is None for _s, d, _c, _i in out)
-    assert sorted(codes) == ["R-ACQ-KNOWN", "R-ACQ-NODOI"]
+    assert sorted(codes) == ["R-ACQ-DUPLICATE", "R-ACQ-NODOI"]
 
 
 def test_ac6_served_pmcid_document_is_skipped_by_its_landing_url():
