@@ -131,7 +131,7 @@ def test_warm_host_old_last_request_goes_out_immediately(clk):
 
 
 def test_crawl_delay_not_fitting_budget_is_queued_with_distinct_code(clk):
-    o, web, _ = _crawl_run(clk, inline_s=12)
+    o, web, _ = _crawl_run(clk, inline_s=28)  # P0DTA-INTEG: >= per_doc_timeout_s (25) so PRIO D3 starts the fetch; 15+15 still exceeds it
     d = disc(o)
     assert d["reason"] == "R-ACQ-CRAWL_DELAY" and d["reason"] != "R-ACQ-DEADLINE", o.public()
     assert X.HTML_URL not in [c[0] for c in web.calls]
