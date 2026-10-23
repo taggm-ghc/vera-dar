@@ -22,6 +22,12 @@ RULES_PATH = Path(__file__).resolve().parent.parent / "config" / "licence_rules.
 ARXIV_HOSTS = ("arxiv.org", "www.arxiv.org", "export.arxiv.org")
 ARXIV_ALLOWED_PREFIX = "/abs/"
 METADATA_KIND = "abstract_metadata"
+# Owner decision ARXIVHTML-1023 (ARX-SECREV-1023 R1, R3): the ONE exception to the rule above is
+# https://arxiv.org/html/<id>vN carrying the arXiv route's version-bound licence evidence (licence.arxiv_evidence,
+# set only by vera.arxiv_fulltext) for the SAME id and version, whose CC licence URL is in arxiv_html_cc_families.
+_ARXIV_NEW_ID = re.compile(r"\d{4}\.\d{4,5}")
+_ARXIV_VERSION = re.compile(r"v[1-9]\d*")
+_CC_LICENCE_URL = re.compile(r"https://creativecommons\.org/licenses/([a-z\-]+)/\d\.\d/?")
 
 
 def _load_rules(path: Path = RULES_PATH) -> dict:
@@ -31,6 +37,54 @@ def _load_rules(path: Path = RULES_PATH) -> dict:
                 ("nd_tokens", "no_educational_use_markers", "fee_only_markers")}
     except (OSError, ValueError, KeyError, TypeError) as e:  # fail verbosely: a gate without rules must not run
         raise RuntimeError(f"licence rules unreadable at {path}: {e!r}") from e
+
+
+# F-1 (ARX-SECREV-1023 R3, C1): Unicode full-stop variants that IDNA treats as label separators.
+_UNICODE_DOTS = ("\u3002", "\uff0e", "\uff61")
+
+
+def _arxiv_host(sp) -> str:
+    """F-1 (C1): the host used to DETECT arXiv, never to admit: urlsplit hostname, lowercased, Unicode full-stop variants
+    mapped to ".", trailing dots stripped, then IDNA-encoded (str.encode("idna"), encodings.idna: nameprep + punycode)
+    and lowercased. "" when the URL has no host. Raises on any normalisation error; the caller defers (fail closed)."""
+    h = (sp.hostname or "").lower()
+    for d in _UNICODE_DOTS:
+        h = h.replace(d, ".")
+    h = h.rstrip(".")
+    return h.encode("idna").decode("ascii").lower() if h else ""
+
+
+def _arxiv_html_cc_ok(c: dict, sp) -> bool:
+    """True only for https://arxiv.org/html/<id>vN(/) when c["licence"]["arxiv_evidence"] (built by the arXiv route from
+    the abs page of that exact id and version) names the SAME id and version, its abs_url is that version's abs page,
+    its licence_url equals the content licence URL, and that URL is a CC licence whose family is listed in config
+    arxiv_html_cc_families (a JSON list). All regexes are full matches. Fails closed: anything absent, mismatched,
+    malformed or unreadable, or any error, means False and the refusal stands."""
+    try:
+        # F-1 (C3): raw hostname AND raw netloc exactly "arxiv.org": no port, userinfo, case, trailing or Unicode dot.
+        if sp.scheme != "https" or sp.hostname != "arxiv.org" or sp.netloc != "arxiv.org" or sp.query or sp.fragment:
+            return False
+        lic = c.get("licence")
+        ev = lic.get("arxiv_evidence") if isinstance(lic, dict) else None
+        content = lic.get("content") if isinstance(lic, dict) else None
+        if not isinstance(ev, dict) or not isinstance(content, dict):
+            return False
+        aid, ver, curl = ev.get("id"), ev.get("version"), content.get("url")
+        if not (isinstance(aid, str) and isinstance(ver, str) and isinstance(curl, str)):
+            return False
+        if not (_ARXIV_NEW_ID.fullmatch(aid) and _ARXIV_VERSION.fullmatch(ver)):
+            return False
+        if ev.get("abs_url") != f"https://arxiv.org/abs/{aid}{ver}" or ev.get("licence_url") != curl:
+            return False
+        if not re.fullmatch(rf"/html/{re.escape(aid)}{re.escape(ver)}/?", sp.path):
+            return False
+        fams = json.loads(RULES_PATH.read_text(encoding="utf-8"))["arxiv_html_cc_families"]
+        if not isinstance(fams, list):
+            return False
+        m = _CC_LICENCE_URL.fullmatch(curl)
+        return bool(m) and m.group(1) in {str(x).lower() for x in fams}
+    except Exception:  # noqa: BLE001  fail closed: any error keeps the arXiv refusal
+        return False
 
 
 def _tokens(text: str) -> list[str]:
@@ -57,8 +111,15 @@ def reject_reason(licence_id: str | None, licence_url: str | None = None) -> str
 
 
 def licence_decision(c: dict) -> tuple[str, str]:
-    sp = urlsplit(c.get("url", ""))
-    if sp.netloc.lower() in ARXIV_HOSTS and not sp.path.startswith(ARXIV_ALLOWED_PREFIX):
+    try:
+        sp = urlsplit(c.get("url", ""))
+        host = _arxiv_host(sp)
+    except Exception as e:  # noqa: BLE001  F-1 (C1): a host that cannot be normalised is held, never allowed
+        return "defer", f"URL host could not be normalised ({type(e).__name__}): held for review (F-1, fail closed)"
+    # F-1 (C2): any arXiv host whose RAW netloc is not exactly the normalised host (port incl. :443, userinfo, case,
+    # trailing dot, Unicode dots) is refused on every path, /abs/ included.
+    if host in ARXIV_HOSTS and (sp.netloc != host or (
+            not sp.path.startswith(ARXIV_ALLOWED_PREFIX) and not _arxiv_html_cc_ok(c, sp))):
         return "reject", "arXiv e-print/PDF/HTML is never stored (arXiv terms); only the abstract page"
     lic = c.get("licence") or {}
     meta, content = lic.get("metadata") or {}, lic.get("content") or {}
