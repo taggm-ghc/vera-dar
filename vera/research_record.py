@@ -32,6 +32,8 @@ _NOT_ATTEMPTED_REASON = {None: "no_search_record", "off": "disabled", "busy": "b
 _SEARCHED = frozenset({"ok", "none", "search_failed", "unanswered"})
 
 
+# Disclosed overcount limit: HOST (first-URL host refusal is pre-request) and ROBOTS (a cached robots.txt refusal sends
+# no request) can mark a candidate "fetch request made" when none was sent for it.
 # Reason code -> was an HTTP request sent for the candidate's source? (code, evidence file:line). Decided per code, not per
 # diag bucket (R-ACQ-ROBOTS/CYCLE/HOST/FORMAT_UNSUPPORTED land in selected_not_fetched but follow requests).
 _FETCH_YES = frozenset({
@@ -39,7 +41,7 @@ _FETCH_YES = frozenset({
     "R-ACQ-FETCH_TIMEOUT",       # :383 (loop top, after >=1 hop in practice), :430 (while streaming a response)
     "R-ACQ-HOST",                # :385/:388 (after a redirect hop; first-URL host refusal is pre-request: overcount), :513
     "R-ACQ-CYCLE",               # :390/:407 (a revisit implies an earlier request)
-    "R-ACQ-ROBOTS",              # :392 (robots.txt itself was fetched)
+    "R-ACQ-ROBOTS",              # :392 (robots.txt itself was fetched; a CACHED robots.txt refusal sends no request: overcount)
     "R-ACQ-ENCODING",            # :419 (response headers read)
     "R-ACQ-FORMAT_UNSUPPORTED",  # :422, :508 (content-type of a response)
     "R-ACQ-LARGE",               # :427 (streaming body)
