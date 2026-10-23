@@ -393,38 +393,94 @@ def _research_eligible(decision, question: str, acq) -> bool:
         return False
 
 
-_CHECKED_STATUSES = ("fetched_rejected", "acquired_not_admitted")  # research_outcome.DIAG_STATUSES actually checked
+
+
+_PREFILTER_LICENCE = ("ineligible_not_open_access", "ineligible_licence_prefilter")
+_UNCHECKED_REASONS = ("ranked_below_cap",)  # discovered_not_selected cut by the candidate cap (R-ACQ-DEFER_CAP)
+
+
+def _notice_class(r) -> str:
+    """DDFIX-1023/INTEG item 9: what happened to one candidate, for the notice. checked = retrieved/read and rejected;
+    licence = dropped before retrieval by the licence/open-access prefilter (judged on its listed licence);
+    irrelevant = judged not relevant (R-ACQ-IRRELEVANT, pre-fetch or full text); unchecked = only cap, deadline, quota
+    or rate skips (never judged); other = excluded for another recorded reason; unknown = no recorded status."""
+    from vera.research_outcome import DIAG_STATUSES
+    if not isinstance(r, dict) or r.get("status") not in DIAG_STATUSES:
+        return "unknown"
+    st, why = r["status"], r.get("status_reason")
+    code = str(r.get("reason") or "").strip().upper()
+    if st == "admitted":
+        return "admitted"
+    if code == "R-ACQ-IRRELEVANT" or why == "relevance_rejected":
+        return "irrelevant"
+    if st == "discovered_not_selected":
+        if code in ("R-ACQ-NOTOA", "R-ACQ-NOLIC") or why in _PREFILTER_LICENCE:
+            return "licence"
+        if why in _UNCHECKED_REASONS or code == "R-ACQ-DEFER_CAP" or (why is None and not code):
+            return "unchecked"  # cut by the cap (or not selected with no recorded reason): never judged
+        return "other"
+    if st == "skipped":
+        return "unchecked"
+    if st in ("fetched_rejected", "acquired_not_admitted"):
+        return "checked"
+    return "other"  # selected_not_fetched: no route, already held, crawl delay
+
+
+def _docs(n: int) -> str:
+    return f"{n} document{'' if n == 1 else 's'}"
 
 
 def _inline_notice(acq, o):
-    """DDFIX-1023/SCOPE (b): the inline "none" notice ("none passed its licence, content and relevance checks") is
-    true only when candidates were actually checked. It now follows the per-candidate diagnostic statuses
-    (P0DTA-DIAG): candidates never checked (not selected, not retrieved, not reached) are reported as not checked.
-    Other statuses, or no per-candidate records, keep the configured notice unchanged."""
+    """DDFIX-1023/SCOPE (b) + INTEG item 9: the inline "none" notice ("none passed its licence, content and relevance
+    checks") is used only when every candidate was actually checked. Otherwise the text follows the per-candidate
+    diagnostic statuses (P0DTA-DIAG): licence/open-access prefilter drops are reported as judged on their listed
+    licence, R-ACQ-IRRELEVANT ones as judged not relevant, and only cap, deadline, quota or rate skips as not checked.
+    Other statuses, or no per-candidate records, keep the configured notice unchanged. Aggregates only (no titles)."""
     from vera import inline_acquire
     t = inline_acquire.notice(acq, o.status)
     recs = getattr(o, "candidates", None)
     if o.status != "none" or not t or recs is None:
         return t
     try:
-        from vera.research_outcome import DIAG_LABELS, diag_counts
-        n = diag_counts(recs)
+        from collections import Counter
+
+        from vera.research_outcome import DIAG_LABELS
+        recs = list(recs)
+        cls = [_notice_class(r) for r in recs]
+        n = Counter(cls)
     except Exception:  # noqa: BLE001
         return t
-    checked = sum(n.get(k, 0) for k in _CHECKED_STATUSES)
-    unchecked = {k: v for k, v in n.items() if v and k not in _CHECKED_STATUSES and k != "admitted"}
-    if not unchecked:
-        if checked:
-            return t
-        return ("VERA-DAR searched for open-access full-text documents on this question while answering, but found "
-                "no candidate documents to check.")
-    parts = "; ".join(f"{v} {DIAG_LABELS.get(k, k)}" for k, v in unchecked.items())
-    lead = "VERA-DAR searched for open-access full-text documents on this question while answering. "
-    if checked:  # the configured sentence is true of the checked ones; say plainly that the rest were not checked
-        n_un = sum(unchecked.values())
-        return f"{t} {n_un} other document{'' if n_un == 1 else 's'} found {'was' if n_un == 1 else 'were'} not checked ({parts})."
-    return (f"{lead}None of the {sum(unchecked.values())} documents it found was checked in this request ({parts}), "
-            "so no document was judged on its licence, content or relevance.")
+    lead = "VERA-DAR searched for open-access full-text documents on this question while answering"
+    total = len(recs)
+    if total == 0:
+        return f"{lead}, but found no candidate documents to check."
+    if n["unknown"] == total:
+        return f"{lead}. It found {_docs(total)}, but no per-document outcome was recorded."
+    un = Counter(r.get("status") for r, c in zip(recs, cls) if c == "unchecked")
+    un_parts = "; ".join(f"{v} {DIAG_LABELS.get(k, k)}" for k, v in un.items())
+    n_un = n["unchecked"]
+    if n["checked"] == total or n["admitted"]:  # all checked (or a reuse record): the configured text stays true
+        return t
+    if n["checked"] and n["checked"] + n_un == total:  # the configured sentence is true of the checked ones
+        return f"{t} {n_un} other document{'' if n_un == 1 else 's'} found {'was' if n_un == 1 else 'were'} not checked ({un_parts})."
+    if n_un == total:
+        return (f"{lead}. None of the {total} documents it found was checked in this request ({un_parts}), "
+                "so no document was judged on its licence, content or relevance.")
+    chk = Counter(r.get("status") for r, c in zip(recs, cls) if c == "checked")
+    parts = [f"{v} {DIAG_LABELS.get(k, k)}" for k, v in chk.items()]
+    if n["licence"]:
+        parts.append(f"{n['licence']} excluded before retrieval because the listed licence or open-access status does "
+                     "not permit use")
+    if n["irrelevant"]:
+        parts.append(f"{n['irrelevant']} judged not relevant to the question")
+    if n_un:
+        parts.append(f"{n_un} not checked in this request ({un_parts})")
+    if n["other"]:
+        parts.append(f"{n['other']} not retrieved for another recorded reason (already held, no identifier or no "
+                     "retrieval route)")
+    if n["unknown"]:
+        parts.append(f"{n['unknown']} with no recorded outcome")
+    return f"{lead}. It found {_docs(total)} and used none: {'; '.join(parts)}."
 
 
 def _base_warming() -> bool:
