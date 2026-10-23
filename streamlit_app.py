@@ -21,6 +21,9 @@ from vera.version_info import UNKNOWN, deployed_commit, short_commit
 
 load_vera_env()  # PLAN-ENV: same loader as main.py (once per process across reruns)
 
+# TABTITLE-1023: must be the first st.* call; without it the browser tab falls back to the file name "streamlit_app".
+st.set_page_config(page_title="VERA-DAR")
+
 # run.sh records its actual host:port here on every start (dev-mode default URL only).
 _LOCAL_URL_FILE = Path(__file__).resolve().parent / ".vera-local-url"
 
