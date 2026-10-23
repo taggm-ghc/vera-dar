@@ -52,6 +52,7 @@ def test_reask_in_new_process_answers_from_stored_documents_without_reacquiring(
     plan = _first_run_plan(rig)
     keys = doc_key_set(DOI, f"https://doi.org/{DOI}", None) if ready_meanwhile else ()
     store, calls = _new_process(rig, plan, served_keys=keys)
+    rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: the reading-list arXiv record would get its own attempt
     n_urls = len(rig.web.urls)
     r = rig.run()
     assert r.result_kind == "answer" and r.evidence.admitted, r.answer
@@ -168,6 +169,7 @@ def test_defect1_reuse_still_answers_when_docs_per_day_is_spent(rig):
     plan = _first_run_plan(rig)
     store, _ = _new_process(rig, plan)
     rig.deps.lookup.day = 10 ** 6  # docs_per_day spent
+    rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: the reading-list arXiv record would get its own attempt
     n_urls = len(rig.web.urls)
     r = rig.run()
     assert r.result_kind == "answer" and r.contract["inline_acquisition"]["reused"] == 1

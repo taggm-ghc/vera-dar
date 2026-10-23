@@ -190,21 +190,24 @@ def discovered_candidates(sources, acq) -> tuple[list, list]:
         pmcid = None if doi else _pmcid_of(s.get("pmcid"))
         kind = _preprint_kind(s, doi)
         e = _entry(s, kind is not None)
-        if kind == "record" or (kind == "arxiv" and not doi):  # D1: no route reads the paper's own licence
+        from vera import arxiv_fulltext  # ARX-A2: arXiv records (no journal DOI) -> arXiv route when enabled
+        ac = arxiv_fulltext.discovered_candidate(s, doi, kind, e, acq)
+        if ac is None and (kind == "record" or (kind == "arxiv" and not doi)):  # D1: no route reads the paper's own licence
             held.append({**e, "gate_a": {"decision": "reject", "factors": {"identifier": "doi" if doi else "none",
                                                                            "preprint": True},
                                          "uncertainty": ["the preprint's own licence cannot be read through any "
                                                          "existing interface; index-metadata CC0 does not apply to it"]},
                          "outcome": "link_only", "reason": acq_config.reason(acq, "preprint_licence_unverified")})
             continue
-        if not doi and not pmcid:
+        if ac is None and not doi and not pmcid:
             held.append({**e, "gate_a": {"decision": "reject", "factors": {"identifier": "none"}, "uncertainty": []},
                          "outcome": "link_only", "reason": acq_config.reason(acq, "no_doi")})
             continue
-        c = {"doi": doi, "url": str(s.get("url") or (f"https://doi.org/{doi}" if doi else "")),
-             "title": " ".join(str(s.get("title") or "").split()), "snippet": " ".join(str(s.get("snippet") or "").split()),
-             "acq_source": "discovered", "discovery": e}
-        if pmcid:
+        c = ac if ac is not None else {
+            "doi": doi, "url": str(s.get("url") or (f"https://doi.org/{doi}" if doi else "")),
+            "title": " ".join(str(s.get("title") or "").split()), "snippet": " ".join(str(s.get("snippet") or "").split()),
+            "acq_source": "discovered", "discovery": e}
+        if pmcid and ac is None:
             c["pmcid"] = pmcid
         if s.get("source_type"):
             c["source_type"] = s["source_type"]

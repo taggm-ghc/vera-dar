@@ -862,6 +862,10 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     dur = {} if dur is None else dur
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
+    if isinstance(cand.get("arxiv"), dict):  # ARX-A2: arXiv full-text representations (vera/arxiv_fulltext.py)
+        from vera import arxiv_fulltext
+        return arxiv_fulltext.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur,
+                                       min_spans)
     t = clock()
     # P0-5: a discovered candidate (only present with inline.use_discovered) records its URL chain; Step B
     # (inline.landing_route) tries ONE DOI -> landing -> JATS location when Europe PMC has no open-access record.

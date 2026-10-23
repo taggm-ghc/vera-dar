@@ -187,9 +187,14 @@ def _public_domain_zero(rec: dict) -> bool:
     return "publicdomain/zero" in s or bool(re.search(r"\bcc0\b", s))
 
 
-def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
-    """Returns the licence record for provenance; raises Refused on reject/hold."""
+def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | None = None) -> dict:
+    """Returns the licence record for provenance; raises Refused on reject/hold.
+    arxiv_evidence (ARX-SECREV-1023 R1): the version-bound licence evidence built ONLY by vera.arxiv_fulltext (route
+    write path; read path: arxiv_fulltext.stored_evidence). It is passed through unchanged and is never read from or
+    synthesised out of the item, the conversion record, a manifest or a discovery record."""
     lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"), "source": "manifest declared"}}
+    if arxiv_evidence is not None:
+        lic["arxiv_evidence"] = dict(arxiv_evidence)
     cand = {"url": item["fulltext_url"], "licence": lic, "stored_text_kind": cfg["stored_text_kind"],
             "gate_a_decision": None, "gate_a_rationale": ""}
     apply_licence_gate([cand])
@@ -228,13 +233,13 @@ def check_item_declared(item: dict, cfg: dict) -> None:
     check_declared_kind(item, cfg, "manifest item")
 
 
-def check_text_record(item: dict, text: str, meta: dict, cfg: dict) -> dict:
+def check_text_record(item: dict, text: str, meta: dict, cfg: dict, *, arxiv_evidence: dict | None = None) -> dict:
     """The text-level filters after the text and its conversion record are in hand (pure; no I/O): declared kind of the
     conversion record, body/length checks and the licence gate. Returns the licence record. Raises Refused.
     Shared by prepare() and vera.fulldoc_db (R3: the DB path re-applies the same filters, never ingest-time judgement)."""
     check_declared_kind(meta, cfg, "conversion record")
     check_content(text, meta, cfg)
-    return check_licence(item, meta, cfg)
+    return check_licence(item, meta, cfg, arxiv_evidence=arxiv_evidence)
 
 
 def prepare(item: dict, base_dir: Path, cfg: dict, now: str | None = None) -> dict:
@@ -244,11 +249,12 @@ def prepare(item: dict, base_dir: Path, cfg: dict, now: str | None = None) -> di
     return prepare_from_parts(item, text, meta, cfg, now, _checked=True)
 
 
-def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | None = None, _checked: bool = False) -> dict:
+def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | None = None, _checked: bool = False,
+                       *, arxiv_evidence: dict | None = None) -> dict:
     """prepare() without file I/O: the same filters and the same record from an in-memory item, text and conversion record."""
     if not _checked:
         check_item_declared(item, cfg)
-    lic = check_text_record(item, text, meta, cfg)
+    lic = check_text_record(item, text, meta, cfg, arxiv_evidence=arxiv_evidence)
     now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
     src = {"doi": item.get("doi"), "url": item["landing_url"]}
     cu = canonical_url(src)

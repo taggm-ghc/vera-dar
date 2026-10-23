@@ -93,6 +93,7 @@ def test_B_neg_nd_licensed_record_is_not_admitted_and_says_why(rig):
 
 def test_B_neg_preprint_without_licence_route_is_link_only_not_fetched(rig):
     web, _ = epmc_web()
+    rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour (route on: tests/test_arxiv_fulltext.py)
     r, _ds = ask_offtopic(rig, [arxiv_src()], web=web)
     _not_an_answer_from_new_doc(rig, r)
     e = entry_for(r, "arXiv:2401.00001")

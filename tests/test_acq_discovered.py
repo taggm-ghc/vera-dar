@@ -134,7 +134,9 @@ def test_t1_openalex_discovered_source_resolves_to_accessible_full_text():
 # ------------------------------------------------------------------------------------------------ test 2 (D1)
 def test_t2_arxiv_preprint_without_licence_route_keeps_link_with_explicit_reason():
     web, _raw = epmc_web()
-    o, store = run(cfg_on(), [arxiv_src(), arxiv_src("2401.00002", doi="10.48550/arxiv.2401.00002")], web)
+    c = cfg_on()
+    c["arxiv_route"]["enabled"] = False  # ARX-A2: the D1 hold is the route-off behaviour (route on: test_arxiv_fulltext)
+    o, store = run(c, [arxiv_src(), arxiv_src("2401.00002", doi="10.48550/arxiv.2401.00002")], web)
     for i in (0, 1):
         e = disc(o, i)
         assert e["outcome"] == "link_only" and e["reason"] == "R-ACQ-PREPRINT_LICENCE_UNVERIFIED"
@@ -388,6 +390,7 @@ def test_p2_untrusted_discovery_strings_are_bounded_and_control_free():
 # ------------------------------------------------------------------------------------------------ test 10
 def test_t10_unsuccessful_acquisition_cannot_generate_an_answer(rig):
     rig.cfg["inline"]["use_discovered"] = True
+    rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour (route on: tests/test_arxiv_fulltext.py)
     rig.setup(topic="clim")  # the only acquirable document is off-topic: the unchanged relevance gate refuses it
     r = rig.run()
     assert r.result_kind != "answer" and rig.h.answer_calls == [] and rig.store.plans == []
@@ -525,6 +528,7 @@ def test_provenance_gate_a_is_the_computed_decision():
 def test_held_records_do_not_use_the_cap_and_records_past_it_are_deferred():
     c = cfg_on()
     c["inline"]["discovered_max"] = 1
+    c["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour
     srcs = [arxiv_src("2401.0000%d" % i) for i in range(1, 4)] + [oa_src(), oa_src(doi="10.9999/second", wid="W2")]
     cands, held = acq_discovered.discovered_candidates(srcs, c)
     assert [x["doi"] for x in cands] == [DOI]

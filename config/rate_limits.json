@@ -86,6 +86,20 @@
       ],
       "_note": "documented ceiling, equal to the existing search.arxiv.min_interval_s 3.0 and max_concurrency 1."
     },
+    "arxiv_web": {
+      "hosts": ["arxiv.org"],
+      "rate_per_s": 0.333333,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://info.arxiv.org/help/api/tou.html", "read": "2026-10-21", "inspection": "summarizing fetch (read for the export API portal above; arxiv.org robots.txt / crawl-delay NOT read in ARX-A2, no network)",
+         "claims": "no more than one request every three seconds; a single connection at a time"}
+      ],
+      "_note": "prior, ARX-A2 SECURITY-CONFIG CHANGE (needs security review): the arXiv full-text route (vera/arxiv_fulltext.py) reads robots.txt (cached), one abs page and one HTML page per record, one at a time, and itself waits arxiv_route.min_interval_s (or a longer robots.txt crawl-delay, up to arxiv_route.max_crawl_delay_s) between its requests; this portal is the process-wide ceiling: 1 request / 3 s, one connection, no burst. Separate from the export.arxiv.org API portal. What would change it: arxiv.org robots.txt crawl-delay (unverified) and live 429/503 counts."
+    },
     "doaj": {
       "hosts": ["doaj.org"],
       "rate_per_s": 1.666667,

@@ -29,6 +29,8 @@ REASON_TEXT = {
     "R-ACQ-NODOI": "No stable identifier, so the full text could not be fetched.",
     "R-ACQ-PREPRINT_LICENCE_UNVERIFIED": "Preprint: its reuse terms could not be confirmed.",
     "R-ACQ-PREPRINT_NOT_PERMITTED": "Preprint: reuse of the full text is not permitted.",
+    "R-ACQ-ARXIV_LICENCE_HOLD": "Preprint: its arXiv licence does not permit reuse of the full text, so it was not used.",
+    "R-ACQ-ARXIV_HTML_POLICY": "Preprint: the full text was found, but arXiv full text is not yet used as evidence.",
     "R-ACQ-NOTOA": "Full text is not openly available.",
     "R-ACQ-NOLIC": "Full text not openly licensed.",
     "R-ACQ-LICENCE_ABSENT": "Full text not openly licensed.",

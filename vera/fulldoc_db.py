@@ -233,7 +233,13 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
             if not isinstance(item, dict) or not isinstance(meta, dict):
                 raise fulltext_loader.Refused(R_DBROW, "recorded item / conversion record missing")
             # R3: the ingest filters, re-applied to the rebuilt text as the configured full-document kind
-            rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"))
+            # ARX-SECREV-1023 R1: only the acquired path, only rows the arXiv route wrote (arxiv_fulltext.stored_evidence)
+            ev = None
+            if "acquisition" in ek:
+                from vera import arxiv_fulltext
+                ev = arxiv_fulltext.stored_evidence(prov)
+            rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"),
+                                                     arxiv_evidence=ev)
             rec["document_id"] = did
             if rec["canonical_url"] != row.get("canonical_url"):
                 raise fulltext_loader.Refused(R_DBROW, "canonical URL differs from the recorded item")

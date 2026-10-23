@@ -179,6 +179,21 @@
     "robots_fail_ttl_s": 60,
     "max_locations_per_candidate": 1
   },
+  "arxiv_route": {
+    "_doc": "ARX-A2 (vera/arxiv_fulltext.py): discovered arXiv records without a journal DOI are no longer held blindly. abs page (identity, metadata, the paper's own licence link) -> representations in order (html; pdf is recorded as not attempted: no PDF extractor exists) -> the existing HTML converter restricted to <article> -> every unchanged gate. SECURITY-CONFIG CHANGE (needs security review): hosts is the arXiv route's OWN fetch allowlist (exact host, https, checked on every redirect hop by auto_acquire._guarded_get with the public-address check and the pinned transport); fetch.allowed_hosts (Europe PMC) is not widened. Requests to arxiv.org are paced by the rate_limits.json arxiv portal (1 request / 3 s, one connection). licence_gate.py still rejects arXiv HTML (R-ACQ-ARXIV_HTML_POLICY) until the owner decides otherwise. enabled=false restores the D1 hold (R-ACQ-PREPRINT_LICENCE_UNVERIFIED).",
+    "enabled": true,
+    "hosts": ["arxiv.org"],
+    "content_types": ["text/html"],
+    "representations": ["html", "pdf"],
+    "pdf_extractor": null,
+    "licence_families": ["by", "by-sa", "by-nc", "by-nc-sa"],
+    "_licence_note": "owner decision 2026-10-23 + R1 licence rule: BY, BY-SA, BY-NC, BY-NC-SA continue to the unchanged gates; BY-ND / BY-NC-ND are rejected (ND marker, R-LIC-REJECT); anything else (arXiv non-exclusive distribution licence, CC0 as an article licence, unknown) is held R-ACQ-ARXIV_LICENCE_HOLD; no link R-ACQ-LICENCE_ABSENT; read from the requested version's abs page only (its final URL must be exactly /abs/<id><version>). ARX-SECREV-1023 R4: the BINDING family list is licence_rules.json arxiv_html_cc_families once the owner-authorized gate change adds it; from then on the route admits only families in BOTH lists (arxiv_fulltext.allowed_families), so this list can never widen the gate.",
+    "abs_max_bytes": 1048576,
+    "min_interval_s": 3,
+    "max_crawl_delay_s": 15,
+    "robots": true,
+    "_calibration_note": "abs_max_bytes is a safety size cap, not a decision threshold: 1 MiB, uncalibrated prior (arXiv abs pages are typically tens of kB; not measured on live pages in this task, no network). Full HTML uses bounds.max_fetch_bytes unchanged. Change it from the size distribution of fetched abs pages in live logs. min_interval_s 3 = the arXiv API terms' documented one request every three seconds (rate_limits.json arxiv portal source), applied to arxiv.org too as a conservative prior; arxiv.org robots.txt was NOT read in ARX-A2 (no network): robots.txt is fetched and obeyed at run time (acq_discovered._robots_allowed, fail closed on 429/5xx/error), and a crawl-delay longer than min_interval_s is honoured; above max_crawl_delay_s 15 (a planner prior: two spaced requests must fit the 45 s inline deadline) the record is refused R-ACQ-ROBOTS rather than fetched faster. Change from the live robots.txt and 429/503 counts."
+  },
   "fetch": {
     "allowed_hosts": [
       "www.ebi.ac.uk",
@@ -256,6 +271,8 @@
     "format_unsupported": "R-ACQ-FORMAT_UNSUPPORTED",
     "identity_mismatch": "R-ACQ-IDENTITY_MISMATCH",
     "licence_absent": "R-ACQ-LICENCE_ABSENT",
-    "licence_mismatch": "R-ACQ-LICENCE_MISMATCH"
+    "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
+    "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",
+    "arxiv_html_policy": "R-ACQ-ARXIV_HTML_POLICY"
   }
 }
