@@ -822,7 +822,8 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     if not trig:
         return _with_research(_annotate(fd, fr), rr.summarize(triggers=[], inline=None, used_new=False,
                                                               older_available=True, fr_before=fr,
-                                                              citations=_source_freshness(fd.sources, fr)))
+                                                              citations=_source_freshness(fd.sources, fr),
+                                                              answer_basis="generated_existing_only"))
     pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
     new_res, failed = None, False
     if o is not None and getattr(o, "corpus", None) is not None:
@@ -834,13 +835,15 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
         fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         rec = rr.summarize(triggers=trig, inline=pub, used_new=True, older_available=True, fr_before=fr, fr_after=fr2,
-                           citations=_source_freshness(new_res.sources, fr2), backfill=bf)
+                           citations=_source_freshness(new_res.sources, fr2), backfill=bf,
+                           answer_basis="generated_new_evidence")
         suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), _mixed_line(texts, fr2), rec["user_text"])
                           if t)
         return _with_research(_annotate(new_res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
                        citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
-                       failed_text=texts.get("new_evidence_unanswered"), backfill=bf)
+                       failed_text=texts.get("new_evidence_unanswered"), backfill=bf,
+                       answer_basis="generated_existing_only")
     base = _annotate(fd, fr)
     if failed:  # the failed combined writer/claim-check spend is still reported
         base = replace(base, tokens_used=failed.tokens, cost_usd=round(failed.cost, 6))
@@ -979,10 +982,11 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
         fr2 = rr.assess(adm, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=True, older_available=False, fr_before=fr,
-                           fr_after=fr2, citations=_source_freshness(res.sources, fr2), backfill=bf)
+                           fr_after=fr2, citations=_source_freshness(res.sources, fr2), backfill=bf,
+                           answer_basis="generated_new_evidence")
         suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), rec["user_text"]) if t)
         return _with_research(_annotate(res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr,
-                       backfill=bf)
+                       backfill=bf, answer_basis="abstained")
     _record_discovery(rec, res, _QUESTION.get())
     return replace(res, contract={**(res.contract or {}), "research": rec})
