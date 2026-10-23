@@ -220,3 +220,16 @@ def test_fallback_paths_unreachable_with_shipped_seam(monkeypatch):
         r = ask_service.answer_in_scope("q", "m", _pricing(), grounding=grounding)
         assert r.result_kind == "reading_list"
     assert calls == []
+
+
+def test_p05b_metadata_licence_reaches_api_and_report(monkeypatch):
+    from vera.m7.live_report import build_live_report
+    src = [{"n": 1, "title": "Paper", "url": "https://openalex.org/W1", "provider": "openalex", "licence_decision": "allow",
+            "licence": {"metadata": {"id": "CC0-1.0"}, "content": None}}]
+    b = ask(monkeypatch, res("reading_list", candidates=public_candidates(src)), None).json()
+    assert b["candidates"][0]["metadata_licence"] == "CC0-1.0" and b["candidates"][0]["acquisition"] == "not_acquired"
+    rep = build_live_report(b, "q", 1.0)
+    assert rep["search"]["by_licence"] == {"Index metadata: CC0; article licence not verified": 1}
+    # a candidate without a metadata licence keeps its exact shape (no key)
+    b2 = ask(monkeypatch, res("reading_list", candidates=public_candidates(SRC)), None).json()
+    assert "metadata_licence" not in b2["candidates"][0]

@@ -62,12 +62,12 @@ def test_memory_sentence_follows_layers(tmp_path):
 
 
 def test_licence_sentence_a0_exact(tmp_path):
-    assert ("Licence terms are as reported by the indexing services for the listed records and were not verified "
-            "with the publisher.") in disclosure.disclosure_text(fulldoc_path=_fd(tmp_path, False))  # state 1
+    assert ("For listed records, only the indexing services' metadata licence was checked; the articles' own "
+            "licences were not verified with the publisher.") in disclosure.disclosure_text(fulldoc_path=_fd(tmp_path, False))  # state 1
     on = disclosure.DISCLOSURE_TEXT  # shipped = state 2 (P1.6): its own exact licence sentences
     assert ("Licences for documents in its own collection were checked against the licence recorded in each document "
-            "and VERA-DAR's licence rules, not with the publisher. Licence terms for listed records are as reported by "
-            "the indexing services and were not verified with the publisher.") in on
+            "and VERA-DAR's licence rules, not with the publisher. For listed records, only the indexing services' "
+            "metadata licence was checked; the articles' own licences were not verified with the publisher.") in on
 
 
 def test_no_l1_wording_when_l1_off(tmp_path):

@@ -423,8 +423,8 @@ def test_model_line_exact():
 
 
 def test_licence_sidebar_a0_exact():
-    assert sb.LICENCE_SIDEBAR == ("Licence terms are as reported by the indexing services for the listed records and "
-                                  "were not verified with the publisher.")
+    assert sb.LICENCE_SIDEBAR == ("For listed records, only the indexing services' metadata licence was checked; the "
+                                  "articles' own licences were not verified with the publisher.")
     assert "abstract" not in sb.LICENCE_SIDEBAR and sb.LICENCE_UNDER_ANSWER == sb.LICENCE_SIDEBAR
 
 
@@ -436,9 +436,35 @@ def test_sidebar_and_disclosure_share_a0_sentences(tmp_path):
     for sentence in (sb.LICENCE_SIDEBAR, "does not use abstracts or snippets as evidence"):
         assert sentence in t, sentence
     on = disclosure.disclosure_text()  # shipped = state 2 (P1.6): same statements, state-2 wording
-    for phrase in ("as reported by the indexing services and were not verified with the publisher",
+    for phrase in ("only the indexing services' metadata licence was checked; the articles' own licences were not verified with the publisher",
                    "does not use their abstracts or snippets as evidence"):
         assert phrase in on, phrase
     # R-028 (2026-10-19): the disclosure replaced the scope-model sentence with the owner-approved third-party sentence
     for x in (t, on):
         assert "sent to third-party AI and search services" in x and sb.MODEL_LINE not in x
+
+
+def test_corpus_failed_fetch_short_cache_success_long_cache(monkeypatch):
+    from types import SimpleNamespace
+    from vera import public_mode, sources_sidebar as sb
+    clock, calls, results = [1000.0], [], [None, {"summary_source": "agentic_model", "source_count": 3}]
+
+    def fake(*a, **k):
+        calls.append(1)
+        return results[min(len(calls) - 1, 1)]
+    monkeypatch.setattr(public_mode, "get_corpus_summary", fake)
+    monkeypatch.setattr(public_mode, "upstream_base_url", lambda: "http://x.invalid")
+    import time
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    st = SimpleNamespace(session_state={})
+    assert sb._corpus(st) is None and len(calls) == 1
+    clock[0] += sb.CORPUS_RETRY_S - 1
+    assert sb._corpus(st) is None and len(calls) == 1  # failure remembered within the retry window
+    clock[0] += 2
+    good = sb._corpus(st)  # retried after the window; real description shown
+    assert good and good["source_count"] == 3 and len(calls) == 2
+    clock[0] += sb.CORPUS_REFRESH_S - 1
+    assert sb._corpus(st) == good and len(calls) == 2  # success cached for the full refresh period
+    clock[0] += 2
+    sb._corpus(st)
+    assert len(calls) == 3

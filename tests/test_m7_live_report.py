@@ -290,3 +290,28 @@ def test_b2_in_scope_admitted_but_no_answer_is_still_authorized():
     rep = lr.build_live_report(body, "q", 1.0)
     assert "Evidence authorized for answer generation: yes." in rep["pipeline"]
     assert "Answer generated: no." in rep["pipeline"] and rep["scope_policy"] == ""
+
+
+def test_p05b_licence_labels_keep_states_distinct():
+    from vera.m7.live_report import licence_label
+    meta = {"acquisition": "not_acquired", "licence_decision": "allow", "metadata_licence": "CC0-1.0"}
+    assert licence_label(meta) == "Index metadata: CC0; article licence not verified"
+    assert licence_label({**meta, "metadata_licence": "CC-BY-4.0"}) == "Index metadata: CC-BY-4.0; article licence not verified"
+    nometa = {"acquisition": "not_acquired", "licence_decision": "allow"}
+    assert licence_label(nometa) == "article licence not verified (link only)"
+    assert "allows use" not in licence_label(meta) and "allows use" not in licence_label(nometa)
+    assert licence_label({"acquisition": "full_document_acquired", "licence_decision": "allow",
+                          "metadata_licence": "CC0-1.0"}) == "article licence allows use"
+    assert licence_label({"acquisition": "not_acquired", "licence_decision": "hold"}) == "licence unclear (held)"
+
+
+def test_p05b_report_tally_and_candidate_field():
+    from vera.m7.live_report import build_live_report
+    from vera.grounded_ask import public_candidates
+    c = public_candidates([{"n": 1, "title": "t", "url": "https://example.org/a", "provider": "openalex",
+                            "licence_decision": "allow",
+                            "licence": {"metadata": {"id": "CC0-1.0"}, "content": None}}])[0]
+    assert c["metadata_licence"] == "CC0-1.0" and c["acquisition"] == "not_acquired"
+    rep = build_live_report(_body("reading_list", candidates=[c], sources=[]), "q", 1.0)
+    assert rep["search"]["by_licence"] == {"Index metadata: CC0; article licence not verified": 1}
+    assert rep["search"]["by_acquisition"] == {"not acquired (link only)": 1}

@@ -186,11 +186,13 @@ class AskCandidate(BaseModel):
     source_id: int | None = None
     admission_passed: bool | None = None
     licence: str | None = None  # declared licence id of a stored candidate
+    metadata_licence: str | None = Field(default=None, max_length=64)  # P0-5B: index (metadata) licence id, never an article licence
 
     @model_serializer(mode="wrap")
     def _drop_absent_stored_fields(self, handler):
         d = handler(self)  # web candidates keep their exact shape: stored-only fields are omitted when absent
-        for k in ("span", "span_id", "disposition", "canonical_source_id", "source_id", "admission_passed", "licence"):
+        for k in ("span", "span_id", "disposition", "canonical_source_id", "source_id", "admission_passed", "licence",
+                  "metadata_licence"):
             if d.get(k) is None:
                 d.pop(k, None)
         return d

@@ -68,8 +68,8 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at"})
 
-LICENCE_SIDEBAR = ("Licence terms are as reported by the indexing services for the listed records and were not verified "
-                   "with the publisher.")
+LICENCE_SIDEBAR = ("For listed records, only the indexing services' metadata licence was checked; the articles' own "
+                   "licences were not verified with the publisher.")
 LICENCE_UNDER_ANSWER = LICENCE_SIDEBAR
 MODEL_LINE = "A third-party hosted language model may be used to decide whether a question is in scope."
 NO_DESCRIPTION = "description not available right now."
@@ -146,6 +146,7 @@ def snapshot_summary(path: Path | None = None) -> dict | None:
 
 
 CORPUS_REFRESH_S = 600  # per browser session: how often the sidebar re-asks the API (the API caches anyway)
+CORPUS_RETRY_S = 20  # a FAILED fetch is remembered this long, so reruns do not re-block on a slow or waking API
 
 
 def _corpus(st) -> dict | None:
@@ -155,7 +156,7 @@ def _corpus(st) -> dict | None:
 
     from vera.public_mode import get_corpus_summary, upstream_base_url
     cached = st.session_state.get("_vera_corpus")
-    if cached and time.monotonic() - cached[0] < CORPUS_REFRESH_S:
+    if cached and time.monotonic() - cached[0] < (CORPUS_REFRESH_S if cached[1] is not None else CORPUS_RETRY_S):
         return cached[1]
     data = get_corpus_summary(upstream_base_url(), os.getenv("VERA_API_KEY", ""))
     st.session_state["_vera_corpus"] = (time.monotonic(), data)

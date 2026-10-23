@@ -10,8 +10,8 @@ _BASE = ("VERA-DAR is an AI system. For each in-scope question it searches publi
          "lists published documents that may be relevant, with links. VERA-DAR has not acquired or read these full "
          "documents, so it does not use abstracts or snippets as evidence and does not write an answer from them. "
          "The list is not neutral or complete and may be wrong. Check the sources and read them yourself before "
-         "relying on any claim. Licence terms are as reported by the indexing services for the listed records and were "
-         "not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you.")
+         "relying on any claim. For listed records, only the indexing services' metadata licence was checked; the articles' own "
+         "licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you.")
 # S1 / DISC-E2 (owner direction 2026-10-21; wording needs owner approval before public activation): used instead of
 # _BASE when the full-document path is enabled (fulldoc.enabled in config/fulldoc_answer.json).
 _BASE_FULLDOC = (
@@ -23,8 +23,8 @@ _BASE_FULLDOC = (
     "their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the "
     "sources and read them yourself before relying on any claim. Licences for documents in its own collection were "
     "checked against the licence recorded in each document and VERA-DAR's licence rules, not with the publisher. "
-    "Licence terms for listed records are as reported by the indexing services and were not verified with the "
-    "publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own "
+    "For listed records, only the indexing services' metadata licence was checked; the articles' own licences were "
+    "not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own "
     "collection, your question, the selected passages with their titles and links, and the draft answer sentences are "
     "sent to third-party AI services.")
 FULLDOC_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "fulldoc_answer.json"

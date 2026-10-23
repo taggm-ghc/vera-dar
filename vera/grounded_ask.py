@@ -340,5 +340,9 @@ def public_candidates(sources: list[dict]) -> tuple:
             c.update({k: s[k] for k in STORED_CANDIDATE_FIELDS if s.get(k) is not None})
             if _licence_id(s):
                 c["licence"] = _licence_id(s)
+        else:  # P0-5B: the index's METADATA licence id, when the record declares one (never an article licence)
+            meta = (s.get("licence") or {}).get("metadata") if isinstance(s.get("licence"), dict) else None
+            if isinstance(meta, dict) and meta.get("id"):
+                c["metadata_licence"] = str(meta["id"])[:64]
         out.append(c)
     return tuple(out)

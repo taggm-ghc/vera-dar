@@ -45,8 +45,28 @@ SERVICE_KIND = {"arxiv": "scholarly index", "openalex": "scholarly index", "euro
                 "stored": "VERA-DAR's document collection", "db": "VERA-DAR's document collection"}
 ACQ_LABEL = {"full_document_acquired": "full document acquired and verified",
              "not_acquired": "not acquired (link only)", "in_collection": "already in VERA-DAR's collection"}
-LICENCE_LABEL = {"allow": "licence allows use", "accept": "licence allows use", "hold": "licence unclear (held)",
-                 "reject": "licence does not allow use"}
+LICENCE_LABEL = {"allow": "article licence allows use", "accept": "article licence allows use",
+                 "hold": "licence unclear (held)", "reject": "licence does not allow use"}
+# P0-5B: three distinct states. A record not acquired has only its index (metadata) licence checked; "allow" for it never
+# means the article's licence allows use. Acquired / in-collection records keep LICENCE_LABEL (article licence state).
+LICENCE_UNACQUIRED_NO_META = "article licence not verified (link only)"
+
+
+def licence_label(row: dict) -> str:
+    """Display label for one record's licence check, never claiming an article licence for an unacquired record."""
+    d = row.get("licence_decision")
+    if not isinstance(d, str):
+        return "not recorded"
+    if row.get("acquisition") in ("full_document_acquired", "in_collection"):
+        return LICENCE_LABEL.get(d, OTHER)
+    if d not in ("allow", "accept"):
+        return LICENCE_LABEL.get(d, OTHER)
+    m = row.get("metadata_licence")
+    if isinstance(m, str) and m.strip():
+        m = m.strip()[:40]
+        m = "CC0" if m.upper().startswith("CC0") else m
+        return f"Index metadata: {m}; article licence not verified"
+    return LICENCE_UNACQUIRED_NO_META
 VERDICT_LABEL = {"supported": "supported", "partial": "partly supported"}
 INLINE_STATUS = {"ok": "A new search found documents and checked them for this question.",
                  "none": "A new search ran but found no usable full document.",
@@ -144,6 +164,13 @@ def _tally(values, labels: dict) -> dict:
     return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
+def _tally_labels(labels: list) -> dict:
+    out: dict = {}
+    for lab in labels:
+        out[lab] = out.get(lab, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def docs_inline(inline: dict) -> list:
     return ui_evidence._list(inline.get("documents"))
 
@@ -233,8 +260,7 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
         "results": len(found),
         "by_service": _tally([r.get("provider") for r in found], SERVICE_KIND),
         "by_acquisition": _tally([r.get("acquisition") for r in found if r.get("acquisition") is not None], ACQ_LABEL),
-        "by_licence": _tally([r.get("licence_decision") for r in found if r.get("licence_decision") is not None],
-                             LICENCE_LABEL),
+        "by_licence": _tally_labels([licence_label(r) for r in found if r.get("licence_decision") is not None]),
         "inline": None if not inline else {
             "status": INLINE_STATUS.get(inline.get("status"), "A new search was considered (outcome: other)."),
             "answer_eligible": ui_evidence._count(inline.get("n_answer_eligible")),
