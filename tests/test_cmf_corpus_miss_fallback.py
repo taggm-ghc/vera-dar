@@ -83,9 +83,10 @@ L2_REFUSE = sorted(scope_router.REFUSE_CATEGORIES)
 # level: L1. off_topic already starts discovery today (positive regression, no xfail).
 def test_A_off_topic_decline_starts_discovery(monkeypatch):
     dec = scope_router.ScopeDecision(False, "layer2_llm", "llm_out:not about research", category="off_topic")
-    calls = _wire(monkeypatch, decision=dec, override=True)
+    # DDFIX-1023/SCOPE: off_topic now takes the normal research path; a corpus miss there starts the in-scope inline
+    calls = _wire(monkeypatch, token="insufficient", decision=dec, override=True)
     ask_service.answer_in_scope(Q_OFF, "m", _pr())
-    assert calls, "layer-2 decline category 'off_topic' must start discovery"
+    assert calls == [True], "layer-2 off_topic verdict must start research (inline, research path)"
 
 
 # level: L1. in_scope (the only practical widening) starts discovery; "" (unknown/invalid category) must NOT (V1 dissent;

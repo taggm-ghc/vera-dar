@@ -88,7 +88,7 @@ def test_shipped_config_enables_full_http_discovery_to_answer(scenario, rig, mon
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["result_kind"] == "answer", body.get("contract")
-    assert bool(body["contract"].get("offtopic")) is (scenario == "off_topic")
+    assert not body["contract"].get("offtopic")  # DDFIX-1023/SCOPE: an off_topic verdict takes the research path
 
     # discovery ran once, through the real retrieve_all, with the provider seam
     assert len(searches) == 1 and searches[0]["providers"]

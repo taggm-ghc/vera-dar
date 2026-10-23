@@ -11,6 +11,14 @@ from tests import fulltext_synth
 from tests import test_fulldoc_e2e as e2e
 from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, fulldoc_db, scope_router
 
+
+@pytest.fixture(autouse=True)
+def _legacy_decline_path(monkeypatch):
+    """DDFIX-1023/SCOPE: an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
+    verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
+    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+
 BASE_NO_EPI = (("syn_clim", "clim", "10.9999/syn.clim"), ("syn_repro", "repro", "10.9999/syn.repro"))
 
 

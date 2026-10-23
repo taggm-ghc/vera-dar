@@ -54,9 +54,10 @@ def test_BASELINE_flag_off_discovered_candidates_do_not_enter_acquisition(rig):
 
 # ------------------------------------------------------------------------------------------------- A: discovery
 def test_A_corpus_miss_runs_discovery_search(rig):
-    """Corpus miss -> the request's discovery (reading-list) search runs, on the restricted off-topic seam."""
+    """Corpus miss -> the request's discovery (reading-list) search runs. DDFIX-1023/SCOPE: an off_topic verdict takes
+    the normal research path, so discovery is the unrestricted search (before: the restricted off-topic seam)."""
     r, ds = ask_offtopic(rig, [discovered()])
-    assert ds.calls and all(c is True for c in ds.calls)
+    assert ds.calls and all(c is False for c in ds.calls)
     assert rig.outcomes, "inline acquisition did not run on a corpus miss"
 
 

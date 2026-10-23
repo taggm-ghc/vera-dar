@@ -177,6 +177,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
+    if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
+        decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     if not decision.accepted:
         trig = None
@@ -338,7 +340,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
     bg = inline_acquire.background_note(acq, o)  # CONT-1023: "" unless candidates were queued for background acquisition
     if o.corpus is None:
-        t = inline_acquire.notice(acq, o.status)
+        t = _inline_notice(acq, o)
         return f"{t} {bg}".strip() if t is not None and bg else t
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
     if not isinstance(out, AskResult):
@@ -363,6 +365,61 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     return replace(out, answer=f"{lead} {out.answer}" if lead else out.answer, accepted=False,
                    contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
                              "inline_acquisition": o.public()})
+
+
+def _research_eligible(decision, question: str, acq) -> bool:
+    """DDFIX-1023/SCOPE (owner directive 2026-10-23): curated corpus coverage is not research eligibility. A WELL-FORMED
+    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless) takes
+    the normal research path: corpus attempt, unrestricted discovery, inline full-text acquisition and the unchanged
+    admission, answer writer and claim check (no answer without admitted evidence). Refusal categories (advice, harmful,
+    programming_task, rule_change), layer-1 deny/injection hits, data markers, malformed or contradictory verdicts, a
+    missing category and layer2_mode none keep the decline path. It applies only where the shipped switches already
+    authorise researching AND answering such a question (acquisition effectively on, scope_expansion
+    override_layer2_declines, decline trigger and layer-2 category gate), so every existing kill switch still applies;
+    what changes is that the research runs as the normal path, not as a refusal with a reading list. Fails closed."""
+    try:
+        from vera import acq_config
+        return (acq is not None and decision.accepted is False and decision.layer == "layer2_llm"
+                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and decision.category not in _NO_LIST_CATEGORIES
+                and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
+                and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_CHECKED_STATUSES = ("fetched_rejected", "acquired_not_admitted")  # research_outcome.DIAG_STATUSES actually checked
+
+
+def _inline_notice(acq, o):
+    """DDFIX-1023/SCOPE (b): the inline "none" notice ("none passed its licence, content and relevance checks") is
+    true only when candidates were actually checked. It now follows the per-candidate diagnostic statuses
+    (P0DTA-DIAG): candidates never checked (not selected, not retrieved, not reached) are reported as not checked.
+    Other statuses, or no per-candidate records, keep the configured notice unchanged."""
+    from vera import inline_acquire
+    t = inline_acquire.notice(acq, o.status)
+    recs = getattr(o, "candidates", None)
+    if o.status != "none" or not t or recs is None:
+        return t
+    try:
+        from vera.research_outcome import DIAG_LABELS, diag_counts
+        n = diag_counts(recs)
+    except Exception:  # noqa: BLE001
+        return t
+    checked = sum(n.get(k, 0) for k in _CHECKED_STATUSES)
+    unchecked = {k: v for k, v in n.items() if v and k not in _CHECKED_STATUSES and k != "admitted"}
+    if not unchecked:
+        if checked:
+            return t
+        return ("VERA-DAR searched for open-access full-text documents on this question while answering, but found "
+                "no candidate documents to check.")
+    parts = "; ".join(f"{v} {DIAG_LABELS.get(k, k)}" for k, v in unchecked.items())
+    lead = "VERA-DAR searched for open-access full-text documents on this question while answering. "
+    if checked:  # the configured sentence is true of the checked ones; say plainly that the rest were not checked
+        n_un = sum(unchecked.values())
+        return f"{t} {n_un} other document{'' if n_un == 1 else 's'} found {'was' if n_un == 1 else 'were'} not checked ({parts})."
+    return (f"{lead}None of the {sum(unchecked.values())} documents it found was checked in this request ({parts}), "
+            "so no document was judged on its licence, content or relevance.")
 
 
 def _base_warming() -> bool:

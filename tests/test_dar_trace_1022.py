@@ -1,12 +1,22 @@
 """DAR-TRACE-1022: inline answer-path drop points (offline, synthetic fixtures only; no network, DB or model call)."""
 import json
 
+import pytest
+
 from tests import acq_support as A
 from tests.test_dar_inline_acquire import OFF_Q, direct, rig  # noqa: F401  (fixtures)
 from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from tests.test_dar_inline_r2 import _first_run_plan, _new_process
 from vera import ask_service, auto_acquire as aa, inline_acquire
 from vera import search_providers as sp
+
+
+@pytest.fixture(autouse=True)
+def _legacy_decline_path(monkeypatch):
+    """DDFIX-1023/SCOPE: an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
+    verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
+    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
 
 OTHER_Q = "What are the different types of horses?"
 
