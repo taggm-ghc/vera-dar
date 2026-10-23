@@ -71,7 +71,8 @@ def test_D1_sort_uses_only_existing_oa_signals(env):
              A.cand("10.9999/p.isoa", oa={"is_oa": True}),
              A.cand("10.9999/p.pmc", pmcid="PMC7300001"),
              A.cand("10.9999/p.ddg", acq_source="ddg", ddg_id_kind="doi"),
-             {"url": X.ABS_URL, "doi": X.DOI, "identifier": f"arXiv:{X.AID}{X.VER}", "title": "t", "snippet": ""}]
+             {"url": X.ABS_URL, "doi": X.DOI, "identifier": f"arXiv:{X.AID}{X.VER}",
+              "title": "SYNTHETIC outbreak transmission incidence preprint", "snippet": ""}]  # DDFIX-1023 D6: a real title (a 1-word placeholder is now tier 1)
     ranked = auto_acquire.rank_candidates(A.Q_EPI, cands, c, set(), auto_acquire._fd_cfg(), lambda code: None)
     dois = [r[1] for r in ranked]
     routable = {"10.9999/p.isoa", "10.9999/p.pmc", X.DOI}

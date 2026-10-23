@@ -197,7 +197,9 @@ def test_landing_page_ssrf_guard_blocks_private_hosts():
 
 
 def test_ddg_candidates_rank_first_and_arxiv_last():
-    ddg = {**_oa_cand(50), "title": "unrelated", "snippet": "", "acq_source": "ddg", "ddg_id_kind": "doi"}
+    # DDFIX-1023 D6: the DDG record still has the weakest pre-rank (no abstract), but a title on the question's topic: a
+    # short title matching no central concept is now relevance tier 1, and the relevance tier precedes DDG-first.
+    ddg = {**_oa_cand(50), "title": "Synthetic widget", "snippet": "", "acq_source": "ddg", "ddg_id_kind": "doi"}
     arx = {**_oa_cand(51), "acq_source": "ddg", "ddg_id_kind": "arxiv"}
     others = [_oa_cand(i) for i in range(52, 56)]
     ranked, _ = _rank(sp.merge_sources([ddg, arx], others))

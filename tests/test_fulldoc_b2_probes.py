@@ -26,7 +26,8 @@ SYNTH_OFF = [
 # every other probe keeps the insufficient expectation.
 # DDFIX-1023 OWNER DECISIONS 2026-10-23 ("34% with idiom strip", "drop it to 34% too": min_question_coverage and
 # min_relevance 0.34): two more synthetic off-corpus probes are now ADMITTED by the lexical gates (2 of 5 content stems
-# in one passage). Recorded as owner-accepted residual risk of that decision; the claim check is the backstop.
+# in one passage). Consequence of the owner-set 0.34 thresholds (2026-10-23); not separately reviewed by the owner. The
+# claim check is the backstop. Still admitted with REL rev2's idiom stripping (checked at the DDFIX-1023 integration tip).
 ACCEPTED_FALSE_ADMITS = {"Which software version should my bakery workflow use?",
                          "What transmission interval suits my wifi router?",
                          "What serial interval should my podcast episodes follow?"}
