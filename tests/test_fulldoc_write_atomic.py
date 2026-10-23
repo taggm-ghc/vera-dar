@@ -21,9 +21,10 @@ CREATE TABLE candidates (candidate_id INTEGER PRIMARY KEY, run_id INTEGER, sourc
   gate_a_decision TEXT, gate_a_rationale TEXT, fetch_status TEXT);
 CREATE TABLE canonical_sources (canonical_source_id INTEGER PRIMARY KEY, canonical_url TEXT UNIQUE);
 CREATE TABLE sources (source_id INTEGER PRIMARY KEY, canonical_source_id INTEGER, candidate_id INTEGER, version INTEGER,
-  content TEXT, content_hash TEXT, provenance TEXT);
+  content TEXT, content_hash TEXT, provenance TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE evidence_spans (span_id INTEGER PRIMARY KEY, source_id INTEGER, text TEXT, start_index INTEGER,
-  end_index INTEGER, relevance_score REAL, evidence_type TEXT, UNIQUE(source_id, start_index, end_index));
+  end_index INTEGER, relevance_score REAL, evidence_type TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(source_id, start_index, end_index));
 """
 TABLES = ["questions", "runs", "candidates", "canonical_sources", "sources", "evidence_spans"]
 

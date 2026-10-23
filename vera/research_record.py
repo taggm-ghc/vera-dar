@@ -35,28 +35,63 @@ def now() -> datetime:
 
 def assess(admitted, cfg: dict, at: datetime | None = None, new_ids=()) -> dict:
     """Per-document freshness of the admitted passages (the least fresh passage decides for its document).
-    status: fresh | stale | unknown | none (no evidence)."""
+    status: fresh | stale | unknown | none (no evidence). FRESH-AMEND-1023: freshness = corpus_added_at (when the chunk
+    was added to the corpus) vs the threshold; evidence_recency (recent | older | unknown) = source_authored_at. Both
+    dates are reported per document. `_backfill` (internal, never public) lists the stamps to revise to now()."""
     at = at or now()
     adm = [a for a in admitted or () if isinstance(a, dict)]
     rep = fz.assess_freshness(adm, now=at, cfg=cfg)
     new_ids = {str(x) for x in new_ids or ()}
     rank = {"fresh": 0, "stale": 1, "unknown": 2}
     docs: dict = {}
+    backfill: list = []
     for a, c in zip(adm, rep.chunks):
+        backfill.extend(c.backfill)
         did = str(a.get("document_id"))
         row = {"document_id": a.get("document_id"), "basis": c.basis, "freshness": c.status, "reason": c.reason,
-               "source_date": c.source_date.isoformat() if c.source_date else None,
-               "acquired_at": None if c.acquired_at is None else str(c.acquired_at),
+               "corpus_added_at": c.corpus_added_at.isoformat() if c.corpus_added_at else None,
+               "corpus_added_basis": c.basis,
+               "source_authored_at": c.source_authored_at, "source_authored_precision": c.authored_precision,
+               "source_authored_basis": c.authored_basis, "evidence_recency": c.authored_recency,
                "last_checked_at": None if c.last_checked_at is None else str(c.last_checked_at),
                "new_this_request": did in new_ids}
         if did not in docs or rank[c.status] > rank[docs[did]["freshness"]]:
             docs[did] = row
     counts = {"fresh": 0, "stale": 0, "unknown": 0}
+    authored = {"recent": 0, "older": 0, "unknown": 0}
     for r in docs.values():
         counts[r["freshness"]] += 1
+        authored[r["evidence_recency"]] += 1
     status = "none" if not docs else "unknown" if counts["unknown"] else "stale" if counts["stale"] else "fresh"
     return {"status": status, "max_age_hours": rep.max_age_hours, "checked_at": at.isoformat(), "counts": counts,
-            "chunk_counts": dict(rep.counts), "documents": list(docs.values())}
+            "chunk_counts": dict(rep.counts), "authored_counts": authored, "trigger_basis": "corpus_added_at",
+            "documents": list(docs.values()), "_backfill": backfill}
+
+
+def apply_backfill(fr: dict | None, cfg: dict, at: datetime, acq: dict | None, stamper=None) -> dict | None:
+    """Owner refinement 2026-10-23: a missing / invalid corpus_added_at on a chunk used in this request is revised to the
+    request's now() (vera.corpus_stamp: in memory at once, persisted by a conditional single-row UPDATE through the WO
+    app path when configured). None when nothing needed it. Never raises."""
+    stamps = (fr or {}).get("_backfill") or []
+    if not stamps:
+        return None
+    import os
+
+    from vera import acq_config, corpus_stamp
+    reason = ""
+    try:
+        if acq_config.killed(acq, os.environ):  # review D1: the persist step honours the kill switch; memory stamp still applies
+            stamper, reason = None, "kill switch"
+        elif stamper is None and any(corpus_stamp.persistable(x) for x in stamps):
+            stamper, reason = corpus_stamp.default_stamper(acq)
+        return corpus_stamp.backfill(stamps, at, cfg, stamper, reason)
+    except Exception as exc:  # noqa: BLE001
+        return {"count": 0, "chunk_ids": [], "at": at.isoformat(), "persist": {"status": "failed",
+                                                                                "reason": type(exc).__name__}}
+
+
+def _public_fr(fr: dict | None) -> dict | None:
+    return None if fr is None else {k: v for k, v in fr.items() if k != "_backfill"}
 
 
 def sufficient(result, cfg: dict) -> bool:
@@ -108,7 +143,7 @@ def _terminal(c: dict) -> str:
 
 def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_available: bool, fr_before: dict | None,
               fr_after: dict | None = None, citations=None, answer_failed: bool = False,
-              failed_text: str | None = None) -> dict:
+              failed_text: str | None = None, backfill: dict | None = None) -> dict:
     """contract["research"]: the full record (report detail) for one request."""
     inline = inline if isinstance(inline, dict) else None
     status = (inline or {}).get("status")
@@ -132,8 +167,9 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
             "complete": complete, "inline_status": status, "portals": [dict(p) for p in raw_portals],
             "candidates": [_public_cand(dict(c, candidate_id=o.candidate_id, ids=dict(o.ids),
                                              terminal_reason=o.terminal_reason)) for c, o in zip(cands, outs)],
-            "report_detail": detail, "freshness": {"before": fr_before, "after": fr_after},
-            "citations": list(citations or [])}
+            "report_detail": detail, "freshness": {"before": _public_fr(fr_before), "after": _public_fr(fr_after)},
+            "citations": list(citations or []),
+            **({"corpus_added_backfill": backfill} if backfill else {})}
 
 
 def public_fields(rec: dict | None) -> dict:
@@ -148,6 +184,9 @@ def public_fields(rec: dict | None) -> dict:
             "freshness": {"status": cur.get("status"), "any_stale_or_unknown": bool(c.get("stale") or c.get("unknown")),
                           "counts": dict(c), "max_age_hours": cur.get("max_age_hours"),
                           "checked_at": cur.get("checked_at"), "documents": list(cur.get("documents") or []),
+                          "trigger_basis": cur.get("trigger_basis"), "authored_counts": dict(cur.get("authored_counts") or {}),
+                          **({"corpus_added_backfill": rec["corpus_added_backfill"]}
+                             if rec.get("corpus_added_backfill") else {}),
                           "after": {"counts": dict(aft.get("counts") or {}),
                                     "documents": list(aft.get("documents") or [])} if aft else None},
             "research_outcome": {"kind": rec.get("kind"), "user_text": rec.get("user_text") or "",

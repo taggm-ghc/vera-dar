@@ -6,12 +6,16 @@ socket guards). Stored chunks are the acquired corpus (fulldoc_db.load_acquired_
 publication and ingest times we control. Time: ONE clock hook `vera.freshness.utcnow` is monkeypatched to NOW; config key
 `freshness_max_age_hours` = 24 is set on the rig's private config copy.
 
-Freshness = age of the PUBLICATION (provenance published / published_at), never the ingest time (acquired_at / fetched_at).
+FRESH-AMEND-1023 (owner clarification 2026-10-23): the freshness TRIGGER = age of corpus_added_at (when the chunk was added to
+the corpus: here provenance.retrieved_at written by the corpus writer, spec key `acquired`); the older/recent LABEL =
+source_authored_at (provenance published, spec key `published`). A missing / invalid corpus_added_at triggers research and is
+revised to the request's now() (vera.corpus_stamp).
 Contract fields (additive): body["triggers"] (list of 'insufficient'|'stale'|'freshness_unknown'), body["freshness"]
 ({any_stale_or_unknown: bool, counts}), body["research_outcome"] ({kind, user_text, complete, portals[], candidates[]}).
 Existing fields keep their behaviour; accept_predicate is used wherever a grounded answer is expected.
-Mutation guard: disabling the insufficiency trigger fails C/D/I2/J; disabling the freshness trigger fails A-vs-B/D/E/F/H;
-using ingest time as freshness fails B (published 30 h ago, ingested 1 h ago) and F (published years ago, ingested today).
+Mutation guard: disabling the insufficiency trigger fails C/D/I2/J; disabling the freshness trigger fails A-vs-B/E/H;
+using the authoring date as the trigger fails B (added 30 h ago, published 1 h ago), E and F (published years ago, added
+today); labelling recency by corpus_added_at fails F; dropping the backfill fails E2.
 """
 import copy
 import json
@@ -123,6 +127,11 @@ class World:
         corpus = fulldoc_db.load_acquired_rows(src, spans, fulldoc_corpus.load_config(), A.cfg()) if plans else None
         if plans:
             assert len(corpus.acquired) == len(plans), f"fixture: stored corpus unusable: {corpus.unusable}"
+            for s, a in zip(specs, sorted(corpus.acquired, key=lambda a: [p["source"]["provenance"]["document_id"]
+                                                                          for p in plans].index(a["document_id"]))):
+                if "stamp" in s:  # a missing / invalid corpus_added_at in the served corpus (no per-chunk stamps)
+                    corpus.stamps[a["document_id"]] = {"corpus_added_at": s["stamp"], "corpus_stamps": []}
+        self.corpus = corpus
         self.mp.setattr(fulldoc_corpus, "get_acquired_corpus", lambda cfg=None, env=None, now=None: corpus)
         return self
 
@@ -193,8 +202,8 @@ def test_A_sufficient_and_fresh_no_external_search(world):
 
 # ============================================================================================================ B
 def test_B_sufficient_but_stale_triggers_discovery_and_acquisition(world):
-    # published 30 h ago, INGESTED 1 h ago: ingest-time-as-freshness would call this fresh
-    world.store(dict(doi=OLD_DOI, published=HOURS(30), acquired=HOURS(1)))
+    # FRESH-AMEND-1023: ADDED to the corpus 30 h ago, published 1 h ago: authoring-time-as-freshness would call this fresh
+    world.store(dict(doi=OLD_DOI, published=HOURS(1), acquired=HOURS(30)))
     body = world.ask()
     assert _need(body, "triggers") == ["stale"]
     assert _need(body, "freshness")["any_stale_or_unknown"] is True
@@ -214,35 +223,79 @@ def test_C_insufficient_but_fresh_triggers(world):
 
 # ============================================================================================================ D
 def test_D_insufficient_and_stale_triggers_both_reasons(world):
-    world.store(dict(doi="10.9999/old.clim1", topic="clim", published=HOURS(72), acquired=HOURS(1)))
+    world.store(dict(doi="10.9999/old.clim1", topic="clim", published=HOURS(1), acquired=HOURS(72)))
     body = world.ask()
-    # FRESH-1023 integration adaptation: the stale stored chunk is about another topic (no candidate passage for this
-    # question), so it is not "materially relevant" evidence and adds no freshness trigger; insufficiency alone triggers.
-    # Both-trigger behaviour on relevant stale evidence is covered by tests/test_fresh_1023_integration.py.
-    assert "insufficient" in _need(body, "triggers")
+    # FRESH-1023 integration adaptation: the stale stored chunk (added 72 h ago) is about another topic (no candidate
+    # passage for this question), so it is not "materially relevant" evidence and adds no freshness trigger;
+    # insufficiency alone triggers (tightened back to == per FRESH-VERIFY-1023). Both-trigger behaviour on relevant
+    # stale evidence is covered by tests/test_fresh_1023_integration.py.
+    assert _need(body, "triggers") == ["insufficient"]
     assert world.triggered(), world.external
 
 
 # ============================================================================================================ E
-@pytest.mark.parametrize("kind,published", [("year_only_no_day", "2026"), ("garbled", "31/31/2026 ??"), ("future", "2027-01-01T00:00:00+00:00")])
-def test_E_missing_or_untrustworthy_timestamp_triggers_verification(world, kind, published):
-    world.store(dict(doi=OLD_DOI, published=published, acquired=HOURS(1)))  # otherwise sufficient
+E_STAMPS = [("missing", None), ("year_only", "2026"), ("year_month", "2026-09"), ("date_only", "2026-10-23"),
+            ("garbled", "31/31/2026 ??"), ("future", "2027-01-01T00:00:00+00:00")]
+
+
+@pytest.mark.parametrize("kind,stamp", E_STAMPS)
+def test_E_missing_or_untrustworthy_timestamp_triggers_verification(world, kind, stamp):
+    # FRESH-AMEND-1023: the untrustworthy value is now corpus_added_at (the served corpus's write-time record); the
+    # publication date is a valid recent one, so authoring time cannot explain the trigger.
+    world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(2), stamp=stamp))  # otherwise sufficient
     body = world.ask()
-    # year_only_no_day: the loader refuses an EMPTY published_year (R-PLACEHOLDER), so "missing" is modelled by a year without a
-    # day: it cannot establish "within 24 h" (nor "older than 24 h") -> unknown, not stale.
-    assert _need(body, "triggers") == ["freshness_unknown"], kind  # not 'stale', not 'insufficient': the date is unknown
+    assert _need(body, "triggers") == ["freshness_unknown"], kind  # not 'stale', not 'insufficient': the stamp is unknown
     fr = _need(body, "freshness")
     assert fr["any_stale_or_unknown"] is True
     assert world.triggered(), world.external
 
 
-# ============================================================================================================ F
-def test_F_recently_ingested_old_publication_is_old(world):
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(0.5)))  # acquired today, published years ago
+@pytest.mark.parametrize("kind,stamp", E_STAMPS)
+def test_E2_invalid_corpus_stamp_is_revised_to_now_and_next_request_is_fresh(world, kind, stamp):
+    """Owner refinement: missing / invalid / imprecise corpus_added_at -> trigger AND revised to the request's now()."""
+    world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(2), stamp=stamp))
+    did = world.corpus.acquired[0]["document_id"]
+    body = world.ask()
+    assert _need(body, "triggers") == ["freshness_unknown"], kind
+    bf = _need(body, "freshness").get("corpus_added_backfill")
+    assert bf and bf["count"] >= 1 and bf["at"] == NOW.isoformat(), bf
+    assert bf["persist"]["status"] == "not_needed" and bf["persist"]["not_persistable"] >= 1  # in-memory chunk: no DB row
+    rec = world.corpus.stamps[did]["corpus_stamps"]
+    assert rec and all(x["corpus_added_at"] == NOW.isoformat() for x in rec)  # the served corpus itself, in place
+    body2 = world.ask()  # within 24 h: the repaired stamp is valid, so no freshness trigger for that chunk
+    assert "freshness_unknown" not in _need(body2, "triggers") and "stale" not in body2["triggers"], body2["triggers"]
+    assert not (_need(body2, "freshness").get("corpus_added_backfill"))
+
+
+def test_E3_valid_corpus_stamp_is_never_overwritten(world):
+    t = HOURS(30).isoformat(timespec="seconds")
+    world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(30)))
+    did = world.corpus.acquired[0]["document_id"]
     body = world.ask()
     assert _need(body, "triggers") == ["stale"]
-    assert _need(body, "freshness")["any_stale_or_unknown"] is True
-    assert world.triggered(), world.external
+    assert not _need(body, "freshness").get("corpus_added_backfill")
+    assert all(x["corpus_added_at"] == t for x in world.corpus.stamps[did]["corpus_stamps"])
+
+
+# ============================================================================================================ F
+def test_F_recently_ingested_old_publication_is_old(world):
+    # FRESH-AMEND-1023: added to the corpus 30 min ago (no freshness trigger), published years ago -> labelled OLDER and
+    # never called recent; both dates are exposed per source and are distinct.
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(0.5)))  # acquired today, published years ago
+    body = world.ask()
+    assert _need(body, "triggers") == []
+    assert _need(body, "freshness")["any_stale_or_unknown"] is False
+    assert not world.triggered() and world.external["plans_written"] == 0, world.external
+    _grounded(body)
+    assert body["sources"]
+    for s in body["sources"]:
+        assert s["evidence_recency"] == "older", s
+        assert s["source_authored_at"].startswith(YEARS_AGO.date().isoformat()) and s["source_authored_precision"] == "day"
+        assert s["corpus_added_at"] == HOURS(0.5).isoformat(timespec="seconds")
+        assert s["corpus_added_at"] != s["source_authored_at"]
+    doc = _need(body, "freshness")["documents"][0]
+    assert doc["freshness"] == "fresh" and doc["evidence_recency"] == "older"
+    assert not re.search(r"\brecent\b", body["answer"], re.I) or "older" in body["answer"].lower()
 
 
 # ============================================================================================================ G
@@ -261,6 +314,14 @@ def test_G_newly_acquired_licensed_chunks_admitted_and_cited_in_same_request(wor
     ro = _need(body, "research_outcome")
     assert ro["kind"] == "answered_with_new" and ro["complete"] is True and ro["user_text"]
     assert any(c["terminal_reason"] for c in ro["candidates"]) and ro["portals"]
+    # FRESH-AMEND-1023: the corpus writer stamps corpus_added_at at write time on the (fake) freshness clock, and the
+    # acquisition/added time is never used as the authoring date (Europe PMC pubYear stays a year-precision date).
+    prov = world.rig.store.plans[0]["source"]["provenance"]
+    assert prov["retrieved_at"] == NOW.isoformat(timespec="seconds")
+    for s in body["sources"]:
+        assert s["corpus_added_at"] == NOW.isoformat(timespec="seconds"), s
+        assert s["source_authored_at"] == str(NOW.year) and s["source_authored_precision"] == "year", s
+        assert s["evidence_recency"] == "unknown"  # a year-only date is never 'recent' (FRESH-VERIFY-1023 F1)
 
 
 # ============================================================================================================ H
@@ -281,7 +342,7 @@ def _per_doc_answer(world):
 
 
 def test_H_new_evidence_contradicts_old_both_kept_and_marked(world):
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1), seed=3))  # sufficient but old
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30), seed=3))  # sufficient but added 30 h ago
     world.answer_hook = lambda: _per_doc_answer(world)
     body = world.ask()
     assert _need(body, "triggers") == ["stale"]
@@ -302,7 +363,7 @@ def test_H_new_evidence_contradicts_old_both_kept_and_marked(world):
 
 # ============================================================================================================ I
 def test_I1_no_eligible_full_text_older_evidence_only_is_qualified(world):
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1)))
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     world.web.records[NEW_DOI]["isOpenAccess"] = "N"  # candidate has no eligible (open licensed) full text
     body = world.ask()
     assert _need(body, "triggers") == ["stale"]

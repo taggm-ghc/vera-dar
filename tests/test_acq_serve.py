@@ -76,6 +76,9 @@ def test_base_insufficient_question_is_answered_from_acquired_verbatim_chunks(h,
 
 def test_base_answers_are_unchanged_and_the_acquired_corpus_is_not_consulted(h, monkeypatch):
     h.bundle()
+    # FRESH-AMEND-1023: the first ask finds the bundle corpus's corpus_added_at missing, triggers and revises it to now()
+    # (owner refinement); a later ask within 24 h is fresh. Prime once so both compared asks see the same stamp state.
+    h.ask(e2e.Q_EPI)
     _, off = h.ask(e2e.Q_EPI)
     acq, _ = _acquired_corpus()
     n = _serve(monkeypatch, acq)

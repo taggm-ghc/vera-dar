@@ -631,7 +631,9 @@ def _source_freshness(sources, fr: dict) -> list:
             continue
         d = by.get(str(s.get("document_id")), {})
         out.append({"n": s.get("n"), "document_id": s.get("document_id"), "freshness": d.get("freshness", "unknown"),
-                    "new_this_request": bool(d.get("new_this_request"))})
+                    "new_this_request": bool(d.get("new_this_request")),
+                    "evidence_recency": d.get("evidence_recency", "unknown"),
+                    **{k: d.get(k) for k in _DATE_KEYS}})
     return out
 
 
@@ -642,8 +644,30 @@ def _with_research(res, rec: dict, suffix: str | None = None):
     return replace(res, answer=text, contract={**(res.contract or {}), "research": rec})
 
 
+def _backfill(fcfg, at, acq, *frs):
+    """Owner refinement 2026-10-23: revise missing/invalid corpus_added_at stamps of the chunks used here to now()."""
+    from vera import research_record as rr
+    stamps = [x for fr in frs for x in ((fr or {}).get("_backfill") or [])]
+    return rr.apply_backfill({"_backfill": stamps}, fcfg, at, acq) if stamps else None
+
+
+def _merge_bf(a, b):
+    if not b:
+        return a
+    if not a:
+        return b
+    pa, pb = a.get("persist") or {}, b.get("persist") or {}
+    return {"count": a["count"] + b["count"], "chunk_ids": list(a["chunk_ids"]) + list(b["chunk_ids"]), "at": a["at"],
+            "persist": {"status": pa.get("status") if pa.get("status") == pb.get("status") else "mixed",
+                        "updated": int(pa.get("updated") or 0) + int(pb.get("updated") or 0),
+                        "not_persistable": int(pa.get("not_persistable") or 0) + int(pb.get("not_persistable") or 0),
+                        "reason": "; ".join(x for x in (pa.get("reason"), pb.get("reason")) if x)}}
+
+
 def _fresh_line(texts: dict, fr2: dict, n_new: int) -> str:
-    c = fr2["counts"]
+    """Publication wording: counts by source_authored_at (authored_counts), never by corpus_added_at."""
+    a = fr2.get("authored_counts") or {}
+    c = {"fresh": a.get("recent", 0), "stale": a.get("older", 0), "unknown": a.get("unknown", 0)}
     t = texts.get("fresh_new") or ""
     try:
         return t.format(n_new=n_new, n_fresh=c["fresh"], n_stale=c["stale"], n_unknown=c["unknown"])
@@ -723,6 +747,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     texts = fcfg.get("texts") or {}
     fr = rr.assess(fd.evidence.admitted, fcfg, at)
     trig = rr.triggers(rr.sufficient(fd, fcfg), fr)
+    bf = _backfill(fcfg, at, acq, fr)
     if not trig:
         return _with_research(_annotate(fd, fr), rr.summarize(triggers=[], inline=None, used_new=False,
                                                               older_available=True, fr_before=fr,
@@ -736,14 +761,15 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
         new_ids = {str(a.get("document_id")) for a in new_res.evidence.admitted
                    if (a.get("document_id"), a.get("text_sha256")) not in base_keys}
         fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
+        bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         rec = rr.summarize(triggers=trig, inline=pub, used_new=True, older_available=True, fr_before=fr, fr_after=fr2,
-                           citations=_source_freshness(new_res.sources, fr2))
+                           citations=_source_freshness(new_res.sources, fr2), backfill=bf)
         suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), _mixed_line(texts, fr2), rec["user_text"])
                           if t)
         return _with_research(_annotate(new_res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
                        citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
-                       failed_text=texts.get("new_evidence_unanswered"))
+                       failed_text=texts.get("new_evidence_unanswered"), backfill=bf)
     base = _annotate(fd, fr)
     if failed:  # the failed combined writer/claim-check spend is still reported
         base = replace(base, tokens_used=failed.tokens, cost_usd=round(failed.cost, 6))
@@ -826,15 +852,22 @@ def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
                                             "inline_acquisition": o.public()}), False
 
 
-_RECENCY = {"fresh": "recent", "stale": "older", "unknown": "unknown"}
+_DATE_KEYS = ("corpus_added_at", "corpus_added_basis", "source_authored_at", "source_authored_precision")
 
 
 def _annotate(res, fr: dict):
-    """Per cited source: evidence_recency (recent | older | unknown) from its document's source-content freshness."""
-    by = {str(d.get("document_id")): d.get("freshness") for d in (fr or {}).get("documents") or ()}
-    srcs = tuple(dict(s, evidence_recency=_RECENCY.get(by.get(str(s.get("document_id"))), "unknown"))
-                 if isinstance(s, dict) else s for s in (res.sources or ()))
-    return replace(res, sources=srcs)
+    """Per cited source (FRESH-AMEND-1023): evidence_recency (recent | older | unknown) from its document's SOURCE
+    AUTHORING date, plus both per-document dates: corpus_added_at (the freshness trigger basis) and source_authored_at
+    (with precision). A newly added old publication is therefore labelled older, never recent."""
+    by = {str(d.get("document_id")): d for d in (fr or {}).get("documents") or ()}
+    srcs = []
+    for s in res.sources or ():
+        if not isinstance(s, dict):
+            srcs.append(s)
+            continue
+        d = by.get(str(s.get("document_id"))) or {}
+        srcs.append(dict(s, evidence_recency=d.get("evidence_recency") or "unknown", **{k: d.get(k) for k in _DATE_KEYS}))
+    return replace(res, sources=tuple(srcs))
 
 
 def _mixed_line(texts: dict, fr2: dict) -> str:
@@ -868,13 +901,16 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
     texts = fcfg.get("texts") or {}
     fr = rr.assess(getattr(ev, "admitted", ()) or _relevant_docs(ev, extra_ev), fcfg, at)
     trig = rr.triggers(False, fr)
+    bf = _backfill(fcfg, at, acq, fr)
     if answered:
         adm = res.evidence.admitted if res.evidence is not None else ()
         new_ids = {str(a.get("document_id")) for a in adm}
         fr2 = rr.assess(adm, fcfg, at, new_ids=new_ids)
+        bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=True, older_available=False, fr_before=fr,
-                           fr_after=fr2, citations=_source_freshness(res.sources, fr2))
+                           fr_after=fr2, citations=_source_freshness(res.sources, fr2), backfill=bf)
         suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), rec["user_text"]) if t)
         return _with_research(_annotate(res, fr2), rec, suffix or None)
-    rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr)
+    rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr,
+                       backfill=bf)
     return replace(res, contract={**(res.contract or {}), "research": rec})

@@ -89,6 +89,9 @@ class FullDocCorpus:
         self._ev_lock = threading.Lock()
         self._chunk_counts: dict = {}
         self.source_kind: str | None = None  # set by get_corpus from the branch actually taken ("db" | "bundle")
+        # FRESH-AMEND-1023: document_id -> {"corpus_added_at", "corpus_stamps": [per stored chunk stamp dicts]} (the
+        # corpus write times, vera.fulldoc_db.corpus_stamps); kept OFF `acquired` so the bundle/DB parity is unchanged.
+        self.stamps: dict = {}
         if dar is not None:
             for c in dar._chunks:
                 did = key_to_doc.get(c["source_key"])

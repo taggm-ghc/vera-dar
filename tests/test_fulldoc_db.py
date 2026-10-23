@@ -381,3 +381,50 @@ def test_row_caps_enforced_before_any_engine(world, tmp_path, capsys):
     s.check_caps(rows * 3, n * 3)  # 9 sources: at the cap
     with pytest.raises(fulltext_loader.IngestError):
         s.check_caps(rows * 4, n * 4)  # 12 sources
+
+
+# ------------------------------------------------------------------ FRESH-AMEND-1023 review D3: legacy fallback breadth
+class _PgErr(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.pgcode = code
+
+
+class _Cur:
+    def __init__(self, fail_code):
+        self.fail_code, self.sql = fail_code, []
+
+    def execute(self, sql, params):
+        self.sql.append(sql)
+        if len(self.sql) == 1 and self.fail_code:
+            raise _PgErr(self.fail_code)
+
+    def fetchall(self):
+        return [("row",)]
+
+
+class _Conn:
+    def __init__(self):
+        self.rolled_back = 0
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def test_select_compat_falls_back_only_on_undefined_column():
+    cur, conn = _Cur("42703"), _Conn()
+    assert fulldoc_db._select_compat(conn, cur, fulldoc_db.SQL_SPANS, {"ids": [1]}) == [("row",)]
+    assert cur.sql[0] == fulldoc_db.SQL_SPANS and "created_at" not in cur.sql[1] and "span_id," not in cur.sql[1]
+    assert conn.rolled_back == 1
+
+
+@pytest.mark.parametrize("code", ["57014", "55P03", "42501", "08006", None])
+def test_select_compat_reraises_everything_else(code):
+    class Boom(_Cur):
+        def execute(self, sql, params):
+            self.sql.append(sql)
+            raise (_PgErr(code) if code else RuntimeError("timeout"))
+    cur = Boom(None)
+    with pytest.raises(Exception):
+        fulldoc_db._select_compat(_Conn(), cur, fulldoc_db.SQL_SOURCES, {"run_id": 1, "kind": "x"})
+    assert cur.sql == [fulldoc_db.SQL_SOURCES]  # no silent legacy retry: write-time stamps are never dropped

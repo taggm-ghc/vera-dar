@@ -165,16 +165,27 @@ class AskSource(BaseModel):
     span_id: str | None = None  # DAR stored-corpus chunk id (absent for web sources)
     disposition: str | None = None  # evidence disposition of a stored source (e.g. "proposed")
     licence: str | None = None  # declared licence id of a stored source (from its stored provenance)
-    # FRESH-1023 (additive): "recent" (published within freshness_max_age_hours), "older", or "unknown" (publication
-    # time not verifiable). Set only when the freshness step ran; absent otherwise.
+    # FRESH-1023 / FRESH-AMEND-1023 (additive; set only when the freshness step ran, absent otherwise):
+    # evidence_recency "recent" | "older" | "unknown" by the SOURCE AUTHORING date (source_authored_at, precision
+    # year|month|day; a partial date is never "recent"); corpus_added_at = when the chunk was added to the corpus (the
+    # 24-hour freshness trigger basis), corpus_added_basis chunk|document|unknown.
     evidence_recency: str | None = None
+    corpus_added_at: str | None = None
+    corpus_added_basis: str | None = None
+    source_authored_at: str | None = None
+    source_authored_precision: str | None = None
 
     @model_serializer(mode="wrap")
     def _drop_absent_recency(self, handler):
         d = handler(self)
-        if d.get("evidence_recency") is None:
-            d.pop("evidence_recency", None)
+        for k in _FRESH_SOURCE_KEYS:
+            if d.get(k) is None:
+                d.pop(k, None)
         return d
+
+
+_FRESH_SOURCE_KEYS = ("evidence_recency", "corpus_added_at", "corpus_added_basis", "source_authored_at",
+                      "source_authored_precision")
 
 
 class AskCandidate(BaseModel):
@@ -584,7 +595,7 @@ def _fulldoc_sources(result) -> list[dict]:
                     "licence_decision": decided.get(s.get("document_id")), "span": s.get("span"), "span_id": s.get("span_id"),
                     "admission_passed": True, "acquisition": answer_contract.ACQ_ACQUIRED,
                     "disposition": "admitted", "licence": s.get("licence"),
-                    **({"evidence_recency": s["evidence_recency"]} if s.get("evidence_recency") else {})})
+                    **{k: s[k] for k in _FRESH_SOURCE_KEYS if s.get(k)}})
     return out
 
 

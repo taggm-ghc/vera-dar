@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -46,12 +47,39 @@ R_DBDOCPIN = "R-DBDOCPIN"  # per-document identity pin (text sha256, licence id,
 class _DocPinFail(Exception):
     """A per-document pin mismatch: the WHOLE run is unusable (fail closed), not just the one document."""
 
-SQL_SOURCES = (f"SELECT s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+SQL_SOURCES = (f"SELECT s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance, s.created_at "
                f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
                f"JOIN {SCHEMA}.candidates d ON d.candidate_id = s.candidate_id "
                f"WHERE d.run_id = %(run_id)s AND s.provenance->>'stored_text_kind' = %(kind)s ORDER BY s.source_id")
-SQL_SPANS = (f"SELECT e.source_id, e.start_index, e.end_index, e.text FROM {SCHEMA}.evidence_spans e "
+SQL_SPANS = (f"SELECT e.source_id, e.start_index, e.end_index, e.text, e.span_id, e.created_at FROM {SCHEMA}.evidence_spans e "
              f"WHERE e.source_id = ANY(%(ids)s) ORDER BY e.source_id, e.start_index")
+
+
+def _at(r, i) -> dict:
+    """FRESH-AMEND-1023: the row's DB write time (created_at, set by the database at INSERT) when the SELECT carries it."""
+    v = r[i] if len(r) > i else None
+    return {} if v is None else {"created_at": v.isoformat() if hasattr(v, "isoformat") else str(v)}
+
+
+def _with_stamps(stamps: dict, corpus):
+    corpus.stamps = {k: v for k, v in stamps.items() if k in corpus._texts}
+    return corpus
+
+
+def corpus_stamps(row: dict, spans: list, prov: dict) -> list:
+    """FRESH-AMEND-1023: per stored chunk {span_id, start, end, corpus_added_at, basis}: the chunk's own write time
+    (evidence_spans.created_at, basis 'chunk'), else the document's (sources.created_at, else the writer's app-clock
+    provenance.retrieved_at, basis 'document'). Shared with the served corpus: only a missing/invalid stamp is ever
+    revised (to the request's now(), vera.corpus_stamp); a valid one never changes."""
+    doc_at = row.get("created_at") or (prov or {}).get("retrieved_at")
+    out = []
+    for sp in spans or ():
+        own = sp.get("created_at")
+        sid = sp.get("span_id")
+        out.append({"span_id": sid if sid is not None else None, "start": sp.get("start_index"), "end": sp.get("end_index"),
+                    "corpus_added_at": own if own not in (None, "") else doc_at,
+                    "basis": "chunk" if own not in (None, "") else "document"})
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ writer-side (pure)
@@ -188,6 +216,7 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
     max_bytes = int(icfg["max_text_bytes"])
 
     acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
+    stamps: dict = {}
     seen_ids, seen_keys, seen_hashes = set(), set(), set()
     for row, prov in recs:
         did = prov.get("document_id")
@@ -254,11 +283,14 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                          "text_sha256": rec["content_hash"], "chars": len(text),
                          "evidence_ranges": _evidence_ranges(p.get("sections"), cfg, len(text), text, ex_ranges),
                          "excluded_ranges": ex_ranges})
+        # FRESH-AMEND-1023: corpus write time (doc level) + per stored chunk stamps (shared; valid stamps immutable)
+        stamps[did] = {"corpus_added_at": row.get("created_at") or prov.get("retrieved_at"),
+                       "corpus_stamps": corpus_stamps(row, by_src.get(row.get("source_id"), []), prov)}
     dar = None
     if docs and not build_index:
         # ACQ-REBUILD-PERF-1021 (acquired path only): verification without the throwaway per-run index. The caller
         # (_load_acquired) indexes the kept documents once and applies the same index-refusal rule there.
-        return FullDocCorpus(STATUS_OK, acquired, unusable, texts, None, key_to_doc, cfg, docs)
+        return _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, None, key_to_doc, cfg, docs))
     if docs:
         dar = DarCorpus(_routing_cfg())
         for d in docs:
@@ -271,8 +303,8 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                 texts.pop(did, None)
                 acquired[:] = [a for a in acquired if a["document_id"] != did]
                 unusable.append(_unusable(did, R_ERR, f"retrieval index refused the document ({res.get('reason')})"))
-    return FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg,
-                         [d for d in docs if d["source_key"] in key_to_doc])
+    return _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg,
+                         [d for d in docs if d["source_key"] in key_to_doc]))
 
 
 _EXTRA_KEYS = {"stored_text_kind", "text_sha256", "chars", "partition", "bundle", "chunking", "seq", "n_documents", "item", "meta"}
@@ -282,6 +314,42 @@ _EXTRA_KEYS = {"stored_text_kind", "text_sha256", "chars", "partition", "bundle"
 def parse_run_id(raw) -> int | None:
     s = str(raw or "").strip()
     return int(s) if re.fullmatch(r"[0-9]{1,18}", s) else None
+
+
+# FRESH-AMEND-1023: the write-time columns (sources.created_at, evidence_spans.span_id/created_at; migrations 001:132,
+# 003:17) are appended at the END of each SELECT. If a live schema lacks them, the read falls back ONCE to the previous
+# column list (no write-time stamp -> corpus_added_at from provenance.retrieved_at, else unknown) instead of failing.
+# ONLY on SQLSTATE 42703 (undefined column); every other error is re-raised (FRESH-AMEND-1023 review D3).
+def _legacy(sql: str) -> str:
+    return (sql.replace(", s.created_at ", " ").replace(", e.span_id, e.created_at ", " "))
+
+
+UNDEFINED_COLUMN = "42703"  # PostgreSQL SQLSTATE undefined_column (the only fallback case; vera_vjay_ro has SELECT on all)
+
+
+def _sqlstate(exc) -> str | None:
+    for e in (exc, getattr(exc, "orig", None)):
+        for k in ("pgcode", "sqlstate"):
+            v = getattr(e, k, None)
+            if isinstance(v, str) and v:
+                return v
+    return None
+
+
+def _select_compat(conn, cur, sql: str, params: dict) -> list:
+    try:
+        return _select(cur, sql, params)
+    except Exception as exc:  # noqa: BLE001
+        legacy = _legacy(sql)
+        if legacy == sql or _sqlstate(exc) != UNDEFINED_COLUMN:
+            raise  # only a missing column falls back; timeouts, locks, privilege errors etc. are NOT masked
+        logging.getLogger("vera").warning("write-time columns unavailable (%s); legacy column list used",
+                                          type(exc).__name__)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return _select(cur, legacy, params)
 
 
 def _select(cur, sql: str, params: dict) -> list:
@@ -297,12 +365,13 @@ def fetch_rows(connect, run_id: int) -> tuple:
     try:
         cur = conn.cursor()
         try:
-            srows = _select(cur, SQL_SOURCES, {"run_id": int(run_id), "kind": FULLDOC_CHUNKS_KIND})
+            srows = _select_compat(conn, cur, SQL_SOURCES, {"run_id": int(run_id), "kind": FULLDOC_CHUNKS_KIND})
             sources = [{"source_id": r[0], "canonical_url": r[1], "content": r[2], "content_hash": r[3],
-                        "provenance": r[4]} for r in srows]
+                        "provenance": r[4], **_at(r, 5)} for r in srows]
             ids = [s["source_id"] for s in sources]
-            prow = _select(cur, SQL_SPANS, {"ids": ids}) if ids else []
-            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3]} for r in prow]
+            prow = _select_compat(conn, cur, SQL_SPANS, {"ids": ids}) if ids else []
+            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3],
+                      **({"span_id": r[4]} if len(r) > 4 else {}), **_at(r, 5)} for r in prow]
         finally:
             try:
                 cur.close()
@@ -449,11 +518,11 @@ SQL_ACQ_FILTER = (f"FROM {SCHEMA}.sources s JOIN {SCHEMA}.canonical_sources cs O
                   f"JOIN {SCHEMA}.candidates d ON d.candidate_id = s.candidate_id "
                   f"WHERE s.provenance->>'stored_text_kind' = %(kind)s "
                   f"AND s.provenance->'acquisition'->>'marker' = %(marker)s AND d.run_id <> %(base)s")
-SQL_ACQ_SOURCES = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+SQL_ACQ_SOURCES = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance, s.created_at "
                    f"{SQL_ACQ_FILTER} ORDER BY s.source_id DESC LIMIT %(lim)s")
 SQL_ACQ_MAX = f"SELECT max(s.source_id), count(*) {SQL_ACQ_FILTER}"
 # DAR-INLINE-1021-R2: the same acquired-row filter, restricted to given canonical URLs (inline reuse of stored documents)
-SQL_ACQ_SOURCES_FOR = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+SQL_ACQ_SOURCES_FOR = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance, s.created_at "
                        f"{SQL_ACQ_FILTER} AND cs.canonical_url = ANY(%(cus)s) ORDER BY s.source_id DESC LIMIT %(lim)s")
 
 
@@ -489,12 +558,13 @@ def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical
             params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(base_run_id), "lim": int(limit)}
             if canonical_urls is not None:
                 params["cus"] = [str(u) for u in canonical_urls]
-            srows = _select(cur, SQL_ACQ_SOURCES if canonical_urls is None else SQL_ACQ_SOURCES_FOR, params)
+            srows = _select_compat(conn, cur, SQL_ACQ_SOURCES if canonical_urls is None else SQL_ACQ_SOURCES_FOR, params)
             sources = [{"run_id": r[0], "source_id": r[1], "canonical_url": r[2], "content": r[3], "content_hash": r[4],
-                        "provenance": r[5]} for r in srows]
+                        "provenance": r[5], **_at(r, 6)} for r in srows]
             ids = [x["source_id"] for x in sources]
-            prow = _select(cur, SQL_SPANS, {"ids": ids}) if ids else []
-            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3]} for r in prow]
+            prow = _select_compat(conn, cur, SQL_SPANS, {"ids": ids}) if ids else []
+            spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3],
+                      **({"span_id": r[4]} if len(r) > 4 else {}), **_at(r, 5)} for r in prow]
         finally:
             try:
                 cur.close()
@@ -535,6 +605,7 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
         runs.setdefault(row.get("run_id"), []).append(row)
     acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
     seen_keys, seen_hashes, total = set(), set(), 0
+    stamps: dict = {}
     for rid, rows in runs.items():
         if len(acquired) >= max_docs:
             break
@@ -542,6 +613,7 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
         bare = [{k: v for k, v in r.items() if k != "run_id"} for r in rows]
         c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS, build_index=False)
         unusable.extend(c.unusable)
+        stamps.update(getattr(c, "stamps", None) or {})
         provs = {}
         for r in rows:
             try:
@@ -612,7 +684,7 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
                             {}, None, {}, cfg)
         out.source_kind = "db"
         return out
-    out = FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs)
+    out = _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs))
     out.source_kind = "db"
     return out
 

@@ -182,3 +182,21 @@ def test_bundle_source_is_never_labelled_db(monkeypatch, tmp_path):
     raw, body = h.ask(e2e.Q_EPI)
     assert body["result_kind"] == "answer" and body["corpus_source"] == {"kind": "bundle"}
     fulldoc_corpus.reset_for_tests()
+
+
+def test_read_path_carries_evidence_spans_created_at_as_corpus_added_at(dbw):
+    """FRESH-AMEND-1023: the DB reader carries each stored chunk's evidence_spans.created_at (+ span_id) as its
+    corpus_added_at stamp (basis 'chunk'); admitted passages reference those stamps. offline/stub; not live."""
+    from vera import fulldoc_admission
+    h, cfg, persisted, log, _ = dbw
+    c = fulldoc_corpus.get_corpus(cfg)
+    assert c.status == "ok" and c.stamps and set(c.stamps) == {a["document_id"] for a in c.acquired}
+    assert all("created_at" not in a and "corpus_stamps" not in a for a in c.acquired)  # bundle parity kept
+    for did, rec in c.stamps.items():
+        ids = {r[0] for r in persisted[did]}
+        assert {x["span_id"] for x in rec["corpus_stamps"]} == ids
+        assert all(x["basis"] == "chunk" and x["corpus_added_at"] for x in rec["corpus_stamps"])
+    ev = fulldoc_admission.admit(e2e.Q_EPI, c, cfg)
+    assert ev.admitted
+    for a in ev.admitted:
+        assert a["corpus_chunks"] and all(x in c.stamps[str(a["document_id"])]["corpus_stamps"] for x in a["corpus_chunks"])

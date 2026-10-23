@@ -197,6 +197,36 @@ def _in_one_range(d: dict, start: int, end: int) -> bool:
         isinstance(r, (list, tuple)) and len(r) == 2 and r[0] <= start and end <= r[1] for r in ranges)
 
 
+def _stamp_holder(corpus, did_s) -> dict:
+    """FRESH-AMEND-1023: the corpus's write-time record of one document (vera.fulldoc_db: corpus.stamps), shared by
+    reference so a corpus_added_at backfill applies in place to the served corpus. A document without per-chunk stamps
+    gets ONE document-level stamp, created lazily in the corpus's own record."""
+    st_by = getattr(corpus, "stamps", None)
+    if not isinstance(st_by, dict):
+        st_by = {}
+    h = st_by.get(did_s)
+    if not isinstance(h, dict):
+        h = {"corpus_added_at": None, "corpus_stamps": []}
+        try:
+            st_by[did_s] = h
+        except Exception:  # noqa: BLE001
+            pass
+    if not isinstance(h.get("corpus_stamps"), list) or not h["corpus_stamps"]:
+        h["corpus_stamps"] = [{"span_id": None, "document_id": did_s, "start": None, "end": None,
+                               "corpus_added_at": h.get("corpus_added_at"), "basis": "document"}]
+    return h
+
+
+def _corpus_chunks(h, start, end) -> list:
+    """The stamps of the stored chunks overlapping [start, end) (all of them when no range is given)."""
+    st = h["corpus_stamps"]
+    if start is None or end is None:
+        return list(st)
+    hit = [x for x in st if isinstance(x, dict) and (x.get("start") is None or x.get("end") is None
+                                                     or (x["start"] < end and start < x["end"]))]
+    return hit or list(st)
+
+
 def _try_merge(c: dict, admitted: list, corpus, d: dict, mcfg: dict, n_chars: int, max_chars):
     """WED-P16-RET read-time merge: a candidate that overlaps or abuts (gap <= max_gap_chars) admitted passages of the
     SAME document becomes one contiguous passage = the exact document slice [min start, max end). Allowed only when the
@@ -399,6 +429,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             n_chars += len(text) - sum(len(a["text"]) for a in members)
             ids = [x for a in members for x in a.get("merged_span_ids", (a["span_id"],))] + [sid]
             keep.update({"span_id": f"{c['document_id']}:{start}-{end}", "start": start, "end": end, "text": text,
+                         "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), start, end),
                          "text_sha256": _sha(text), "relevance": max([rel] + [a["relevance"] for a in members]),
                          "merged_span_ids": tuple(ids)})
             admitted[:] = [a for a in admitted if a is keep or all(a is not x for x in members)]
@@ -419,7 +450,9 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
                 "title": d.get("title"), "url": d.get("url"), "published": d.get("published"),
                 "authors": d.get("authors"), "licence": d.get("licence"), "start": c["start"], "end": c["end"],
                 "text": c["text"], "text_sha256": _sha(c["text"]), "relevance": rel,
-                "licence_url": d.get("licence_url"), "attribution": d["_attribution"]})
+                "licence_url": d.get("licence_url"), "attribution": d["_attribution"],
+                "corpus_added_at": _stamp_holder(corpus, did_s).get("corpus_added_at"),
+                "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), c["start"], c["end"])})
 
     if weighted:
         thr = float(wcfg.get("min_weighted_coverage", 0.60))
@@ -467,7 +500,9 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             "licence": d.get("licence"), "licence_decision": d.get("licence_decision"),
             "text_sha256": d.get("text_sha256"), "chars": d.get("chars"),
             "chunks_inspected": n_chunks if isinstance(n_chunks, int) else 0,
-            "candidate_spans": n_cand.get(did_s, 0), "admitted_spans": per_doc.get(did_s, 0)})
+            "candidate_spans": n_cand.get(did_s, 0), "admitted_spans": per_doc.get(did_s, 0),
+            "corpus_added_at": _stamp_holder(corpus, did_s).get("corpus_added_at"),
+            "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), None, None)})
     by_reason: dict = {}
     for r in rejected:
         by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1

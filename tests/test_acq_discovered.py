@@ -430,6 +430,8 @@ def test_flags_off_identity_holds_when_runs_straddle_a_second_boundary(monkeypat
             return base + _dt.timedelta(seconds=1.1 * max(run_idx[0], 0))
     monkeypatch.setattr(auto_acquire, "datetime", FakeDT)
     monkeypatch.setattr(fulltext_loader, "datetime", FakeDT)
+    from vera import freshness  # FRESH-AMEND-1023: the acquisition write time now reads the freshness clock hook
+    monkeypatch.setattr(freshness, "utcnow", lambda: FakeDT.now(_dt.timezone.utc))
     stamps = _flags_off_identity_check(on_run=lambda: run_idx.__setitem__(0, run_idx[0] + 1), raw_hook=True)
     assert stamps[0] != stamps[1], "the straddle was not exercised: raw retrieved_at identical across runs"
 

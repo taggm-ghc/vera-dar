@@ -764,7 +764,8 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
                                   deadline=deadline, **({"chain": chain} if chain is not None else {}))
     dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
     t = clock()
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    from vera import freshness as _fz  # FRESH-AMEND-1023: corpus write time on the freshness clock hook
+    now_iso = _fz.utcnow().astimezone(timezone.utc).isoformat(timespec="seconds")
     rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso,
                                            **({"landing_url": landing} if landing else {}))
     if not doi and item.get("doi"):  # PLAN-NONDOI-1022: promoted from the JATS article-id; re-check known

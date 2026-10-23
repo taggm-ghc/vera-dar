@@ -76,7 +76,7 @@ def _stale_world(world, fc):
     public_mode.reset_limiter(public_mode.CapLimiter(public_mode.Caps(req_per_min_per_client=10**6, req_per_day_per_client=10**6,
                                                                        req_per_day_global=10**6)))
     world.mp.setattr(public_mode, "reset_limiter", public_mode.reset_limiter)
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1)))  # sufficient but stale -> 'stale' on every ask
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))  # added 30 h ago -> 'stale' (corpus_added_at) on every ask
     world.rig.cfg["inline"]["result_ttl_s"] = 0  # no outcome reuse: every ask is a real acquisition attempt
     world.rig.cfg["inline"]["failure_ttl_s"] = 0
     _three_candidates(world)
@@ -155,7 +155,7 @@ def test_slow_portals_honour_inline_deadline_and_return_honest_outcome(world):
         def __call__(self, *a, **k):
             time.sleep(0.4)
             return super().__call__(*a, **k)
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1)))
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     world.rig.cfg["inline"]["deadline_s"] = 0.05  # the pipeline's own deadline mechanism (shipped value: 45 s)
     t0 = time.monotonic()
     body = world.ask(web=Slow(world.web.records, world.web.jats))
@@ -183,7 +183,7 @@ def test_freshness_trigger_does_not_remove_the_retry_budget_guard():
 
 # ---------------------------------------------------------------------------------------------------- (3) kill switch
 def test_kill_switch_stale_trigger_but_no_external_work(world, monkeypatch):
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1)))
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
     body = world.ask()
     assert _need(body, "triggers") == ["stale"]
@@ -203,7 +203,7 @@ def test_kill_switch_stale_trigger_but_no_external_work(world, monkeypatch):
 
 # ---------------------------------------------------------------------------------------------------- (4) write switch absent
 def test_no_wo_url_nothing_persisted_and_citations_are_admitted_only(world, monkeypatch):
-    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(1)))
+    world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     monkeypatch.setattr(acq_config, "db_configured", _REAL_DB_CONFIGURED)  # honour the env, not the harness stub
     monkeypatch.delenv("VERA_DB_URL_WO", raising=False)
     monkeypatch.setenv("VERA_DB_URL_RO", "postgresql://ro.invalid/x")  # harmless placeholder; the guards forbid any connection
@@ -235,7 +235,7 @@ class ReplWorld(World):
             p = st.plans[0]
             prov = p["source"]["provenance"]
             prov["published"] = prov["item"]["published_year"] = s["published"]
-            t = HOURS(1).isoformat(timespec="seconds")
+            t = HOURS(30).isoformat(timespec="seconds")  # FRESH-AMEND-1023: corpus-added >24 h -> stale trigger
             prov["item"]["fetched_at"] = prov["fetched_at"] = prov["retrieved_at"] = prov["acquisition"]["acquired_at"] = t
             plans.append(p)
         src, spans = A.rows_from_plans(plans)
