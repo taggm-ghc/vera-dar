@@ -183,3 +183,24 @@ def test_e2e_recently_added_old_publication_is_fresh_but_labelled_older(world):
     for s in body["sources"]:
         assert s["evidence_recency"] == "older" and s["corpus_added_at"] == HOURS(0.5).isoformat(timespec="seconds")
         assert s["source_authored_at"].startswith("2019-") and s["corpus_added_at"] != s["source_authored_at"]
+
+
+def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_refused_at_current_gate(world):
+    # INTEG-1023 gap fix: an arXiv record returned by the ROUTING acquisition search (not the discovery panel) reaches
+    # arxiv_fulltext (same hook as discovery) instead of Europe PMC / no_route; the shipped gate still refuses it.
+    world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
+    world.p.beh[AX] = [{"provider": "arxiv", "url": X.ABS_URL, "doi": X.DOI, "arxiv_id": X.AID, "title": X.TITLE,
+                        "snippet": "transmission incidence outbreak pathogen", "stored_text_kind": "abstract_metadata"}]
+    world.store()
+    body = world.ask(providers=[DDG, AX])
+    assert world.p.log[0] == DDG and AX in world.p.log, world.p.log  # DDG-first order unchanged
+    urls = world.rig.web.urls
+    assert X.ABS_URL in urls and X.HTML_URL in urls, urls
+    assert not any("ebi.ac.uk" in u and "48550" in u for u in urls), urls  # no Europe PMC lookup for the arXiv record
+    assert world.rig.store.plans == []
+    att = arxiv_fulltext.last_attempts(X.AID + X.VER)
+    assert att and att[-1]["reason"] == "R-LIC-REJECT", att
+    c = [c for c in _cands_public(body) if str(c["ids"].get("doi") or "").lower() == X.DOI.lower()]
+    assert len(c) == 1, _cands_public(body)
+    assert c[0]["reason"] == "R-ACQ-ARXIV_HTML_POLICY" and c[0]["terminal_reason"] == "licence_rejected", c[0]
+    assert c[0].get("background") != "queued" and _queued() == []

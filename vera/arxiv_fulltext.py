@@ -95,6 +95,21 @@ def discovered_candidate(s: dict, doi: str | None, kind: str | None, entry: dict
             "acq_source": "discovered", "discovery": entry, "arxiv": {"id": aid, "version": ver}}
 
 
+def search_candidate(cand: dict, doi: str | None, acq) -> dict | None:
+    """INTEG-1023: the same rule as discovered_candidate for a candidate returned by the ACQUISITION search
+    (search_providers.acquisition_search -> auto_acquire.evaluate_candidate): an arXiv-identified record with no journal
+    DOI goes to this route when arxiv_route is enabled; else None (the unchanged Europe PMC path). Same allowlist,
+    pacing and gates as the discovery path (evaluate)."""
+    if not route_on(acq) or not isinstance(cand, dict) or isinstance(cand.get("arxiv"), dict):
+        return None
+    ident = arxiv_ident(cand)
+    if ident is None or (doi and not _ARXIV_DOI.match(str(doi))):
+        return None
+    aid, ver = ident
+    return {**cand, "doi": f"10.48550/arxiv.{aid}", "url": f"https://arxiv.org/abs/{aid}{ver or ''}",
+            "arxiv": {"id": aid, "version": ver}}
+
+
 # ------------------------------------------------------------------------------------------------ abs page
 class _AbsPage(HTMLParser):
     """citation_* meta tags, licence links (link rel=license, a.has_license / title 'Rights to this article' / any

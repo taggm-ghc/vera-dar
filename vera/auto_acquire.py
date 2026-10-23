@@ -862,8 +862,11 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     dur = {} if dur is None else dur
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
+    from vera import arxiv_fulltext
+    if not isinstance(cand.get("arxiv"), dict):  # INTEG-1023: an arXiv hit from the acquisition search -> same route
+        cand = arxiv_fulltext.search_candidate(cand, doi, cfg) or cand
+        doi = cand.get("doi") or doi
     if isinstance(cand.get("arxiv"), dict):  # ARX-A2: arXiv full-text representations (vera/arxiv_fulltext.py)
-        from vera import arxiv_fulltext
         return arxiv_fulltext.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur,
                                        min_spans)
     t = clock()
