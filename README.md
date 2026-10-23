@@ -4,7 +4,7 @@
 
 VERA-DAR is an experimental research assistant that answers a question only from full-text documents it has checked, and shows which passage supports each sentence. When it cannot do that, it says so and gives a reading list of links instead of a guess. It was built during the AI engineering bootcamp capstone (TAI Labs Agentic AI Engineering Bootcamp, 2026).
 
-**Status, 2026-10-22:** Demo Day candidate (commit `de609d1`). A FastAPI service and a Streamlit interface work end to end in offline tests. Live behaviour of this exact commit is untested (assumed) in this document. The claim that VERA-DAR beats leading language models **has not been demonstrated**.
+**Status, 2026-10-22:** Demo Day candidate (the deployed build is shown in the interface footer). A FastAPI service and a Streamlit interface work end to end in offline tests. Live behaviour of the deployed build is untested (assumed) in this document. The claim that VERA-DAR beats leading language models **has not been demonstrated**.
 
 ## The problem
 
@@ -103,7 +103,7 @@ Other settings: discovery notes are written only when the `L2` layer is enabled 
 
 ## Privacy and data handling
 
-Every page of the demo shows one data-use disclosure, built from the live configuration in `vera/disclosure.py`. With the shipped configuration its closing text says that the question is sent to third-party AI and search services, that VERA-DAR does not save the question or information identifying the user, and that its collection may grow with open-access full text found while searching.
+Every page of the demo shows one data-use disclosure, built from the live configuration in `vera/disclosure.py`. With the shipped configuration its closing text says that the question is sent to third-party AI and search services, that VERA-DAR does not save the question or information identifying the user, and that its collection may grow with open-access full text found while searching. When the optional full-document path answers from the collection, the question, the selected passages with their titles and links, and draft answer sentences are sent to third-party AI services.
 
 What the code shows at `de609d1`:
 
@@ -119,7 +119,7 @@ Records written by earlier configurations are not erased by this configuration.
 - Full-document answers need a configured corpus source; the collection is small, so most questions get a reading list or a decline.
 - Claim checking is done by a language model and can be wrong.
 - Thresholds are placeholders pending calibration on live data.
-- Licence labels come from indexing services and publisher XML and are not verified with rights holders.
+- Licence labels come from indexing services and publisher XML and are not verified with rights holders. For listed results whose full text was not acquired, the label reads "Index metadata: <id>; article licence not verified" only when the licence check allows the record and the index declares a licence (for example CC0 for the index record); without a declared licence it reads "article licence not verified (link only)", and held or rejected records keep their hold or reject label. None of these is a licence for the article.
 - The scope router's layer 2 and the off-topic category accuracy are uncalibrated.
 - Comparative superiority over frontier models is unproven.
 - Live behaviour of this commit is untested (assumed) in this document; the free-tier host can be slow on first request.

@@ -32,7 +32,7 @@ The owner-only endpoints require `VERA_OWNER_KEY` in the `X-Owner-Key` header; w
 The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and a `result_kind` that says what kind of result it is. **Only `result_kind: "answer"` is an evidentiary answer.** Other kinds (for example a reading list, discovery result or decline) are not answers. Further fields include:
 
 - `outcome`: the single response-level disposition (see below).
-- `candidates`: reading-list entries (document links) for non-answer results.
+- `candidates`: reading-list entries (document links) for non-answer results. A candidate may carry `metadata_licence`, the licence id the indexing service declares for its own record (at most 64 characters). It is not a licence for the article and is omitted when absent.
 - `contract`: the enabled result layers and any fallback reason.
 - `sources` and `traced_sources`: source records, and records traced from links but not used.
 - `claim_check`: a summary of the claim check, present when an answer was checked.
