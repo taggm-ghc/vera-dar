@@ -5,6 +5,7 @@ python-dotenv==1.2.2
 openai==1.58.1
 streamlit==1.40.1
 requests==2.33.0
+urllib3==2.8.0  # E3 (SECVET C6): the version the CMF-I2 pinned-transport tests passed on; transitive via requests
 sqlalchemy==2.0.36
 psycopg2-binary==2.9.10
 defusedxml==0.7.1

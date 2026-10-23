@@ -436,7 +436,8 @@ def test_flags_off_identity_holds_when_runs_straddle_a_second_boundary(monkeypat
 
 def _flags_off_identity_check(on_run=None, raw_hook=False):
     off = A.cfg()
-    assert off["inline"]["use_discovered"] is False and off["inline"]["landing_route"] is False
+    off["inline"]["use_discovered"] = False  # flag-off behaviour via override (the shipped file enables it, owner D3/D5 2026-10-23)
+    assert off["inline"]["landing_route"] is False
     res, raw_stamps = [], []
     for passed in (False, True):
         if on_run:
@@ -464,13 +465,14 @@ def test_flags_off_ask_service_calls_acquire_exactly_as_before(rig, monkeypatch)
     calls = []
     orig = acq_discovered.discovery_results
     monkeypatch.setattr(acq_discovered, "discovery_results", lambda *a, **k: calls.append(1) or orig(*a, **k))
+    rig.cfg["inline"]["use_discovered"] = False  # flag-off behaviour via override (shipped file: true)
     rig.run()
     assert seen == [["served"]] and calls == []
 
 
-def test_shipped_config_ships_both_flags_off_and_an_empty_publisher_allowlist():
+def test_shipped_config_enables_use_discovered_only_with_landing_route_off_and_an_empty_publisher_allowlist():
     c = acq_config.load_config()
-    assert c["inline"]["use_discovered"] is False and c["inline"]["landing_route"] is False
+    assert c["inline"]["use_discovered"] is True and c["inline"]["landing_route"] is False  # owner D3/D5 2026-10-23
     assert c["landing_route"]["publisher_hosts"] == []
     assert c["landing_route"]["resolver_hosts"] == ["doi.org", "dx.doi.org"]
     assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk", "eutils.ncbi.nlm.nih.gov"]  # unchanged

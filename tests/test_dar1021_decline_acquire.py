@@ -80,7 +80,10 @@ def test_first_ask_reading_list_starts_acquisition(h, monkeypatch, override):
     _decide(monkeypatch, False, "layer2_llm", "llm_out:sports", "off_topic")
     s = Search()
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "reading_list" and r.accepted is False and r.sources == () and s.calls == [True]
+    # the reading list runs the restricted search once; with inline.use_discovered on the hand-off reads it again
+    # (main.py serves the second read from its per-request cache: test_enable_use_discovered_1022)
+    disc = cfg["inline"]["use_discovered"] is True and override  # the hand-off runs only on the override (inline) path
+    assert r.result_kind == "reading_list" and r.accepted is False and r.sources == () and s.calls == [True] * (1 + disc)
     assert r.acquire_trigger == "decline" and r.contract["offtopic"] is True
     key = "reading_list_notice_answering" if override else "reading_list_notice_listing"
     assert cfg["scope_expansion"][key] in r.answer and "outside VERA-DAR's curated scope" in r.answer
@@ -304,12 +307,13 @@ def test_askdiag_override_reading_list_never_waits_on_base_corpus(h, monkeypatch
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     _serve(monkeypatch, None)  # nothing acquired yet (the first ask)
-    _override(monkeypatch, True)
+    cfg = _override(monkeypatch, True)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:sports", "off_topic")
     base = _no_base_load(monkeypatch)
     s = Search()
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and s.calls == [True] and base == []
+    disc = cfg["inline"]["use_discovered"] is True  # hand-off re-reads the cached restricted search (see above)
+    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and s.calls == [True] * (1 + disc) and base == []
 
 
 def test_askdiag_override_answer_from_acquired_never_waits_on_base_corpus(h, monkeypatch):
