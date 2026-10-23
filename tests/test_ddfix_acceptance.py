@@ -187,25 +187,49 @@ def test_p1_unfamiliar_research_domain_triggers_research_not_a_subject_matter_re
 
 
 # ------------------------------------------------------------------------------------------------ point 2
-@pytest.mark.xfail(strict=True, reason="DDFIX-1023: P2 needs REL rev2 (rev1 reverted); remove this mark when rev2 lands")
-def test_p2_relevant_papers_outrank_lexical_false_positives_before_slots(acc):
-    r, _ds, ia = _mixed(acc)
+# Orchestrator decision 2026-10-23 (owner brief: "relevant publications outrank lexical false positives"; "improve
+# relevance assessment before allocating scarce inline slots"): every relevant record ranks above every false positive;
+# no false positive is selected while a relevant candidate is left unselected (displaced by the cap); a record matching
+# NO question concept is dropped (R-ACQ-IRRELEVANT); a WEAK lexical match ("Pedestrian Archetypes" shares "archetypes")
+# may use a spare slot only after every relevant record was selected, and admission then judges it.
+WEAK_FP = {"2607.16922"}  # arXiv id of the one live false positive sharing a question concept
+IRRELEVANT = "R-ACQ-IRRELEVANT"
+
+
+def _is_weak(c) -> bool:
+    t = json.dumps(c, default=str).lower()
+    return any(a in t for a in WEAK_FP)
+
+
+def _recs_for(ia, mark):
+    return [c for c in list(ia.get("discovered") or ()) + list(ia.get("candidates") or ())
+            if isinstance(c, dict) and mark in json.dumps(c, default=str).lower()]
+
+
+def _p2_checks(acc, ia, rel_marks):
     cands = [c for c in ia.get("candidates") or () if isinstance(c, dict)]
     fps = [c for c in cands if _is_fp(c)]
-    for mark in REL_MARK:  # every relevant paper was given an inline slot; none of its records says "too many"
-        recs = [c for c in list(ia.get("discovered") or ()) + cands
-                if isinstance(c, dict) and mark in json.dumps(c, default=str).lower()]
+    for mark in rel_marks:  # every relevant paper was given an inline slot; none of its records says "too many"
+        recs = _recs_for(ia, mark)
         assert any(_slot_used(c) for c in recs), (mark, "relevant paper got no inline slot", recs)
         assert not [c for c in recs if c.get("status_reason") in ("candidate_cap", "ranked_below_cap")
                     or discovery_panel._reason_line(c) == TOO_MANY], (mark, "relevant paper deferred as over the cap", recs)
-    # owner 2026-10-23: the five live false positives must not consume inline slots (none tried, none fetched)
-    assert not [c for c in fps if _slot_used(c)], [(c.get("public_id"), c.get("status"), c.get("status_reason"))
-                                                     for c in fps if _slot_used(c)]
-    hit = [u for u in acc.web.urls if any(d in u.lower() or (a and a in u) for d, a in FP_MARK)]
-    assert not hit, ("false-positive records were requested", hit)
+    # every relevant record ranks above every false positive (the inline candidate record is in rank order)
+    rel_i = [i for i, c in enumerate(cands) if any(m in json.dumps(c, default=str).lower() for m in rel_marks)]
+    fp_i = [i for i, c in enumerate(cands) if _is_fp(c)]
+    assert rel_i and (not fp_i or max(rel_i) < min(fp_i)), (rel_i, fp_i)
+    # a record matching no concept is dropped as irrelevant: never given a slot, never requested, never stored
+    strong = [c for c in fps if not _is_weak(c)]
+    assert all(c.get("reason") == IRRELEVANT and not _slot_used(c) for c in strong), \
+        [(c.get("public_id"), c.get("status"), c.get("reason")) for c in strong]
+    hit = [u for u in acc.web.urls if any((d in u.lower() or (a and a in u)) and a not in WEAK_FP for d, a in FP_MARK)]
+    assert not hit, ("no-concept false-positive records were requested", hit)
     stored = " ".join(json.dumps(p["source"]["provenance"]).lower() for p in acc.store.plans)
     assert not any(d in stored for d, _a in FP_MARK)
-    # owner: no listed candidate may show "too many candidates" while fewer than the inline slot count were attempted
+    # no false positive is selected while a relevant candidate is left unselected
+    if any(_slot_used(c) for c in fps):
+        assert all(any(_slot_used(c) for c in _recs_for(ia, m)) for m in rel_marks)
+    # no listed candidate may show "too many candidates" while fewer than the inline slot count were attempted
     slots = int(acq_config.bound(acc.cfg, "max_candidates_resolved"))
     used = sum(1 for c in cands if _slot_used(c))
     listed = [e for e in list(ia.get("discovered") or ()) + cands if isinstance(e, dict)]
@@ -213,6 +237,29 @@ def test_p2_relevant_papers_outrank_lexical_false_positives_before_slots(acc):
               if discovery_panel._reason_line(e) == TOO_MANY]
     assert not capped or used >= slots, (f"{len(capped)} labelled {TOO_MANY!r} but only {used} of {slots} inline "
                                          f"slots were attempted", capped)
+    return cands, fps, slots
+
+
+def test_p2_relevant_papers_outrank_lexical_false_positives_before_slots(acc):
+    _r, _ds, ia = _mixed(acc)
+    _p2_checks(acc, ia, REL_MARK)
+
+
+# SYNTHETIC: as many relevant papers as there are inline slots (max_candidates_resolved 6)
+REL_MANY = [(f"mas_many{i}", f"10.9999/ddfix.masmany{i}.z", f"PMC91002{i:02d}",
+             f"SYNTHETIC agent archetypes in multi-agent orchestration, study {i}",
+             "planner supervisor worker critic roles coordinate language model agents") for i in range(6)]
+
+
+def test_p2_relevant_candidates_fill_every_slot_and_no_false_positive_is_selected(acc):
+    marks = [r[1].split("/", 1)[1].lower() for r in REL_MANY]
+    cands = [_fp_cand(*f) for f in FP] + [_rel_cand(*x) for x in REL_MANY]  # false positives first, as live
+    _r, _ds, ia = _ask(acc, cands, _web(rel=REL_MANY))
+    got, fps, slots = _p2_checks(acc, ia, marks[:int(acq_config.bound(acc.cfg, "max_candidates_resolved"))])
+    assert len(REL_MANY) >= slots
+    assert not [c for c in fps if _slot_used(c)], [(c.get("public_id"), c.get("status")) for c in fps if _slot_used(c)]
+    hit = [u for u in acc.web.urls if any(d in u.lower() or (a and a in u) for d, a in FP_MARK)]
+    assert not hit, ("a false positive was requested although relevant candidates filled every slot", hit)
 
 
 # ------------------------------------------------------------------------------------------------ point 3
