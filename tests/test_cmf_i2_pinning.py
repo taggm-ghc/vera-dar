@@ -21,6 +21,14 @@ import urllib3
 from tests import acq_support as A
 from vera import auto_acquire, rate_limit, search_providers, selective_fetch, source_resolver
 
+
+@pytest.fixture(autouse=True)
+def _ddgfix_layers_off(monkeypatch):
+    """DDGFIX-1023 DF-8: landing_doi now also checks robots.txt before any GET.
+    These tests target the SSRF / redirect / pinning layers beneath them, which are unchanged; the new layer is
+    switched open here and are tested in tests/test_ddgflow_eval.py (test_df8_*)."""
+    monkeypatch.setattr(search_providers, "_landing_robots", lambda *a, **k: (lambda u: True))
+
 PUB4 = "93.184.216.34"
 PUB4B = "93.184.216.35"
 PUB6 = "2606:2800:220:1:248:1893:25c8:1946"

@@ -190,12 +190,14 @@ def test_e2e_url_only_candidate_is_marked_followable_and_queued(world):
     url = "https://example.org/reports/outbreak-landing"
     world.p.beh[DDG] = [ddg_row(url, title="SYNTHETIC outbreak transmission incidence report")]
     world.store()
-    body = world.ask(providers=[DDG])
+    body = world.ask()  # DDGFIX-1023 DF-3b: the SHIPPED base search (OpenAlex) with DDG first, not providers=[DDG]
     assert not any("example.org" in u for u in world.rig.web.urls)  # no request to the URL host
     c = [c for c in _cands_public(body) if c["ids"].get("url") == url]
     assert len(c) == 1, _cands_public(body)
     assert c[0]["terminal_reason"] == "queued_background" and c[0]["route"] == "follow_url", c[0]
     assert c[0]["reason"] == "R-ACQ-NODOI"
+    v = c[0]["portal"]
+    assert "ddg" in ({canon(x) for x in v} if isinstance(v, list) else {canon(v)}), c[0]  # found by DDG, not openalex
     assert [q.get("url") for q in _queued()] == [url]
     ro = _ro(body)
     assert ro["complete"] is False and "budget ran out" not in ro["user_text"]

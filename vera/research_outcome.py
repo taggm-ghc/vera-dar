@@ -122,7 +122,15 @@ _CAUSE_TEXT = {
     "error": "a portal had a service failure",
     "budget": "the search budget ran out",
     "awaiting_route": "some sources found have no usable identifier yet",  # CONT-1023: URL-only, queued to follow
+    "unreachable": "a source found could not be reached in time",  # DDGFIX-1023 DF-4: queued after a fetch failure
 }
+
+
+def queued_unreachable(code) -> bool:
+    """DDGFIX-1023 DF-4: the reason a queued candidate was left unfinished is a fetch/transport failure (the source
+    could not be reached), not the request's search budget (deadline, candidate cut, not evaluated)."""
+    c = str(code or "").strip().upper()
+    return c in ("R-ACQ-UNREACHABLE", "R-ACQ-RATELIMITED", "R-ACQ-ERROR") or c.startswith("R-ACQ-ERR-")
 
 
 def _awaiting_route(candidates) -> bool:
@@ -131,13 +139,15 @@ def _awaiting_route(candidates) -> bool:
                for c in candidates)
 
 
-def _causes(attempts, budget_exhausted: bool, awaiting: bool = False) -> list[str]:
+def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable: bool = False) -> list[str]:
     out: list[str] = []
     for a in attempts:
         if a.status in ("timeout", "quota", "error") and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")
+    if unreachable:
+        out.append("unreachable")
     if awaiting:
         out.append("awaiting_route")
     return out
@@ -168,13 +178,13 @@ def _detail(attempts, candidates, kind, complete, causes) -> dict:
 
 def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                       older_evidence_available: bool,
-                      new_evidence_admitted: bool) -> ResearchOutcome:
+                      new_evidence_admitted: bool, source_unreachable: bool = False) -> ResearchOutcome:
     attempts, candidates = list(attempts), list(candidates)
     applicable = [a for a in attempts if a.status != "skipped"]
     awaiting = _awaiting_route(candidates)
     complete = bool(applicable) and all(a.status == "completed" for a in applicable) \
-        and not budget_exhausted and not awaiting
-    causes = _causes(attempts, budget_exhausted, awaiting)
+        and not budget_exhausted and not awaiting and not source_unreachable
+    causes = _causes(attempts, budget_exhausted, awaiting, source_unreachable)
     if not applicable and not budget_exhausted:
         causes = ["none_searched"]
     admitted = new_evidence_admitted or any(c.terminal_reason == "admitted" for c in candidates)

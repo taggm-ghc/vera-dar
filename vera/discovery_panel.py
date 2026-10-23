@@ -90,6 +90,17 @@ def _reasons_by_url(data: dict) -> dict:
         line = _reason_line(e)
         if line and isinstance(e.get("url"), str) and e["url"].strip():
             out.setdefault(e["url"].strip().rstrip("/"), line)
+    # DDGFIX-1023 DF-6: candidates found by DuckDuckGo (or any acquisition-search portal) get the same per-URL reason
+    # line, keyed by the result URL the visitor sees (discovered_url) and the candidate URL. Discovery entries win.
+    ro = data.get("research_outcome")
+    for c in (ro.get("candidates") if isinstance(ro, dict) else None) or []:
+        if not isinstance(c, dict):
+            continue
+        line = _reason_line(c)
+        ids = c.get("ids") if isinstance(c.get("ids"), dict) else {}
+        for u in (c.get("discovered_url"), ids.get("url"), c.get("url")):
+            if line and isinstance(u, str) and u.strip():
+                out.setdefault(u.strip().rstrip("/"), line)
     return out
 
 

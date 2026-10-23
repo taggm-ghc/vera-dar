@@ -322,6 +322,7 @@ def _cand_record(c: dict) -> dict:
     return {"portal": portal or c.get("provider"), "doi": aa._doi(c),
             "pmcid": aa._pmcid(c) or None, "openalex_id": c.get("openalex_id") or None,
             "arxiv_id": c.get("arxiv_id") or c.get("arxiv") or None, "url": c.get("url") or None,
+            **({"discovered_url": c["discovered_url"]} if isinstance(c.get("discovered_url"), str) else {}),  # DF-6
             "published": c.get("published") or c.get("publication_date") or c.get("year") or None,
             "outcome": None, "reason": None, "found_by": list(c.get("found_by") or [portal or c.get("provider")])}
 
@@ -458,6 +459,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 rc["outcome"], rc["reason"] = "rejected", got
             elif id(got) in kept_ids:
                 rc["outcome"] = "admitted"
+                if not rc.get("pmcid") and got.get("resolved_pmcid"):  # DDGFIX-1023 DF-7: the PMCID the route used
+                    rc["pmcid"] = got["resolved_pmcid"]
                 rc["n_chunks"] = len(got.get("spans") or ())  # PORT-P2: additive (url and ids unchanged)
                 rc["canonical_url"], rc["canonical_ref"] = got.get("canonical_url"), _canonical_ref(got.get("canonical_url"))
                 rec_plan[id(got)] = rc

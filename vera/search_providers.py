@@ -595,6 +595,19 @@ def _or_differs(question: str, terms_cfg, profile, suffix: str) -> bool:
         return False
 
 
+def _is_timeout(e: BaseException) -> bool:
+    """DDGFIX-1023 DF-5: a portal call that timed out (builtin/futures TimeoutError or requests' Timeout family:
+    ReadTimeout, ConnectTimeout)."""
+    import concurrent.futures as cf
+    if isinstance(e, (cf.TimeoutError, TimeoutError)):
+        return True
+    try:
+        import requests
+        return isinstance(e, requests.exceptions.Timeout)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _cand_ids(c: Mapping) -> set:
     doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(c.get("doi") or "").strip().lower())
     pm = _pmcid_of(c.get("pmcid") or ((c.get("oa") or {}) if isinstance(c.get("oa"), Mapping) else {}).get("pmcid"))
@@ -613,8 +626,8 @@ def _default_terms_and_profile(cfg: Mapping):
 # through the UNCHANGED resolve (Europe PMC by DOI), fetch and licence gates. Any other page is HELD (never ingested,
 # never evidence): the acquisition fetch accepts only Europe PMC JATS XML, so licensed HTML pages are not candidates.
 _DOI_IN_URL = re.compile(r"(10\.\d{4,9}/[^\s?#&\"'<>]+)", re.I)
-_ARXIV_URL = re.compile(r"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf)/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?/?$",
-                        re.I)
+_ARXIV_URL = re.compile(r"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf|html)/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?"
+                        r"(?:\.pdf)?/?$", re.I)  # DDGFIX-1023 DF-2: the version is captured (group 2), never dropped
 _PMC_URL = re.compile(r"^https?://(?:www\.)?(?:ncbi\.nlm\.nih\.gov/pmc/articles|pmc\.ncbi\.nlm\.nih\.gov/articles|"
                       r"europepmc\.org/(?:article|abstract)/PMC)/(PMC\d{1,10})\b", re.I)
 _PMID_URL = re.compile(r"^https?://(?:pubmed\.ncbi\.nlm\.nih\.gov/|(?:www\.)?ncbi\.nlm\.nih\.gov/pubmed/|"
@@ -623,47 +636,135 @@ _META_DOI = re.compile(r"<meta\s[^>]*?name=[\"'](?:citation_doi|dc\.identifier|p
 _CONTENT = re.compile(r"content=[\"']\s*(?:doi:\s*|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\"'\s]+)", re.I)
 
 
+_DOI_TAIL = re.compile(r"(?:\.full|\.pdf|\.abstract|\.html?|/full|/abstract|/epdf|/pdf|/meta|/|[.,;:])$", re.I)
+_CLOSERS = {")": "(", "]": "[", "}": "{"}
+
+
+def normalise_doi(s) -> str | None:
+    """DDGFIX-1023 DF-1: a DOI taken from a URL or page text -> its canonical form, or None. URL-decoded, query/fragment
+    removed, a resolver prefix ("doi:", doi.org) removed, trailing "/", ".full", ".pdf", ".abstract", "/full",
+    "/abstract", "/pdf", "/epdf" and trailing punctuation stripped, a closing ")", "]" or "}" only when UNBALANCED
+    (verifier D3: "...U2(1)" stays intact; SICI DOIs with "<...>" are kept whole), lower-cased (case-insensitive)."""
+    from urllib.parse import unquote
+    d = unquote(str(s or "")).strip()  # ONE decode: "%252F" stays "%2F" (verifier D3)
+    d = re.sub(r"^(?:doi:\s*|https?://(?:dx\.)?doi\.org/)", "", d, flags=re.I)
+    d = re.split(r"[?#\s\"']", d, maxsplit=1)[0]
+    while d:
+        t = _DOI_TAIL.sub("", d)
+        if t == d and d[-1] in _CLOSERS and d.count(_CLOSERS[d[-1]]) < d.count(d[-1]):
+            t = d[:-1]
+        if t == d:
+            break
+        d = t
+    d = d.lower()
+    return d if re.fullmatch(r"10\.\d{4,9}/\S+", d) else None
+
+
 def ddg_identifier(url: str) -> dict | None:
-    """{"kind": "doi"|"pmcid"|"pmid"|"arxiv", "value"} from the URL alone (no request), or None."""
+    """{"kind": "doi"|"pmcid"|"pmid"|"arxiv", "value"[, "version"]} from the URL alone (no request), or None. An arXiv
+    URL keeps its version ("v2") when it names one (DDGFIX-1023 DF-2); "value" stays the bare id."""
     u = str(url or "").strip()
     m = _ARXIV_URL.match(u)
     if m:
-        return {"kind": "arxiv", "value": m.group(1).lower()}
+        return {"kind": "arxiv", "value": m.group(1).lower(), "version": (m.group(2) or "").lower() or None}
     m = _PMC_URL.match(u)
     if m:
         return {"kind": "pmcid", "value": m.group(1).upper()}
     m = _PMID_URL.match(u)
     if m:
         return {"kind": "pmid", "value": m.group(1)}
-    m = _DOI_IN_URL.search(u)
+    from urllib.parse import unquote
+    m = _DOI_IN_URL.search(unquote(u.split("#", 1)[0].split("?", 1)[0]))  # DF-1: decoded path, no query/fragment
     if m:
-        doi = re.sub(r"(\.pdf|/full|/abstract|/epdf|/pdf|[.,;)])+$", "", m.group(1), flags=re.I).lower()
-        if re.fullmatch(r"10\.\d{4,9}/\S+", doi):
+        doi = normalise_doi(m.group(1))
+        if doi:
             return {"kind": "doi", "value": doi}
     return None
 
 
+_WIKI_HOST = re.compile(r"(?:^|\.)(?:wikipedia|wikimedia|wikidata)\.org$", re.I)
+
+
+def _is_wikipedia(url: str) -> bool:
+    """Wikipedia is a portal only (owner 2026-10-22): its pages are never fetched, followed or used as evidence here."""
+    try:
+        return bool(_WIKI_HOST.search(urlsplit(str(url or "")).hostname or ""))
+    except ValueError:
+        return False
+
+
+def _landing_url_ok(u: str) -> bool:
+    """DF-8: https only, no userinfo, default port: the same URL shape rule as every other acquisition fetch."""
+    try:
+        sp = urlsplit(u)
+        port = sp.port
+    except ValueError:
+        return False
+    return sp.scheme == "https" and bool(sp.hostname) and sp.username is None and sp.password is None \
+        and port in (None, 443)
+
+
+def _landing_robots(acq: Mapping | None, get: Callable, url_check: Callable, deadline: float | None,
+                    clock: Callable) -> Callable:
+    """DF-8: robots.txt for each landing hop through the EXISTING checker (acq_discovered._robots_allowed: cached per
+    host, 4xx = allowed per RFC 9309, 429/5xx/error/timeout = NOT allowed, fail closed), using the same pinned,
+    public-address-checked GET. The host set is the hop's own host only (no allowlist entry is added anywhere)."""
+    from types import SimpleNamespace
+
+    from vera import acq_discovered
+    deps = SimpleNamespace(url_check=url_check, http_get=get)
+
+    def ok(u: str) -> bool:
+        try:
+            host = (urlsplit(u).hostname or "").lower()
+            return bool(acq_discovered._robots_allowed(u, {host}, deps, dict(acq or {}), clock, deadline))
+        except Exception:  # noqa: BLE001  fail closed
+            return False
+    return ok
+
+
 def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | None = None,
                 url_check: Callable | None = None, deadline: float | None = None,
-                clock: Callable | None = None) -> str | None:
-    """ONE cheap GET of a journal landing page (public-address check on every hop, at most 2 redirects, size-capped,
-    short timeout) -> its citation_doi meta tag, or None. Never raises."""
+                clock: Callable | None = None, acq: Mapping | None = None,
+                robots_ok: Callable | None = None) -> str | None:
+    """ONE cheap GET of a journal landing page -> its citation_doi meta tag, or None. Never raises. The page is read
+    ONLY for the identifier: its text is never stored, returned or used as evidence. DDGFIX-1023 DF-8, on every hop
+    (at most 2 redirects): https/no userinfo/port 443, the public-address check, robots.txt through the existing
+    checker (fail closed), the pinned transport (connects only to the address just validated) wrapped in the
+    per-host rate limiter (config/rate_limits.json; hosts in no portal pass unlimited, as for every caller),
+    Accept-Encoding identity, an HTML content type, the size cap and the hop/overall deadline. Owner P0 (2026-10-23):
+    previously unknown public websites are allowed through this existing safe transport; no host list is added."""
     if get is None:  # CMF-1022-I2 (E1/A4): connect only to the address validated for this hop
-        from vera.selective_fetch import pinned_get as get
+        from vera import rate_limit
+        from vera.selective_fetch import pinned_get
+        get = rate_limit.limited_by_url(pinned_get)
     if url_check is None:
         from vera.selective_fetch import is_public_url as url_check
     import time as _t
     clock = clock or _t.monotonic
+    if robots_ok is None:
+        robots_ok = _landing_robots(acq, get, url_check,
+                                    clock() + timeout_s if deadline is None else min(deadline, clock() + timeout_s),
+                                    clock)
     cur = url
     try:
         for _hop in range(3):
             left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
             if left <= 0.2:
                 return None
+            if not _landing_url_ok(cur) or _is_wikipedia(cur):
+                return None
             ok = url_check(cur)
             if not (ok[0] if isinstance(ok, tuple) else ok):
                 return None
-            r = get(cur, headers={"User-Agent": USER_AGENT}, timeout=left, allow_redirects=False, stream=True)
+            if not robots_ok(cur):
+                return None
+            left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
+            if left <= 0.2:
+                return None
+            from vera.selective_fetch import USER_AGENT as _FETCH_UA  # verifier D1: the UA robots.txt was checked for
+            r = get(cur, headers={"User-Agent": _FETCH_UA, "Accept-Encoding": "identity"}, timeout=left,
+                    allow_redirects=False, stream=True)
             stop_at = clock() + left  # a trickling server cannot hold the thread past the hop budget or the deadline
             try:
                 if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
@@ -672,6 +773,9 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                     continue
                 if r.status_code != 200:
                     return None
+                ctype = str((getattr(r, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
+                if ctype and ctype not in ("text/html", "application/xhtml+xml"):
+                    return None  # DF-8: only an HTML landing page is read for its meta tags
                 buf = b""
                 for chunk in r.iter_content(65536):
                     buf += chunk
@@ -686,7 +790,7 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
             for tag in _META_DOI.findall(text):
                 m = _CONTENT.search(tag)
                 if m:
-                    return m.group(1).rstrip(".").lower()
+                    return normalise_doi(m.group(1))  # DF-1
             return None
     except Exception:  # noqa: BLE001
         return None
@@ -718,35 +822,49 @@ def europepmc_ids_lookup(ids: list, timeout_s: float, ecfg: Mapping, *, transpor
 
 def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: float, clock: Callable,
                       calls_left: int, transport: Callable | None = None, get: Callable | None = None,
-                      url_check: Callable | None = None) -> tuple[list, dict]:
+                      url_check: Callable | None = None, acq: Mapping | None = None,
+                      robots_ok: Callable | None = None) -> tuple[list, dict]:
     """DDG results -> (acquirable candidates, counts). DOI in the URL and arXiv ids map directly; PMC/PubMed links map
     through ONE Europe PMC id lookup (only when calls_left >= 1); a portal landing page with no identifier gets ONE
     cheap GET for its citation_doi meta tag (at most dcfg.max_landing_fetches, inside the deadline). Everything else is
-    held (counted, dropped from acquisition; it stays a reading-list link on /ask)."""
-    counts = {"ddg_results": 0, "ddg_mapped": 0, "ddg_held": 0, "ddg_landing_get": 0}
+    held (counted, dropped from acquisition; it stays a reading-list link on /ask).
+    DDGFIX-1023 DF-3 (URLPUBLIC-1023: "a candidate URL may indicate that it may need to be followed to find the actual
+    source"): a public https result with no identifier becomes a URL-ONLY candidate (no DOI/PMCID): acquisition drops
+    it R-ACQ-NODOI and the CONT-1023 rules queue it to be followed (route follow_url: identifier extraction from the
+    URL only, no request). Wikipedia pages stay held (portal only, never evidence or a candidate)."""
+    counts = {"ddg_results": 0, "ddg_mapped": 0, "ddg_held": 0, "ddg_landing_get": 0, "ddg_url_only": 0}
     out, pending, landing = [], [], 0
     max_landing = int(dcfg.get("max_landing_fetches", 3))
     lt = float(dcfg.get("landing_timeout_s", 5))
     lb = int(dcfg.get("landing_max_bytes", 524288))
+    lgroups = tuple(dcfg.get("landing_groups") or ("portals",))
     for r in results or ():
         if not isinstance(r, Mapping) or not r.get("url"):
             continue
         counts["ddg_results"] += 1
         ident = ddg_identifier(r["url"])
-        if ident is None and landing < max_landing and str(r.get("discovery_group") or "") in set(
-                dcfg.get("landing_groups") or ("portals",)) and deadline - clock() > lt:
+        if ident is None and _is_wikipedia(r["url"]):
+            counts["ddg_held"] += 1  # portal only: never fetched, never a candidate
+            continue
+        if ident is None and landing < max_landing and str(r.get("discovery_group") or "") in set(lgroups) \
+                and deadline - clock() > lt:
             landing += 1
             counts["ddg_landing_get"] += 1
-            d = landing_doi(r["url"], lt, lb, get=get, url_check=url_check, deadline=deadline, clock=clock)
+            d = landing_doi(r["url"], lt, lb, get=get, url_check=url_check, deadline=deadline, clock=clock, acq=acq,
+                            robots_ok=robots_ok)
             ident = {"kind": "doi", "value": d} if d else None
         if ident is None:
-            counts["ddg_held"] += 1
+            if _landing_url_ok(str(r["url"])):  # DF-3: followable URL-only candidate (no request is made for it)
+                counts["ddg_url_only"] += 1
+                out.append(_ddg_url_cand(r))
+            else:
+                counts["ddg_held"] += 1
             continue
         if ident["kind"] in ("pmcid", "pmid"):
             pending.append((ident, r))
             continue
         doi = ident["value"] if ident["kind"] == "doi" else f"10.48550/arxiv.{ident['value']}"
-        out.append(_ddg_cand(r, doi, None, ident["kind"]))
+        out.append(_ddg_cand(r, doi, None, ident["kind"], arxiv_version=ident.get("version")))
     if pending:
         found = {}
         if calls_left >= 1 and deadline - clock() > 1:
@@ -761,14 +879,25 @@ def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: 
                 counts["ddg_held"] += 1
                 continue
             out.append(_ddg_cand(r, rec["doi"], rec.get("pmcid"), ident["kind"]))
-    counts["ddg_mapped"] = len(out)
+    counts["ddg_mapped"] = len(out) - counts["ddg_url_only"]
     return out, counts
 
 
-def _ddg_cand(r: Mapping, doi: str, pmcid, kind: str) -> dict:
-    return {"url": f"https://doi.org/{doi}", "title": " ".join(str(r.get("title") or "").split()), "snippet": "",
-            "doi": doi, "provider": "ddg", "acq_source": "ddg", "ddg_id_kind": kind, "discovered_url": r.get("url"),
-            **({"pmcid": pmcid, "oa": {"pmcid": pmcid}} if pmcid else {})}
+def _ddg_cand(r: Mapping, doi: str, pmcid, kind: str, arxiv_version: str | None = None) -> dict:
+    c = {"url": f"https://doi.org/{doi}", "title": " ".join(str(r.get("title") or "").split()), "snippet": "",
+         "doi": doi, "provider": "ddg", "acq_source": "ddg", "ddg_id_kind": kind, "discovered_url": r.get("url"),
+         **({"pmcid": pmcid, "oa": {"pmcid": pmcid}} if pmcid else {})}
+    if kind == "arxiv":  # DF-2: the exact arXiv id+version the result named, handed to the arXiv route
+        aid = doi.split("arxiv.", 1)[1]
+        c["arxiv_id"] = aid + (arxiv_version or "")
+        c["identifier"] = "arXiv:" + c["arxiv_id"]  # read by arxiv_fulltext.arxiv_ident (version-bound route)
+    return c
+
+
+def _ddg_url_cand(r: Mapping) -> dict:
+    """DF-3: a URL-only DDG candidate (no identifier yet): never fetched here; followed only via follow_url."""
+    return {"url": str(r.get("url")), "title": " ".join(str(r.get("title") or "").split()), "snippet": "",
+            "doi": None, "provider": "ddg", "acq_source": "ddg", "ddg_id_kind": "url", "discovered_url": r.get("url")}
 
 
 def acq_source(c: Mapping) -> str:
@@ -1010,7 +1139,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 base = list(base_search(question, n, timeout_s) or [])
             except Exception as e:  # noqa: BLE001
                 base_err = e
-                st_oa = "timeout" if isinstance(e, TimeoutError) else "failed"
+                st_oa = "timeout" if _is_timeout(e) else "failed"
                 if _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1
                     st_oa = "skipped_quota"
@@ -1035,7 +1164,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 if _is_quota_error(e):
                     counts[f"{k}_429"] = 1
                     st_f[k] = "quota"
-                elif isinstance(e, (cf.TimeoutError, TimeoutError)):
+                elif _is_timeout(e):  # DDGFIX-1023 DF-5: requests ReadTimeout/ConnectTimeout too
                     st_f[k] = "timeout"
                 else:
                     st_f[k] = "failed"
@@ -1056,7 +1185,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         ddg = []
         if got.get("ddg"):
             ddg, dcounts = ddg_to_candidates(got["ddg"], ecfg, dcfg, deadline=t_end, clock=clock,
-                                            calls_left=lookup_left, transport=transport, get=get, url_check=url_check)
+                                            calls_left=lookup_left, transport=transport, get=get, url_check=url_check,
+                                            acq=cfg)
             counts.update(dcounts)
         try:  # FRESH-1023 C3: each configured portal exactly once, from this (the main) thread. ROUTE-R3: in actual
             # start order; an enabled portal left without a search-call slot is not_attempted (never "completed")

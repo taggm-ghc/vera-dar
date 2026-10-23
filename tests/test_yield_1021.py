@@ -146,7 +146,8 @@ def test_ddg_identifier_mapping():
                                                                                          "value": "PMC0000043"}
     assert sp.ddg_identifier("https://pubmed.ncbi.nlm.nih.gov/99999999/") == {"kind": "pmid", "value": "99999999"}
     assert sp.ddg_identifier("https://europepmc.org/article/MED/99999998") == {"kind": "pmid", "value": "99999998"}
-    assert sp.ddg_identifier("https://arxiv.org/pdf/9999.00001v2") == {"kind": "arxiv", "value": "9999.00001"}
+    assert sp.ddg_identifier("https://arxiv.org/pdf/9999.00001v2") == {"kind": "arxiv", "value": "9999.00001",
+                                                                         "version": "v2"}  # DDGFIX-1023 DF-2
     assert sp.ddg_identifier("https://example.org/blog/widgets") is None
 
 
@@ -172,10 +173,13 @@ def test_ddg_to_candidates_maps_doi_pmc_arxiv_landing_and_holds_unclear():
     out, counts = sp.ddg_to_candidates(_ddg_results(), {"search_url": "https://epmc.invalid/s"},
                                        {"max_landing_fetches": 3, "landing_groups": ["portals"]},
                                        deadline=time.monotonic() + 30, clock=time.monotonic, calls_left=1,
-                                       transport=_lookup_tx, get=_land_get, url_check=lambda u: (True, ""))
-    dois = sorted(c["doi"] for c in out)
+                                       transport=_lookup_tx, get=_land_get, url_check=lambda u: (True, ""),
+                                       robots_ok=lambda u: True)
+    dois = sorted(c["doi"] for c in out if c["doi"])
     assert dois == ["10.48550/arxiv.9999.00002", "10.9999/yield.45", "10.9999/yield.46", "10.9999/yield.47"]
-    assert counts["ddg_held"] == 1 and counts["ddg_landing_get"] == 1
+    # DDGFIX-1023 DF-3: the no-identifier news row is a URL-only candidate (followable), not held
+    assert [c["url"] for c in out if not c["doi"]] == ["https://example.org/blog/widgets"]
+    assert counts["ddg_held"] == 0 and counts["ddg_url_only"] == 1 and counts["ddg_landing_get"] == 1
     assert all(c["acq_source"] == "ddg" for c in out)
 
 

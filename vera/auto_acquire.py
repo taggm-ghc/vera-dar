@@ -923,6 +923,8 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     if n_adm < need:
         raise _Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"), n_adm)
     plan["admitted_spans"] = n_adm  # ONE-SPAN-1021: read by the caller's persist decision; never written to the DB
+    if res.get("pmcid"):  # DDGFIX-1023 DF-7: the resolved PMCID for the public candidate record; never written
+        plan["resolved_pmcid"] = res["pmcid"]
     if disc is not None:
         acq_discovered.gate_b_admit(plan)  # P0-5 D3: admit + basis, no score or count
     return plan, isbn

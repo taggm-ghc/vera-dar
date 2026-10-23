@@ -155,10 +155,13 @@ def ddg_cands(calls_left=1):
 
 def test_ddg_to_candidates_maps_ids_and_drops_non_scholarly():
     out, counts, seen = ddg_cands()
+    url_only = [c for c in out if not c["doi"]]  # DDGFIX-1023 DF-3: the no-identifier row is a URL-only candidate
+    out = [c for c in out if c["doi"]]
     assert [c["doi"] for c in out] == ["10.9999/darb.doi1", "10.9999/darb.doi2", "10.9999/darb.pmc9", "10.9999/darb.pmc10"]
     assert [c.get("pmcid") for c in out] == [None, None, "PMC9000009", "PMC9000010"]  # pmcid kept when looked up
     assert all(c["acq_source"] == "ddg" and c["provider"] == "ddg" for c in out)
-    assert counts["ddg_results"] == 5 and counts["ddg_mapped"] == 4 and counts["ddg_held"] == 1
+    assert counts["ddg_results"] == 5 and counts["ddg_mapped"] == 4 and counts["ddg_held"] == 0
+    assert counts["ddg_url_only"] == 1 and len(url_only) == 1 and url_only[0]["ddg_id_kind"] == "url"
     assert not any("reuters" in (c["url"] + str(c["discovered_url"])) for c in out)
     assert len(seen) == 1 and "PMCID:PMC9000009" in seen[0] and "PMCID:PMC9000010" in seen[0]
     assert [c["pmcid"] for c in out if c.get("pmcid")] == [c["oa"]["pmcid"] for c in out if c.get("pmcid")]
@@ -166,7 +169,8 @@ def test_ddg_to_candidates_maps_ids_and_drops_non_scholarly():
 
 def test_ddg_pmc_rows_held_without_lookup_budget():
     out, counts, seen = ddg_cands(calls_left=0)
-    assert [c["doi"] for c in out] == ["10.9999/darb.doi1", "10.9999/darb.doi2"] and not seen and counts["ddg_held"] == 3
+    assert [c["doi"] for c in out if c["doi"]] == ["10.9999/darb.doi1", "10.9999/darb.doi2"] and not seen
+    assert counts["ddg_held"] == 2 and counts["ddg_url_only"] == 1  # DDGFIX-1023 DF-3
 
 
 def test_europepmc_ids_lookup_maps_pmcid_and_pmid_to_lowercase_doi():

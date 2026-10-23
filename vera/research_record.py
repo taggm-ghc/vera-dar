@@ -156,14 +156,17 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
     cands = [c for c in ((inline or {}).get("candidates") or []) if isinstance(c, dict)]
     outs = [ro.CandidateOutcome(f"c{i + 1}", _ids(c), _terminal(c), str(c.get("reason") or ""))
             for i, c in enumerate(cands)]
+    # DDGFIX-1023 DF-4: a candidate queued because its source could not be reached (unreachable, rate-limited,
+    # transport error) has that cause, not "the search budget ran out"; URL-only ones have the awaiting_route cause.
+    unreachable = [o for o in outs if o.terminal_reason == "queued_background" and ro.queued_unreachable(o.detail)]
     budget = (status in _BUDGET_STATUSES or any(p.get("status") in ("skipped_budget", "not_attempted") for p in raw_portals)
               or any(o.terminal_reason == "budget_exhausted" or (o.terminal_reason == "queued_background"  # CONT-1023
-                     and ro.reason_from_code(o.detail) != "no_route") for o in outs))  # URL-only: awaiting_route cause
+                     and ro.reason_from_code(o.detail) != "no_route" and o not in unreachable) for o in outs))
     if not triggers:
         kind, text, complete, detail = "not_needed", "", False, {}
     else:
         res = ro.summarize_outcome(attempts, outs, budget_exhausted=budget, older_evidence_available=older_available,
-                                   new_evidence_admitted=used_new)
+                                   new_evidence_admitted=used_new, source_unreachable=bool(unreachable))
         kind, text, complete, detail = res.kind, res.user_text, res.complete, res.report_detail
         if answer_failed and failed_text:
             text = f"{failed_text} {text}".strip()
