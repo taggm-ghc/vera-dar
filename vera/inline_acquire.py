@@ -67,6 +67,10 @@ class Outcome:
     documents: list = field(default_factory=list)
     codes: dict = field(default_factory=dict)
     ms: dict = field(default_factory=dict)
+    # P0-5 (inline.use_discovered only; None = flag off, and public() is then unchanged): one entry per discovered
+    # record: {service, record_id, url, [epistemic], gate_a {decision, factors, uncertainty}, outcome, [reason],
+    # [gate_b {decision, basis}]}
+    discovered: list | None = None
 
     @property
     def n_answer_eligible(self) -> int:
@@ -83,7 +87,8 @@ class Outcome:
     def public(self) -> dict:
         return {"status": self.status, "admitted": self.admitted, "stored": self.stored, "reused": self.reused,
                 "persisted": not self.persist_failed, "n_answer_eligible": self.n_answer_eligible,
-                "n_persisted": self.n_persisted, "documents": [dict(d) for d in self.documents], "ms": dict(self.ms)}
+                "n_persisted": self.n_persisted, "documents": [dict(d) for d in self.documents], "ms": dict(self.ms),
+                **({"discovered": [dict(d) for d in self.discovered]} if self.discovered is not None else {})}
 
 
 class _Inline:
@@ -139,25 +144,37 @@ def default_deps(acq: dict, env):
     return d
 
 
-def _cache_key(question: str, served) -> tuple:
+def _cache_key(question: str, served, disc=None) -> tuple:
     """Defect 3: the outcome cache/in-flight key is the question PLUS a digest of the document set the stored-corpus
-    attempt tried, so a cached "none" is not reused once new documents became available. served None = unknown."""
+    attempt tried, so a cached "none" is not reused once new documents became available. served None = unknown.
+    P0-5: with discovered candidates (flag on) a digest of their identities is appended; disc None = unchanged key."""
     if served is None:
-        return (aa._qkey(question), None)
-    return (aa._qkey(question), hashlib.sha256("\n".join(sorted(map(str, served))).encode()).hexdigest()[:16])
+        k = (aa._qkey(question), None)
+    else:
+        k = (aa._qkey(question), hashlib.sha256("\n".join(sorted(map(str, served))).encode()).hexdigest()[:16])
+    if disc is None:
+        return k
+    from vera import acq_discovered
+    return k + ("d:" + acq_discovered.digest(disc[0]),)
 
 
 def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, deps_factory=None,
-            served=None) -> Outcome:
+            served=None, discovered=None) -> Outcome:
     """Never raises. See the module docstring for statuses. served (R2): doc keys the caller's stored-corpus attempt
-    already tried (skipped here); None = the currently served acquired corpus (deps.corpus_keys)."""
+    already tried (skipped here); None = the currently served acquired corpus (deps.corpus_keys). discovered (P0-5):
+    the request's discovery results (list of source dicts), used only when inline.use_discovered is true."""
     try:
         if not inline_enabled(acq, env) or not str(question or "").strip():
             return Outcome("off")
         from vera import scope_router  # SCOPE-1022: the shared intent rule also guards inline acquisition
         if not scope_router.intent_clean(str(question)):
             return Outcome("off")
-        key = _cache_key(question, served)
+        disc = None
+        if discovered is not None:
+            from vera import acq_discovered
+            if acq_discovered.use_discovered(acq):
+                disc = acq_discovered.discovered_candidates(discovered, acq)
+        key = _cache_key(question, served, disc) if disc is not None else _cache_key(question, served)
         now = clock()
         with _I.lock:
             ttl = _b(acq, "result_ttl_s", 600)
@@ -187,7 +204,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         return slot[1] if slot[1] is not None else Outcome("busy")
     out = Outcome("error")  # an unexpected failure is never reported as "searched" (no search notice is shown)
     try:
-        out = _run(question, acq, env, clock, deps_factory, served)
+        out = _run(question, acq, env, clock, deps_factory, served,
+                   **({"disc": disc} if disc is not None else {}))  # P0-5: flag off = the unchanged call
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
     finally:
@@ -203,14 +221,15 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     return out
 
 
-def _run(question, acq, env, clock, deps_factory, served=None) -> Outcome:
+def _run(question, acq, env, clock, deps_factory, served=None, disc=None) -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     with rate_limit.deadline_scope(time.monotonic() + float(_b(acq, "deadline_s", 45))):
-        return _run_body(question, acq, env, clock, deps_factory, served)
+        return _run_body(question, acq, env, clock, deps_factory, served,
+                         **({"disc": disc} if disc is not None else {}))
 
 
-def _run_body(question, acq, env, clock, deps_factory, served=None) -> Outcome:
+def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
     deadline = t0 + _b(acq, "deadline_s", 45)
@@ -220,7 +239,15 @@ def _run_body(question, acq, env, clock, deps_factory, served=None) -> Outcome:
     def count(code):
         codes[code] = codes.get(code, 0) + 1
 
+    entries: dict = {}  # P0-5: id(discovered candidate) -> its public entry (disc only)
+
     def done(o: Outcome) -> Outcome:
+        if disc is not None:
+            o.discovered = [entries.get(id(c)) or {**c["discovery"], "outcome": "not_reached"} for c in disc[0]] + \
+                [dict(h) for h in disc[1]]
+            if disc[1]:
+                for h in disc[1]:
+                    count(h["reason"])
         ms["total"] = int((clock() - t0) * 1000)
         o.codes, o.ms = dict(sorted(codes.items())), ms
         aa._log("inline", status=o.status, admitted=o.admitted, stored=o.stored, persist_failed=o.persist_failed,
@@ -247,31 +274,69 @@ def _run_body(question, acq, env, clock, deps_factory, served=None) -> Outcome:
         # acquires nothing, so it is not capped. With budget 0 nothing new is resolved, fetched or stored.
         s = acq.get("search") or {}
         t = clock()
+        search_failed = False
         try:
             cands = list(deps.search(question, int(s.get("results_per_provider", 10)),
                                      max(1.0, min(float(s.get("timeout_s", 20)), deadline - clock()))) or [])
         except Exception:  # noqa: BLE001
             count(acq_config.reason(acq, "search_failed"))
-            return done(Outcome("search_failed"))
+            if not (disc is not None and disc[0]):
+                return done(Outcome("search_failed"))
+            cands, search_failed = [], True  # P0-5: the discovered candidates still go through acquisition
         ms["search"] = int((clock() - t) * 1000)
         fdcfg = aa._fd_cfg()
         icfg = acq_config.ingest_cfg(fl.load_config(), acq)
         # R2: skip only what the stored-corpus attempt actually tried. The served acquired corpus may have finished
         # loading in the background since (a new process), so its keys are NOT "already tried".
         skip = set(served) if served is not None else set(deps.corpus_keys() or ())
+        if disc is not None:  # P0-5: discovered first (merge keeps the first occurrence; DOI/PMCID de-duplication)
+            from vera import acq_discovered
+            from vera.search_providers import merge_sources
+            cands = merge_sources(list(disc[0]), cands)
         ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count)
+        if disc is not None:
+            entries.update(acq_discovered.gate_a(disc[0], cands, ranked, skip, acq))
         # DAR-INLINE-1021-R2: ranked candidates ALREADY stored as acquired documents are answered from their stored rows
         # (read-only) instead of being skipped as R-ACQ-KNOWN while lower-ranked documents are acquired in their place
         # (the run-2 failure: a new process, the served acquired corpus still loading in the background).
         t = clock()
-        reused, ranked = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg,
-                                     clock=clock, deadline=deadline)
+        reused, ranked_left = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg,
+                                          clock=clock, deadline=deadline)
+        if disc is not None:
+            left = {id(r[2]) for r in ranked_left}
+            for r in ranked:
+                e = entries.get(id(r[2]))
+                if e is not None and id(r[2]) not in left:
+                    e["outcome"] = "already_stored"
+        ranked = ranked_left
         ms["reuse"] = int((clock() - t) * 1000)
         job_max = int(acq_config.bound(acq, "max_docs_per_job"))
         fresh_budget = max(0, min(budget, job_max - len(reused[0])))
         t = clock()
+        per: dict | None = {} if disc is not None else None
         plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,
-                                   ms) if fresh_budget > 0 else []
+                                   ms, **({"per": per} if per is not None else {})) if fresh_budget > 0 else []
+        by_plan: dict = {}
+        if disc is not None:
+            kept = {id(p) for p in plans}
+            for i, r in enumerate(ranked):
+                e = entries.get(id(r[2]))
+                if e is None:
+                    continue
+                got = per.get(i)
+                if got is None:
+                    e["outcome"] = "not_evaluated"  # deadline or the document budget was reached first
+                elif isinstance(got, str):
+                    e["outcome"], e["reason"] = "rejected", got
+                    if got in (acq_config.reason(acq, "irrelevant"), acq_config.reason(acq, "few_spans")):
+                        e["gate_b"] = {"decision": "reject", "basis": acq_discovered.GATE_B_REJECT_BASIS}
+                elif id(got) in kept:
+                    e["outcome"], e["gate_b"] = "admitted", {"decision": "admit", "basis": acq_discovered.GATE_B_BASIS}
+                    by_plan[id(got)] = e
+                else:
+                    e["outcome"] = "not_used"  # admitted but over the document budget
+        if search_failed and not plans and not reused[0]:
+            return done(Outcome("search_failed"))
         ms["evaluate"] = int((clock() - t) * 1000)
         if not plans and not reused[0]:
             if budget <= 0:
@@ -284,12 +349,17 @@ def _run_body(question, acq, env, clock, deps_factory, served=None) -> Outcome:
         failed = 0
         t = clock()
         for plan in plans:  # one INSERT-only transaction per document (WoStore); DOI dedupe = canonical_state
+            e = by_plan.get(id(plan))
             if not aa.persist_eligible(plan, acq):  # ONE-SPAN-1021: answers this request only; never written
                 count(acq_config.reason(acq, BELOW_PERSIST_MIN))
                 out.documents.append({"persisted": False, "reason": BELOW_PERSIST_MIN})
+                if e is not None:
+                    e["persisted"] = False
                 continue
             try:
                 w = deps.store.write(plan)
+                if e is not None:
+                    e["persisted"] = w.get("status") == "stored"
                 if w.get("status") == "stored":
                     out.stored += 1
                     count(acq_config.reason(acq, "stored"))
@@ -393,9 +463,11 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
         return REUSE_UNUSABLE
 
 
-def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms) -> list:
+def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms,
+                       per: dict | None = None) -> list:
     """Every ranked candidate through the job's evaluate stage in a small pool; per-document timeout capped by the
-    inline deadline; stops at `budget` admitted documents. Returns the admitted row plans (rank order)."""
+    inline deadline; stops at `budget` admitted documents. Returns the admitted row plans (rank order). per (P0-5,
+    flag on only): filled with rank index -> plan or reason code for each finished evaluation."""
     from vera import fulltext_loader as fl
     if not ranked or clock() >= deadline:
         if ranked:
@@ -434,6 +506,8 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
             fin, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
             for f in fin:
                 idx, plan, code = f.result()
+                if per is not None:
+                    per[idx] = plan if plan is not None else code
                 if plan is not None:
                     got[idx] = plan
                 else:

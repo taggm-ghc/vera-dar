@@ -772,7 +772,7 @@ def _ddg_cand(r: Mapping, doi: str, pmcid, kind: str) -> dict:
 
 
 def acq_source(c: Mapping) -> str:
-    if c.get("acq_source") in ("ddg", "wikipedia_portal"):  # WIKIREF-1022 edit 2
+    if c.get("acq_source") in ("ddg", "wikipedia_portal", "discovered"):  # WIKIREF-1022 edit 2; P0-5 (flag on only)
         return c["acq_source"]
     return "epmc" if c.get("provider") == "europepmc" else "openalex"
 

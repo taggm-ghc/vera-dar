@@ -173,6 +173,18 @@
          "claims": ":free models 20 req/min; 50 req/day with under 10 credits purchased (1000/day with 10+); X-RateLimit-* only on 429; Retry-After when providers give a hint"}
       ],
       "_note": "INACTIVE in config/ask-provider-chain.json (openrouter_example only). Values are the documented ceilings for :free models with no purchased credits."
+    },
+    "doi_landing": {
+      "hosts": ["doi.org", "dx.doi.org"],
+      "rate_per_s": 0.5,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "sources": [
+        {"url": "https://www.doi.org/", "read": "2026-10-22", "inspection": "NOT read (P0-5 ran with no network); conservative planner prior",
+         "claims": "none: no published limit was checked; 1 request per 2 s, one at a time, until a source is read"}
+      ],
+      "_note": "P0-5 Step B (config/auto_acquire.json inline.landing_route, ships false): DOI resolver hops and their robots.txt only; no other caller requests these hosts through rate_limit.limited_by_url. Owner-approved publisher hosts (landing_route.publisher_hosts, ships empty) must get their own portal entry, honouring robots crawl-delay, before the flag is enabled."
     }
   }
 }

@@ -259,7 +259,11 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         if info is not None:
             info["outcome"] = {"status": "off"}
         return None
-    o = inline_acquire.acquire(question, acq, served=tried)  # R2: only documents actually tried are skipped
+    from vera import acq_discovered
+    kw = {}  # P0-5 (inline.use_discovered, default off): the request's own cached discovery results; off = unchanged call
+    if acq_discovered.use_discovered(acq):  # the off-topic path lists the restricted search, in-scope the full one
+        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=not in_scope)
+    o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}

@@ -363,10 +363,15 @@ class _Stop(Exception):
 
 
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
-                 clock=time.monotonic, deadline: float | None = None):
+                 clock=time.monotonic, deadline: float | None = None, chain: list | None = None):
     """GET with the host allowlist checked on every hop, https only, the SSRF guard, manual redirects, content type, size
     cap, and a wall-clock limit over the WHOLE fetch (requests' timeout is per read; plan V-D7). Every streamed
-    response is closed, including on an early stop."""
+    response is closed, including on an early stop.
+
+    P0-5 (discovered candidates only, i.e. `chain` is a list): every requested hop is appended to `chain`; a revisited
+    hop stops with reason `cycle` (before: only the hop cap, as unreachable); userinfo or a port other than 443 stops
+    with `host`; Accept-Encoding: identity is sent and any other Content-Encoding is refused. chain=None (every
+    existing caller) is byte-identical to before."""
     from urllib.parse import urljoin
 
     from vera import selective_fetch as sf
@@ -382,17 +387,29 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             raise _Stop(acq_config.reason(cfg, "deadline"))
 
     current, hops, resp = url, 0, None
+    visited = set()
     try:
         while True:
             late()
             sp = urlsplit(current)
             if sp.scheme != "https" or (sp.hostname or "").lower() not in allowed:
                 raise _Stop(acq_config.reason(cfg, "host"))
+            if chain is not None:  # P0-5 (new path only)
+                from vera import acq_discovered
+                if not acq_discovered._host_ok(current, allowed):
+                    raise _Stop(acq_config.reason(cfg, "host"))
+                if acq_discovered._norm(current) in visited:
+                    raise _Stop(acq_config.reason(cfg, "cycle"))
+                visited.add(acq_discovered._norm(current))
             ok, _why = check(current)
             if not ok:
                 raise _Stop(acq_config.reason(cfg, "host"))
+            if chain is not None:
+                chain.append(acq_discovered._clean(current, 2000))
+            hdrs = {"User-Agent": sf.USER_AGENT} if chain is None else {"User-Agent": sf.USER_AGENT,
+                                                                        "Accept-Encoding": "identity"}
             try:
-                resp = deps.http_get(current, headers={"User-Agent": sf.USER_AGENT}, timeout=timeout_s,
+                resp = deps.http_get(current, headers=hdrs, timeout=timeout_s,
                                      allow_redirects=False, stream=True)
             except rate_limit.RateLimited:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
                 raise _Stop(acq_config.reason(cfg, "rate_limited")) from None
@@ -409,6 +426,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             break
         if resp.status_code != 200:
             raise _Stop(acq_config.reason(cfg, "unreachable"))
+        if chain is not None and str(resp.headers.get("Content-Encoding") or "identity").strip().lower() != "identity":
+            raise _Stop(acq_config.reason(cfg, "encoding"))
         ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if want_json:
             if ctype not in ("application/json", "text/json"):
@@ -441,7 +460,7 @@ def _close(resp) -> None:
 
 
 def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, deadline: float | None = None,
-               pmcid: str | None = None) -> dict:
+               pmcid: str | None = None, chain: list | None = None) -> dict:
     """Europe PMC REST search by DOI (core result), or by PMCID when the candidate has no DOI (PLAN-NONDOI-1022).
     Raises _Stop with a reason code when not usable. The result's "doi" is the core record's well-formed DOI or None."""
     rcfg = cfg.get("resolve") or {}
@@ -454,7 +473,7 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
     url = rcfg["search_url"] + "?" + urlencode({"query": f'DOI:"{doi}"' if doi else f'PMCID:"{pmcid}"', "resultType": "core", "format": "json",
                                                 "pageSize": 1})
     raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
-                               clock=clock, deadline=deadline)
+                               clock=clock, deadline=deadline, **({"chain": chain} if chain is not None else {}))
     try:
         doc = json.loads(raw.decode("utf-8"))
         res = ((doc.get("resultList") or {}).get("result") or [])
@@ -501,7 +520,7 @@ def _family(licence_or_url: str) -> str | None:
 
 # ------------------------------------------------------------------------------------------------ the job
 def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url: str, cfg: dict, icfg: dict, job: Job,
-                   score: float, now_iso: str) -> tuple[dict, dict, dict, str]:
+                   score: float, now_iso: str, landing_url: str | None = None) -> tuple[dict, dict, dict, str]:
     """(rec, item, meta, text) after conversion and EVERY fulltext_loader filter; raises _Stop / Refused."""
     from vera import fulltext_loader as fl
     from vera import jats_text
@@ -521,7 +540,7 @@ def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url
     authors = res.get("authors") or "; ".join(str(a) for a in (jm.get("authors") or []) if a)
     year = res.get("year") or str(jm.get("year") or "")
     item = {"document_id": did, "title": res.get("title") or cand.get("title") or "", "doi": doi,
-            "landing_url": cfg["resolve"]["landing_url_template"].format(pmcid=res["pmcid"]),
+            "landing_url": landing_url or cfg["resolve"]["landing_url_template"].format(pmcid=res["pmcid"]),
             "fulltext_url": final_url, "fulltext_format": (cfg.get("fetch") or {}).get("fulltext_format", "jats-xml"),
             "text_file": f"acquired/{did}.xml", "licence": res["licence"], "licence_url": res["licence_url"],
             "authors": authors, "published_year": year, "fetched_at": now_iso,
@@ -698,7 +717,24 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
     t = clock()
-    res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand))
+    # P0-5: a discovered candidate (only present with inline.use_discovered) records its URL chain; Step B
+    # (inline.landing_route) tries ONE DOI -> landing -> JATS location when Europe PMC has no open-access record.
+    disc = cand.get("discovery") if isinstance(cand.get("discovery"), dict) else None
+    chain = [] if disc is not None else None
+    route, landing = "europepmc", None
+    if disc is None:
+        res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand))
+    else:
+        from vera import acq_discovered
+        try:
+            res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand),
+                             chain=chain)
+        except _Stop as e:
+            if not (doi and e.code == acq_config.reason(cfg, "not_oa") and acq_discovered.landing_on(cfg)):
+                raise
+            route = "landing"
+            raw, final, landing, res = acq_discovered.landing_fetch(doi, cand, cfg, deps, icfg, clock=clock,
+                                                                    deadline=deadline, chain=chain)
     if not doi and res.get("doi"):  # PLAN-NONDOI-1022 rule 6: promote to the DOI identity, re-check known
         doi = res["doi"]
         if deps.lookup.known(doi, None, (isbn or {}).get("isbn")):
@@ -707,14 +743,16 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
         isbn = acq_config.first_isbn(res.get("isbn_values"))
         if isbn and deps.lookup.known(doi, None, isbn["isbn"]):
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
-    url = cfg["resolve"]["fulltext_url_template"].format(pmcid=res["pmcid"])
-    raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
-                              float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
-                              deadline=deadline)
+    if route == "europepmc":
+        url = cfg["resolve"]["fulltext_url_template"].format(pmcid=res["pmcid"])
+        raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
+                                  float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
+                                  deadline=deadline, **({"chain": chain} if chain is not None else {}))
     dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
     t = clock()
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso)
+    rec, item, meta, text = build_document(doi, cand, res, raw, final, cfg, icfg, job, score, now_iso,
+                                           **({"landing_url": landing} if landing else {}))
     if not doi and item.get("doi"):  # PLAN-NONDOI-1022: promoted from the JATS article-id; re-check known
         if deps.lookup.known(item["doi"], None, (isbn or {}).get("isbn")):
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
@@ -723,12 +761,16 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     value = {"open_access": True, "licence_family": _family(res["licence"]) or "",
              "pub_types_n": len(res.get("pub_types") or [])}
     plan = build_plan(rec, item, meta, cfg, job, score, value, isbn, now_iso)
+    if disc is not None:
+        acq_discovered.annotate(plan, cand, res, route, chain, cfg)
     n_adm = relevance_gate(job.question, plan, cfg, icfg, fdcfg)
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
         raise _Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"), n_adm)
     plan["admitted_spans"] = n_adm  # ONE-SPAN-1021: read by the caller's persist decision; never written to the DB
+    if disc is not None:
+        acq_discovered.gate_b_admit(plan)  # P0-5 D3: admit + basis, no score or count
     return plan, isbn
 
 
