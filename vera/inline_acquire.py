@@ -253,7 +253,7 @@ QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the bac
 def _transient(acq, code) -> bool:
     """CONT-1023: a per-candidate failure that may succeed later (timeout, 5xx/non-200, quota, connection error)."""
     c = str(code or "")
-    if c in {acq_config.reason(acq, k) for k in ("unreachable", "rate_limited", "deadline")}:
+    if c in {acq_config.reason(acq, k) for k in ("unreachable", "rate_limited", "deadline", "crawl_delay")}:
         return True
     return c.startswith("R-ACQ-ERR-") and any(w in c for w in ("Timeout", "Connection"))
 
@@ -321,10 +321,17 @@ def _cand_record(c: dict) -> dict:
         portal = c.get("provider")
     return {"portal": portal or c.get("provider"), "doi": aa._doi(c),
             "pmcid": aa._pmcid(c) or None, "openalex_id": c.get("openalex_id") or None,
-            "arxiv_id": c.get("arxiv_id") or c.get("arxiv") or None, "url": c.get("url") or None,
+            "arxiv_id": _arxiv_id_str(c.get("arxiv_id") or c.get("arxiv")), "url": c.get("url") or None,
             **({"discovered_url": c["discovered_url"]} if isinstance(c.get("discovered_url"), str) else {}),  # DF-6
             "published": c.get("published") or c.get("publication_date") or c.get("year") or None,
             "outcome": None, "reason": None, "found_by": list(c.get("found_by") or [portal or c.get("provider")])}
+
+
+def _arxiv_id_str(v):
+    """P0DTA-ARXFIX: arxiv_id is a string (id + version), never the route's {"id","version"} dict."""
+    if isinstance(v, dict):
+        return f"{v.get('id') or ''}{v.get('version') or ''}" or None
+    return v or None
 
 
 def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False) -> Outcome:
@@ -648,8 +655,12 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
         durs.append(d)
         job = aa.Job(question=question, trigger="inline", created=clock())
         try:
+            pd = per_doc
+            if isinstance(cand.get("arxiv"), dict):  # P0DTA-ARXFIX C: 2 x crawl-delay + fetch timeout, not the flat bound
+                from vera import arxiv_fulltext
+                pd = max(per_doc, arxiv_fulltext.doc_budget(acq, clock))
             plan, _isbn = aa.evaluate_candidate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock,
-                                                min(deadline, clock() + per_doc), d,
+                                                min(deadline, clock() + pd), d,
                                                 min_spans=acq_config.answer_min_spans(acq))  # ONE-SPAN-1021
             return idx, plan, None
         except aa._Stop as e:

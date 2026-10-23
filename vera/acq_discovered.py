@@ -39,7 +39,6 @@ from vera import acq_config
 
 PREPRINT_EPISTEMIC = "preprint: not peer reviewed"
 ARXIV_DOI_PREFIX = "10.48550/"
-_ARXIV_ID = re.compile(r"arxiv\.org/(?:abs|pdf)/([a-z\-]+/\d{7}|\d{4}\.\d{4,5})", re.I)
 _STORED_KEYS = ("in_corpus", "span", "dar_span", "span_id")
 RETENTION_REASON = ("no existing raw-content store: acquired sources keep content '' and the converted text as "
                     "immutable spans; storing original bytes needs a separate schema/storage approval (D3b)")
@@ -126,8 +125,9 @@ def _service(s: dict) -> str:
 
 
 def _arxiv_id(s: dict) -> str | None:
-    m = _ARXIV_ID.search(str(s.get("url") or ""))
-    return m.group(1).lower() if m else None
+    from vera import arxiv_fulltext  # P0DTA-ARXFIX: shared parser (http/https, abs|pdf|html, query/fragment)
+    p = arxiv_fulltext.parse_arxiv_url(s.get("url"))
+    return p[0] if p else None
 
 
 def _record_id(s: dict) -> str | None:

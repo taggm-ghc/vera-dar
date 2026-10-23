@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -37,10 +38,11 @@ from vera import acq_config
 
 ROUTE = "arxiv-html"
 # new-style ids only carry a version suffix we can pin; old-style (cs/0101001) ids also accepted
-_ID_IN_URL = re.compile(r"^https://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf|html)/"
-                        r"(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(v\d+)?(?:\.pdf)?/?$", re.I)
-_ID_TEXT = re.compile(r"^(?:arxiv:)?(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(v\d+)?$", re.I)
-_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
+# P0DTA-ARXFIX: the ONE shared arXiv URL parser (http or https; query/fragment ignored); acq_discovered reuses it.
+_ID_IN_URL = re.compile(r"^https?://(?:www\.|export\.)?arxiv\.org/(?:abs|pdf|html)/"
+                        r"(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(v\d+)?(?:\.pdf)?/?(?:[?#].*)?$", re.I | re.A)
+_ID_TEXT = re.compile(r"^(?:arxiv:)?(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(v\d+)?$", re.I | re.A)
+_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I | re.A)
 _CC = re.compile(r"^https?://creativecommons\.org/(?:licenses/([a-z\-]+)/(\d\.\d)|publicdomain/zero/(1\.0))/?$", re.I)
 _ARXIV_LIC = re.compile(r"^https?://arxiv\.org/licenses/([a-z\-]+)/(\d\.\d)/?(?:license\.html)?$", re.I)
 FAMILY_LICENCE = {"by": "cc by", "by-sa": "cc by-sa", "by-nc": "cc by-nc", "by-nc-sa": "cc by-nc-sa",
@@ -63,6 +65,13 @@ def last_attempts(key: str) -> list:
 
 
 # ------------------------------------------------------------------------------------------------ identity
+def parse_arxiv_url(url) -> tuple[str, str | None] | None:
+    """(lower-case id, version "vN" or None) of any arXiv abs/pdf/html URL shape, else None. Callers canonicalise to
+    https://arxiv.org/abs/<id><vN> (the F-1 host check and licence gate are unchanged)."""
+    m = _ID_IN_URL.match(str(url or "").strip())
+    return (m.group(1).lower(), (m.group(2) or "").lower() or None) if m else None
+
+
 def arxiv_ident(s: dict) -> tuple[str, str | None] | None:
     """(id, version or None) of an arXiv discovery record, from its URL, identifier or arXiv DataCite DOI."""
     m = _ID_IN_URL.match(str(s.get("url") or "").strip())
@@ -261,6 +270,28 @@ def _route_cfg(acq: dict, ctypes) -> dict:
 
 
 _sleep = time.sleep  # tests replace it; production waits really
+_HOST_LAST: dict = {}  # P0DTA-ARXFIX C: host -> clock() of the last request to it, process level (spans requests)
+_HOST_LOCKS: dict = {}
+_HOST_GUARD = threading.Lock()
+
+
+def _host_lock(host: str):
+    with _HOST_GUARD:
+        return _HOST_LOCKS.setdefault(host, threading.Lock())
+
+
+def doc_budget(acq, clock=time.monotonic) -> float:
+    """P0DTA-ARXFIX C: the per-document time an arXiv-routed record needs: 2 x crawl-delay (abs, then html) plus one
+    fetch timeout. The crawl-delay is the robots value when cached, else the configured maximum (never lowered)."""
+    from vera import acq_discovered
+    from vera import selective_fetch as sf
+    r = rcfg(acq)
+    cd = float(r.get("max_crawl_delay_s", 15))  # robots not cached yet: assume the configured maximum
+    hit = acq_discovered._ROBOTS.get("arxiv.org")
+    if hit is not None and hit[1] not in (None, True, False):
+        v = hit[1].crawl_delay(sf.USER_AGENT)
+        cd = float(v) if v is not None else float(r.get("min_interval_s", 3))
+    return 2 * cd + float(acq_config.bound(acq, "fetch_timeout_s"))
 
 
 def _get(url, acq, deps, max_bytes, clock, deadline, chain, pace: dict):
@@ -273,11 +304,22 @@ def _get(url, acq, deps, max_bytes, clock, deadline, chain, pace: dict):
     hosts = {str(h).lower() for h in (r.get("hosts") or ())}
     host = (urlsplit(url).hostname or "").lower()
     gap = float(r.get("min_interval_s", 3))
+    with _host_lock(host):  # one request at a time per host; pacing is process level, not per record
+        return _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, hosts, host, gap)
+
+
+def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, hosts, host, gap):
+    from vera import acq_discovered
+    from vera import auto_acquire as aa
+    from vera import selective_fetch as sf
+    last = _HOST_LAST.get(host)
+    if last is not None and last <= clock():  # the most recent request by ANY record to this host (read under the lock)
+        pace["last"] = max(pace.get("last") or last, last)
     if r.get("robots", True):
         cached = host in acq_discovered._ROBOTS
         allowed = host in hosts and acq_discovered._robots_allowed(url, hosts, deps, acq, clock, deadline)
         if not cached:
-            pace["last"] = clock()  # robots.txt was requested just now
+            pace["last"] = _HOST_LAST[host] = clock()  # robots.txt was requested just now
         if not allowed:
             raise aa._Stop(acq_config.reason(acq, "robots"))
         rp = (acq_discovered._ROBOTS.get(host) or (0, None))[1]
@@ -290,14 +332,14 @@ def _get(url, acq, deps, max_bytes, clock, deadline, chain, pace: dict):
         wait = pace["last"] + gap - clock()
         if wait > 0:
             if deadline is not None and clock() + wait >= deadline:
-                raise aa._Stop(acq_config.reason(acq, "deadline"))
+                raise aa._Stop(acq_config.reason(acq, "crawl_delay"))  # P0DTA-ARXFIX C: distinct, background-eligible
             _sleep(wait)
     c = _route_cfg(acq, r.get("content_types") or ("text/html",))
     try:
         return aa._guarded_get(url, c, deps, int(max_bytes), float(acq_config.bound(acq, "fetch_timeout_s")), False,
                                clock=clock, deadline=deadline, chain=chain)
     finally:
-        pace["last"] = clock()
+        pace["last"] = _HOST_LAST[host] = clock()
 
 
 def _is_latexml_article(raw: bytes) -> bool:
