@@ -81,8 +81,10 @@ def test_validation_missing_shows_info(files):
     assert any("Check validation not yet available" in i.value for i in at.info)
 
 
-def test_missing_results_warns(files):
+def test_missing_results_warns(files, monkeypatch):
     _, v, tmp = files
+    from vera import trace_viz
+    monkeypatch.setattr(trace_viz, "PUBLIC_PATH", tmp / "absent_public.json")  # a committed public file must not leak in
     at = _run(str(tmp / "absent.json"), v)
     assert not at.exception
     assert [w.value for w in at.warning] == [MISSING_RESULTS_TEXT]

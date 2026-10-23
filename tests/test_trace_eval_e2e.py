@@ -146,7 +146,9 @@ def test_page_paired_comparison_when_baseline_present(tmp_path):
     assert "Computed determinations" in text and NO_BASELINE_TEXT not in text
 
 
-def test_no_results_state_explains_how(tmp_path):
+def test_no_results_state_explains_how(tmp_path, monkeypatch):
+    from vera import trace_viz
+    monkeypatch.setattr(trace_viz, "PUBLIC_PATH", tmp_path / "absent_public.json")  # a committed public file must not leak in
     at = _run(tmp_path / "absent.json", tmp_path / "absent-v.json")
     assert not at.exception
     assert [w.value for w in at.warning] == [MISSING_RESULTS_TEXT]

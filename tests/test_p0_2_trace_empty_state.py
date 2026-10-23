@@ -42,7 +42,10 @@ def test_empty_state_kept_when_no_run_anywhere(tmp_path):
     assert MISSING_RESULTS_TEXT in _page(at)
 
 
-def test_sidebar_snapshot_reads_public_file(monkeypatch):
+def test_sidebar_snapshot_reads_public_file(monkeypatch, tmp_path):
+    (tmp_path / "eval_results").mkdir()  # fixture root holding only the shipped historical file (no published run)
+    (tmp_path / "eval_results" / HIST.name).write_bytes(HIST.read_bytes())
+    monkeypatch.setattr(sb, "ROOT", tmp_path)
     s = sb.snapshot_summary()
     d = json.loads(HIST.read_text())
     assert s and s["count"] is None and s["questions"] == d["n_questions"] and s["captured"] == d["generated_at"][:10]
