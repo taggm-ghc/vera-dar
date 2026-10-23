@@ -37,8 +37,8 @@ def _proposed_rule(c):
 
 @pytest.fixture
 def allow_arxiv_html(monkeypatch):
-    monkeypatch.setattr(licence_gate, "licence_decision", _proposed_rule)
-    monkeypatch.setattr(fulltext_loader, "licence_decision", _proposed_rule)
+    """ARX-REAL-VERIFY: stand-in DISABLED; the real licence gate decides."""
+    return None
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def test_abs_final_url_trailing_slash_is_accepted():
     final = X.ABS_URL + "/"
     web = Router({}, {}, {**X.routes(), X.ABS_URL: redirect(final), final: X.html_resp(X.abs_page())})
     o, _store = _go(web)
-    assert disc(o)["reason"] == "R-ACQ-ARXIV_HTML_POLICY"  # passes R2; still refused at the unchanged gate
+    assert disc(o)["outcome"] == "admitted"  # passes R2; admitted at the v2 gate
 
 
 def test_unversioned_record_requires_unversioned_abs_final():
@@ -99,7 +99,7 @@ def test_unversioned_record_requires_unversioned_abs_final():
 # ------------------------------------------------------------------------------------------------ R1 route side
 def test_route_hands_the_version_bound_evidence_to_the_loader(spy_kwargs):
     o, _store = _go(Router({}, {}, X.routes()))
-    assert disc(o)["reason"] == "R-ACQ-ARXIV_HTML_POLICY"  # the current gate ignores the block and still refuses
+    assert disc(o)["outcome"] == "admitted"  # the v2 gate accepts the version-bound block
     assert spy_kwargs and spy_kwargs[-1].get("arxiv_evidence") == _expected_evidence()
 
 

@@ -41,8 +41,8 @@ def _proposed_rule(c):
 
 @pytest.fixture
 def allow_arxiv_html(monkeypatch):
-    monkeypatch.setattr(licence_gate, "licence_decision", _proposed_rule)
-    monkeypatch.setattr(fulltext_loader, "licence_decision", _proposed_rule)
+    """ARX-REAL-VERIFY: stand-in DISABLED; the real licence gate decides."""
+    return None
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ def _attempts():
 
 
 # ------------------------------------------------------------------------------------------------ route + gate
-def test_html_attempted_through_safe_route_and_refused_at_current_licence_gate():
+def test_html_attempted_through_safe_route_and_admitted_at_the_licence_gate():
     web = _go_web = _web()
     o, store = _go(web)
     urls = [u for u, _h, _k in web.calls]
@@ -74,11 +74,11 @@ def test_html_attempted_through_safe_route_and_refused_at_current_licence_gate()
     for _u, hdrs, _k in web.calls[1:]:
         assert hdrs.get("Accept-Encoding") == "identity" and "Cookie" not in hdrs and "Authorization" not in hdrs
     e = disc(o)
-    assert e["outcome"] == "rejected" and e["reason"] == "R-ACQ-ARXIV_HTML_POLICY", e
+    assert e["outcome"] == "admitted", e
     assert e["epistemic"] == "preprint: not peer reviewed"
-    assert store.plans == [] and o.status != "ok"
+    assert len(store.plans) == 1 and o.status == "ok"
     last = _attempts()[-1]
-    assert last["status"] == "refused" and last["reason"] == "R-LIC-REJECT" and "arXiv" in last["detail"]
+    assert last["status"] == "fetched", last
     assert "europepmc" not in " ".join(urls) and "ebi.ac.uk" not in " ".join(urls)
 
 
@@ -102,7 +102,7 @@ def test_openalex_record_with_arxiv_datacite_doi_is_routed():
     src = {"provider": "openalex", "doi": X.DOI, "url": X.ABS_URL, "title": X.TITLE, "openalex_id": "https://openalex.org/W8"}
     web = _web()
     o, _store = _go(web, src=src)
-    assert [u for u, _h, _k in web.calls][:2] == [ROBOTS, X.ABS_URL] and disc(o)["reason"] == "R-ACQ-ARXIV_HTML_POLICY"
+    assert [u for u, _h, _k in web.calls][:2] == [ROBOTS, X.ABS_URL] and disc(o)["outcome"] == "admitted"
 
 
 # ------------------------------------------------------------------------------------------------ licence
@@ -328,10 +328,10 @@ def test_robots_server_error_fails_closed():
 
 # ------------------------------------------------------------------------------------------------ every CC variant
 @pytest.mark.parametrize("lic,current,simulated", [
-    ("http://creativecommons.org/licenses/by/4.0/", "R-ACQ-ARXIV_HTML_POLICY", "admitted"),
-    ("http://creativecommons.org/licenses/by-sa/4.0/", "R-ACQ-ARXIV_HTML_POLICY", "admitted"),
-    ("http://creativecommons.org/licenses/by-nc/4.0/", "R-ACQ-ARXIV_HTML_POLICY", "admitted"),
-    ("http://creativecommons.org/licenses/by-nc-sa/4.0/", "R-ACQ-ARXIV_HTML_POLICY", "admitted"),
+    ("http://creativecommons.org/licenses/by/4.0/", "admitted", "admitted"),
+    ("http://creativecommons.org/licenses/by-sa/4.0/", "admitted", "admitted"),
+    ("http://creativecommons.org/licenses/by-nc/4.0/", "admitted", "admitted"),
+    ("http://creativecommons.org/licenses/by-nc-sa/4.0/", "admitted", "admitted"),
     ("http://creativecommons.org/licenses/by-nd/4.0/", "R-LIC-REJECT", "R-LIC-REJECT"),
     ("http://creativecommons.org/licenses/by-nc-nd/4.0/", "R-LIC-REJECT", "R-LIC-REJECT"),
     ("http://creativecommons.org/publicdomain/zero/1.0/", "R-ACQ-ARXIV_LICENCE_HOLD", "R-ACQ-ARXIV_LICENCE_HOLD"),
@@ -344,8 +344,6 @@ def test_each_licence_variant(monkeypatch, lic, current, simulated):
     assert (e.get("reason") or e["outcome"]) == current, e
     from vera import acq_discovered, auto_acquire, inline_acquire
     auto_acquire.reset_for_tests(); inline_acquire.reset_for_tests(); acq_discovered.reset_for_tests()  # noqa: E702
-    monkeypatch.setattr(licence_gate, "licence_decision", _proposed_rule)
-    monkeypatch.setattr(fulltext_loader, "licence_decision", _proposed_rule)
     o, _s = _go(_web(licence=lic))
     e = disc(o)
     assert (e.get("reason") or e["outcome"]) == simulated, e

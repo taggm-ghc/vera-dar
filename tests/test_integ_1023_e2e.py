@@ -3,8 +3,8 @@
 OFFLINE and in process (FastAPI TestClient via the ROUTE-R2 RouteWorld harness): only external I/O is stubbed (the
 search provider chain, the Europe PMC transport, the full-text http_get) and the answer model / claim checker (the
 _pipeline_support rig). Licence, injection, relevance, claim-check, caps and the DB/socket guards all run unchanged; the
-DB/socket guard is fail-loud. The licence gate is the SHIPPED one (no test-only gate rule): arXiv HTML stays refused
-(D-ARX-1 pending the owner). Background jobs are never started (tests/conftest.py autouse); the queue is inspected only.
+DB/socket guard is fail-loud. The licence gate is the REAL one in the tree (owner-applied v2 + F-1 v4; no test-only gate rule): a CC BY arXiv
+HTML with valid route evidence is admitted and cited in the same request; F-1 host spellings are refused. Background jobs are never started (tests/conftest.py autouse); the queue is inspected only.
 """
 import pytest
 
@@ -132,22 +132,58 @@ def _ask_with_discovery(world, raws, providers=None):
     return resp.json()
 
 
-def test_e2e_arxiv_html_candidate_refused_at_current_gate_with_precise_reason(world):
+def _arx_cand(body):
+    return [c for c in _cands_public(body) if c["ids"].get("arxiv_id") == X.AID
+            or str(c["ids"].get("doi") or "").lower() == X.DOI.lower() or c["ids"].get("url") in (X.ABS_URL, X.HTML_URL)]
+
+
+def _assert_arxiv_admitted_and_cited(world, body):
+    urls = world.rig.web.urls
+    assert X.ABS_URL in urls and X.HTML_URL in urls, urls  # fetched through the arXiv route (robots, abs, html)
+    assert len(world.rig.store.plans) == 1, world.rig.store.plans
+    prov = world.rig.store.plans[0]["source"]["provenance"]
+    assert prov["licence_decision"] == "allow" and prov["fulltext_url"] == X.HTML_URL, prov
+    assert prov["licence"]["arxiv_evidence"]["version"] == X.VER
+    c = _arx_cand(body)
+    assert c and c[0]["terminal_reason"] == "admitted", c
+    assert c[0].get("background") != "queued" and _queued() == []
+    # grounded answer citing the newly admitted arXiv evidence in THIS request (accept_predicate)
+    _grounded(body)
+    did = world.rig.store.plans[0]["document_id"]
+    assert did in {a["document_id"] for a in body["admitted_evidence"]}
+    assert did in {c["document_id"] for c in body["citations"]}
+    assert _ro(body)["kind"] == "answered_with_new"
+
+
+def test_e2e_arxiv_html_cc_by_admitted_and_cited_in_same_request(world):
+    # real v2 + F-1 v4 gate: CC BY arXiv HTML with valid route evidence (formerly R-ACQ-ARXIV_HTML_POLICY) is admitted
     world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
     world.store()
     body = _ask_with_discovery(world, [X.discovery_src()], providers=[DDG])
     assert world.p.log[0] == DDG, world.p.log
-    urls = world.rig.web.urls
-    assert X.ABS_URL in urls and X.HTML_URL in urls, urls  # fetched through the arXiv route (robots, abs, html)
-    assert world.rig.store.plans == []  # never admitted under the shipped gate (D-ARX-1 pending)
+    _assert_arxiv_admitted_and_cited(world, body)
+
+
+@pytest.mark.parametrize("f1", [f"https://arxiv.org:443/html/{X.AID}{X.VER}", f"https://u@arxiv.org/html/{X.AID}{X.VER}",
+                                f"https://ArXiv.org/html/{X.AID}{X.VER}"], ids=["port-443", "userinfo", "mixed-case"])
+def test_e2e_arxiv_html_f1_host_spelling_is_refused(world, f1):
+    # the arXiv HTML redirects to an F-1 spelling of itself. End to end it is stopped by the route's guarded fetch
+    # (userinfo/port -> host stop; same normalised URL -> cycle) before any candidate reaches the gate; the gate's own
+    # F-1 refusal of such a candidate is covered by tests/test_arx_gate_f1_v4.py and test_arx_gate_after_authorization.py.
+    from tests.test_acq_discovered import redirect
+    rt = X.routes(licence=X.CC_BY)
+    rt[f1] = rt[X.HTML_URL]
+    rt[X.HTML_URL] = redirect(f1)
+    world.web = Router(world.web.records, world.web.jats, rt)
+    world.store()
+    body = _ask_with_discovery(world, [X.discovery_src()], providers=[DDG])
+    assert world.rig.store.plans == []  # never admitted
+    assert f1 not in world.rig.web.urls  # the F-1 spelling is never requested
     att = arxiv_fulltext.last_attempts(X.AID + X.VER)
-    assert att and att[-1]["reason"] == "R-LIC-REJECT", att  # the gate's own text is kept in the attempts
-    c = [c for c in _cands_public(body) if c["ids"].get("arxiv_id") == X.AID
-         or str(c["ids"].get("doi") or "").lower() == X.DOI.lower() or c["ids"].get("url") in (X.ABS_URL, X.HTML_URL)]
-    assert c, _cands_public(body)
-    assert c[0]["reason"] == "R-ACQ-ARXIV_HTML_POLICY" and c[0]["terminal_reason"] == "licence_rejected", c[0]
-    assert c[0].get("background") != "queued" and _queued() == []
-    assert _ro(body)["kind"] != "answered_with_new"
+    assert att and att[-1]["status"] == "refused", att
+    c = _arx_cand(body)
+    assert c and c[0]["terminal_reason"] != "admitted", c
+    assert not body.get("admitted_evidence") and _ro(body)["kind"] != "answered_with_new"
 
 
 def test_e2e_url_only_candidate_is_marked_followable_and_queued(world):
@@ -185,9 +221,9 @@ def test_e2e_recently_added_old_publication_is_fresh_but_labelled_older(world):
         assert s["source_authored_at"].startswith("2019-") and s["corpus_added_at"] != s["source_authored_at"]
 
 
-def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_refused_at_current_gate(world):
+def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_admitted_and_cited(world):
     # INTEG-1023 gap fix: an arXiv record returned by the ROUTING acquisition search (not the discovery panel) reaches
-    # arxiv_fulltext (same hook as discovery) instead of Europe PMC / no_route; the shipped gate still refuses it.
+    # arxiv_fulltext (same hook as discovery) instead of Europe PMC / no_route; the real v2 + F-1 v4 gate admits it.
     world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
     world.p.beh[AX] = [{"provider": "arxiv", "url": X.ABS_URL, "doi": X.DOI, "arxiv_id": X.AID, "title": X.TITLE,
                         "snippet": "transmission incidence outbreak pathogen", "stored_text_kind": "abstract_metadata"}]
@@ -195,12 +231,5 @@ def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_refused_a
     body = world.ask(providers=[DDG, AX])
     assert world.p.log[0] == DDG and AX in world.p.log, world.p.log  # DDG-first order unchanged
     urls = world.rig.web.urls
-    assert X.ABS_URL in urls and X.HTML_URL in urls, urls
     assert not any("ebi.ac.uk" in u and "48550" in u for u in urls), urls  # no Europe PMC lookup for the arXiv record
-    assert world.rig.store.plans == []
-    att = arxiv_fulltext.last_attempts(X.AID + X.VER)
-    assert att and att[-1]["reason"] == "R-LIC-REJECT", att
-    c = [c for c in _cands_public(body) if str(c["ids"].get("doi") or "").lower() == X.DOI.lower()]
-    assert len(c) == 1, _cands_public(body)
-    assert c[0]["reason"] == "R-ACQ-ARXIV_HTML_POLICY" and c[0]["terminal_reason"] == "licence_rejected", c[0]
-    assert c[0].get("background") != "queued" and _queued() == []
+    _assert_arxiv_admitted_and_cited(world, body)
