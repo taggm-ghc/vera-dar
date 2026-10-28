@@ -8,10 +8,19 @@ import pytest
 
 from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from tests.test_dar_inline_acquire import rig  # noqa: F401  (fixture)
-from tests.test_ddfix_scope_1023 import LIVE_Q, _real_router
 from tests.test_item72_scope import cfg, fake_chat
 from vera import ask_service
 from vera import scope_router as sr
+
+LIVE_Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
+REAL_ROUTE = sr.route
+
+
+def _real_router(rig, verdict: dict):
+    """The real scope router (real config, real layer 1); only the layer-2 classifier LLM is faked."""
+    rig.mp.setattr(sr, "route", REAL_ROUTE)
+    rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (json.dumps(verdict), 10, 2))
+
 
 Q = "Who won the World Cup in 2014?"  # layer 1 unsure: goes to the classifier
 
