@@ -218,7 +218,10 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                 if not isinstance(dp, dict) or any(got[k] is None or got[k] != dp.get(k) for k in got):
                     raise _DocPinFail(f"document {did!r} differs from its configured pin")
             base = {k: v for k, v in prov.items() if k not in ek}
-            if base != {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}:
+            derived = {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}
+            # FIXR-7DA-1028: rows written before PROVFIX-1028 lack its label-only fields; accept the exact record or
+            # the pre-PROVFIX view of it (all-or-nothing; licence id/url/decision and hashes are compared either way)
+            if base != derived and base != fulltext_loader.legacy_label_view(derived, meta):
                 raise fulltext_loader.Refused(R_DBROW, "stored provenance differs from the re-derived record")
             key = rec["canonical_url"]
             if key in seen_keys:

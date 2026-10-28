@@ -242,6 +242,29 @@ def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
     return {"licence": lic, "licence_decision": d, "licence_rationale": cand["gate_a_rationale"].strip()}
 
 
+def legacy_label_view(provenance: dict, meta: dict) -> dict:
+    """FIXR-7DA-1028: the re-derived provenance as the pre-PROVFIX-1028 code (7da574a) would have written it.
+
+    PROVFIX-1028 added label-only fields that no decision reads: licence.content.version, the licence.embedded entry
+    taken from the per-element JATS summary when the converter's single-element read found no id/url, and
+    discovered_via. Rows stored before that change lack them, so the read path (vera.fulldoc_db) accepts a stored row
+    that equals EITHER the full re-derived record OR this view. Only those three label additions are removed; licence
+    id, url, source, decision, the converter-derived embedded licence, hashes and every other field are kept, so any
+    change to them still fails the equality check."""
+    out = dict(provenance)
+    out.pop("discovered_via", None)
+    lic = out.get("licence")
+    if isinstance(lic, dict):
+        lic = dict(lic)
+        if isinstance(lic.get("content"), dict):
+            lic["content"] = {k: v for k, v in lic["content"].items() if k != "version"}
+        conv = (meta.get("meta") or {}).get("licence") or {} if isinstance(meta, dict) else {}
+        if not (isinstance(conv, dict) and (conv.get("id") or conv.get("url"))):
+            lic.pop("embedded", None)  # only the PROVFIX (d) jats_licences branch can have produced it
+        out["licence"] = lic
+    return out
+
+
 def check_item_declared(item: dict, cfg: dict) -> None:
     """The manifest-item level filters (pure; no I/O). Shared by prepare() and the DB-backed reader (R3)."""
     check_item(item, cfg)
