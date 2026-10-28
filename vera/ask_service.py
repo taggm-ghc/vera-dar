@@ -180,6 +180,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     offline_spent: dict = {}  # PATHA-1028 CT-2: spend of a corpus attempt that produced no checked answer
+    offline_text = ""  # REFUSE-FIX-1028 V4: that attempt's fixed insufficient-evidence text (config text, never model text)
     if acq is None and _offline_coverage_eligible(decision, question):  # PATHA-1028 CT-2 (plan s26.2(6), P10)
         # acquisition off: a clean layer-2 verdict that is only about the topic is answered from the existing corpus
         # through the unchanged admission, writer and claim check. No inline search, no background job; when the
@@ -189,6 +190,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             return fd
         if isinstance(fd, tuple) and len(fd) == 5:
             offline_spent = {"tokens_used": int(fd[2] or 0), "cost_usd": round(float(fd[3] or 0.0), 6)}
+            offline_text = fd[4] if isinstance(fd[4], str) else ""
     if not decision.accepted:
         trig = None
         inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
@@ -235,6 +237,17 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                            contract={**(off.contract or {}), **_inline_trace(inline_note), **iac} if (_inline_trace(inline_note) or iac) else off.contract,
                            acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
                            **_spent(inline_note))
+        if acq is None and _offline_coverage_eligible(decision, question):
+            # REFUSE-FIX-1028 V4 (OD-1028(21)): a harmless off_topic/coverage question whose reading list is unavailable
+            # (no grounding seam or a search failure) is not a refusal: return the existing insufficient-evidence text
+            # and/or acquisition_off_note, never decline_template. Refusal reasons never reach this (eligibility gate).
+            from vera import answer_contract as _ac
+            from vera import scope_router as _sr
+            text = " ".join(t for t in (offline_text.strip(), _sr.acquisition_off_note()) if t)
+            res = _ac.reading_list_result((), decision.tokens_used, decision.cost_usd, accepted=False,
+                                          empty_text=text or None)
+            return replace(res, sources=(), contract={**(res.contract or {}), "offtopic": True, **iac},
+                           **offline_spent)
         return replace(AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
                                  result_kind="decline", acquire_trigger=trig if inline_note is None else None,
                                  **({"contract": iac} if iac and acq is not None else {})),  # feature off: the bare refusal stays byte-identical
