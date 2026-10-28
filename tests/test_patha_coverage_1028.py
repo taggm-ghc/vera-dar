@@ -9,6 +9,8 @@ from tests.test_dar_inline_acquire import GROUND, Search
 from vera import ask_service
 from vera import scope_router as sr
 
+REAL_ROUTE = sr.route
+
 OFF = dict(accepted=False, layer="layer2_llm", reason="llm_out:not about the curated fields", category="off_topic")
 
 
@@ -147,3 +149,92 @@ def test_ct4_only_topic_labels_are_coverage_labels(cat):
     d = sr.ScopeDecision(**{**OFF, "category": cat})
     assert not ask_service._offline_coverage_eligible(d, e2e.Q_EPI)
     assert ask_service._COVERAGE_LABELS == ("in_scope", "off_topic")
+
+
+# ------------------------------------------------------------------------------------------------ Q2 nullified verdict
+import json  # noqa: E402
+
+Q_UNSURE = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
+CLEAN = json.dumps({"in_scope": False, "category": "off_topic", "reason": "multi-agent systems"})
+DUP_OFF = '{"in_scope": false, "category": "in_scope", "category": "off_topic", "reason": "x"}'
+DUP_HARM = '{"in_scope": false, "category": "harmful", "category": "off_topic", "reason": "x"}'
+
+
+class Chat:
+    def __init__(self, *replies):
+        self.replies, self.calls = list(replies), 0
+
+    def __call__(self, messages, model, l2):
+        self.calls += 1
+        return self.replies[min(self.calls, len(self.replies)) - 1], 10, 2
+
+
+def _route(chat, cfg=None):
+    assert sr.layer1(Q_UNSURE, sr.load_config())[0] == sr.UNSURE
+    return sr.route(Q_UNSURE, "m", cfg=cfg, chat=chat)
+
+
+@pytest.mark.parametrize("bad", ["not json", DUP_OFF, '{"in_scope": false, "reason": "x"}',
+                                 '{"in_scope": false, "category": "sports", "reason": "x"}',
+                                 '{"in_scope": "false", "category": "off_topic"}'])
+def test_q2_nullified_verdict_is_retried_once_then_declined(bad):
+    c = Chat(bad, bad)
+    d = _route(c)
+    assert c.calls == 2 and d.accepted is False and d.llm_calls == 2 and d.tokens_used == 24
+    assert d.reason == "classifier_malformed" or d.category == ""
+    assert not ask_service._offline_coverage_eligible(d, Q_UNSURE)
+
+
+@pytest.mark.parametrize("bad", ["not json", DUP_OFF])
+def test_q2_retry_with_a_clean_second_verdict_uses_it(bad):
+    c = Chat(bad, CLEAN)
+    d = _route(c)
+    assert c.calls == 2 and d.reason.startswith("llm_out:") and d.category == "off_topic" and d.llm_calls == 2
+
+
+@pytest.mark.parametrize("reply,reason", [
+    (DUP_HARM, "classifier_malformed"),  # nullified, but the raw text names a refusal category: no retry (s4.1 D1)
+    ('{"in_scope": false, "category": "off_topic", "note": {"category": "harmful"}}', "classifier_malformed:refusal_token"),
+    ('{"in_scope": true, "category": "harmful", "reason": "x"}', "classifier_malformed:category_conflict"),
+    ('not json, but harmful', "classifier_malformed"),
+])
+def test_q2_safety_hits_are_never_retried(reply, reason):
+    c = Chat(reply, CLEAN)
+    d = _route(c)
+    assert c.calls == 1 and d.accepted is False and d.reason == reason
+
+
+@pytest.mark.parametrize("cat", ["harmful", "advice", "rule_change", "programming_task"])
+def test_q2_well_formed_refusal_category_is_not_retried(cat):
+    c = Chat(json.dumps({"in_scope": False, "category": cat, "reason": "x"}), CLEAN)
+    d = _route(c)
+    assert c.calls == 1 and d.category == cat and d.accepted is False
+
+
+def test_q2_clean_verdict_makes_one_call():
+    c = Chat(CLEAN)
+    assert _route(c).llm_calls == 1 and c.calls == 1
+
+
+def test_q2_retry_bound_is_configurable_and_clamped():
+    raw = json.loads(json.dumps(sr.load_config().raw))
+    raw["layer2"]["malformed_retry"] = 0
+    c = Chat("not json", CLEAN)
+    assert _route(c, cfg=sr.parse_config(raw)).reason == "classifier_malformed" and c.calls == 1
+    for bad in (2, -1, True, "1"):
+        raw["layer2"]["malformed_retry"] = bad
+        with pytest.raises(sr.ScopeConfigError):
+            sr.parse_config(raw)
+    assert sr.load_config().layer2["malformed_retry"] == 1
+
+
+def test_q2_nullified_twice_gives_the_neutral_decline_and_no_search(h, monkeypatch):
+    h.bundle()
+    h.install()
+    _serve(monkeypatch, None)
+    monkeypatch.setattr(sr, "route", REAL_ROUTE)
+    c = Chat(DUP_OFF, DUP_OFF)
+    monkeypatch.setattr(sr, "default_chat", lambda messages, model, l2, **k: c(messages, model, l2))
+    s = Search()
+    r = _ask(Q_UNSURE, s)
+    assert c.calls == 2 and r.result_kind != "answer" and h.answer_calls == [] and h.inline_calls == []

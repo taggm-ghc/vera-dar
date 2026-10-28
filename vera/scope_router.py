@@ -78,6 +78,9 @@ def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
         if unsure not in (ACCEPT, DECLINE):
             raise ScopeConfigError(f"scope_router.json: none_mode_unsure_action {unsure!r} must be accept|decline")
         l1 = raw["layer1"]
+        mr = raw["layer2"].get("malformed_retry", 1)
+        if isinstance(mr, bool) or mr not in (0, 1):  # PATHA-1028 Q2: a bound, clamped to 0/1; fail verbose
+            raise ScopeConfigError(f"scope_router.json: layer2.malformed_retry {mr!r} must be 0 or 1")
         return RouterConfig(
             raw=raw,
             layer2_mode=mode,
@@ -308,22 +311,56 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
         return ScopeDecision(False, "layer1", "deny:injection_marker")
     if cfg.layer2_mode == "none":
         return ScopeDecision(cfg.none_mode_unsure_action == ACCEPT, "layer2_none", "unsure:" + cfg.none_mode_unsure_action)
-    content, pt, ct = (chat or default_chat)(classifier_messages(question, cfg), model, cfg.layer2)
-    cost = 0.0
-    if pricing is not None:
-        cost = round(pt / 1_000_000 * pricing.input + ct / 1_000_000 * pricing.output, 8)
+    messages = classifier_messages(question, cfg)
+    retries = int(cfg.layer2.get("malformed_retry", 1))
+    pt = ct = calls = 0
+    while True:  # PATHA-1028 Q2: at most 1 + malformed_retry (<= 2) classifier calls
+        content, p_, c_ = (chat or default_chat)(messages, model, cfg.layer2)
+        pt, ct, calls = pt + p_, ct + c_, calls + 1
+        cost = 0.0
+        if pricing is not None:
+            cost = round(pt / 1_000_000 * pricing.input + ct / 1_000_000 * pricing.output, 8)
+        d = _layer2_decision(content, pt, ct, cost, calls)
+        if calls > retries or not _nullified(d) or _raw_names_refusal(content):
+            if calls > 1:
+                import logging
+                logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
+            return d
+
+
+def _nullified(d: ScopeDecision) -> bool:
+    """PATHA-1028 Q2: a verdict with no usable classification (plan s26.1 P5 and P10b): a malformed, oversize, bad-JSON,
+    duplicate-key or non-ASCII-category reply, or a well-formed in_scope=false reply whose category is missing or not
+    in the closed enum. category_conflict and refusal_token verdicts are safety refusals, not nullified."""
+    return d.reason == "classifier_malformed" or (d.reason.startswith("llm_out:") and d.category == "")
+
+
+_RAW_REFUSAL = re.compile(r"(?<![a-z])(harmful|rule[ _-]?change|advice|programming[ _-]?task)(?![a-z])")
+
+
+def _raw_names_refusal(content) -> bool:
+    """PATHA-1028 Q2 / s4.1 D1: True when the raw reply text names a refusal category anywhere (lenient, no decode), so
+    a nullified reply that mentions e.g. "harmful" is declined at once and never retried. Non-str or any fault: True."""
+    try:
+        return not isinstance(content, str) or bool(_RAW_REFUSAL.search(_norm_ws(content)))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int) -> ScopeDecision:
+    """One classifier reply -> ScopeDecision (unchanged A1 rules; moved out of route for the Q2 retry)."""
     in_scope, why = parse_verdict(content)
     if in_scope is None:
-        return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, 1)
+        return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, calls)
     category = parse_category(content)
     if in_scope and category in REFUSE_CATEGORIES:  # SCOPE-1022: in_scope=true with an advice/harm/... category is a
         # contradictory verdict; fail closed with the fixed refusal (never answered, listed or acquired)
-        return ScopeDecision(False, "layer2_llm", "classifier_malformed:category_conflict", pt + ct, cost, 1, category)
+        return ScopeDecision(False, "layer2_llm", "classifier_malformed:category_conflict", pt + ct, cost, calls, category)
     tok = refusal_token(content)
     if tok and (in_scope or category not in REFUSE_CATEGORIES):  # HOTFIX-DUPKEY-1027: a refusal category named anywhere
         # else in the reply (nested, a key, a reason) is never answered, listed or acquired; fail closed, keep the category
-        return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, 1, tok)
-    return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, 1,
+        return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, calls, tok)
+    return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, calls,
                          category)
 
 
