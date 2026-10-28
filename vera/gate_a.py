@@ -17,8 +17,9 @@ from vera import strict_json
 from dataclasses import dataclass
 
 from vera.cost_ledger import CostLedger
+from vera.generator_client import cost_usd as _gen_cost, generator_model, make_client
 
-MODEL = "gpt-4.1-nano"  # cheapest acceptable model; see config/model-selection.json
+MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
 WEIGHTS = {"query_fit": 0.4, "evidentiary_value": 0.4, "cost_risk": 0.2}
 FETCH_THRESHOLD = 0.6   # composite >= this -> fetch (subject to max_fetch)
 REJECT_THRESHOLD = 0.25  # composite < this AND scorer confident -> reject; else defer
@@ -73,18 +74,13 @@ def decide(score: float | None, uncertainty: str, cfg: GateAConfig) -> tuple[str
 
 
 def _openai_llm_call(messages: list[dict]) -> tuple[str, int, int]:
-    from vera.ask_service import _get_client
-    c = _get_client().chat.completions.create(
+    c = make_client().chat.completions.create(
         model=MODEL, messages=messages, response_format={"type": "json_object"}, temperature=0)
     return c.choices[0].message.content, c.usage.prompt_tokens, c.usage.completion_tokens
 
 
 def _llm_cost(prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
-    from vera.pricing.config import latest_pricing_for, load_model_pricing
-    rec = latest_pricing_for(MODEL, load_model_pricing())
-    if rec is None:
-        return 0.0, False
-    return round(prompt_tokens / 1e6 * rec.input + completion_tokens / 1e6 * rec.output, 6), True
+    return _gen_cost(MODEL, prompt_tokens, completion_tokens), True  # unpriced model raises (fail closed)
 
 
 def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int, dict]:

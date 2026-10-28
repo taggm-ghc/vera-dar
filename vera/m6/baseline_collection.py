@@ -11,17 +11,16 @@ import statistics
 import time
 from typing import Callable
 
-from vera.pricing.config import latest_pricing_for, load_model_pricing
+from vera.generator_client import cost_usd as _gen_cost, generator_model, make_client
 
-DEFAULT_MODEL = "gpt-4.1-nano"  # cheapest acceptable; same model as M5 (R1 rule)
+DEFAULT_MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
 N_RUNS = 3
 MAX_OUTPUT_TOKENS = 2500  # per-run step cap
 
 
 def _openai_call(question: str, model: str) -> dict:
-    from vera.ask_service import _get_client
     t0 = time.monotonic()
-    c = _get_client().chat.completions.create(
+    c = make_client().chat.completions.create(
         model=model, messages=[{"role": "user", "content": question}],
         max_tokens=MAX_OUTPUT_TOKENS)
     return {"text": c.choices[0].message.content or "",
@@ -31,11 +30,7 @@ def _openai_call(question: str, model: str) -> dict:
 
 
 def _cost(model: str, ptok: int, ctok: int) -> float:
-    rec = latest_pricing_for(model, load_model_pricing())
-    if rec is None:
-        raise RuntimeError(f"No pricing record for {model!r} in config/model-pricing.json; "
-                           "refusing to report an unpriced cost as $0.")
-    return round(ptok / 1e6 * rec.input + ctok / 1e6 * rec.output, 6)
+    return _gen_cost(model, ptok, ctok)  # unpriced model raises UnpricedModelError (a RuntimeError)
 
 
 def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,

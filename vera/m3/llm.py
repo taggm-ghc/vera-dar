@@ -15,11 +15,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
+from vera.generator_client import generator_model, make_client, pricing_for
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 
 logger = logging.getLogger("vera.m3")
 
-DEFAULT_MODEL = "gpt-4.1-nano"
+DEFAULT_MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
 
 
 class LLMError(RuntimeError):
@@ -89,17 +90,16 @@ class OpenAIJSONClient:
 
     def _get(self):
         if self._client is None:
-            from openai import OpenAI
-
-            self._client = OpenAI(timeout=self.timeout_s, max_retries=1)
+            self._client = make_client(timeout=self.timeout_s, max_retries=1)
         return self._client
 
     def _cost(self, pt: int, ct: int) -> float:
         if self._pricing is None:
-            return 0.0  # unknown price is logged as 0 but flagged in the record error
+            pricing_for(self.model)  # raises UnpricedModelError (fail closed; no silent $0)
         return round(pt / 1e6 * self._pricing.input + ct / 1e6 * self._pricing.output, 6)
 
     def complete_json(self, system: str, user: str, purpose: str) -> dict:
+        pricing_for(self.model)  # fail closed before any paid call
         t0 = time.monotonic()
         try:
             resp = self._get().chat.completions.create(

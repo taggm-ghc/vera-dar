@@ -58,7 +58,12 @@ class JudgeConfigError(RuntimeError):
 def generation_family(config: EvalConfig | None = None) -> str:
     """Family of the generator model, derived from the run config (not a constant): the judge must differ."""
     cfg = config or load_eval_config()
-    return family_for(cfg.generator_model, cfg).family
+    fam = family_for(cfg.generator_model, cfg).family
+    if not fam:
+        raise JudgeConfigError(
+            f"generator model {cfg.generator_model!r} resolved to no family (None); the self-grading guard "
+            "cannot be checked. Add it to model_families in config/vera_eval_run.json with a source URL.")
+    return fam
 
 
 @dataclass
