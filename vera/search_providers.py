@@ -426,7 +426,7 @@ class OpenAlexProvider:
         if len(body.encode("utf-8", "ignore")) > self.max_bytes:
             raise ProviderResponseError(f"openalex response over {self.max_bytes} bytes; refused before parsing")
         try:
-            doc = strict_json.loads(body)
+            doc = strict_json.loads(body, keys="exact")  # abstract_inverted_index keys are words
         except ValueError as e:
             raise ProviderResponseError(f"openalex response is not JSON: {e}") from None
         if not isinstance(doc, dict) or not isinstance(doc.get("results"), list):

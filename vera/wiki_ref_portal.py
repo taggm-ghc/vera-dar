@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import time
+from vera import strict_json
 from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import urlencode, urlsplit
@@ -294,7 +295,7 @@ def get_json(params: dict, cfg: Mapping, *, http_get: Callable, url_check: Calla
         except Exception:  # noqa: BLE001
             raise PortalError("unreachable") from None
         try:
-            doc = json.loads(b"".join(chunks).decode("utf-8"))
+            doc = strict_json.loads(b"".join(chunks).decode("utf-8"))
         except Exception:  # noqa: BLE001
             raise PortalError("unreachable") from None
         if not isinstance(doc, dict) or "error" in doc:

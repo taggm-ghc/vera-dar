@@ -268,7 +268,7 @@ class OpenAICompatJudge(BaseJudge):
         if not r.ok:  # verbose, no retry (bounded-loops rule)
             raise RuntimeError(f"Judge call to {self.provider} model {self.model!r} failed: "
                                f"HTTP {r.status_code}: {r.text[:300]}")
-        d = r.json()
+        d = strict_json.response_json(r)
         u = d.get("usage", {})
         return (d["choices"][0]["message"]["content"],
                 u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
@@ -296,7 +296,7 @@ def preflight_judge(judge, *, http_get=None, timeout_s: float = PREFLIGHT_TIMEOU
     if not r.ok:
         raise JudgeConfigError(f"Preflight: {judge.provider} /models HTTP {r.status_code}: {str(r.text)[:300]}")
     try:
-        rows = r.json().get("data", [])
+        rows = strict_json.response_json(r).get("data", [])
     except Exception as e:  # noqa: BLE001
         raise JudgeConfigError(f"Preflight: {judge.provider} /models returned unreadable JSON "
                                f"({type(e).__name__}); nothing spent.") from None
