@@ -8,7 +8,6 @@ Bounds (fail verbosely, never loop): one call = one request, at most one retry
 on malformed JSON, hard request timeout, hard max_tokens. Failures raise
 LLMError carrying the stage context rather than returning partial data.
 """
-import json
 import logging
 import time
 from contextlib import contextmanager
@@ -16,6 +15,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable
 
+from vera import strict_json
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 
 logger = logging.getLogger("vera")
@@ -74,7 +74,7 @@ def complete_json(system: str, user: str, *, model: str | None = None) -> LLMRes
             cost += (u.prompt_tokens * pricing.input + u.completion_tokens * pricing.output) / 1_000_000
         raw = c.choices[0].message.content or ""
         try:
-            data = json.loads(raw)
+            data = strict_json.loads(raw)  # STRICTJSON-1027 C3: duplicate / non-ASCII keys, non-finite numbers rejected
             if not isinstance(data, dict):
                 raise ValueError("top-level JSON is not an object")
             return LLMResult(data, model, tokens, round(cost, 6), round(time.monotonic() - started, 3), raw)

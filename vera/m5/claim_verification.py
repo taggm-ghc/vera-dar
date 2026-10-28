@@ -28,6 +28,7 @@ STOP = set("that this with from have been were their which about also such than 
            "while these those other using used when what they them will would could should".split())
 ACTION = {"unsupported": "remove", "overreach": "tone_down", "weak": "qualify", "contested": "qualify"}
 NUM = re.compile(r"\d+(?:\.\d+)?")
+VERDICTS = ("supported", "partial", "unsupported")  # the only verdicts _llm_check accepts
 
 
 def _words(t: str) -> set[str]:
@@ -63,11 +64,24 @@ def _llm_check(claims: list[dict], spans: dict, llm) -> dict[int, dict]:
     )
     res = call(llm, system, "<evidence>\n" + "\n\n".join(items) + "\n</evidence>")
     out = {}
-    for v in res.data.get("verdicts", []):
-        try:
-            out[int(v["index"])] = {"verdict": str(v["verdict"]).lower(), "issue": str(v.get("issue", ""))}
-        except (KeyError, TypeError, ValueError):
+    rows = res.data.get("verdicts", [])
+    rows = rows if isinstance(rows, list) else []
+    # STRICTJSON-1027 C6: only a plain int index counts (bool "true", "0", 0.0 are skipped -> no verdict, never
+    # 'supported'). A repeated int index, counted over every dict row whether or not it has a verdict, rejects the
+    # whole reply (LLMError, caught by verify_claims -> llm_ok False). Reject, not merge.
+    idx = [v["index"] for v in rows if isinstance(v, dict) and type(v.get("index")) is int]
+    if len(idx) != len(set(idx)):
+        raise LLMError("repeated_index")
+    for v in rows:
+        if not (isinstance(v, dict) and type(v.get("index")) is int):
             continue
+        try:
+            verdict = str(v["verdict"]).lower()
+        except KeyError:
+            continue
+        if verdict not in VERDICTS:  # R2-SJ-1: "refuted", "unsupported " etc. never fall through to 'supported'
+            continue
+        out[v["index"]] = {"verdict": verdict, "issue": str(v.get("issue", ""))}
     return out
 
 

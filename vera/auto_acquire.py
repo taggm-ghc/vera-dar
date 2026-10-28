@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from vera import acq_config, rate_limit
+from vera import acq_config, rate_limit, strict_json
 
 logger = logging.getLogger("vera.autoacq")
 CODE_VERSION = "wed-acq2-p17-1"
@@ -636,9 +636,12 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
     raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
                                clock=clock, deadline=deadline, **({"chain": chain} if chain is not None else {}))
     try:
-        doc = json.loads(raw.decode("utf-8"))
+        doc = strict_json.loads(raw.decode("utf-8"))  # STRICTJSON-1027 C4: duplicate / non-ASCII keys, NaN rejected
         res = ((doc.get("resultList") or {}).get("result") or [])
         r = res[0] if res and isinstance(res[0], dict) else None
+    except strict_json.StrictJSONError as e:
+        logger.warning("resolve_oa strict JSON reject (%s)", e.code)  # fixed code only, never record text
+        r = None
     except Exception:  # noqa: BLE001
         r = None
     rdoi = str((r or {}).get("doi") or "").strip().lower()

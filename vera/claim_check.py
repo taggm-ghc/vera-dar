@@ -14,6 +14,8 @@ from contextvars import ContextVar
 
 from openai import OpenAI
 
+from vera import strict_json
+
 logger = logging.getLogger("vera")
 USAGE: ContextVar = ContextVar("claim_usage", default=None)  # S5: caller-set out-channel for checker usage rows
 RECORDS: ContextVar = ContextVar("claim_records", default=None)  # item #84: caller-set out-channel for records
@@ -77,18 +79,29 @@ def _messages(claims: list[dict], sources: list[dict], question: str | None = No
 
 def _parse(text: str, claims: list[dict], responsive: bool = False) -> dict[int, dict] | None:
     try:
-        rows = json.loads(text)["claims"]
+        rows = strict_json.loads(text)["claims"]  # STRICTJSON-1027 C2a: duplicate / non-ASCII keys, NaN reject the reply
+    except strict_json.StrictJSONError as e:
+        logger.warning("/ask claim check reply rejected (%s)", e.code)  # fixed code only, never reply text (C2e)
+        return None
     except (ValueError, KeyError, TypeError):
         return None
+    rows = rows if isinstance(rows, list) else []
+    ids = {c["id"] for c in claims}
+    seen = [r["id"] for r in rows if isinstance(r, dict) and "id" in r]
+    # C2b/C2c: a repeated id (over every dict row with an id, whatever its verdict), or an id that is not a plain int
+    # claim id (bool, str, float, foreign), rejects the whole reply; the next checker is tried.
+    if any(type(i) is not int or i not in ids for i in seen) or len(seen) != len(set(seen)):
+        logger.warning("/ask claim check reply rejected (row_ids)")
+        return None
     got = {}
-    for r in rows if isinstance(rows, list) else []:
+    for r in rows:
         if isinstance(r, dict) and isinstance(r.get("id"), int) and r.get("verdict") in ("supported", "partial", "unsupported"):
             row = {"verdict": r["verdict"], "reason": str(r.get("reason", ""))[:200]}
             if responsive:  # RESP-1022: only the three literal values count; a missing or invalid value is None, which
                 # means "treated as responsive" (today's behaviour) and is counted as responsive_missing. Never fails closed.
                 row["responsive"] = r.get("responsive") if r.get("responsive") in _RESPONSIVE else None
             got[r["id"]] = row
-    return got if len(got) == len(claims) else None  # every claim must be judged, or the check failed
+    return got if set(got) == ids else None  # C2d: every claim id judged exactly, or the check failed
 
 
 def _client(checker: dict, timeout_s: float):
