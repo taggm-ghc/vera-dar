@@ -98,3 +98,21 @@ def test_logs_class_token_only(blocked, caplog):
         ask_service.answer_in_scope("What is your name?", "m", PRICING)
     msgs = " ".join(r.getMessage() for r in caplog.records)
     assert "class=self_reflective" in msgs and "name" not in msgs.replace("self_reflective", "")
+
+
+def test_dotted_ai_alternative_can_match():
+    assert sr.self_reflective("Are you an A.I.?", CFG) and sr.self_reflective("are you a.i", CFG)
+
+
+def test_self_description_api_and_page(monkeypatch):
+    """API carries result_kind/outcome self_description; the page shows the answer text, no reading-list heading."""
+    from tests import test_k2_integrated_contract as k2
+    monkeypatch.setattr(k2, "_setup", lambda mp, case: (
+        lambda q, entries, grounding: (ask_service.answer_in_scope("Who are you?", "m", PRICING, grounding=grounding), "groq:m")))
+    _, body, _ = k2._post(monkeypatch, "self_description")
+    assert body["result_kind"] == "self_description" and body["outcome"] == "self_description"
+    assert body["answer"] == sr.self_reflective_text(CFG) and body["sources"] == [] and body["candidates"] == []
+    at = k2._page(monkeypatch, body)
+    shown = "\n".join(k2._texts(at, *k2.ALL))
+    assert "I am VERA-DAR" in " ".join(k2._texts(at, "info"))
+    assert "Reading list" not in shown and "has not acquired or read" not in shown.lower() and not at.success

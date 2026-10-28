@@ -7,6 +7,7 @@ from vera.sources_sidebar import LICENCE_SIDEBAR, _link, plain
 from vera.ui_safety import safe_markdown
 
 KIND_ANSWER, KIND_DECLINE, KIND_READING_LIST = "answer", "decline", "reading_list"
+KIND_SELF_DESCRIPTION = "self_description"  # SELFREF-1028: fixed public self-description, shown as plain text
 
 
 def _candidates(raw) -> list[dict]:
@@ -48,7 +49,7 @@ def _render_memory(st, data: dict) -> None:
 
 def render_discovery(st, data: dict) -> None:
     kind = data.get("result_kind")
-    if kind == KIND_DECLINE:
+    if kind in (KIND_DECLINE, KIND_SELF_DESCRIPTION):  # SELFREF-1028: text only, no reading-list heading or warning
         st.info(safe_markdown(data.get("answer") or ""))
         return
     cands = _candidates(data.get("candidates"))

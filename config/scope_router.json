@@ -32,7 +32,7 @@
       "who are you( exactly)?",
       "what are you( exactly)?",
       "what (kind|sort|type) of (ai|assistant|tool|system|bot|chatbot|program|thing) are you",
-      "are you (an? )?(ai|a\\.i\\.|bot|robot|chatbot|human|person|real|machine|program)",
+      "are you (an? )?(ai|a\\.i\\.?|bot|robot|chatbot|human|person|real|machine|program)",
       "(please )?(introduce yourself|tell me (a bit )?about yourself|describe yourself)",
       "what (is|are) your (purpose|role|job|function|capabilities|abilities|limitations|limits)",
       "what (can|could) you do( for me)?",
