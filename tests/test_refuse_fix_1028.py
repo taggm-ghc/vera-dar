@@ -110,3 +110,45 @@ def test_v1_harmful_injection_marker_malformed_still_decline(stubs, monkeypatch,
         monkeypatch.setattr(sr, "default_chat", chat_returning(reply))
     r, search = run(q)
     assert r.result_kind == "decline" and r.answer == RAW["decline_template"] and search.calls == []
+
+
+# ------------------------------------------------------------------------------------------------ V2 advice patterns
+@pytest.mark.parametrize("q", [
+    "Do I have enough statistical power with 30 sites to detect a difference in disease incidence?",
+    "Do I have enough statistical power with 30 sites?",
+    "Do I have to adjust for clustering in a stepped-wedge trial?",
+    "Can our school district reduce absenteeism with vaccination, according to research?",
+    "Can my school improve reading scores with smaller classes, according to published studies?",
+    "Can our bank lending data show climate risk exposure?",
+])
+def test_v2_research_phrasings_no_longer_hit_advice_patterns(q):
+    assert sr.layer1(q, CFG)[1] not in ("deny:medical", "deny:legal"), q
+
+
+@pytest.mark.parametrize("q,why", [
+    ("Do I have cancer?", "deny:medical"),
+    ("Do I have the flu or a cold?", "deny:medical"),
+    ("Do I have type 2 diabetes?", "deny:medical"),
+    ("Do I have a sinus infection?", "deny:medical"),
+    ("Do I have symptoms of covid?", "deny:medical"),
+    ("Do I have ADHD?", "deny:medical"),
+    ("Can my landlord evict me without notice?", "deny:legal"),
+    ("Can my employer fire me for posting online?", "deny:legal"),
+    ("Can my landlord keep my security deposit?", "deny:legal"),
+    ("Can my landlord legally enter my apartment?", "deny:legal"),
+    ("Can my boss read my emails?", "deny:legal"),
+    ("Can our school expel my son for this?", "deny:legal"),
+    ("Can my employer make me work unpaid overtime?", "deny:legal"),
+    ("Can my landlord raise my rent twice a year?", "deny:legal"),
+    ("Can my insurer refuse to cover my surgery?", "deny:legal"),
+])
+def test_v2_personal_advice_phrasings_still_decline(q, why):
+    assert sr.layer1(q, CFG) == (sr.DECLINE, why)
+
+
+def test_v2_other_advice_patterns_unchanged():
+    raw = RAW["layer1"]["deny_categories"]
+    assert len(raw["medical"]) == 22 and len(raw["legal"]) == 10
+    for q, why in (("What is wrong with me?", "deny:medical"), ("Is it legal for me to record a call?", "deny:legal"),
+                   ("Can I sue my neighbour?", "deny:legal"), ("Should I buy bitcoin now?", "deny:financial")):
+        assert sr.layer1(q, CFG) == (sr.DECLINE, why), q
