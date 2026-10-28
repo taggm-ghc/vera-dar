@@ -379,9 +379,24 @@ def _assert_declined_untouched(monkeypatch, *replies, q=Q_NONE):
     return r
 
 
-@pytest.mark.parametrize("cat", sorted(sr.REFUSE_CATEGORIES))
+@pytest.mark.parametrize("cat", sorted(set(sr.REFUSE_CATEGORIES) - {"programming_task"}))
 def test_safety_refusal_categories_still_decline(monkeypatch, acq_on, cat):
     _assert_declined_untouched(monkeypatch, json.dumps({"in_scope": False, "category": cat, "reason": "x"}))
+
+
+def test_programming_task_is_unsupported_use_not_catstep(monkeypatch, acq_on):
+    # NEXTREL-1028: REFUSE-FIX-1028 (release) makes a clean programming_task verdict the unsupported-use reading list
+    # (no code, no acquisition); the catstep must still not touch it.
+    _chat_seq(monkeypatch, json.dumps({"in_scope": False, "category": "programming_task", "reason": "x"}))
+    seen = _spy_fulldoc(monkeypatch)
+    cats = []
+    real = catstep.categorise
+    monkeypatch.setattr(catstep, "categorise", lambda *a, **k: cats.append(1) or real(*a, **k))
+    inl = []
+    monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: inl.append(1))
+    r = ask_service.answer_in_scope(Q_NONE, "m", PRICING, grounding=(lambda *a, **k: [], {}))
+    assert r.result_kind in ("reading_list", "decline") and r.acquire_trigger is None
+    assert seen == [] and cats == [] and inl == []
 
 
 @pytest.mark.parametrize("replies", [

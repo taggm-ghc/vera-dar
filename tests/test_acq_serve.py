@@ -157,7 +157,7 @@ def test_decline_triggers(h, monkeypatch, layer, reason, question, category, exp
 def test_decline_without_the_feature_is_byte_identical(h, monkeypatch):
     h.bundle()
     h.install()
-    _decide(monkeypatch, False, "layer2_llm", "llm_out:x")
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "harmful")  # NEXTREL-1028: "" now takes CATSTEP-1028's coverage path
     monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
     r = ask_service.answer_in_scope("What is the best sourdough recipe?", "m", e2e.PRICING)
     assert r == ask_service.AskResult(answer=scope_router.decline_text(), tokens_used=0, cost_usd=0.0,

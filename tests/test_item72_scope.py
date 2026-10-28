@@ -125,8 +125,10 @@ def test_answer_in_scope_llm_decline_uses_template_not_model_text(monkeypatch):
     monkeypatch.setattr(sr, "default_chat", fake_chat('{"in_scope": false, "reason": "MODEL TEXT"}'))
     monkeypatch.setattr(ask_service, "answer_question", lambda *a: (_ for _ in ()).throw(AssertionError("answered")))
     r = ask_service.answer_in_scope("Who painted the Mona Lisa?", "m", _pricing())
-    # Q2 / Path A: no category -> nullified -> one retry (tokens of both calls), then the fixed decline
-    assert r.answer == RAW["decline_template"] and "MODEL TEXT" not in r.answer and r.tokens_used == 220
+    # Q2 / Path A: no category -> nullified -> one retry (tokens of both calls). NEXTREL-1028 (requirement change from
+    # CATSTEP-1028): the well-formed in_scope:false/no-category verdict is then categorised and takes the coverage path;
+    # with acquisition off the reply is the fixed acquisition-off note, never the model text.
+    assert r.answer == RAW["acquisition_off_note"] and "MODEL TEXT" not in r.answer and r.tokens_used == 220
 
 
 def test_main_ask_routes_through_scope_router():
