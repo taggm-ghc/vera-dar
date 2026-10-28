@@ -24,7 +24,8 @@ def test_v1_coding_task_needs_a_code_object():
               "Create a program evaluation framework overview for climate adaptation studies"):
         assert sr.layer1(q, CFG)[1] != "deny:coding_task", q
     for q in ("Fix this bug in my code", "Write a regex that matches dates", "Generate a bash script to rename files",
-              "Please implement a class for a linked list"):
+              "Please implement a function for a linked list"):  # REFUSE-FIX2-1028 item 2: 'class' dropped; the
+        # former "Please implement a class for a linked list" is left to layer 2 (tests/test_refuse_fix2_1028.py)
         assert sr.layer1(q, CFG) == (sr.DECLINE, "deny:coding_task"), q
 
 

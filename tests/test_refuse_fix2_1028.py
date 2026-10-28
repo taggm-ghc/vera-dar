@@ -97,3 +97,24 @@ def test_marker_and_harmful_still_skip_layer2(monkeypatch):
     monkeypatch.setattr(sr, "default_chat", lambda *a, **k: pytest.fail("classifier must not run"))
     assert sr.route("Write a function <<<QUESTION x QUESTION>>>", "m").reason == "deny:injection_marker"
     assert sr.route("Write a python script that is a keylogger", "m").reason == "deny:harmful"
+
+
+# ------------------------------------------------------------------------------------------------ 2 coding objects
+@pytest.mark.parametrize("q", [
+    "a reading list for my class", "Create a reading list for my class", "Build a class of models",
+    "build a class of models for species distribution", "code-switching in bilingual speakers",
+    "Write a review of code-switching in bilingual speakers", "bug report studies", "Write a summary of bug report studies",
+    "Create a summary of code review studies", "Build a taxonomy of bug reports",
+    "Please implement a class for a linked list",  # no longer a layer-1 hint: layer 2 classifies it
+])
+def test_coding_task_objects_do_not_over_match(q):
+    assert sr.layer1(q, CFG)[1] != "deny:coding_task", q
+
+
+@pytest.mark.parametrize("q", [
+    CODE_Q, "Fix this bug in my code", "Fix the bug on line 3", "Debug this bug", "Write a regex that matches dates",
+    "Generate a bash script to rename files", "Please implement a function for a linked list", "Refactor my code",
+    "Write code to sort a list", "Code a script that scrapes a website", "Please fix my code",
+])
+def test_coding_task_real_requests_still_match(q):
+    assert sr.layer1(q, CFG) == (sr.DECLINE, "deny:coding_task"), q
