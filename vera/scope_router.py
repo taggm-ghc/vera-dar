@@ -173,18 +173,40 @@ def _any(patterns: tuple[re.Pattern, ...], text: str) -> bool:
     return any(p.search(text) for p in patterns)
 
 
+def _views(question: str) -> list[str]:
+    """The layer-1 matching views: the normalised question and (SCOPE2-1022) its letter-spaced-collapsed form when it
+    differs (matching only; the question itself is never altered)."""
+    q = normalise(question)
+    views = [q]
+    qc = normalise(collapse_letter_spaced(strip_format_chars(question or "")))
+    if qc != q:
+        views.append(qc)
+    return views
+
+
+def injection_unstripped(question: str, cfg: RouterConfig | None = None) -> bool:
+    """REL-FIX3-1028 D1: an injection pattern or a classifier data marker on the UN-STRIPPED text (every view), checked
+    before any mode claim is nullified, so stripping a claim can never delete the last word of an injection
+    ("ignore all previous instructions mode on"). A hit rejects the whole input. Fails closed (True) on error."""
+    try:
+        cfg = cfg or load_config()
+        return has_marker(question) or any(_any(cfg.injection, v) for v in _views(question))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     """Return (ACCEPT|DECLINE|UNSURE, reason). Zero cost, deterministic."""
     q = normalise(question)
     if not q:
         return DECLINE, "empty"
-    # SCOPE2-1022: also match a letter-spaced-collapsed view (matching only; the question itself is never altered)
-    views = [q]
-    qc = normalise(collapse_letter_spaced(strip_format_chars(question or "")))
-    if qc != q:
-        views.append(qc)
+    views = _views(question)
+    # REL-FIX3-1028 D1: injection is checked on the UN-STRIPPED views first; a hit rejects the whole input
+    if any(_any(cfg.injection, v) for v in views):
+        return DECLINE, "deny:injection"
     # SEC-V3-1028 / owner 2026-10-28: mode-switch claims are nullified (stripped) on every view, never obeyed; the
-    # rest is checked below as usual. Nothing meaningful left -> the neutral decline.
+    # rest is checked below as usual (injection again included). Nothing meaningful left -> the neutral decline.
+    raw_views = views
     stripped = [_strip_mode_claims(v, cfg) for v in views]
     if any(n for _v, n in stripped):
         views = [re.sub(r"\s+", " ", v).strip() for v, _n in stripped]
@@ -196,8 +218,9 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     # injection or harmful hit that only the letter-spaced view shows. Every outcome here is still DECLINE.
     if any(_any(cfg.injection, v) for v in views):
         return DECLINE, "deny:injection"
+    deny_views = views if views is raw_views else views + raw_views  # D1: the un-stripped text is checked too
     for name, pats in cfg.deny.items():
-        if any(_any(pats, v) for v in views):
+        if any(_any(pats, v) for v in deny_views):
             return DECLINE, f"deny:{name}"
     if _any(cfg.tool_names, q):
         return ACCEPT, "tool_name"
@@ -355,16 +378,20 @@ def parse_verdict(content: str) -> tuple[bool | None, str]:
 def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = None,
           chat: ChatFn | None = None) -> ScopeDecision:
     cfg = cfg or load_config()
+    original = question
     question = nullify_mode_claims(question, cfg)[0]  # SEC-V3-1028: the classifier never sees a mode claim either
-    verdict, reason = layer1(question, cfg)
-    if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON and has_marker(question):
+    # REL-FIX3-1028 D1: layer 1 runs on the ORIGINAL text (it checks injection before stripping mode claims itself),
+    # and the marker check covers the original as well as the stripped text
+    verdict, reason = layer1(original, cfg)
+    marker = has_marker(original) or has_marker(question)
+    if verdict == DECLINE and reason in (UNSUPPORTED_L1_REASON, "deny:mode_claim") and marker:
         # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)
         return ScopeDecision(False, "layer1", "deny:injection_marker")
     if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON:
         return _coding_hint(question, model, pricing, cfg, chat)
     if verdict != UNSURE:
         return ScopeDecision(verdict == ACCEPT, "layer1", reason)
-    if has_marker(question):  # DAR-1021 SEC H1: fixed refusal, no classifier call, never a reading list or acquisition
+    if marker:  # DAR-1021 SEC H1: fixed refusal, no classifier call, never a reading list or acquisition
         return ScopeDecision(False, "layer1", "deny:injection_marker")
     if cfg.layer2_mode == "none":
         return ScopeDecision(cfg.none_mode_unsure_action == ACCEPT, "layer2_none", "unsure:" + cfg.none_mode_unsure_action)
