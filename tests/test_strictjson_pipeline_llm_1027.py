@@ -32,7 +32,11 @@ def fake(monkeypatch):
     def install(*replies):
         client = FakeClient(replies)
         monkeypatch.setattr(pl, "_client", lambda: client)
-        monkeypatch.setattr(pl, "load_model_pricing", lambda: None)
+        # FREEGEN-IMPL-1028 fail-closed cost: an unpriced model now raises, so the fake model gets an explicit 0 record
+        from vera.pricing.config import ModelPricing, PricingRecord
+        zero = PricingRecord(provider="fake", model="fake-model", input=0.0, output=0.0, source_url="u",
+                             retrieved_at="2026-10-28T00:00:00", effective_from="2026-10-28")
+        monkeypatch.setattr(pl, "load_model_pricing", lambda: ModelPricing(records=[zero]))
         monkeypatch.setattr(pl, "default_model", lambda: "fake-model")
         return client
     return install

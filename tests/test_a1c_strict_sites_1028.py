@@ -104,7 +104,11 @@ def test_gate_a_dup_key_defers_like_invalid_json():
 
 def _llm_client(content):
     c = OpenAIJSONClient.__new__(OpenAIJSONClient)
-    c.model, c._pricing, c.timeout_s = "m", None, 1.0
+    # FREEGEN-IMPL-1028 fail-closed cost: an unpriced model raises, so the fixture carries an explicit 0 record
+    from vera.pricing.config import PricingRecord
+    c.model, c.timeout_s = "m", 1.0
+    c._pricing = PricingRecord(provider="fake", model="m", input=0.0, output=0.0, source_url="u",
+                               retrieved_at="2026-10-28T00:00:00", effective_from="2026-10-28")
     from vera.m3.llm import CallLog
     c.log = CallLog()
     c._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: SimpleNamespace(

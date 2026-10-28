@@ -99,7 +99,8 @@ class OpenAIJSONClient:
         return round(pt / 1e6 * self._pricing.input + ct / 1e6 * self._pricing.output, 6)
 
     def complete_json(self, system: str, user: str, purpose: str) -> dict:
-        pricing_for(self.model)  # fail closed before any paid call
+        if self._pricing is None:
+            pricing_for(self.model)  # fail closed before any paid call
         t0 = time.monotonic()
         try:
             resp = self._get().chat.completions.create(
