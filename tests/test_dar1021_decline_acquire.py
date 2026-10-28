@@ -59,8 +59,7 @@ def test_route_parses_closed_enum_category(monkeypatch, reply, cat):
 
 
 def test_prompt_asks_for_category_and_shipped_gate_is_off_topic_only():
-    raw = json.loads(open(sr.CONFIG_PATH).read()) if hasattr(sr, "CONFIG_PATH") else None
-    prompt = (raw or sr.load_config().raw)["layer2"]["system_prompt"]
+    prompt = sr.load_config().layer2["system_prompt"]  # OOE-APRIME-C-1028: rendered from the category table
     for c in sr.LAYER2_CATEGORIES:
         assert f'\\"{c}\\"' in json.dumps(prompt)
     se = acq_config.load_config()["scope_expansion"]

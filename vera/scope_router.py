@@ -20,6 +20,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
+from types import MappingProxyType
 from pathlib import Path
 from typing import Callable
 
@@ -94,20 +95,25 @@ def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
             ai_terms=_compile(l1["ai_terms"], "ai_terms"),
             dev_terms=_compile(l1["dev_terms"], "dev_terms"),
             tool_names=_compile(l1["tool_names"], "tool_names"),
-            layer2=raw["layer2"],
+            layer2={**raw["layer2"], "system_prompt": render_category_prompt(raw["layer2"]["system_prompt"])},
             mode_claims=_compile(l1.get("mode_claim_patterns", []), "mode_claim_patterns"),
         )
     except KeyError as exc:
         raise ScopeConfigError(f"scope_router.json: missing key {exc}") from exc
 
 
-@lru_cache(maxsize=1)
-def load_config(path: str = str(CONFIG_PATH)) -> RouterConfig:
+def _read_owner_json(path, what: str):
+    """Read an owner-written config file (read-only; the one json.loads of config in this module)."""
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ScopeConfigError(f"cannot load scope router config {Path(path).name}: {exc}") from exc
-    return parse_config(raw)
+        raise ScopeConfigError(f"cannot load {what} {Path(path).name}: {exc}") from exc
+    return raw
+
+
+@lru_cache(maxsize=1)
+def load_config(path: str = str(CONFIG_PATH)) -> RouterConfig:
+    return parse_config(_read_owner_json(path, "scope router config"))
 
 
 def strip_format_chars(text: str) -> str:
@@ -404,8 +410,111 @@ def default_chat(messages: list[dict], model: str, l2: dict, client=None,
     return c.choices[0].message.content or "", c.usage.prompt_tokens, c.usage.completion_tokens
 
 
-LAYER2_CATEGORIES = ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
-REFUSE_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})  # SCOPE-1022: never answered, listed or acquired
+# OOE-APRIME-C-1028 (OD-1028(38), owner "a' + c"): the layer-2 categories come from ONE owner-curated, versioned table,
+# config/classifier_categories.json. Read-only at runtime: loaded once at import into immutable structures (frozen rows,
+# tuples, frozensets, a read-only alias map); no code path writes or extends it (the model never creates a research
+# route). An invalid table raises ScopeConfigError at import (fail closed, startup error).
+CATEGORIES_PATH = Path(__file__).resolve().parent.parent / "config" / "classifier_categories.json"
+DISPOSITIONS = ("in_scope", "off_topic", "refuse", "unsupported_use")  # the dispositions the code implements
+REFUSING_DISPOSITIONS = frozenset({"refuse", "unsupported_use"})  # never answered, listed as normal research, or acquired
+# Owner rule 2026-10-28 ("a new C entry must have a significantly dissimlar description from all other descriptions").
+# Calibration (config description_similarity_note): on the six shipped descriptions the pairwise token-set Jaccard max
+# is 0.250 (advice vs harmful); 0.50 = max + 0.25 margin. Re-calibrate when a row is added.
+DESCRIPTION_SIMILARITY_MAX = 0.50
+_DESC_STOPWORDS = frozenset("a an the and or of to for in on at by with about any your you only is are be it this that "
+                            "as from".split())
+_CODE_RE = re.compile(r"[a-z][a-z_]{1,31}")
+
+
+@dataclass(frozen=True)
+class Category:
+    code: str
+    description: str
+    disposition: str
+    refusal_rank: int | None
+    aliases: tuple[str, ...]
+
+
+def description_similarity(a: str, b: str) -> float:
+    """Token-set Jaccard of lowercased word tokens, stopwords removed (deterministic, stdlib)."""
+    ta = frozenset(re.findall(r"[a-z]+", a.lower())) - _DESC_STOPWORDS
+    tb = frozenset(re.findall(r"[a-z]+", b.lower())) - _DESC_STOPWORDS
+    return len(ta & tb) / len(ta | tb) if ta | tb else 1.0
+
+
+def parse_categories(raw) -> tuple[Category, ...]:
+    """Validate the category table; any fault is a ScopeConfigError (fail closed). Returns an immutable tuple."""
+    where = "classifier_categories.json"
+    rows = raw.get("categories") if isinstance(raw, dict) else None
+    if not isinstance(rows, list) or not rows:
+        raise ScopeConfigError(f"{where}: 'categories' must be a non-empty list")
+    out, labels = [], set()
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict) or set(r) != {"code", "description", "disposition", "refusal_rank", "aliases"}:
+            raise ScopeConfigError(f"{where}: row {i} must have exactly code, description, disposition, refusal_rank, aliases")
+        code, desc, disp, rank, aliases = (r["code"], r["description"], r["disposition"], r["refusal_rank"], r["aliases"])
+        if not isinstance(code, str) or not _CODE_RE.fullmatch(code):
+            raise ScopeConfigError(f"{where}: row {i} code {code!r} must match {_CODE_RE.pattern}")
+        if code in labels:
+            raise ScopeConfigError(f"{where}: duplicate code or alias {code!r}")
+        labels.add(code)
+        if not isinstance(desc, str) or not desc.strip() or not desc.isascii() or any(ch in desc for ch in '"{}'):
+            raise ScopeConfigError(f"{where}: {code}: description must be non-empty ASCII text without quotes or braces")
+        if disp not in DISPOSITIONS:
+            raise ScopeConfigError(f"{where}: {code}: unknown disposition {disp!r} (known: {DISPOSITIONS})")
+        if disp in REFUSING_DISPOSITIONS:
+            if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
+                raise ScopeConfigError(f"{where}: {code}: a refusing row needs a positive integer refusal_rank")
+        elif rank is not None:
+            raise ScopeConfigError(f"{where}: {code}: refusal_rank must be null for disposition {disp!r}")
+        if not isinstance(aliases, list) or not all(isinstance(a, str) and _CODE_RE.fullmatch(a) for a in aliases):
+            raise ScopeConfigError(f"{where}: {code}: aliases must be a list of label strings")
+        out.append(Category(code, desc.strip(), disp, rank, tuple(aliases)))
+    for c in out:  # aliases are checked after all codes are known: never a code, never twice
+        for a in c.aliases:
+            if a in labels:
+                raise ScopeConfigError(f"{where}: alias {a!r} of {c.code} collides with a code or another alias")
+            labels.add(a)
+    ranks = [c.refusal_rank for c in out if c.refusal_rank is not None]
+    if len(ranks) != len(set(ranks)):
+        raise ScopeConfigError(f"{where}: refusal_rank values must be unique")
+    for k in ("in_scope", "off_topic", "unsupported_use"):  # the code paths keyed on these need exactly one row each
+        if sum(c.disposition == k for c in out) != 1:
+            raise ScopeConfigError(f"{where}: exactly one row must have disposition {k!r}")
+    for i, a in enumerate(out):
+        for b in out[i + 1:]:
+            score = description_similarity(a.description, b.description)
+            if score >= DESCRIPTION_SIMILARITY_MAX:
+                raise ScopeConfigError(f"{where}: descriptions of {a.code} and {b.code} are too similar "
+                                       f"(score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
+    return tuple(out)
+
+
+def load_categories(path: str | Path = CATEGORIES_PATH) -> tuple[Category, ...]:
+    return parse_categories(_read_owner_json(path, "classifier category table"))
+
+
+CATEGORY_TABLE: tuple[Category, ...] = load_categories()
+LAYER2_CATEGORIES = tuple(c.code for c in CATEGORY_TABLE)
+CATEGORY_ALIASES = MappingProxyType({a: c.code for c in CATEGORY_TABLE for a in c.aliases})  # output label -> code
+REFUSE_CATEGORIES = frozenset(c.code for c in CATEGORY_TABLE if c.disposition in REFUSING_DISPOSITIONS)  # SCOPE-1022: never answered, listed or acquired
+
+
+def resolve_label(label) -> str:
+    """A classifier output label -> its code ("" when not a code or alias). Aliases never apply to user text."""
+    if not isinstance(label, str):
+        return ""
+    return label if label in LAYER2_CATEGORIES else CATEGORY_ALIASES.get(label, "")
+
+
+def render_category_prompt(template: str) -> str:
+    """The classifier prompt's category enum and meanings, rendered from the table into the {{category_enum}} and
+    {{category_meanings}} slots of layer2.system_prompt."""
+    if not isinstance(template, str) or "{{category_enum}}" not in template or "{{category_meanings}}" not in template:
+        raise ScopeConfigError("scope_router.json: layer2.system_prompt must hold {{category_enum}} and {{category_meanings}}")
+    enum = " or ".join(f'"{c.code}"' for c in CATEGORY_TABLE)
+    meanings = "; ".join(f'"{c.code}": {c.description}' for c in CATEGORY_TABLE)
+    return template.replace("{{category_enum}}", enum).replace("{{category_meanings}}", meanings)
 
 # HOTFIX-DUPKEY-1027: strict classifier-reply parsing. Code constants (a security floor), not config.
 # STRICTJSON-1027 C5: the normaliser and strict loader live in vera/strict_json.py (moved verbatim); behaviour unchanged.
@@ -424,12 +533,12 @@ def _strict_loads(content):
     return loads_or_none(content, allow_constants=True, max_chars=MAX_REPLY_CHARS)
 
 
-_REFUSE_ORDER = ("harmful", "rule_change", "advice", "programming_task")  # SCOPE v2 precedence
-_CATS = r"(harmful|rule[ _]?change|advice|programming[ _]?task)"
+_REFUSE_ORDER = tuple(c.code for c in sorted((c for c in CATEGORY_TABLE if c.code in REFUSE_CATEGORIES),
+                                               key=lambda c: c.refusal_rank))  # SCOPE v2 precedence (table refusal_rank)
+_CATS = "(" + "|".join(c.replace("_", "[ _]?") for c in _REFUSE_ORDER) + ")"
 _RAW_QUOTED = re.compile(r'\\*"' + _CATS + r'\\*"')  # SEC-H-2/H-4: any run of backslashes before each quote
 _CAT_IN_TEXT = re.compile(r"categor(?:y|ies)\W{0,8}" + _CATS)  # SEC-H-2/H-6: bounded, no \w* backtracking
-_CAT_SPELLINGS = {"harmful": "harmful", "advice": "advice", "rule_change": "rule_change", "rulechange": "rule_change",
-                  "programming_task": "programming_task", "programmingtask": "programming_task"}
+_CAT_SPELLINGS = {**{c: c for c in _REFUSE_ORDER}, **{c.replace("_", ""): c for c in _REFUSE_ORDER}}
 
 
 def _canon(m: re.Match) -> str:
@@ -497,19 +606,35 @@ def parse_category(content: str) -> str:
     non-string or an unknown value, is "" so every gate keyed on it fails closed."""
     obj = _strict_loads(content)
     c = obj.get("category") if isinstance(obj, dict) else None
-    return c if isinstance(c, str) and c in LAYER2_CATEGORIES else ""
+    return resolve_label(c)  # OOE-APRIME-C-1028: a code, or an owner-curated alias of one, from the table
 
 
-def parse_verdict(content: str) -> tuple[bool | None, str]:
-    """Return (in_scope, reason); in_scope None when the reply is malformed (caller fails closed)."""
+def _label_only_invalid(content) -> bool:
+    """OOE-APRIME-C-1028 (A'): True when the reply is well-formed (strict decode, boolean in_scope, ASCII category) and
+    invalid ONLY because its non-empty category label is neither a table code nor an alias. Never raises."""
+    try:
+        obj = _strict_loads(content)
+        if not isinstance(obj, dict) or not isinstance(obj.get("in_scope"), bool):
+            return False
+        c = obj.get("category")
+        return (isinstance(c, str) and unicodedata.normalize("NFKC", c).isascii() and bool(c.strip())
+                and not resolve_label(c))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def parse_verdict(content: str, unknown_label_ok: bool = False) -> tuple[bool | None, str]:
+    """Return (in_scope, reason); in_scope None when the reply is malformed (caller fails closed). unknown_label_ok
+    (OOE-APRIME-C-1028, used only after the retry) reads an out-of-enum label as no recognised category."""
     obj = _strict_loads(content)
     if not isinstance(obj, dict) or not isinstance(obj.get("in_scope"), bool):
         return None, "classifier_malformed"
     c = obj.get("category")
     if isinstance(c, str) and not unicodedata.normalize("NFKC", c).isascii():  # lookalike value, e.g. Cyrillic а
         return None, "classifier_malformed"
-    if isinstance(c, str) and c.strip() and c not in LAYER2_CATEGORIES:  # OOE-A-PRESTAGE-1028 (pending owner choice):
-        # a non-empty label outside the closed enum is invalid classifier output (OD-1028(21) c4), not user misuse
+    if isinstance(c, str) and c.strip() and not resolve_label(c) and not unknown_label_ok:  # OOE-A-PRESTAGE-1028:
+        # a non-empty label outside the closed enum is invalid classifier output (OD-1028(21) c4), not user misuse;
+        # nullified and retried once (OOE-APRIME-C-1028: still out-of-enum after the retry -> no recognised category)
         return None, "classifier_malformed"
     return obj["in_scope"], str(obj.get("reason", ""))[:200]
 
@@ -554,6 +679,7 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
     messages = classifier_messages(question, cfg)
     retries = int(cfg.layer2.get("malformed_retry", 1))
     pt = ct = calls = 0
+    ooe_label = None  # OOE-APRIME-C-1028: the last label-only invalid reply, for the label log
     while True:  # PATHA-1028 Q2: at most 1 + malformed_retry (<= 2) classifier calls
         content, p_, c_ = (chat or default_chat)(messages, model, cfg.layer2)
         pt, ct, calls = pt + p_, ct + c_, calls + 1
@@ -561,7 +687,19 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
         if pricing is not None:
             cost = round(pt / 1_000_000 * pricing.input + ct / 1_000_000 * pricing.output, 8)
         d = _layer2_decision(content, pt, ct, cost, calls)
+        label_only = d.reason == "classifier_malformed" and _label_only_invalid(content)
+        if label_only:
+            ooe_label = content
         if calls > retries or not _nullified(d) or _raw_names_refusal(content):
+            outcome = ""
+            if label_only and not _raw_names_refusal(content):  # OOE-APRIME-C-1028 (A'): still out-of-enum after the
+                # retry -> no recognised category: the absent-category path (catstep gates: layer 1, intent_clean, ...)
+                d = _layer2_decision(content, pt, ct, cost, calls, unknown_label_ok=True)
+                outcome = "catstep_after_retry"
+            elif ooe_label is not None:
+                outcome = "declined" if d.reason == "classifier_malformed" else "retry_resolved"
+            if outcome:
+                _log_out_of_enum(ooe_label, outcome)
             if calls > 1:
                 import logging
                 logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
@@ -573,7 +711,8 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
 
 # REFUSE-FIX2-1028 (OD-1028(26): layer 2 is the primary intent classifier): closed set of layer-2 categories that
 # confirm a layer-1 coding hint as unsupported use; and the closed fallback tokens logged when layer 2 cannot confirm.
-CODING_HINT_CONFIRM = frozenset({"programming_task", "off_topic", "in_scope"})
+CODING_HINT_CONFIRM = frozenset(c.code for c in CATEGORY_TABLE  # OOE-APRIME-C-1028: from the table
+                                if c.disposition in ("unsupported_use", "off_topic", "in_scope"))
 CODING_HINT_FALLBACKS = ("l2_unavailable", "l2_mode_none", "l2_malformed")
 
 
@@ -619,7 +758,7 @@ def _nullified(d: ScopeDecision) -> bool:
     return d.reason == "classifier_malformed" or (d.reason.startswith("llm_out:") and d.category == "")
 
 
-_RAW_REFUSAL = re.compile(r"(?<![a-z])(harmful|rule[ _-]?change|advice|programming[ _-]?task)(?![a-z])")
+_RAW_REFUSAL = re.compile(r"(?<![a-z])(" + "|".join(c.replace("_", "[ _-]?") for c in _REFUSE_ORDER) + r")(?![a-z])")
 
 
 def _raw_names_refusal(content) -> bool:
@@ -631,24 +770,24 @@ def _raw_names_refusal(content) -> bool:
         return True
 
 
-def _log_out_of_enum(content) -> None:
-    """OOE-A-PRESTAGE-1028: log the out-of-enum category label only (sanitised, <= 32 chars; never question text)."""
+def _log_out_of_enum(content, outcome: str) -> None:
+    """OOE-A-PRESTAGE-1028: log the out-of-enum category label only (sanitised, <= 32 chars; never question text).
+    OOE-APRIME-C-1028: outcome = retry_resolved | catstep_after_retry | declined (the retry was malformed otherwise)."""
     try:
         obj = _strict_loads(content)
         c = obj.get("category") if isinstance(obj, dict) else None
-        if isinstance(c, str) and c.strip() and c not in LAYER2_CATEGORIES and c.isascii():
+        if isinstance(c, str) and c.strip() and not resolve_label(c) and c.isascii():
             import logging
-            logging.getLogger("vera").info("scope classifier out-of-enum category: label=%s",
-                                           re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32])
+            logging.getLogger("vera").info("scope classifier out-of-enum category: label=%s outcome=%s",
+                                           re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32], outcome)
     except Exception:  # noqa: BLE001
         pass
 
 
-def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int) -> ScopeDecision:
+def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int, unknown_label_ok: bool = False) -> ScopeDecision:
     """One classifier reply -> ScopeDecision (unchanged A1 rules; moved out of route for the Q2 retry)."""
-    in_scope, why = parse_verdict(content)
+    in_scope, why = parse_verdict(content, unknown_label_ok)
     if in_scope is None:
-        _log_out_of_enum(content)
         return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, calls)
     category = parse_category(content)
     if in_scope and category in REFUSE_CATEGORIES:  # SCOPE-1022: in_scope=true with an advice/harm/... category is a
@@ -688,7 +827,7 @@ def offtopic_enabled(cfg: RouterConfig | None = None) -> bool:
 
 
 UNSUPPORTED_L1_REASON = "deny:coding_task"  # REFUSE-FIX-1028 V1 (OD-1028(21)): unsupported use, not a forbidden topic
-UNSUPPORTED_CATEGORY = "programming_task"
+UNSUPPORTED_CATEGORY = next(c.code for c in CATEGORY_TABLE if c.disposition == "unsupported_use")  # OOE-APRIME-C-1028
 
 
 def unsupported_use_text(cfg: RouterConfig | None = None) -> str:
