@@ -23,6 +23,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
+from vera.strict_json import base_norm as _base, loads_or_none, norm_key as _norm
+
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "scope_router.json"
 LAYER2_MODES = ("llm", "none", "embedding")
 
@@ -193,21 +195,8 @@ LAYER2_CATEGORIES = ("in_scope", "off_topic", "advice", "harmful", "programming_
 REFUSE_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})  # SCOPE-1022: never answered, listed or acquired
 
 # HOTFIX-DUPKEY-1027: strict classifier-reply parsing. Code constants (a security floor), not config.
+# STRICTJSON-1027 C5: the normaliser and strict loader live in vera/strict_json.py (moved verbatim); behaviour unchanged.
 MAX_REPLY_CHARS = 16384  # SEC-H-6: layer-2 max_tokens is 512 (well under 4 KB of JSON); re-calibrate if it exceeds ~2048
-_DROP_CATS = frozenset({"Cf", "Cc", "Mn"})  # SEC-H-1: format, control and combining-mark characters are dropped
-
-
-class _ReplyRejected(ValueError):
-    """A classifier reply with a duplicate key (after normalising) or a non-ASCII key."""
-
-
-def _base(s: str) -> str:
-    return "".join(ch for ch in unicodedata.normalize("NFKC", s) if unicodedata.category(ch) not in _DROP_CATS)
-
-
-def _norm(s: str) -> str:
-    """Keys and equality checks: no whitespace at all, case-folded."""
-    return re.sub(r"\s+", "", _base(s)).casefold()
 
 
 def _norm_ws(s: str) -> str:
@@ -215,22 +204,11 @@ def _norm_ws(s: str) -> str:
     return re.sub(r"\s+", " ", _base(s)).casefold().strip()
 
 
-def _pairs_hook(pairs):  # json applies it at every nesting level
-    keys = [_norm(k) for k, _ in pairs]
-    if len(set(keys)) != len(keys) or any(not k.isascii() for k, _ in pairs):
-        raise _ReplyRejected
-    return dict(pairs)
-
-
 def _strict_loads(content):
     """The decoded reply, or None when it is malformed (non-str, oversize, bad JSON, too deep, duplicate or non-ASCII
-    key); the caller fails closed. A plain json.loads keeps the LAST of duplicate keys (R2-SCOPE-S-2)."""
-    if not isinstance(content, str) or len(content) > MAX_REPLY_CHARS:
-        return None
-    try:
-        return json.loads(content, object_pairs_hook=_pairs_hook)
-    except (TypeError, ValueError, RecursionError):  # JSONDecodeError and _ReplyRejected are ValueError
-        return None
+    key); the caller fails closed. A plain json.loads keeps the LAST of duplicate keys (R2-SCOPE-S-2). NaN and 1e999
+    stay accepted here (allow_constants=True), exactly as in the hotfix."""
+    return loads_or_none(content, allow_constants=True, max_chars=MAX_REPLY_CHARS)
 
 
 _REFUSE_ORDER = ("harmful", "rule_change", "advice", "programming_task")  # SCOPE v2 precedence
