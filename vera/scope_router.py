@@ -563,3 +563,47 @@ def offtopic_notice(cfg: RouterConfig | None = None) -> str:
     scope = str(cfg.raw.get("scope", "")).rstrip(".")
     scope = scope[:1].lower() + scope[1:]  # FIX1 verify D3: mid-sentence insertion, lower-case first letter
     return t.replace("{scope}", scope)
+
+
+# ---- SELFREF-1028 (owner directive 2026-10-28): self-reflective questions answered from fixed public text -------------
+_SELF_TRAIL_RE = re.compile(r"[\s?.!]+$")
+_SELF_LEAD_RE = re.compile(r"^(hi|hello|hey|ok|okay|so|and)[ ,]+|^please[ ,]+")
+
+
+def _self_cfg(cfg: RouterConfig | None) -> dict:
+    sr = (cfg or load_config()).raw.get("self_reflective")
+    return sr if isinstance(sr, dict) else {}
+
+
+def self_reflective(question: str, cfg: RouterConfig | None = None) -> bool:
+    """True only for a benign second-person question about VERA-DAR's identity, capabilities or how it works that
+    FULLY matches one pattern of the closed list `self_reflective.patterns`. Injection, deny and marker checks run
+    first (layer 1 verdict DECLINE or a classifier marker -> False), so an instruction/config/prompt request never
+    qualifies. Fails closed (False) on a missing key, a bad pattern or any error."""
+    try:
+        cfg = cfg or load_config()
+        pats = _self_cfg(cfg).get("patterns")
+        if not isinstance(pats, list) or not pats or has_marker(question):
+            return False
+        if layer1(question, cfg)[0] == DECLINE:
+            return False
+        q = normalise(question)
+        if len(q) > 120:
+            return False
+        q = _SELF_TRAIL_RE.sub("", q)
+        q = _SELF_LEAD_RE.sub("", q)
+        return any(re.fullmatch(p, q, re.IGNORECASE) for p in pats if isinstance(p, str))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def self_reflective_text(cfg: RouterConfig | None = None) -> str:
+    """The fixed reply: the configured identity line plus the public disclosure text. "" when not configured."""
+    try:
+        ident = _self_cfg(cfg).get("identity_text")
+        if not isinstance(ident, str) or not ident.strip():
+            return ""
+        from vera.disclosure import disclosure_text
+        return f"{ident.strip()} {disclosure_text()}"
+    except Exception:  # noqa: BLE001
+        return ""

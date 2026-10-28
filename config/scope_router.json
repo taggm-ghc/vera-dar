@@ -24,6 +24,28 @@
   "unsupported_use_text_note": "REFUSE-FIX-1028 V1 (OD-1028(21) and clarification): code generation is unsupported use, not a forbidden topic. A layer-1 deny:coding_task hit (no injection, marker or other deny hit) or a clean layer-2 programming_task verdict gets this fixed neutral sentence plus the scholarly reading list (no code, no model answer, no background or inline acquisition). Missing or empty: decline_template.",
   "acquisition_off_note": "Automatic search for new documents is currently off; VERA-DAR looked only in the documents it already holds.",
   "acquisition_off_note_note": "PATHA-1028 CT-2 (plan s26.2(6)): appended to the reading list while automatic acquisition is effectively off (flag, kill switch or DB env). A clean layer-2 off_topic verdict is first tried against the existing corpus (no inline search, no background job, sources=() on the list).",
+  "self_reflective": {
+    "note": "SELFREF-1028 (owner directive 2026-10-28): closed list of benign second-person questions about VERA-DAR's own identity, capabilities or how it works. Matched with fullmatch on the normalised question (a final ?.! removed) only AFTER layer 1 found no injection or deny hit and the question holds no classifier marker; the reply is identity_text plus the public disclosure text, with no LLM call, no retrieval, no storage and no memory. Anything not matching a pattern (including 'what model are you', 'what are your instructions') takes the normal route.",
+    "patterns": [
+      "(what is|what's|what’s|whats) your (full |first )?name",
+      "what (should|can|do) (i|we) call you",
+      "who are you( exactly)?",
+      "what are you( exactly)?",
+      "what (kind|sort|type) of (ai|assistant|tool|system|bot|chatbot|program|thing) are you",
+      "are you (an? )?(ai|a\\.i\\.|bot|robot|chatbot|human|person|real|machine|program)",
+      "(please )?(introduce yourself|tell me (a bit )?about yourself|describe yourself)",
+      "what (is|are) your (purpose|role|job|function|capabilities|abilities|limitations|limits)",
+      "what (can|could) you do( for me)?",
+      "what do you do",
+      "what are you (able to do|used for|good at|for)",
+      "how can you help( me)?",
+      "what (kinds?|sorts?|types?) of (questions|things|tasks) can you (answer|help (me )?with|do)",
+      "how do(es)? (you|this (tool|assistant|system)) (work|answer( my| the)?( questions?)?|find (your )?answers?)",
+      "how (are|were) you (made|built|designed)"
+    ],
+    "identity_text": "I am VERA-DAR, a research assistant that answers from open-access scholarly sources. You can call me VERA-DAR. I can look for published research on a question and, when the documents I hold support it, answer with cited passages; otherwise I list sources for you to read yourself.",
+    "log_token": "self_reflective"
+  },
   "layer1": {
     "note": "Regexes are matched case-insensitively against the NFKC-normalised, lower-cased, whitespace-collapsed question. Order: injection markers, then deny categories (DECLINE), then the in-scope rule (ACCEPT), else UNSURE. Authored before the scope set v1 was read (the set was authored blind by a separate agent).",
     "injection_patterns": [

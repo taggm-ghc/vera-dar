@@ -177,6 +177,12 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
+    from vera import scope_router as _sr_self
+    if _sr_self.self_reflective(question):  # SELFREF-1028: fixed public text; no LLM, search, storage or memory
+        _txt = _sr_self.self_reflective_text()
+        if _txt:
+            logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective")
+            return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
