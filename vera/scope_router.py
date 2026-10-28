@@ -216,16 +216,19 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
 _INTERROG_RE = re.compile(r"^(what|why|how|which|who|whom|whose|when|where|is|are|was|were|does|do|did|has|have|had"
                           r"|can|could|should|would|will|may|might)\b")
 _RESEARCH_VERB_RE = re.compile(r"^(explain|describe|summari[sz]e|compare|define|outline|discuss|review)\b")
-_META_START_RE = re.compile(r"^(what|why|how|which|who|where|when|is|are|was|were|does|do|did|has|have)\b")
+# INJSEP-SECREVIEW-1028 D1: a wh-word followed by an auxiliary ("what does", "why do", "how is"); never "why not",
+# "how about" or an auxiliary-first form ("do ... now?"), which can direct the quoted text at VERA
+_META_START_RE = re.compile(r"^(what|why|how|which|who|where|when)\s+(is|are|was|were|does|do|did|has|have|had|can"
+                            r"|could|would|should|might|may|will)\b")
 _CONNECTIVE_RE = re.compile(r"^(then|and|also|now|instead|so|but|next|finally|afterwards|after that|otherwise|plus|or"
                             r"|additionally|furthermore|moreover|meanwhile|first|second|lastly)\b")
 _SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|u|ur|vera(-dar)?)\b")
 
 
 def separation_enabled(cfg: RouterConfig) -> bool:
-    """INJ-SEP-1028: config `injection_separation` (default true, the owner's decision); only an explicit false turns
-    it off, which restores the whole-input decline."""
-    return cfg.raw.get("injection_separation", True) is not False
+    """INJ-SEP-1028: config `injection_separation`; only an explicit boolean true enables it (INJSEP-SECREVIEW-1028
+    D4: fail closed like offtopic_enabled; the shipped config sets true). Off restores the whole-input decline."""
+    return cfg.raw.get("injection_separation") is True
 
 
 def _hits_injection(text: str, cfg: RouterConfig) -> bool:
@@ -243,14 +246,25 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
 
 
-def _well_formed(sentences: list[str]) -> bool:
-    """The remainder stands alone: 3+ words, no sentence opens with a connective that leans on removed text, and the
-    final sentence is an interrogative ending in '?' or opens with a research verb (explain, describe, ...)."""
+def _well_formed(sentences: list[str], quoted: bool = False) -> bool:
+    """The remainder stands alone (INJSEP-SECREVIEW-1028 D1/D2): 3+ words, and EVERY sentence is an interrogative
+    ending in '?' or opens with a research verb (explain, describe, ...); no sentence opens with a connective that leans
+    on removed text, and no sentence holds a second-person token (you, your, VERA, ...: a residual instruction signal,
+    even after a research verb). With a masked quote every sentence must be a third-person wh-question about it.
+    Declaratives and imperatives are not kept: the input is declined whole instead (conservative)."""
     norm = [normalise(s) for s in sentences]
-    if not norm or len(re.findall(r"[^\W_]+", " ".join(norm))) < 3 or any(_CONNECTIVE_RE.match(s) for s in norm):
+    if not norm or len(re.findall(r"[^\W_]+", " ".join(norm))) < 3:
         return False
-    last = norm[-1]
-    return bool((_INTERROG_RE.match(last) and last.endswith("?")) or _RESEARCH_VERB_RE.match(last))
+    for s in norm:
+        if _CONNECTIVE_RE.match(s) or _SECOND_PERSON_RE.search(s):
+            return False
+        if quoted:
+            ok = bool(_META_START_RE.match(s)) and s.endswith("?")
+        else:
+            ok = bool((_INTERROG_RE.match(s) and s.endswith("?")) or _RESEARCH_VERB_RE.match(s))
+        if not ok:
+            return False
+    return True
 
 
 def separate_instructions(question: str, cfg: RouterConfig) -> tuple[str, str, int] | None:
@@ -284,7 +298,7 @@ def separate_instructions(question: str, cfg: RouterConfig) -> tuple[str, str, i
         rest, rest_m = " ".join(kept), " ".join(kept_m)
         if _hits_injection(rest_m, cfg) or has_marker(rest):  # re-check the joined rest on every view
             return None
-        if not _well_formed(_sentences(nullify_mode_claims(rest_m, cfg)[0])):
+        if not _well_formed(_sentences(nullify_mode_claims(rest_m, cfg)[0]), quoted=bool(quoted)):
             return None
         return rest, rest_m, removed
     except Exception:  # noqa: BLE001
@@ -335,14 +349,15 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     # injection or harmful hit that only the letter-spaced view shows. Every outcome here is still DECLINE.
     if any(_any(cfg.injection, v) for v in views):
         return DECLINE, "deny:injection"
+    # INJ-SEP-1028 (+ INJSEP-SECREVIEW-1028 D5: runs BEFORE the deny loop): removing an instruction never clears a
+    # deny rule the ORIGINAL matches; any such hit keeps the plain injection decline, never a softer path such as
+    # the coding reading list (_coding_hint), whether the hit is in the removed sentence or the kept rest
+    if separated and any(_any(pats, v) for pats in cfg.deny.values() for v in orig_views):
+        return DECLINE, "deny:injection"
     deny_views = views if views is raw_views else views + raw_views  # D1: the un-stripped text is checked too
     for name, pats in cfg.deny.items():
         if any(_any(pats, v) for v in deny_views):
-            return DECLINE, f"deny:{name}"
-    # INJ-SEP-1028: removing an instruction never clears a deny rule the ORIGINAL matches (e.g. inside the removed
-    # sentence): that input keeps the plain injection decline, never a softer path such as the coding reading list
-    if separated and any(_any(pats, v) for pats in cfg.deny.values() for v in orig_views):
-        return DECLINE, "deny:injection"
+            return DECLINE, f"deny:{name}" if not separated else "deny:injection"
     if _any(cfg.tool_names, q):
         return ACCEPT, "tool_name"
     if _any(cfg.ai_terms, q) and _any(cfg.dev_terms, q):
