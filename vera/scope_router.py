@@ -192,25 +192,130 @@ def default_chat(messages: list[dict], model: str, l2: dict, client=None,
 LAYER2_CATEGORIES = ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
 REFUSE_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})  # SCOPE-1022: never answered, listed or acquired
 
+# HOTFIX-DUPKEY-1027: strict classifier-reply parsing. Code constants (a security floor), not config.
+MAX_REPLY_CHARS = 16384  # SEC-H-6: layer-2 max_tokens is 512 (well under 4 KB of JSON); re-calibrate if it exceeds ~2048
+_DROP_CATS = frozenset({"Cf", "Cc", "Mn"})  # SEC-H-1: format, control and combining-mark characters are dropped
+
+
+class _ReplyRejected(ValueError):
+    """A classifier reply with a duplicate key (after normalising) or a non-ASCII key."""
+
+
+def _base(s: str) -> str:
+    return "".join(ch for ch in unicodedata.normalize("NFKC", s) if unicodedata.category(ch) not in _DROP_CATS)
+
+
+def _norm(s: str) -> str:
+    """Keys and equality checks: no whitespace at all, case-folded."""
+    return re.sub(r"\s+", "", _base(s)).casefold()
+
+
+def _norm_ws(s: str) -> str:
+    """Text scans: whitespace runs kept as one space, so merged words such as "categorical advice" do not match."""
+    return re.sub(r"\s+", " ", _base(s)).casefold().strip()
+
+
+def _pairs_hook(pairs):  # json applies it at every nesting level
+    keys = [_norm(k) for k, _ in pairs]
+    if len(set(keys)) != len(keys) or any(not k.isascii() for k, _ in pairs):
+        raise _ReplyRejected
+    return dict(pairs)
+
+
+def _strict_loads(content):
+    """The decoded reply, or None when it is malformed (non-str, oversize, bad JSON, too deep, duplicate or non-ASCII
+    key); the caller fails closed. A plain json.loads keeps the LAST of duplicate keys (R2-SCOPE-S-2)."""
+    if not isinstance(content, str) or len(content) > MAX_REPLY_CHARS:
+        return None
+    try:
+        return json.loads(content, object_pairs_hook=_pairs_hook)
+    except (TypeError, ValueError, RecursionError):  # JSONDecodeError and _ReplyRejected are ValueError
+        return None
+
+
+_REFUSE_ORDER = ("harmful", "rule_change", "advice", "programming_task")  # SCOPE v2 precedence
+_CATS = r"(harmful|rule[ _]?change|advice|programming[ _]?task)"
+_RAW_QUOTED = re.compile(r'\\*"' + _CATS + r'\\*"')  # SEC-H-2/H-4: any run of backslashes before each quote
+_CAT_IN_TEXT = re.compile(r"categor(?:y|ies)\W{0,8}" + _CATS)  # SEC-H-2/H-6: bounded, no \w* backtracking
+_CAT_SPELLINGS = {"harmful": "harmful", "advice": "advice", "rule_change": "rule_change", "rulechange": "rule_change",
+                  "programming_task": "programming_task", "programmingtask": "programming_task"}
+
+
+def _canon(m: re.Match) -> str:
+    return _CAT_SPELLINGS[m.group(1).replace(" ", "_")]
+
+
+_ASSIGN = re.compile(r"categor(?:y|ies)(?![\s(;,.]*" + _CATS.replace("(", "(?:", 1) + r")[\W_]{1,8}" + _CATS)  # "category <sep> X" anywhere; not ";" "," "." or space/paren
+
+
+def refusal_token(content, categories=REFUSE_CATEGORIES) -> str:
+    """HOTFIX-DUPKEY-1027 v2 (A1-OVERREFUSE-1028): the first refusal category (by _REFUSE_ORDER, restricted to
+    `categories`) the reply names, else "". Runs on the strictly decoded reply (duplicate / non-ASCII keys at any depth,
+    bad JSON, depth and size already make it malformed). Every key and value EXCEPT the top-level free-text "reason" is
+    scanned for a category (equality, "category: X" phrasing, quoted labels, embedded JSON). The reason declines only if
+    it (a) equals a category, (b) contains an assignment "category: X"/"categories=X" anywhere (any 1-8 non-word separator characters except a bare space, paren, ; , or .), or (c) contains "{" or "["
+    (decoded and walked, quoted labels scanned). Prose such as 'not "advice"' does not decline. Total: never raises;
+    a non-str, oversize, malformed or non-object reply, or any internal fault, gives the fail-closed value."""
+    fc = next((c for c in _REFUSE_ORDER if c in categories), "harmful")
+    try:
+        obj = _strict_loads(content)
+        if not isinstance(obj, dict):
+            return fc
+        hits = set()
+        stack = []
+
+        def scan_str(s, prose):
+            n = _norm(s)
+            if prose:  # rule (a): quotes, punctuation, whitespace and case are all ignored
+                n = re.sub(r"[\W_]+", "", n)
+            if n in _CAT_SPELLINGS:
+                hits.add(_CAT_SPELLINGS[n])
+            t = _norm_ws(s)
+            if prose:
+                hits.update(_canon(m) for m in _ASSIGN.finditer(t))  # rule (b): assignment form anywhere in the reason
+                if "{" not in s and "[" not in s:
+                    return
+            else:
+                hits.update(_canon(m) for m in _CAT_IN_TEXT.finditer(t))
+            hits.update(_canon(m) for m in _RAW_QUOTED.finditer(t))
+            if "{" in s or "[" in s:
+                try:  # lenient decode: duplicate keys are all kept as (key, value) pairs
+                    stack.append(json.loads(s, object_pairs_hook=lambda pairs: pairs))
+                except (ValueError, RecursionError):  # not JSON: scan it as text (single quotes, bare keys, ...)
+                    hits.update(_canon(m) for m in _CAT_IN_TEXT.finditer(t))
+
+        top_reason = obj.get("reason")
+        if isinstance(top_reason, str):
+            scan_str(top_reason, prose=True)
+        stack.append([(k, v) for k, v in obj.items() if k != "reason" or not isinstance(v, str)])
+        while stack:  # iterative walk: no recursion limit on deep replies
+            node = stack.pop()
+            if isinstance(node, dict):
+                stack.extend(node.items())
+            elif isinstance(node, (list, tuple)):
+                stack.extend(node)
+            elif isinstance(node, str):
+                scan_str(node, prose=False)
+        return next((c for c in _REFUSE_ORDER if c in categories and c in hits), "")
+    except Exception:  # noqa: BLE001  SEC-H-7: fail closed
+        return fc
+
 
 def parse_category(content: str) -> str:
     """DAR-1021: the classifier's optional `category` (a closed enum). Anything else, including a missing field, a
     non-string or an unknown value, is "" so every gate keyed on it fails closed."""
-    try:
-        obj = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return ""
+    obj = _strict_loads(content)
     c = obj.get("category") if isinstance(obj, dict) else None
     return c if isinstance(c, str) and c in LAYER2_CATEGORIES else ""
 
 
 def parse_verdict(content: str) -> tuple[bool | None, str]:
     """Return (in_scope, reason); in_scope None when the reply is malformed (caller fails closed)."""
-    try:
-        obj = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        return None, "classifier_malformed"
+    obj = _strict_loads(content)
     if not isinstance(obj, dict) or not isinstance(obj.get("in_scope"), bool):
+        return None, "classifier_malformed"
+    c = obj.get("category")
+    if isinstance(c, str) and not unicodedata.normalize("NFKC", c).isascii():  # lookalike value, e.g. Cyrillic а
         return None, "classifier_malformed"
     return obj["in_scope"], str(obj.get("reason", ""))[:200]
 
@@ -236,6 +341,10 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     if in_scope and category in REFUSE_CATEGORIES:  # SCOPE-1022: in_scope=true with an advice/harm/... category is a
         # contradictory verdict; fail closed with the fixed refusal (never answered, listed or acquired)
         return ScopeDecision(False, "layer2_llm", "classifier_malformed:category_conflict", pt + ct, cost, 1, category)
+    tok = refusal_token(content)
+    if tok and (in_scope or category not in REFUSE_CATEGORIES):  # HOTFIX-DUPKEY-1027: a refusal category named anywhere
+        # else in the reply (nested, a key, a reason) is never answered, listed or acquired; fail closed, keep the category
+        return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, 1, tok)
     return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, 1,
                          category)
 
