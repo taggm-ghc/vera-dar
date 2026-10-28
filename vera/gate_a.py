@@ -13,6 +13,7 @@ Scores are 0-1, higher is better, for three factors:
 composite = 0.4*query_fit + 0.4*evidentiary_value + 0.2*cost_risk
 """
 import json
+from vera import strict_json
 from dataclasses import dataclass
 
 from vera.cost_ledger import CostLedger
@@ -105,7 +106,7 @@ def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int
         ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=cost, cost_known=known,
                       units={"prompt_tokens": pt, "completion_tokens": ct, "batch": len(batch)})
     try:
-        rows = json.loads(text)["scores"]
+        rows = strict_json.loads(text)["scores"]
     except (ValueError, KeyError, TypeError):
         return {}
     out = {}

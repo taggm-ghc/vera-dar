@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import json
+from vera import strict_json
 import re
 import threading
 from datetime import datetime, timezone
@@ -425,7 +426,7 @@ class OpenAlexProvider:
         if len(body.encode("utf-8", "ignore")) > self.max_bytes:
             raise ProviderResponseError(f"openalex response over {self.max_bytes} bytes; refused before parsing")
         try:
-            doc = json.loads(body)
+            doc = strict_json.loads(body)
         except ValueError as e:
             raise ProviderResponseError(f"openalex response is not JSON: {e}") from None
         if not isinstance(doc, dict) or not isinstance(doc.get("results"), list):
@@ -559,7 +560,7 @@ def europepmc_search(question: str, n: int, timeout_s: float, ecfg: Mapping, *, 
     if len(body.encode("utf-8", "ignore")) > int(ecfg.get("max_response_bytes", 2_000_000)):
         raise ProviderResponseError("europepmc response too large; refused before parsing")
     try:
-        doc = json.loads(body)
+        doc = strict_json.loads(body)
         rows = (doc.get("resultList") or {}).get("result") or []
     except (ValueError, AttributeError):
         raise ProviderResponseError("europepmc response is not the expected JSON") from None
@@ -702,7 +703,7 @@ def europepmc_ids_lookup(ids: list, timeout_s: float, ecfg: Mapping, *, transpor
                                                       float(timeout_s))
     if int(getattr(resp, "status_code", 200) or 200) != 200:
         raise ProviderResponseError(f"europepmc lookup HTTP {getattr(resp, 'status_code', '?')}")
-    rows = ((json.loads(resp.text or "{}").get("resultList") or {}).get("result") or [])
+    rows = ((strict_json.loads(resp.text or "{}").get("resultList") or {}).get("result") or [])
     out = {}
     for r in rows if isinstance(rows, list) else ():
         if not isinstance(r, dict) or not r.get("doi"):
@@ -1069,7 +1070,7 @@ class DOAJProvider:
         if getattr(resp, "status_code", None) != 200:
             return False
         try:
-            doc = json.loads(resp.text or "")
+            doc = strict_json.loads(resp.text or "")
         except ValueError:
             return False
         return isinstance(doc, dict) and isinstance(doc.get("results"), list) and not doc["results"]
@@ -1094,7 +1095,7 @@ class DOAJProvider:
         if len(body.encode("utf-8", "ignore")) > self.max_bytes:
             raise ProviderResponseError(f"doaj response over {self.max_bytes} bytes; refused before parsing")
         try:
-            doc = json.loads(body)
+            doc = strict_json.loads(body)
         except ValueError as e:
             raise ProviderResponseError(f"doaj response is not JSON: {e}") from None
         if not isinstance(doc, dict) or not isinstance(doc.get("results"), list):

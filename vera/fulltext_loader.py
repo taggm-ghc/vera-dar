@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from vera import strict_json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -148,7 +149,7 @@ def load_text(item: dict, base_dir: Path, cfg: dict) -> tuple[str, dict]:
     if len(raw) > int(cfg["max_text_bytes"]):
         _refuse(cfg, "too_large", f"text is {len(raw)} bytes, above max_text_bytes {cfg['max_text_bytes']}")
     try:
-        meta = json.loads(mp.read_text(encoding="utf-8"))
+        meta = strict_json.loads(mp.read_text(encoding="utf-8"))
         text = raw.decode("utf-8")
     except (ValueError, UnicodeDecodeError) as e:
         _refuse(cfg, "text_missing", f"text or conversion record unreadable: {e!r}")

@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from vera import strict_json
 import os
 import re
 import threading
@@ -172,7 +173,7 @@ class FullDocCorpus:
 
 def _manifest_items(raw: bytes):
     try:
-        m = json.loads(raw.decode("utf-8"))
+        m = strict_json.loads(raw.decode("utf-8"))
         items = m.get("sources") if isinstance(m, dict) else None
         return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else None
     except (ValueError, UnicodeDecodeError, AttributeError):

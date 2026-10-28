@@ -6,6 +6,7 @@ version): it is regenerated only when the corpus or the prompt changes. A model 
 deterministic description (not cached) and generation retries after a cooldown.
 """
 import json
+from vera import strict_json
 import logging
 import os
 import re
@@ -224,7 +225,7 @@ def generate_with_chain(entries):
                 kw = {"extra_body": e.extra_body} if e.extra_body else {}
                 r = client.chat.completions.create(model=e.model, messages=messages, temperature=0,
                                                    response_format={"type": "json_object"}, **kw)
-                obj = json.loads(r.choices[0].message.content or "")
+                obj = strict_json.loads(r.choices[0].message.content or "")
                 if isinstance(obj.get("summary"), str) and obj["summary"].strip():
                     topics = [str(t) for t in obj.get("topics") or [] if isinstance(t, str)]
                     return obj["summary"], topics, e.label

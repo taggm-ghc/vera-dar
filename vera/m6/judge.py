@@ -39,6 +39,7 @@ from typing import Protocol
 from datetime import datetime, timezone
 
 from vera.cost_ledger import CostLedger
+from vera import strict_json
 from vera.eval_config import EvalConfig, family_for, load_eval_config
 
 # Why: the judge's max_tokens is a fixed call setting (not a threshold); named once, imported by
@@ -94,12 +95,14 @@ def parse_json_loose(text: str) -> dict:
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S)
     try:
-        return json.loads(t)
-    except json.JSONDecodeError:
+        return strict_json.loads(t)
+    except strict_json.StrictJSONError as e:
+        if e.code != "bad_json":  # duplicate keys, NaN etc. are nullified, never re-parsed from a fragment
+            raise
         m = re.search(r"\{.*\}", t, flags=re.S)
         if not m:
             raise
-        return json.loads(m.group(0))
+        return strict_json.loads(m.group(0))
 
 
 class BaseJudge:
@@ -165,7 +168,7 @@ class BaseJudge:
                            "latency_s": round(dt, 3)})
             try:
                 return parse_json_loose(text)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, strict_json.StrictJSONError) as e:
                 last_err = e
         raise RuntimeError(
             f"Judge returned unparseable JSON for {purpose!r} after "

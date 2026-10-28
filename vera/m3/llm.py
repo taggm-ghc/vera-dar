@@ -9,6 +9,7 @@ rubric-guided appraisal, so none is used.
 from __future__ import annotations
 
 import json
+from vera import strict_json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
@@ -113,8 +114,8 @@ class OpenAIJSONClient:
                                     self._cost(u.prompt_tokens, u.completion_tokens),
                                     round(time.monotonic() - t0, 3),
                                     error="" if self._pricing else "no pricing record; cost unknown"))
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
+            return strict_json.loads(raw)
+        except (json.JSONDecodeError, strict_json.StrictJSONError) as exc:
             raise LLMError(f"{purpose}: model returned non-JSON output: {exc}") from exc
         except Exception as exc:  # provider failure: log and re-raise verbosely
             self.log.add(CallRecord(purpose, self.model, 0, 0, 0.0, round(time.monotonic() - t0, 3),
