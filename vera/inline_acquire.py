@@ -39,7 +39,7 @@ from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from vera import acq_config, rate_limit
+from vera import acq_config, acq_rounds, rate_limit
 from vera import auto_acquire as aa
 
 logger = logging.getLogger("vera.autoacq")
@@ -159,7 +159,7 @@ def _cache_key(question: str, served, disc=None) -> tuple:
 
 
 def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, deps_factory=None,
-            served=None, discovered=None) -> Outcome:
+            served=None, discovered=None, topic_key: str = "") -> Outcome:
     """Never raises. See the module docstring for statuses. served (R2): doc keys the caller's stored-corpus attempt
     already tried (skipped here); None = the currently served acquired corpus (deps.corpus_keys). discovered (P0-5):
     the request's discovery results (list of source dicts), used only when inline.use_discovered is true."""
@@ -205,7 +205,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     out = Outcome("error")  # an unexpected failure is never reported as "searched" (no search notice is shown)
     try:
         out = _run(question, acq, env, clock, deps_factory, served,
-                   **({"disc": disc} if disc is not None else {}))  # P0-5: flag off = the unchanged call
+                   **({"disc": disc} if disc is not None else {}),
+                   **({"topic_key": topic_key} if topic_key else {}))  # P0-5: flag off = the unchanged call
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
     finally:
@@ -221,15 +222,16 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     return out
 
 
-def _run(question, acq, env, clock, deps_factory, served=None, disc=None) -> Outcome:
+def _run(question, acq, env, clock, deps_factory, served=None, disc=None, topic_key="") -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     with rate_limit.deadline_scope(time.monotonic() + float(_b(acq, "deadline_s", 45))):
         return _run_body(question, acq, env, clock, deps_factory, served,
-                         **({"disc": disc} if disc is not None else {}))
+                         **({"disc": disc} if disc is not None else {}),
+                         **({"topic_key": topic_key} if topic_key else {}))
 
 
-def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -> Outcome:
+def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, topic_key="") -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
     deadline = t0 + _b(acq, "deadline_s", 45)
@@ -270,6 +272,13 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -
     reserved, used = 0, 0
     try:
         budget = reserved = aa.docs_budget(acq, deps, clock=clock, reserve=True)  # VER L5: reserved under the lock
+
+        def track(n_stored):  # ROUNDS-1028 (observational): the job's stored count and route exhaustion -> topic round
+            if budget <= 0:
+                return  # a spent daily budget is a cap effect, not a result of the topic's routes
+            acq_rounds.observe(question, acq, n_stored, acq_rounds.routes_exhausted(
+                len(ranked), len(plans), fresh_budget, acq_config.reason(acq, "deadline") in codes), "inline",
+                hint=topic_key)
         # R2 defect 1: a spent docs_per_day no longer stops before the search: reusing already-stored documents
         # acquires nothing, so it is not capped. With budget 0 nothing new is resolved, fetched or stored.
         s = acq.get("search") or {}
@@ -345,6 +354,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -
                 count(acq_config.reason(acq, "daily_cap"))
                 return done(Outcome("daily_cap"))
             late = clock() >= deadline or acq_config.reason(acq, "deadline") in codes
+            track(0)
             return done(Outcome("deadline" if late else "none"))
         out = Outcome("ok", admitted=len(plans))
         out.reused = len(reused[0])
@@ -379,6 +389,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -
         ms["write"] = int((clock() - t) * 1000)
         t = clock()
         out.corpus = ephemeral_corpus(plans, acq, fdcfg, icfg, stored=reused)
+        track(out.stored)
         ms["corpus"] = int((clock() - t) * 1000)
         if out.corpus is None:
             out.status = "unanswered"  # VER L3: documents passed the checks but no usable corpus; never "none"

@@ -369,6 +369,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     kw = {}  # P0-5 (inline.use_discovered, default off): the request's own cached discovery results; off = unchanged call
     if acq_discovered.use_discovered(acq):  # the off-topic path lists the restricted search, in-scope the full one
         kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=not in_scope)
+    if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
+        kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
