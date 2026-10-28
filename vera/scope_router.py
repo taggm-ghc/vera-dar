@@ -44,6 +44,8 @@ class ScopeDecision:
     cost_usd: float = 0.0
     llm_calls: int = 0
     category: str = ""  # DAR-1021: layer-2 verdict category ("" when absent or not in LAYER2_CATEGORIES)
+    raw_refusal_named: bool = False  # CATSTEP-1028 (plan s27.1 C1): the final raw reply names a refusal word (lenient)
+    topic_key: str = ""  # CATSTEP-1028 (plan s27.3): topic key derived by vera/catstep.py ("" = step not run)
 
 
 @dataclass(frozen=True)
@@ -419,6 +421,9 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
             if calls > 1:
                 import logging
                 logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
+            if d.reason.startswith("llm_out:") and d.category == "" and _raw_names_refusal(content):
+                from dataclasses import replace as _replace
+                d = _replace(d, raw_refusal_named=True)  # CATSTEP-1028 C1: never categorised (keeps the decline)
             return d
 
 

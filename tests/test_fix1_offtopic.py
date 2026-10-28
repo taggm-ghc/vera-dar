@@ -36,6 +36,12 @@ class Search:
 
 @pytest.fixture
 def stubs(monkeypatch):
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # (OUT below) is now categorised and researched. These tests pin the reading-list mechanics, which that reply
+    # reaches only with the CATSTEP kill switch off (unknown_category_step.enabled false): set here; no assertion changed.
+    # The new research behaviour is pinned by test_missing_category_reply_now_researches below.
+    from vera import catstep
+    monkeypatch.setattr(catstep, "enabled", lambda cfg=None: False)
     monkeypatch.setattr(sr, "default_chat", chat_returning(OUT))
     monkeypatch.setattr(ask_service, "_fulldoc", lambda *a, **k: (_ for _ in ()).throw(AssertionError("fulldoc called")))
     monkeypatch.setattr(ask_service, "answer_question", lambda *a, **k: (_ for _ in ()).throw(AssertionError("answered")))
@@ -209,3 +215,17 @@ def test_end_to_end_ask_no_admission_no_memory(stubs, monkeypatch):
     assert b["result_kind"] == "reading_list" and b["outcome"] == "reading_list" and len(b["candidates"]) == 1
     assert b["discovery_note_submitted"] == 0 and b["recalled_discovery"] == [] and b["sources"] == []
     assert seen == [] and search.calls == [True]
+
+
+def test_missing_category_reply_now_researches(monkeypatch):
+    """CATSTEP-1028 (owner 2026-10-28, plan s27): with the step on (shipped), the category-missing reply OUT no longer
+    gets the reading list; it is categorised and takes the research path (the corpus attempt runs)."""
+    from vera import catstep
+    assert catstep.enabled() is True
+    monkeypatch.setattr(sr, "default_chat", chat_returning(OUT))
+    monkeypatch.setattr(ask_service, "_acq_cfg_if_on", lambda: None)  # acquisition off: CT-2 corpus attempt only
+    seen = []
+    monkeypatch.setattr(ask_service, "_fulldoc", lambda *a, **k: seen.append(a[3]) or None)
+    r, search = run()
+    assert seen and seen[0].category == "off_topic" and seen[0].reason == catstep.REASON_OK
+    assert r.result_kind != "decline"

@@ -186,6 +186,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(original, model, pricing, chat=chat if (client or extra_body) else None)  # D1: route nullifies
+    decision = _catstep(decision, question, model, pricing, chat if (client or extra_body) else None)  # CATSTEP-1028
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
     _log_basis(decision)  # PATHA-1028 CT-4: the topic label is a log tag only (class tokens, never reason text)
     if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
@@ -419,6 +420,28 @@ def _research_eligible(decision, question: str, acq) -> bool:
                 and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _catstep(decision, question: str, model: str, pricing, chat):
+    """CATSTEP-1028 (plan s27; owner 2026-10-28): a well-formed in_scope:false verdict with a missing or unrecognised
+    category (D-P10b, after the single retry) is categorised instead of declined. An existing topic or no topic both
+    become a clean coverage verdict (category off_topic, fixed reason llm_out:catstep, topic_key set), which then takes
+    the unchanged Path A gates (CT-1 / CT-2) exactly as a clean off_topic verdict. Similarity to a forbidden or
+    restricted category refuses (deny:catstep:*); invalid optional-LLM output falls back to the previous safe decline
+    (classifier_malformed:catstep:*). Any other verdict is returned unchanged. A fault returns the decision unchanged
+    (the previous decline path)."""
+    try:
+        from vera import catstep
+        if not catstep.applies(decision, question):
+            return decision
+        out = catstep.categorise(question, chat=chat, model=model, pricing=pricing)
+        spend = {"tokens_used": decision.tokens_used + out.tokens, "cost_usd": round(decision.cost_usd + out.cost, 8),
+                 "llm_calls": decision.llm_calls + out.calls}
+        if out.status == "refuse":
+            return replace(decision, reason=catstep.decision_reason(out), category=out.refuse_category, **spend)
+        return replace(decision, category="off_topic", reason=catstep.REASON_OK, topic_key=out.key, **spend)
+    except Exception:  # noqa: BLE001
+        return decision
 
 
 # PATHA-1028 CT-4 (plan s26.2(1), s26.4 CT-4): the classifier's topic labels. A clean layer-2 verdict carrying either

@@ -128,7 +128,9 @@ def _decide(monkeypatch, accepted, layer, reason, category=""):
 @pytest.mark.parametrize("layer,reason,question,category,expect", [
     ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "off_topic", "decline"),
     # DAR-1021 category gate: only the closed-enum off_topic category acquires; everything else fails closed
-    ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "", None),
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # is now categorised and routed like a clean off_topic verdict (was: None, D-P10b). Only this expectation changed.
+    ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "", "decline"),
     ("layer2_llm", "llm_out:harm", "What is the best sourdough recipe?", "harmful", None),
     ("layer2_llm", "llm_out:advice", "What is the best sourdough recipe?", "advice", None),
     ("layer2_llm", "llm_out:code", "What is the best sourdough recipe?", "programming_task", None),
@@ -180,11 +182,16 @@ def test_scope_override_ships_off_and_works_only_when_switched_on(h, monkeypatch
     assert r.result_kind == "answer" and all(c["document_id"].startswith("acq-") for c in
                                              (r.evidence.admitted if r.evidence else ()))
     for layer, reason, cat in (("layer1", "deny:medical", "off_topic"), ("layer2_llm", "classifier_malformed", "off_topic"),
-                               ("layer2_llm", "llm_out:x", "harmful"), ("layer2_llm", "llm_out:x", "advice"),
-                               ("layer2_llm", "llm_out:x", "")):
+                               ("layer2_llm", "llm_out:x", "harmful"), ("layer2_llm", "llm_out:x", "advice")):
         _decide(monkeypatch, False, layer, reason, cat)
         r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING)
         assert r.result_kind == "decline" and r.acquire_trigger is None  # DAR-1021: neither acquires nor answers
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # (was in the loop above, D-P10b) now takes the same research path as a clean off_topic verdict.
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "")
+    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(lambda: [], e2e.GROUNDING))
+    assert r.result_kind == "answer" and all(c["document_id"].startswith("acq-") for c in
+                                             (r.evidence.admitted if r.evidence else ()))
 
 
 # ------------------------------------------------------------------------------------------------ refresh (RO SELECTs)

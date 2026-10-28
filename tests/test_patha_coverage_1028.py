@@ -67,7 +67,8 @@ def test_ct2_acq_off_uncovered_off_topic_gives_neutral_list_and_persists_nothing
     dict(accepted=False, layer="layer2_llm", reason="llm_out:x", category="programming_task"),
     dict(accepted=False, layer="layer2_llm", reason="classifier_malformed", category=""),
     dict(accepted=False, layer="layer2_llm", reason="classifier_malformed:refusal_token", category="harmful"),
-    dict(accepted=False, layer="layer2_llm", reason="llm_out:x", category=""),
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # moved out of this list (was D-P10b); see test_ct2_missing_category_reaches_the_corpus below.
     dict(accepted=False, layer="layer1", reason="deny:injection", category=""),
     dict(accepted=False, layer="layer2_none", reason="unsure:decline", category=""),
 ])
@@ -78,6 +79,15 @@ def test_ct2_acq_off_refusals_and_nullified_verdicts_never_reach_the_corpus(h, m
     r = _ask(e2e.Q_EPI)
     assert r.result_kind != "answer" and fd.calls == [] and h.answer_calls == []
     assert h.enqueued == [] and h.inline_calls == []
+
+
+def test_ct2_missing_category_reaches_the_corpus(h, monkeypatch):
+    """CATSTEP-1028 (plan s27): acquisition off + a D-P10b reply -> categorised -> CT-2 corpus attempt, no writes."""
+    _acq_off(h, monkeypatch)
+    _decide(monkeypatch, accepted=False, layer="layer2_llm", reason="llm_out:x", category="")
+    fd = FulldocSpy(monkeypatch)
+    _ask(e2e.Q_EPI)
+    assert fd.calls and h.enqueued == [] and h.inline_calls == []
 
 
 def test_ct2_eligibility_needs_a_clean_layer1(monkeypatch):

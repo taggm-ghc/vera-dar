@@ -367,7 +367,8 @@ def test_in_scope_request_never_calls_inline(h, monkeypatch):
     ("layer2_llm", "llm_out:x", "advice"),
     ("layer2_llm", "llm_out:x", "programming_task"),
     ("layer2_llm", "llm_out:x", "rule_change"),
-    ("layer2_llm", "llm_out:x", ""),
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # moved out of this list (was D-P10b); see test_missing_category_is_categorised_and_calls_inline below.
     ("layer2_llm", "classifier_malformed", "off_topic"),
     ("layer2_none", "unsure:decline", ""),
 ])
@@ -375,6 +376,13 @@ def test_other_declines_never_call_inline(rig, layer, reason, cat):
     r = rig.run(layer=layer, reason=reason, category=cat)
     assert rig.outcomes == [] and rig.search_calls == [] and r.acquire_trigger is None and r.evidence is None
     assert "inline_acquisition" not in (r.contract or {})
+
+
+def test_missing_category_is_categorised_and_calls_inline(rig):
+    """CATSTEP-1028 (plan s27): the D-P10b reply researches in the same request, exactly like a clean off_topic."""
+    r = rig.run(category="")
+    assert r.result_kind == "answer" and rig.outcomes and r.evidence is not None and r.evidence.admitted
+    assert "inline_acquisition" in (r.contract or {})
 
 
 def test_override_off_never_calls_inline(rig):
