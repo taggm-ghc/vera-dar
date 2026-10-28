@@ -207,7 +207,7 @@ def test_load_snapshot_parameterised_and_shape():
     assert snap["corpus_assoc"] == [{"name_norm": "alpha", "source_key": "k1", "asserted_by": "dar"}]
     assert snap["chunk_assoc"] == [{"name_norm": "alpha", "source_key": "k1", "start": 0, "end": 4, "asserted_by": "dar"}]
     doc_sql, doc_p = next(c for c in eng.calls if "DISTINCT ON" in c[0])
-    assert "= ANY(:kinds)" in doc_sql and "IS NOT NULL" in doc_sql and doc_p == {"kinds": ["abstract_metadata"]}
+    assert "= ANY(:kinds)" in doc_sql and "NOT (" not in doc_sql and "IS NOT NULL" in doc_sql and doc_p == {"kinds": ["abstract_metadata"]}
     ch_sql, ch_p = next(c for c in eng.calls if "domain_chunks" in c[0])
     assert ch_p == {"span_text": "whole abstract", "fd_kind": "fulldoc_chunks"} and "whole abstract" not in ch_sql and "abstract_metadata" not in doc_sql
     assert "s1.research_domains" in doc_sql or all("s1." in c[0] for c in eng.calls)

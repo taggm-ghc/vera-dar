@@ -72,7 +72,7 @@ def _build(cfg: dict, rt: dict, env, engine_factory):
     from vera.dar_corpus import DarCorpus
     from vera.dar_store import DarReader
     try:
-        kinds = (answer_contract.load_config().get("acquisition") or {}).get("non_document_text_kinds") or []
+        kinds = answer_contract.full_document_kinds()
         corpus = DarCorpus(cfg)
         reader = DarReader(engine)
         try:  # taken BEFORE the snapshot so a concurrent ingest triggers a later refresh; failure/unsupported = None
@@ -137,7 +137,7 @@ def _fetch_version_and_delta(rt: dict, env, engine_factory, cursor, want_delta: 
         version = reader.corpus_version()
         if not want_delta(version):
             return version, None
-        kinds = (answer_contract.load_config().get("acquisition") or {}).get("non_document_text_kinds") or []
+        kinds = answer_contract.full_document_kinds()
         try:
             delta = reader.load_delta(cursor, kinds, span_text=_span_text(answer_contract.CHAIN_CONFIG_PATH),
                                       **delta_limits(rt))

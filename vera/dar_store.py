@@ -167,16 +167,16 @@ class DarReader:
             n += 1
         return n
 
-    def load_snapshot(self, non_document_kinds, span_text=None, max_documents=None) -> dict:
+    def load_snapshot(self, full_document_kinds, span_text=None, max_documents=None) -> dict:
         """Snapshot for DarCorpus.restore. Documents = stored full texts whose provenance stored_text_kind is set and
-        NOT in non_document_kinds (bound parameter). Placeholder spans (start 0 AND text = span_text) are excluded
+        IN full_document_kinds (fail-closed allow-list, bound parameter; empty = no documents). Placeholder spans (start 0 AND text = span_text) are excluded
         from chunk associations; span_text is a bound parameter. max_documents (optional, from config) bounds the
         number of full texts loaded (bound LIMIT parameter). When the corpus is larger the result is flagged
         {"partial": True, "reason": "snapshot_max_documents", "cursor": None} (the oldest canonical sources are kept).
         Additive key "cursor": the since-dict for load_delta, computed from what was read."""
-        return self._collect(non_document_kinds, span_text, max_documents, None)
+        return self._collect(full_document_kinds, span_text, max_documents, None)
 
-    def load_delta(self, since: dict | None, non_document_kinds=None, span_text=None, max_documents=None,
+    def load_delta(self, since: dict | None, full_document_kinds=None, span_text=None, max_documents=None,
                    max_assocs=None, lookback_ids=0, lookback_s=0) -> dict:
         """Same shape as load_snapshot but ONLY rows newer than the cursor `since`
         ({"source_id","span_id","domain_id","assoc_ts"}): documents with source_id > since.source_id (full text),
@@ -192,14 +192,14 @@ class DarReader:
         delta presented as complete (the caller must rebuild)."""
         lim = {"max_documents": max_documents, "max_assocs": max_assocs, "lookback_ids": max(int(lookback_ids or 0), 0),
                "lookback_s": max(float(lookback_s or 0), 0.0)}
-        return self._collect(non_document_kinds, span_text, None, dict(since or {}), lim)
+        return self._collect(full_document_kinds, span_text, None, dict(since or {}), lim)
 
-    def _collect(self, non_document_kinds, span_text, max_documents, since, lim=None) -> dict:
+    def _collect(self, full_document_kinds, span_text, max_documents, since, lim=None) -> dict:
         with self._one_txn():
-            return self._collect_in_txn(non_document_kinds, span_text, max_documents, since, lim)
+            return self._collect_in_txn(full_document_kinds, span_text, max_documents, since, lim)
 
-    def _collect_in_txn(self, non_document_kinds, span_text, max_documents, since, lim=None) -> dict:
-        kinds = list(non_document_kinds or [])
+    def _collect_in_txn(self, full_document_kinds, span_text, max_documents, since, lim=None) -> dict:
+        kinds = list(full_document_kinds or [])
         delta = since is not None
         since = since or {}
         lim = lim or {}
@@ -235,7 +235,7 @@ class DarReader:
             "s.provenance->>'stored_text_kind', s.provenance->'licence', s.provenance->'licence_decision' "
             "FROM {S}.canonical_sources cs JOIN {S}.sources s ON s.canonical_source_id = cs.canonical_source_id "
             "WHERE s.provenance->>'stored_text_kind' IS NOT NULL "
-            "AND NOT (s.provenance->>'stored_text_kind' = ANY(:kinds)) "
+            "AND s.provenance->>'stored_text_kind' = ANY(:kinds) "  # fail-closed allow-list; empty list = no rows
             + ("AND s.source_id > :since_source_id " if delta else "")
             + "ORDER BY cs.canonical_source_id, s.version DESC"
             + (" LIMIT CAST(:lim AS integer)" if "lim" in doc_params else ""), doc_params)

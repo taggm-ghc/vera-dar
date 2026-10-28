@@ -37,7 +37,7 @@ from collections import Counter
 from typing import Callable
 
 from vera import domain_registry, domain_routing
-from vera.answer_contract import ACQ_ACQUIRED, CONFIG_PATH as CONTRACT_CONFIG_PATH, acquisition_state
+from vera.answer_contract import ACQ_ACQUIRED, CONFIG_PATH as CONTRACT_CONFIG_PATH, acquisition_state, full_document_kinds
 from vera.domain_identify import DomainIdentifier, tokenize
 
 LIMITATION = "stored corpus only; proposals, not admitted evidence"
@@ -164,7 +164,10 @@ class DarCorpus:
 
     def _gate(self, doc: dict):
         path = self.ccfg.get("contract_config_path") or CONTRACT_CONFIG_PATH
-        return acquisition_state(doc, path) == ACQ_ACQUIRED
+        kind = doc.get("stored_text_kind")
+        # fail-closed allow-list (GAP-DBKIND-1028): kind must be listed; the deny-list state check stays as a second gate
+        return (isinstance(kind, str) and kind in full_document_kinds(path)
+                and acquisition_state(doc, path) == ACQ_ACQUIRED)
 
     def _prep(self, doc: dict) -> dict | None:
         """Gate + duplicate handling; returns a status dict to return early, else None."""

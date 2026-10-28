@@ -8,6 +8,7 @@ Switches and texts live in config/discovery_contract.json (no hard-coded data). 
 modules (vera/discovery.py, vera/discovery_leak_check.py): L0 must work when they are absent (D5).
 """
 import json
+import logging
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "discovery_contract.json"
@@ -29,6 +30,19 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def full_document_kinds(path: Path = CONFIG_PATH) -> list[str]:
+    """Fail-closed ALLOW-list of stored_text_kind values loadable as DAR full documents (acquisition.full_document_text_kinds,
+    GAP-DBKIND-1028). Missing, empty, non-list or non-string entries -> [] (no DAR documents) with a logged reason; never a
+    fallback to the deny-list."""
+    raw = (load_config(path).get("acquisition") or {}).get("full_document_text_kinds")
+    if not isinstance(raw, list) or not raw or not all(isinstance(k, str) and k.strip() for k in raw):
+        logging.getLogger(__name__).error(
+            "DAR full_document_text_kinds missing or invalid in %s (%s): failing closed, no DAR documents will be loaded",
+            Path(path).name, type(raw).__name__)
+        return []
+    return [k for k in raw]
 
 
 def layers(path: Path = CONFIG_PATH) -> list[str]:

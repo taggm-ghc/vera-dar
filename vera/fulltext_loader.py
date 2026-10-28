@@ -474,10 +474,10 @@ def check_persist(res: dict, label: str) -> dict:
     return res
 
 
-def prime_from_store(dar, lookup: RoLookup, reader, non_doc_kinds) -> tuple[dict, list[dict]]:
+def prime_from_store(dar, lookup: RoLookup, reader, full_doc_kinds) -> tuple[dict, list[dict]]:
     """Restore the stored corpus into `dar` and seed one persist ctx. Returns (ctx, pending) where pending are stored
     documents with no evidence spans (to be re-ingested and persisted)."""
-    snap = reader.load_snapshot(non_doc_kinds)
+    snap = reader.load_snapshot(full_doc_kinds)
     docs = snap.get("documents") or []
     counts = lookup.span_counts([d["db_source_id"] for d in docs])
     pending = [d for d in docs if counts.get(int(d["db_source_id"]), 0) == 0]
