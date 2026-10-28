@@ -195,3 +195,19 @@ def test_first_span_failure_with_failing_rollback_is_still_soft():
              "content_hash": "h"} for i in range(1, 4)]
     conn = B(rows, [])
     assert len(fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, 2000, 10, MT)) == 3
+
+
+# CAP6-1028: OD-1027(4) "at least 6 docs per micro-topic" -> shipped served_per_topic_max is 6 (added tests; none edited)
+def test_shipped_per_topic_cap_is_six_and_totals_unchanged():
+    b = acq_config.load_config()["bounds"]
+    assert b["served_per_topic_max"] == 6
+    assert b["served_acquired_max"] == 30 and b["served_acquired_max_bytes"] == 50000000
+    assert "OD-1027(4)" in b["_served_per_topic_note"]
+
+
+def test_six_per_topic_serves_six_and_respects_total_cap():
+    got = fulldoc_db.select_served(_rows(), 6, 30, MT)
+    for lo, hi in ((1, 20), (21, 40), (41, 58)):
+        assert sum(1 for g in got if lo <= g <= hi) == 6
+    assert {59, 60} <= set(got) and len(got) == 3 * 6 + 2 and len(set(got)) == len(got)
+    assert len(fulldoc_db.select_served(_rows(), 6, 10, MT)) == 10  # total cap still binds
