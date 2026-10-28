@@ -372,6 +372,13 @@ def offtopic_openalex_profile(cfg: RouterConfig | None = None) -> dict | None:
     return {"and_extra_max": p["and_extra_max"], "generic_terms": list(p.get("generic_terms") or ())}
 
 
+def acquisition_off_note(cfg: RouterConfig | None = None) -> str:
+    """PATHA-1028 CT-2: the fixed sentence appended to the reading list while automatic search is off ("" when the key
+    is missing or not a string)."""
+    t = (cfg or load_config()).raw.get("acquisition_off_note")
+    return t.strip() if isinstance(t, str) else ""
+
+
 def offtopic_notice(cfg: RouterConfig | None = None) -> str:
     cfg = cfg or load_config()
     t = cfg.raw.get("offtopic_notice")

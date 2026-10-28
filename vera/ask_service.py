@@ -178,6 +178,16 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
         decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
+    offline_spent: dict = {}  # PATHA-1028 CT-2: spend of a corpus attempt that produced no checked answer
+    if acq is None and _offline_coverage_eligible(decision, question):  # PATHA-1028 CT-2 (plan s26.2(6), P10)
+        # acquisition off: a clean layer-2 verdict that is only about the topic is answered from the existing corpus
+        # through the unchanged admission, writer and claim check. No inline search, no background job; when the
+        # corpus does not cover the question the neutral reading list below is returned (sources=(), persists nothing).
+        fd = _fulldoc(question, model, pricing, replace(decision, accepted=True), chained, grounding)
+        if isinstance(fd, AskResult):
+            return fd
+        if isinstance(fd, tuple) and len(fd) == 5:
+            offline_spent = {"tokens_used": int(fd[2] or 0), "cost_usd": round(float(fd[3] or 0.0), 6)}
     if not decision.accepted:
         trig = None
         inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
@@ -212,6 +222,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
         if off is not None:
             if not trig:
+                if acq is None:  # PATHA-1028 CT-2: say plainly that automatic search is off (neutral, no topic text)
+                    from vera import scope_router as _sr
+                    note = _sr.acquisition_off_note()
+                    off = replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, **offline_spent)
                 return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
             from vera import acq_config
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
@@ -375,6 +389,20 @@ def _research_eligible(decision, question: str, acq) -> bool:
                 and decision.category not in _NO_LIST_CATEGORIES
                 and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
                 and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _offline_coverage_eligible(decision, question: str) -> bool:
+    """PATHA-1028 CT-2 (plan s26.2(6), s26.4 CT-2, owner Q4): with automatic acquisition effectively off, a CLEAN
+    layer-2 verdict (strictly decoded, reason llm_out:, category off_topic, no refusal category, layer 1 clean) is
+    answered from the existing corpus instead of the topic reading list. Refusal categories, layer-1 deny/injection
+    and marker hits, every classifier_malformed* verdict, a missing category and layer2_mode none keep the decline
+    path. Fails closed."""
+    try:
+        return (decision.accepted is False and decision.layer == "layer2_llm"
+                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and decision.category not in _NO_LIST_CATEGORIES and _layer1_clean(question))
     except Exception:  # noqa: BLE001
         return False
 
