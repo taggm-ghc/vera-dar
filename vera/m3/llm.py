@@ -15,12 +15,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
-from vera.generator_client import generator_model, make_client, pricing_for
+from vera.generator_client import default_generator_model, lazy_module_attr, make_client, pricing_for
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 
 logger = logging.getLogger("vera.m3")
 
-DEFAULT_MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
+# DEFAULT_MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
 
 
 class LLMError(RuntimeError):
@@ -82,7 +82,7 @@ class OpenAIJSONClient:
 
     def __init__(self, model: str | None = None, log: CallLog | None = None, timeout_s: float = 60.0):
         sel = load_model_selection()
-        self.model = model or (sel.selected_model if sel else DEFAULT_MODEL)
+        self.model = model or (sel.selected_model if sel else lazy_module_attr(globals(), "DEFAULT_MODEL"))
         self.log = log if log is not None else CallLog()
         self.timeout_s = timeout_s
         self._client = None
@@ -122,3 +122,9 @@ class OpenAIJSONClient:
             self.log.add(CallRecord(purpose, self.model, 0, 0, 0.0, round(time.monotonic() - t0, 3),
                                     ok=False, error=repr(exc)))
             raise LLMError(f"{purpose}: LLM call failed: {exc!r}") from exc
+
+
+def __getattr__(name):  # PEP 562: DEFAULT_MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "DEFAULT_MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -14,6 +14,7 @@ record with input = output = 0 in config/model-pricing.json.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 from dataclasses import dataclass
@@ -63,6 +64,20 @@ def generator_settings(run_path: Path | str | None = None) -> GeneratorSettings:
 
 def generator_model(run_path: Path | str | None = None) -> str:
     return generator_settings(run_path).model
+
+
+@functools.lru_cache(maxsize=1)
+def default_generator_model() -> str:
+    """generator.model of config/vera_eval_run.json, read at FIRST USE (not at import) and then cached, so modules on
+    the /ask import path start even when the eval run config is absent (FIXR-7DA-1028, VER-REL7DA-1-1028 #3). A read
+    error is raised to the caller that needs the model and is not cached."""
+    return generator_model()
+
+
+def lazy_module_attr(module_globals: dict, name: str) -> str:
+    """The model for a module's lazy constant `name`: an explicitly set module attribute wins (tests/overrides),
+    else default_generator_model()."""
+    return module_globals.get(name) or default_generator_model()
 
 
 def make_client(settings: GeneratorSettings | None = None, *, env: Mapping[str, str] | None = None,

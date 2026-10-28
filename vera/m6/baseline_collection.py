@@ -11,9 +11,9 @@ import statistics
 import time
 from typing import Callable
 
-from vera.generator_client import cost_usd as _gen_cost, generator_model, make_client
+from vera.generator_client import cost_usd as _gen_cost, default_generator_model, lazy_module_attr, make_client
 
-DEFAULT_MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
+# DEFAULT_MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
 N_RUNS = 3
 MAX_OUTPUT_TOKENS = 2500  # per-run step cap
 
@@ -33,7 +33,7 @@ def _cost(model: str, ptok: int, ctok: int) -> float:
     return _gen_cost(model, ptok, ctok)  # unpriced model raises UnpricedModelError (a RuntimeError)
 
 
-def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
+def collect_baseline(question: str, model: str | None = None, *,
                      llm_call: Callable[[str, str], dict] | None = None,
                      n_runs: int = N_RUNS) -> dict:
     """Return the median baseline run plus per-run logs.
@@ -41,6 +41,7 @@ def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
     `llm_call(question, model) -> {text, prompt_tokens, completion_tokens, latency_s}`
     is injectable so tests never touch the network.
     """
+    model = model or lazy_module_attr(globals(), "DEFAULT_MODEL")  # default: generator.model, read at first use
     call = llm_call or _openai_call
     runs = []
     for i in range(n_runs):  # bounded: exactly n_runs steps, no retry loop
@@ -69,3 +70,9 @@ def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
                  for r in runs],
         "question": question,
     }
+
+
+def __getattr__(name):  # PEP 562: DEFAULT_MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "DEFAULT_MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

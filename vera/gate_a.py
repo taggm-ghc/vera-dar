@@ -18,11 +18,15 @@ from vera import strict_json
 from dataclasses import dataclass
 
 from vera.cost_ledger import CostLedger
-from vera.generator_client import cost_usd as _gen_cost, generator_model, make_client
+from vera.generator_client import cost_usd as _gen_cost, default_generator_model, lazy_module_attr, make_client
 
 logger = logging.getLogger("vera")
 
-MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
+# MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
+
+
+def _model() -> str:
+    return lazy_module_attr(globals(), "MODEL")
 WEIGHTS = {"query_fit": 0.4, "evidentiary_value": 0.4, "cost_risk": 0.2}
 FETCH_THRESHOLD = 0.6   # composite >= this -> fetch (subject to max_fetch)
 REJECT_THRESHOLD = 0.25  # composite < this AND scorer confident -> reject; else defer
@@ -78,12 +82,12 @@ def decide(score: float | None, uncertainty: str, cfg: GateAConfig) -> tuple[str
 
 def _openai_llm_call(messages: list[dict]) -> tuple[str, int, int]:
     c = make_client().chat.completions.create(
-        model=MODEL, messages=messages, response_format={"type": "json_object"}, temperature=0)
+        model=_model(), messages=messages, response_format={"type": "json_object"}, temperature=0)
     return c.choices[0].message.content, c.usage.prompt_tokens, c.usage.completion_tokens
 
 
 def _llm_cost(prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
-    return _gen_cost(MODEL, prompt_tokens, completion_tokens), True  # unpriced model raises (fail closed)
+    return _gen_cost(_model(), prompt_tokens, completion_tokens), True  # unpriced model raises (fail closed)
 
 
 def _score_batch(question: str, batch: list[dict], llm_call, ledger, safe_cost: bool = False) -> dict[int, dict]:
@@ -97,7 +101,7 @@ def _score_batch(question: str, batch: list[dict], llm_call, ledger, safe_cost: 
         text, pt, ct = llm_call(messages)
     except Exception as exc:  # provider failure: fail verbosely per batch, candidates get deferred
         if ledger:
-            ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=0.0, ok=False,
+            ledger.record(kind="llm_gate_a", provider=f"openai:{_model()}", cost_usd=0.0, ok=False,
                           detail=f"{type(exc).__name__}: {exc}", units={"batch": len(batch)})
         return {}
     try:
@@ -109,12 +113,16 @@ def _score_batch(question: str, batch: list[dict], llm_call, ledger, safe_cost: 
         # discarded unscored, so every candidate gets a "defer" decision; the class name (never the text) is logged.
         logger.warning("gate A cost unpriced (%s): batch of %d deferred unscored", type(exc).__name__, len(batch))
         if ledger:
-            ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=0.0, cost_known=False, ok=False,
+            try:
+                provider = f"openai:{_model()}"
+            except Exception:  # noqa: BLE001  generator config unreadable: still never raise on this path
+                provider = "openai:unknown"
+            ledger.record(kind="llm_gate_a", provider=provider, cost_usd=0.0, cost_known=False, ok=False,
                           detail=type(exc).__name__, units={"prompt_tokens": pt, "completion_tokens": ct,
                                                             "batch": len(batch)})
         return {}
     if ledger:
-        ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=cost, cost_known=known,
+        ledger.record(kind="llm_gate_a", provider=f"openai:{_model()}", cost_usd=cost, cost_known=known,
                       units={"prompt_tokens": pt, "completion_tokens": ct, "batch": len(batch)})
     try:
         rows = strict_json.loads(text)["scores"]
@@ -180,3 +188,9 @@ def score_candidates(
                 row["gate_a_decision"] = "defer"
                 row["gate_a_rationale"] += f" Demoted to defer: fetch budget max_fetch={cfg.max_fetch} reached."
     return scored
+
+
+def __getattr__(name):  # PEP 562: MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
