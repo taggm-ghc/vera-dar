@@ -255,9 +255,10 @@ def test_v5_route_and_answer_log_the_refusal(stubs, monkeypatch, caplog):
 def test_nextrel_fix_1028_is_it_legal_general_vs_personal():
     # NEXTREL-FIX-1028 (OD-1028(21) clarification 2): general legal questions pass layer 1; personalised ones still decline.
     for q in ("Is it legal to record a phone call in the US? I know it varies by state, how generally",
-              "Is it legal to photograph public buildings in France?",
+              "Is it legal to record phone calls in California?", "Is it legal to photograph public buildings in France?",
               "Is it lawful to scrape public websites in the EU? Studies and case law summaries please"):
         assert sr.layer1(q, CFG)[1] != "deny:legal", q
-    for q in ("Is it legal to sue my landlord?", "Is it legal for me to record my boss?",
+    for q in ("Is it legal for me to record phone calls in California?", "Is it legal for me to drive at 16?",
+              "Is it legal to sue my landlord?", "Is it legal for me to record my boss?",
               "Should I sue my landlord over the broken heating?", "Should I plead guilty to my traffic ticket or fight it in court?"):
         assert sr.layer1(q, CFG) == (sr.DECLINE, "deny:legal"), q
