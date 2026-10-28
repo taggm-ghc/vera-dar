@@ -175,6 +175,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
+    if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
+        decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     if not decision.accepted:
         trig = None
@@ -354,6 +356,27 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     return replace(out, answer=f"{lead} {out.answer}" if lead else out.answer, accepted=False,
                    contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
                              "inline_acquisition": o.public()})
+
+
+def _research_eligible(decision, question: str, acq) -> bool:
+    """DDFIX-1023/SCOPE (owner directive 2026-10-23): curated corpus coverage is not research eligibility. A WELL-FORMED
+    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless) takes
+    the normal research path: corpus attempt, unrestricted discovery, inline full-text acquisition and the unchanged
+    admission, answer writer and claim check (no answer without admitted evidence). Refusal categories (advice, harmful,
+    programming_task, rule_change), layer-1 deny/injection hits, data markers, malformed or contradictory verdicts, a
+    missing category and layer2_mode none keep the decline path. It applies only where the shipped switches already
+    authorise researching AND answering such a question (acquisition effectively on, scope_expansion
+    override_layer2_declines, decline trigger and layer-2 category gate), so every existing kill switch still applies;
+    what changes is that the research runs as the normal path, not as a refusal with a reading list. Fails closed."""
+    try:
+        from vera import acq_config
+        return (acq is not None and decision.accepted is False and decision.layer == "layer2_llm"
+                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and decision.category not in _NO_LIST_CATEGORIES
+                and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
+                and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _base_warming() -> bool:
