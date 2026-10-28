@@ -193,7 +193,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         trig = None
         inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
         ia: dict = {"status": "off"} if acq is None else {}  # P0-B1b: inline outcome for a declined non-answer (Report)
-        if acq is not None:
+        from vera import scope_router as _sru
+        if acq is not None and not _sru.unsupported_use(decision):  # REFUSE-FIX-1028 V1: unsupported use never acquires
             from vera import acq_config
             if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
                     and acq_config.layer2_category_ok(acq, decision)):  # DAR-1021 category gate (fails closed)
@@ -478,7 +479,8 @@ def _offtopic_reading_list(decision, grounding):
 
     if grounding is None or not sr.offtopic_applies(decision):
         return None
-    if getattr(decision, "category", "") in _NO_LIST_CATEGORIES:  # DAR-1021 SEC M2: classifier said advice/harm/...
+    unsupported = sr.unsupported_use(decision)  # REFUSE-FIX-1028 V1: code request -> fixed sentence + this list
+    if getattr(decision, "category", "") in _NO_LIST_CATEGORIES and not unsupported:  # DAR-1021 SEC M2: advice/harm/...
         return None
     sources_fn, _cfg = grounding
     cands = ()
@@ -503,6 +505,8 @@ def _offtopic_reading_list(decision, grounding):
         if tok is not None:
             search_providers.OPENALEX_PROFILE.reset(tok)
     notice = sr.offtopic_notice()
+    if unsupported:  # fixed config text, never model text; the list's own not-read notice follows
+        notice = f"{sr.unsupported_use_text()} {notice}"
     res = contract.reading_list_result(cands, decision.tokens_used, decision.cost_usd, accepted=False)
     return replace(res, answer=notice if cands else f"{notice} {res.answer}", sources=(),
                    contract={**(res.contract or {}), "offtopic": True})

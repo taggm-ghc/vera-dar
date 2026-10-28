@@ -67,6 +67,13 @@ def test_safety_and_policy_refusals_still_refuse(rig, cat):
     _real_router(rig, {"in_scope": False, "category": cat, "reason": "x"})
     ds = Spy()
     r = _ask(LIVE_Q, ds)
+    if cat == "programming_task":
+        # REFUSE-FIX-1028 V1: requirement changed under OD-1028(21) and its clarification: a code request is
+        # unsupported use, so it gets the fixed unsupported-use sentence plus the scholarly reading list (restricted
+        # search only), never an answer, a background job or an acquisition.
+        assert r.result_kind == "reading_list" and r.answer.startswith(sr.unsupported_use_text())
+        assert set(ds.calls) <= {True} and rig.outcomes == [] and rig.h.answer_calls == [] and r.acquire_trigger is None
+        return
     assert r.result_kind == "decline" and r.answer == sr.decline_text()
     assert ds.calls == [] and rig.outcomes == [] and rig.h.answer_calls == []
 

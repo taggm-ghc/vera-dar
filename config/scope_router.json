@@ -20,6 +20,8 @@
   "offtopic_openalex_profile": {"and_extra_max": 4, "generic_terms": ["key", "main", "major", "differences", "difference", "different", "compare", "compared", "comparison", "similarities", "similar", "versus", "vs", "best", "better", "good", "bad", "common", "important", "types", "type", "kinds", "work", "works", "cause", "causes", "effect", "effects", "role", "impact", "know", "tell", "explain", "describe", "give", "make", "get"]},
   "offtopic_openalex_profile_note": "RL-REL-1021: for the off-topic reading list only, an OpenAlex query with no core phrase ANDs up to and_extra_max distinctive terms (generic_terms dropped) instead of OR-ing every token, so an ambiguous token no longer pulls unrelated papers. In-scope /ask searches are unchanged. No PMC filter (the list shows records). Remove the offtopic_openalex_profile key to restore the previous query.",
   "offtopic_notice": "VERA-DAR could not give a checked answer to this question from the documents it holds. It has not read the documents listed below and gives no answer to your question; the list comes from a search on your question and may not be relevant. For medical, legal, financial or safety matters, please consult a qualified professional or an appropriate official source.",
+  "unsupported_use_text": "VERA-DAR does not write or fix code; it can point to published research instead.",
+  "unsupported_use_text_note": "REFUSE-FIX-1028 V1 (OD-1028(21) and clarification): code generation is unsupported use, not a forbidden topic. A layer-1 deny:coding_task hit (no injection, marker or other deny hit) or a clean layer-2 programming_task verdict gets this fixed neutral sentence plus the scholarly reading list (no code, no model answer, no background or inline acquisition). Missing or empty: decline_template.",
   "acquisition_off_note": "Automatic search for new documents is currently off; VERA-DAR looked only in the documents it already holds.",
   "acquisition_off_note_note": "PATHA-1028 CT-2 (plan s26.2(6)): appended to the reading list while automatic acquisition is effectively off (flag, kill switch or DB env). A clean layer-2 off_topic verdict is first tried against the existing corpus (no inline search, no background job, sources=() on the list).",
   "layer1": {
@@ -100,7 +102,7 @@
         "(^(please )?|\\b(how to|how (do|can|could|would|should) (i|we|you)|help me|teach me|show me how to|tell me how to|i want to|i need to|can you|could you|please)\\s+)bypass (a |the )?(paywall|license|licence|drm|authentication|2fa|login)\\b"
       ],
       "coding_task": [
-        "^(please )?(write|generate|create|implement|build|code|fix|debug|refactor)\\b.{0,40}\\b(function|script|program|class|code|regex|query|app|bug)\\b"
+        "^(please )?(write|generate|create|implement|build|code|fix|debug|refactor)\\b.{0,40}\\b(function|script|class|code|regex|bug)\\b"
       ]
     },
     "accept_rule": "an ai_term AND (a dev_term) both match, OR a tool_name matches; deny checks always run first",

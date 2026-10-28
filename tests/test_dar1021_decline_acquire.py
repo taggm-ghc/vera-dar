@@ -244,6 +244,13 @@ def test_m2_no_reading_list_for_flagged_categories(h, monkeypatch, cat):
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", cat)
     s = Search()
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
+    if cat == "programming_task":
+        # REFUSE-FIX-1028 V1: requirement changed under OD-1028(21) and its clarification: a code request is
+        # unsupported use, so it gets the fixed unsupported-use sentence plus the scholarly reading list (restricted
+        # search only), never an answer, a background job or an acquisition.
+        assert r.result_kind == "reading_list" and r.acquire_trigger is None and set(s.calls) == {True}
+        assert r.answer.startswith(sr.unsupported_use_text()) and r.sources == () and r.accepted is False
+        return
     assert r.result_kind == "decline" and r.acquire_trigger is None and s.calls == []
 
 

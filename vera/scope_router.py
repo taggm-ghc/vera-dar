@@ -142,12 +142,14 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     qc = normalise(collapse_letter_spaced(question))
     if qc != q:
         views.append(qc)
-    for v in views:
-        if _any(cfg.injection, v):
-            return DECLINE, "deny:injection"
-        for name, pats in cfg.deny.items():
-            if _any(pats, v):
-                return DECLINE, f"deny:{name}"
+    # REFUSE-FIX-1028 V1: injection is checked on every view before any deny category, and each category on every
+    # view before the next one, so a softer reason (coding_task, which now gets a reading list) can never mask an
+    # injection or harmful hit that only the letter-spaced view shows. Every outcome here is still DECLINE.
+    if any(_any(cfg.injection, v) for v in views):
+        return DECLINE, "deny:injection"
+    for name, pats in cfg.deny.items():
+        if any(_any(pats, v) for v in views):
+            return DECLINE, f"deny:{name}"
     if _any(cfg.tool_names, q):
         return ACCEPT, "tool_name"
     if _any(cfg.ai_terms, q) and _any(cfg.dev_terms, q):
@@ -305,6 +307,9 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
           chat: ChatFn | None = None) -> ScopeDecision:
     cfg = cfg or load_config()
     verdict, reason = layer1(question, cfg)
+    if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON and has_marker(question):
+        # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)
+        return ScopeDecision(False, "layer1", "deny:injection_marker")
     if verdict != UNSURE:
         return ScopeDecision(verdict == ACCEPT, "layer1", reason)
     if has_marker(question):  # DAR-1021 SEC H1: fixed refusal, no classifier call, never a reading list or acquisition
@@ -357,6 +362,10 @@ def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int) -> Scop
         # contradictory verdict; fail closed with the fixed refusal (never answered, listed or acquired)
         return ScopeDecision(False, "layer2_llm", "classifier_malformed:category_conflict", pt + ct, cost, calls, category)
     tok = refusal_token(content)
+    if category == UNSUPPORTED_CATEGORY and tok and tok != category:  # REFUSE-FIX-1028 V1: a programming_task verdict
+        # that also names a stronger refusal category (harmful, rule_change, advice) keeps the fixed refusal, so the
+        # unsupported-use reading list never masks it
+        return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, calls, tok)
     if tok and (in_scope or category not in REFUSE_CATEGORIES):  # HOTFIX-DUPKEY-1027: a refusal category named anywhere
         # else in the reply (nested, a key, a reason) is never answered, listed or acquired; fail closed, keep the category
         return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, calls, tok)
@@ -385,12 +394,43 @@ def offtopic_enabled(cfg: RouterConfig | None = None) -> bool:
     return (cfg or load_config()).raw.get("offtopic_reading_list") is True
 
 
+UNSUPPORTED_L1_REASON = "deny:coding_task"  # REFUSE-FIX-1028 V1 (OD-1028(21)): unsupported use, not a forbidden topic
+UNSUPPORTED_CATEGORY = "programming_task"
+
+
+def unsupported_use_text(cfg: RouterConfig | None = None) -> str:
+    """REFUSE-FIX-1028 V1: the fixed neutral unsupported-use sentence ("" when missing or not a string)."""
+    t = (cfg or load_config()).raw.get("unsupported_use_text")
+    return t.strip() if isinstance(t, str) else ""
+
+
+def unsupported_use(decision: ScopeDecision, cfg: RouterConfig | None = None) -> bool:
+    """REFUSE-FIX-1028 V1 (OD-1028(21) and clarification): True for a request to write or fix code: a layer-1
+    deny:coding_task hit (layer 1 checks injection and every other deny category first; route checks the data markers
+    first) or a CLEAN layer-2 verdict (reason llm_out:) whose category is programming_task. Such a request gets the
+    fixed unsupported-use sentence plus the scholarly reading list: no code, no model answer, no acquisition.
+    refusal_token, category_conflict and malformed verdicts never qualify. False when the sentence is not configured
+    or on any error (fail closed: decline_template)."""
+    try:
+        cfg = cfg or load_config()
+        if decision.accepted or not unsupported_use_text(cfg):
+            return False
+        if decision.layer == "layer1":
+            return decision.reason == UNSUPPORTED_L1_REASON
+        return (decision.layer == "layer2_llm" and decision.reason.startswith("llm_out:")
+                and decision.category == UNSUPPORTED_CATEGORY)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def offtopic_applies(decision: ScopeDecision, cfg: RouterConfig | None = None) -> bool:
     """True only for a declined question whose decline came from a WELL-FORMED layer-2 LLM out-of-scope verdict (so
-    layer 1 matched no deny/injection rule). Layer-1 declines, malformed replies and layer2_mode none never qualify."""
+    layer 1 matched no deny/injection rule), or for an unsupported-use request (REFUSE-FIX-1028 V1, unsupported_use).
+    Other layer-1 declines, malformed replies and layer2_mode none never qualify."""
     cfg = cfg or load_config()
-    return (offtopic_enabled(cfg) and not decision.accepted and decision.layer == "layer2_llm"
-            and decision.reason.startswith("llm_out:"))
+    if not offtopic_enabled(cfg) or decision.accepted:
+        return False
+    return (decision.layer == "layer2_llm" and decision.reason.startswith("llm_out:")) or unsupported_use(decision, cfg)
 
 
 def offtopic_providers(cfg: RouterConfig | None = None) -> list[str]:

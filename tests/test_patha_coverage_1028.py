@@ -314,6 +314,13 @@ def test_q1_safety_refusals_stay_with_acquisition_on(rig, q, reply):
     rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: c(messages, model, l2))
     s = Search()
     r = _ask(q, s)
+    if reply and '"programming_task"' in reply:
+        # REFUSE-FIX-1028 V1: requirement changed under OD-1028(21) and its clarification: a code request is
+        # unsupported use, so it gets the fixed unsupported-use sentence plus the scholarly reading list (restricted
+        # search only), never an answer, a background job or an acquisition.
+        assert r.result_kind == "reading_list" and r.answer.startswith(sr.unsupported_use_text())
+        assert set(s.calls) <= {True} and rig.outcomes == [] and rig.h.answer_calls == [] and r.acquire_trigger is None
+        return
     assert r.result_kind == "decline" and r.answer == sr.decline_text()
     assert s.calls == [] and rig.outcomes == [] and rig.h.answer_calls == [] and r.acquire_trigger is None
     if reply is None:
