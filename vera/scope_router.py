@@ -310,12 +310,19 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON and has_marker(question):
         # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)
         return ScopeDecision(False, "layer1", "deny:injection_marker")
+    if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON:
+        return _coding_hint(question, model, pricing, cfg, chat)
     if verdict != UNSURE:
         return ScopeDecision(verdict == ACCEPT, "layer1", reason)
     if has_marker(question):  # DAR-1021 SEC H1: fixed refusal, no classifier call, never a reading list or acquisition
         return ScopeDecision(False, "layer1", "deny:injection_marker")
     if cfg.layer2_mode == "none":
         return ScopeDecision(cfg.none_mode_unsure_action == ACCEPT, "layer2_none", "unsure:" + cfg.none_mode_unsure_action)
+    return _classify(question, model, pricing, cfg, chat)
+
+
+def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatFn | None) -> ScopeDecision:
+    """The layer-2 classifier call with the PATHA-1028 Q2 retry (unchanged; moved out of route for REFUSE-FIX2-1028)."""
     messages = classifier_messages(question, cfg)
     retries = int(cfg.layer2.get("malformed_retry", 1))
     pt = ct = calls = 0
@@ -331,6 +338,47 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
                 import logging
                 logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
             return d
+
+
+# REFUSE-FIX2-1028 (OD-1028(26): layer 2 is the primary intent classifier): closed set of layer-2 categories that
+# confirm a layer-1 coding hint as unsupported use; and the closed fallback tokens logged when layer 2 cannot confirm.
+CODING_HINT_CONFIRM = frozenset({"programming_task", "off_topic", "in_scope"})
+CODING_HINT_FALLBACKS = ("l2_unavailable", "l2_mode_none", "l2_malformed")
+
+
+def _coding_fallback(token: str, d: ScopeDecision | None = None) -> ScopeDecision:
+    import logging
+    logging.getLogger("vera").info("scope coding hint: layer2=%s", token)
+    return ScopeDecision(False, "layer1", f"{UNSUPPORTED_L1_REASON}:{token}", *(
+        (d.tokens_used, d.cost_usd, d.llm_calls) if d is not None else ()))
+
+
+def _coding_hint(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatFn | None) -> ScopeDecision:
+    """REFUSE-FIX2-1028: a layer-1 deny:coding_task hit is a HINT; layer 2 also runs (OD-1028(26)).
+    - a CLEAN layer-2 verdict (reason llm_out:/llm_in:, no refusal token or conflict) whose category is
+      programming_task, off_topic or in_scope -> ScopeDecision(False, "layer1", "deny:coding_task") carrying the
+      classifier spend: the unsupported-use sentence plus the reading list (unsupported_use); never an answer, code or
+      acquisition (layer 1 stays DECLINE, so intent_clean is False);
+    - any other refusal category (advice, harmful, rule_change, also via refusal_token or category_conflict) -> that
+      layer-2 decision unchanged, refused by the existing paths;
+    - layer2_mode none, a classifier error, or a malformed / nullified / unexpected verdict -> the fixed decline
+      (reason deny:coding_task:<token>, token from CODING_HINT_FALLBACKS, also logged). Never raises."""
+    try:
+        if cfg.layer2_mode == "none":
+            return _coding_fallback("l2_mode_none")
+        try:
+            d = _classify(question, model, pricing, cfg, chat)
+        except Exception as exc:  # noqa: BLE001  unavailable classifier: the decline, as before V1
+            import logging
+            logging.getLogger("vera").warning("scope coding hint classifier unavailable (%s)", type(exc).__name__)
+            return _coding_fallback("l2_unavailable")
+        if d.category in REFUSE_CATEGORIES - {UNSUPPORTED_CATEGORY} and not d.accepted:
+            return d  # advice / harmful / rule_change (clean, refusal_token or category_conflict): existing refusal
+        if d.reason.startswith(("llm_out:", "llm_in:")) and d.category in CODING_HINT_CONFIRM:
+            return ScopeDecision(False, "layer1", UNSUPPORTED_L1_REASON, d.tokens_used, d.cost_usd, d.llm_calls)
+        return _coding_fallback("l2_malformed", d)
+    except Exception:  # noqa: BLE001  fail closed
+        return ScopeDecision(False, "layer1", f"{UNSUPPORTED_L1_REASON}:l2_unavailable")
 
 
 def _nullified(d: ScopeDecision) -> bool:
@@ -406,8 +454,8 @@ def unsupported_use_text(cfg: RouterConfig | None = None) -> str:
 
 def unsupported_use(decision: ScopeDecision, cfg: RouterConfig | None = None) -> bool:
     """REFUSE-FIX-1028 V1 (OD-1028(21) and clarification): True for a request to write or fix code: a layer-1
-    deny:coding_task hit (layer 1 checks injection and every other deny category first; route checks the data markers
-    first) or a CLEAN layer-2 verdict (reason llm_out:) whose category is programming_task. Such a request gets the
+    deny:coding_task hit CONFIRMED by a clean layer-2 verdict (REFUSE-FIX2-1028, _coding_hint; layer 1 checks injection
+    and every other deny category first; route checks the data markers first) or a CLEAN layer-2 verdict (reason llm_out:) whose category is programming_task. Such a request gets the
     fixed unsupported-use sentence plus the scholarly reading list: no code, no model answer, no acquisition.
     refusal_token, category_conflict and malformed verdicts never qualify. False when the sentence is not configured
     or on any error (fail closed: decline_template)."""
@@ -415,8 +463,9 @@ def unsupported_use(decision: ScopeDecision, cfg: RouterConfig | None = None) ->
         cfg = cfg or load_config()
         if decision.accepted or not unsupported_use_text(cfg):
             return False
-        if decision.layer == "layer1":
-            return decision.reason == UNSUPPORTED_L1_REASON
+        if decision.layer == "layer1":  # REFUSE-FIX2-1028: only after layer 2 confirmed the hint (route's
+            # _coding_hint is the sole producer of this exact reason, always with >= 1 classifier call)
+            return decision.reason == UNSUPPORTED_L1_REASON and decision.llm_calls >= 1
         return (decision.layer == "layer2_llm" and decision.reason.startswith("llm_out:")
                 and decision.category == UNSUPPORTED_CATEGORY)
     except Exception:  # noqa: BLE001

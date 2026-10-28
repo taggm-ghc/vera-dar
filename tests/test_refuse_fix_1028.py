@@ -48,7 +48,10 @@ def test_v1_marker_beats_coding_task(monkeypatch):
 
 
 def test_v1_layer1_coding_task_gets_unsupported_sentence_and_reading_list(stubs, monkeypatch):
-    _no_classifier(monkeypatch)
+    # REFUSE-FIX2-1028 (OD-1028(26)): a layer-1 coding hit is a hint; the layer-2 classifier now also runs and must
+    # return a clean programming_task (or off_topic/in_scope) verdict before the unsupported-use list is given
+    monkeypatch.setattr(sr, "default_chat", chat_returning(json.dumps(
+        {"in_scope": False, "category": "programming_task", "reason": "x"})))
     monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: pytest.fail("inline acquisition must not run"))
     r, search = run(CODE_Q)
     assert r.result_kind == "reading_list" and r.answer.startswith(RAW["unsupported_use_text"])
