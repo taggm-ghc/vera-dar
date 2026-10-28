@@ -395,7 +395,8 @@ def test_programming_task_is_unsupported_use_not_catstep(monkeypatch, acq_on):
     inl = []
     monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: inl.append(1))
     r = ask_service.answer_in_scope(Q_NONE, "m", PRICING, grounding=(lambda *a, **k: [], {}))
-    assert r.result_kind in ("reading_list", "decline") and r.acquire_trigger is None
+    assert r.result_kind == "reading_list" and r.acquire_trigger is None  # OD-1028(21) clarification 1: offer research
+    assert sr.unsupported_use_text() in r.answer
     assert seen == [] and cats == [] and inl == []
 
 
