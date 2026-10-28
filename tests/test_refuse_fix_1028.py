@@ -202,3 +202,47 @@ def test_v4_layer1_and_marker_without_list_still_decline(stubs, monkeypatch, q):
     _v4(monkeypatch, OFFT)
     r, _ = run(q, grounding=False)
     assert r.result_kind == "decline" and r.answer == RAW["decline_template"]
+
+
+# ------------------------------------------------------------------------------------------------ V5 refusal log token
+def _basis_lines(caplog, decision):
+    import logging
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="vera"):
+        ask_service._log_basis(decision)
+    return [r.getMessage() for r in caplog.records if r.getMessage().startswith("scope basis=")]
+
+
+@pytest.mark.parametrize("cat", sorted(sr.REFUSE_CATEGORIES))
+def test_v5_layer2_refusal_categories_are_logged(caplog, cat):
+    for reason in ("llm_out:SECRET MODEL TEXT", "classifier_malformed:refusal_token",
+                   "classifier_malformed:category_conflict"):
+        lines = _basis_lines(caplog, sr.ScopeDecision(False, "layer2_llm", reason, category=cat))
+        assert len(lines) == 1 and lines[0].endswith(f" refusal={cat}") and "SECRET" not in lines[0], reason
+
+
+def test_v5_nullified_and_non_refusal_verdicts_carry_no_refusal_token(caplog):
+    for d in (sr.ScopeDecision(False, "layer2_llm", "classifier_malformed"),
+              sr.ScopeDecision(False, "layer2_llm", "llm_out:x", category=""),
+              sr.ScopeDecision(False, "layer2_llm", "llm_out:x", category="off_topic"),
+              sr.ScopeDecision(True, "layer2_llm", "llm_in:x", category="in_scope"),
+              sr.ScopeDecision(False, "layer2_llm", "llm_out:x", category="harmful; drop table"),  # not in the enum
+              sr.ScopeDecision(False, "layer1", "deny:harmful", category="harmful")):  # layer 1 keeps class=deny:*
+        lines = _basis_lines(caplog, d)
+        assert len(lines) == 1 and "refusal=" not in lines[0], d
+    assert _basis_lines(caplog, sr.ScopeDecision(False, "layer2_llm", "llm_out:x", category="off_topic")) == [
+        "scope basis=off_topic layer=layer2_llm class=llm_out"]
+    nul = _basis_lines(caplog, sr.ScopeDecision(False, "layer2_llm", "classifier_malformed"))[0]
+    tok = _basis_lines(caplog, sr.ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token",
+                                                category="harmful"))[0]
+    assert nul != tok and "refusal=harmful" in tok and "refusal=" not in nul
+
+
+def test_v5_route_and_answer_log_the_refusal(stubs, monkeypatch, caplog):
+    import logging
+    monkeypatch.setattr(sr, "default_chat", chat_returning(json.dumps(
+        {"in_scope": False, "category": "advice", "reason": "MODEL WORDS"})))
+    with caplog.at_level(logging.INFO, logger="vera"):
+        r, _ = run()
+    lines = [x.getMessage() for x in caplog.records if x.getMessage().startswith("scope basis=")]
+    assert r.result_kind == "decline" and lines == ["scope basis=none layer=layer2_llm class=llm_out refusal=advice"]

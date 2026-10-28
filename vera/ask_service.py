@@ -414,6 +414,9 @@ def _research_eligible(decision, question: str, acq) -> bool:
 _COVERAGE_LABELS = ("in_scope", "off_topic")
 
 
+_REFUSAL_VERDICTS = ("classifier_malformed:refusal_token", "classifier_malformed:category_conflict")
+
+
 def _log_basis(decision) -> None:
     """PATHA-1028 CT-4: log the routing basis as class tokens only (feeds B-SCOPE-2 counts). Never raises."""
     try:
@@ -421,7 +424,15 @@ def _log_basis(decision) -> None:
         basis = cat if getattr(decision, "layer", "") == "layer2_llm" and cat in _COVERAGE_LABELS else "none"
         reason = str(getattr(decision, "reason", ""))
         cls = reason.split(":", 1)[0] if reason.startswith(("llm_in:", "llm_out:")) else reason[:48]
-        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s", basis, getattr(decision, "layer", ""), cls)
+        # REFUSE-FIX-1028 V5 (OD-1028(22)): a layer-2 refusal (a clean refusal-category verdict, or a refusal_token /
+        # category_conflict verdict) adds refusal=<category>, taken from the closed REFUSE_CATEGORIES enum (the
+        # constant itself, never raw or model text). A nullified verdict (no usable category) never carries it.
+        ref = _REFUSAL_LOG_TOKENS.get(cat) if getattr(decision, "layer", "") == "layer2_llm" and isinstance(cat, str) \
+            else None
+        if ref and not (reason.startswith("llm_out:") or reason in _REFUSAL_VERDICTS):
+            ref = None
+        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s%s", basis, getattr(decision, "layer", ""), cls,
+                                       f" refusal={ref}" if ref else "")
     except Exception:  # noqa: BLE001
         pass
 
@@ -480,6 +491,7 @@ try:  # SCOPE-1022: one closed set of refusal categories (scope_router.REFUSE_CA
     from vera.scope_router import REFUSE_CATEGORIES as _NO_LIST_CATEGORIES
 except Exception:  # noqa: BLE001
     _NO_LIST_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})
+_REFUSAL_LOG_TOKENS = {c: c for c in sorted(_NO_LIST_CATEGORIES)}  # REFUSE-FIX-1028 V5: closed enum -> log token
 
 
 def _offtopic_reading_list(decision, grounding):
