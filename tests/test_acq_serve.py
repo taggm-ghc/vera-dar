@@ -257,10 +257,19 @@ def test_d1_probe_and_rebuild_never_run_on_the_request_thread(h, monkeypatch):
     _db_env(monkeypatch, plans, [])
     seen = []
     real = fulldoc_db.acquired_signature
-    monkeypatch.setattr(fulldoc_db, "acquired_signature",
-                        lambda *a, **k: seen.append(threading.current_thread().name) or real(*a, **k))
+    gate = threading.Event()  # FLAKE-D1-1028: hold the background probe until the first call has returned; without it
+    # the stubbed probe can finish before the request thread reads the cache under load (a legitimate fresher result)
+
+    def probe(*a, **k):
+        seen.append(threading.current_thread().name)
+        assert gate.wait(30)
+        return real(*a, **k)
+    monkeypatch.setattr(fulldoc_db, "acquired_signature", probe)
     cfg = fulldoc_corpus.load_config()
-    assert fulldoc_corpus.get_acquired_corpus(cfg) is None  # first call: returns at once, probe started elsewhere
+    try:
+        assert fulldoc_corpus.get_acquired_corpus(cfg) is None  # first call: returns at once, probe started elsewhere
+    finally:
+        gate.set()
     for t in threading.enumerate():
         if t.name == "vera-autoacq-serve":
             t.join(30)
