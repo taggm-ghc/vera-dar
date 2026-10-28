@@ -50,19 +50,26 @@ def test_ambiguous_or_lookalike_reply_is_malformed(reply):
     assert sr.parse_category(reply) == ""
 
 
+def _decline_gate(d, question, cfg):
+    """7da574a decline-override gates, exactly as ask_service.py applies them before researching a declined question."""
+    from vera import acq_config
+    return (acq_config.trigger_for_decline(cfg, d.layer, d.reason) and ask_service._layer1_clean(question)
+            and acq_config.layer2_category_ok(cfg, d))
+
+
 def test_duplicate_key_reply_is_not_research_eligible(rig):  # T1 end to end
     reply = '{"in_scope":false,"category":"harmful","category":"off_topic"}'
     _real_router(rig, {})
     rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (reply, 10, 2))
     d = sr.route(LIVE_Q, "m")
-    assert d.reason == "classifier_malformed" and not ask_service._research_eligible(d, LIVE_Q, rig.cfg)
+    assert d.reason == "classifier_malformed" and not _decline_gate(d, LIVE_Q, rig.cfg)
 
 
 def test_off_topic_control_stays_research_eligible(rig):  # T11 end to end: proves the T1 test is not vacuous
     _real_router(rig, {"in_scope": False, "category": "off_topic", "reason": "cooking, not harmful advice"})
     d = sr.route(LIVE_Q, "m")
     assert d.reason == "llm_out:cooking, not harmful advice" and d.category == "off_topic"
-    assert ask_service._research_eligible(d, LIVE_Q, rig.cfg)
+    assert _decline_gate(d, LIVE_Q, rig.cfg)
 
 
 # ------------------------------------------------------------------------------------------------ refusal token anywhere
