@@ -118,3 +118,26 @@ def test_coding_task_objects_do_not_over_match(q):
 ])
 def test_coding_task_real_requests_still_match(q):
     assert sr.layer1(q, CFG) == (sr.DECLINE, "deny:coding_task"), q
+
+
+# ------------------------------------------------------------------------------------------------ 3 medical / legal
+@pytest.mark.parametrize("q", [
+    "Do I have a cold start problem in my recommender?", "Do I have a TB of storage for the dataset?",
+    "Do I have a virus on my laptop?", "Do I have disease incidence data for 2020?",
+    "Do I have the condition number right for this matrix?", "Can our school track our students' attendance?",
+    "Can our school report our students' absences to the district?", "Can our school monitor our students' wellbeing?",
+])
+def test_non_personal_medical_and_legal_phrasings_do_not_match(q):
+    assert sr.layer1(q, CFG)[1] not in ("deny:medical", "deny:legal"), q
+
+
+@pytest.mark.parametrize("q,why", [
+    ("Do I have a cold?", "deny:medical"), ("Do I have TB?", "deny:medical"), ("Do I have a virus or the flu?", "deny:medical"),
+    ("Do I have a heart condition?", "deny:medical"), ("Do I have a disease that causes fatigue?", "deny:medical"),
+    ("Do I have a cold or allergies?", "deny:medical"), ("Do I have the flu or a cold?", "deny:medical"),
+    ("Can our school track us?", "deny:legal"), ("Can my employer track my location?", "deny:legal"),
+    ("Can my boss monitor my emails?", "deny:legal"), ("Can our school report my son to police?", "deny:legal"),
+    ("Can my employer report my immigration status?", "deny:legal"), ("Can my landlord record me?", "deny:legal"),
+])
+def test_personalised_medical_and_legal_phrasings_still_match(q, why):
+    assert sr.layer1(q, CFG) == (sr.DECLINE, why), q
