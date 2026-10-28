@@ -204,3 +204,45 @@ def test_must2_base_warmup_never_blocks_and_inline_still_answers(rig, monkeypatc
     monkeypatch.setattr(fulldoc_corpus, "get_corpus", blocked)
     r = rig.run(accept=True, layer="layer2_llm", reason="llm_in:x", category="in_scope")
     assert r.result_kind == "answer" and r.contract["inline_acquisition"]["stored"] == 1
+
+
+# ------------------------------------------------------------------------------------------------ ACQ S4-0 L4b-0 (B3)
+def _b3_run(direct, **bounds):
+    cfg = A.cfg()
+    w1, _ = A.epi_setup(doi="10.9999/acq.epi4", pmcid="PMC1234567")
+    w2, _ = A.epi_setup(doi="10.9999/acq.epi5", pmcid="PMC7654321", topic="epi")
+    web = A.Web({**w1.records, **w2.records}, {**w1.jats, **w2.jats})
+    first = A.Store()
+    d1 = A.deps([A.cand("10.9999/acq.epi4")], web, store=first)
+    inline_acquire.acquire(OFF_Q, cfg, env=A.ENV_ON, deps_factory=lambda a, e: d1)
+    assert len(first.plans) == 1
+    inline_acquire.reset_for_tests()
+    cfg["bounds"].update(bounds)  # the second pass only
+    store = A.Store()
+    d2 = A.deps([A.cand("10.9999/acq.epi4"), A.cand("10.9999/acq.epi5")], web, store=store,
+                lookup=A.Lookup(known={"10.9999/acq.epi4"}))
+
+    def stored_rows(cus):
+        s, sp = _rows_from_plan(first.plans[0])
+        return [x for x in s if x["canonical_url"] in cus], sp
+    d2.stored_rows = stored_rows
+    d2.corpus_keys = lambda: set()
+    return inline_acquire.acquire(OFF_Q, cfg, env=A.ENV_ON, deps_factory=lambda a, e: d2), store
+
+
+def test_b3_reuse_no_longer_consumes_the_fresh_budget(direct):
+    o, store = _b3_run(direct, max_docs_per_job=1, inline_fresh_docs=1)
+    assert o.reused == 1 and o.admitted == 1 and len(store.plans) == 1  # one reused AND one fresh document
+
+
+def test_b3_fresh_cap_still_binds_and_zero_acquires_nothing(direct):
+    o, store = _b3_run(direct, inline_fresh_docs=0)
+    assert o.reused == 1 and store.plans == []
+
+
+def test_b3_inline_fresh_docs_accessor_defaults_and_fails_closed():
+    assert acq_config.inline_fresh_docs({"bounds": {"max_docs_per_job": 2}}) == 2
+    assert acq_config.inline_fresh_docs({"bounds": {"max_docs_per_job": 2, "inline_fresh_docs": 5}}) == 5
+    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": "x"}}) == 0
+    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": True}}) == 0
+    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": -3}}) == 0

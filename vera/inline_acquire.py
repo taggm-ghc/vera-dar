@@ -310,8 +310,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None) -
                     e["outcome"] = "already_stored"
         ranked = ranked_left
         ms["reuse"] = int((clock() - t) * 1000)
-        job_max = int(acq_config.bound(acq, "max_docs_per_job"))
-        fresh_budget = max(0, min(budget, job_max - len(reused[0])))
+        # ACQ S4-0 L4b-0 (B3): the fresh budget is separate from reuse; documents answered from stored rows no longer
+        # reduce it. Same cap value as before (bounds.inline_fresh_docs, default max_docs_per_job), still bounded by the
+        # remaining daily budget.
+        fresh_budget = max(0, min(budget, acq_config.inline_fresh_docs(acq)))
         t = clock()
         per: dict | None = {} if disc is not None else None
         plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,

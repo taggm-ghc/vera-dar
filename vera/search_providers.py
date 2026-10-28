@@ -294,13 +294,40 @@ def openalex_default_transport(url: str, params: dict, headers: dict, timeout: f
     return rate_limit.limited("openalex", requests.get)(url, params=params, headers=headers, timeout=timeout)
 
 
+def openalex_key_env_name(settings: Mapping | None = None) -> str:
+    """D4: ONE source of truth for the env var NAME: config/auto_acquire.json keys.openalex_api_key_env; fallback
+    search.openalex.api_key_env (settings api_key_env); fallback OPENALEX_API_KEY. A name must be [A-Z][A-Z0-9_]*."""
+    cand = []
+    try:
+        from vera import acq_config
+        cand.append(((acq_config.load_config() or {}).get("keys") or {}).get("openalex_api_key_env"))
+    except Exception:  # noqa: BLE001
+        pass
+    cand.append((settings or {}).get("api_key_env"))
+    for c in cand:
+        if isinstance(c, str) and re.fullmatch(r"[A-Z][A-Z0-9_]*", c.strip()):
+            return c.strip()
+    return "OPENALEX_API_KEY"
+
+
 def openalex_api_key(settings: Mapping | None = None, env: Mapping | None = None) -> str | None:
-    """YIELD-1021: OPTIONAL OpenAlex API key from the env var named by settings api_key_env (default OPENALEX_API_KEY).
+    """YIELD-1021: OPTIONAL OpenAlex API key from the env var named by openalex_key_env_name().
     Absent or blank = the keyless free tier, unchanged. The value is never logged or stored."""
     import os
-    name = str((settings or {}).get("api_key_env") or "OPENALEX_API_KEY")
+    name = openalex_key_env_name(settings)
     v = str((os.environ if env is None else env).get(name) or "").strip()
     return v if re.fullmatch(r"[A-Za-z0-9_\-]{8,200}", v) else None
+
+
+def _scrub_resp_url(resp, key: str) -> None:
+    """ACQ-1027 K3: a response's .url may carry the key; overwrite it with the scrubbed form when settable."""
+    from vera import acq_urls
+    u = getattr(resp, "url", None)
+    if isinstance(u, str):
+        try:
+            resp.url = acq_urls.scrub(u, [key])
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def reconstruct_abstract(inverted: Mapping | None, max_chars: int) -> str:
@@ -411,10 +438,14 @@ class OpenAlexProvider:
         key = openalex_api_key(self.s)
         if not key:
             return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
+        from vera import acq_urls
         try:  # YIELD-1021: OPTIONAL key (env only); never logged: any error text is redacted before it propagates
-            return tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+            with acq_urls.quiet_urllib3([key]):  # ACQ-1027 K3: no DEBUG log of the raw keyed URL
+                resp = tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+            _scrub_resp_url(resp, key)
+            return resp
         except Exception as e:  # noqa: BLE001
-            msg = str(e).replace(key, "[redacted]")
+            msg = acq_urls.redact_text(str(e), [key])
             try:
                 err = type(e)(msg)
             except Exception:  # noqa: BLE001

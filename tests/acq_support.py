@@ -134,7 +134,8 @@ class FakeConn:
         return self
 
     def execute(self, sql, params):
-        assert sql in (fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_SPANS), "unexpected SQL"
+        assert sql in (fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_SPANS,
+                       fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_SOURCES_BY_ID), "unexpected SQL"
         self.log.append(sql)
         mk = [s for s in self.sources if json.loads(s["provenance"]).get("acquisition", {}).get("marker")
               == params.get("marker", None)] if "marker" in params else None
@@ -143,6 +144,13 @@ class FakeConn:
         elif sql == fulldoc_db.SQL_ACQ_SOURCES:
             self._rows = [(s["run_id"], s["source_id"], s["canonical_url"], s["content"], s["content_hash"],
                            s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])][: params["lim"]]
+        elif sql == fulldoc_db.SQL_ACQ_INDEX:  # L9 light index: source_id, run_id, provenance only
+            self._rows = [(s["source_id"], s["run_id"], s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])
+                          ][: params["scan"]]
+        elif sql == fulldoc_db.SQL_ACQ_SOURCES_BY_ID:
+            want = set(params["sids"])
+            self._rows = [(s["run_id"], s["source_id"], s["canonical_url"], s["content"], s["content_hash"],
+                           s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"]) if s["source_id"] in want]
         else:
             ids = set(params["ids"])
             self._rows = [(x["source_id"], x["start_index"], x["end_index"], x["text"]) for x in self.spans

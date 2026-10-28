@@ -27,7 +27,30 @@ def load_config(path: Path = CONFIG_PATH) -> dict | None:
         cfg = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return cfg if isinstance(cfg, dict) else None
+    if not isinstance(cfg, dict) or refuse_key_like_values(cfg):
+        return None  # ACQ S4-0 L1/L4c: a tracked config holding a key-like value is refused (feature OFF)
+    return cfg
+
+
+def refuse_key_like_values(cfg, _depth: int = 0) -> list:
+    """Paths (never values) of string values in `cfg` that look like a secret (vera.acq_urls.key_like_value). Keys
+    belong in the process environment; the tracked config holds env var NAMES only. Empty list = clean."""
+    from vera import acq_urls
+    out: list = []
+
+    def walk(node, path):
+        if len(path) > 12:
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, path + [str(k)])
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, path + [str(i)])
+        elif isinstance(node, str) and acq_urls.key_like_value(node, ".".join(path)):
+            out.append(".".join(path))
+    walk(cfg, [])
+    return out
 
 
 def _true_like(v) -> bool:
@@ -65,6 +88,20 @@ def bound(cfg: dict, key: str, default=None):
     if v is None:
         raise KeyError(f"auto_acquire bound {key!r} missing")
     return v
+
+
+def inline_fresh_docs(cfg: dict) -> int:
+    """ACQ S4-0 L4b-0 (B3): fresh-document budget of one inline pass, separate from the reuse budget. Key
+    bounds.inline_fresh_docs; absent = max_docs_per_job (the current cap). Anything not a non-negative int fails
+    closed to 0 (a malformed cap acquires nothing)."""
+    b = (cfg or {}).get("bounds") or {}
+    v = b.get("inline_fresh_docs", b.get("max_docs_per_job"))
+    if v is None:
+        raise KeyError("auto_acquire bound 'max_docs_per_job' missing")
+    try:
+        return max(0, int(v)) if not isinstance(v, bool) else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def docs_per_day_cap(cfg: dict):

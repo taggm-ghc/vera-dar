@@ -193,7 +193,8 @@ def test_acquired_corpus_refresh_uses_only_the_readonly_selects(h, monkeypatch):
     fulldoc_corpus.refresh_acquired(cfg, sync=True)
     c = fulldoc_corpus.get_acquired_corpus(cfg, now=lambda: 0.0)
     assert c is not None and c.status == "ok" and len(c.acquired) == 1
-    assert set(log) == {fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_SPANS}
+    assert set(log) == {fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_SOURCES_BY_ID,
+                        fulldoc_db.SQL_SPANS}  # L9: per-topic path (served_per_topic_max set)
     n = len(log)
     fulldoc_corpus.get_acquired_corpus(cfg, now=lambda: 1.0)  # inside refresh_ttl_s: no probe
     assert len(log) == n
