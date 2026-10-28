@@ -58,6 +58,7 @@ class RouterConfig:
     dev_terms: tuple[re.Pattern, ...]
     tool_names: tuple[re.Pattern, ...]
     layer2: dict
+    mode_claims: tuple[re.Pattern, ...] = ()  # SEC-V3-1028 / owner 2026-10-28: nullified, not refused
 
 
 def _compile(patterns: list[str], where: str) -> tuple[re.Pattern, ...]:
@@ -92,6 +93,7 @@ def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
             dev_terms=_compile(l1["dev_terms"], "dev_terms"),
             tool_names=_compile(l1["tool_names"], "tool_names"),
             layer2=raw["layer2"],
+            mode_claims=_compile(l1.get("mode_claim_patterns", []), "mode_claim_patterns"),
         )
     except KeyError as exc:
         raise ScopeConfigError(f"scope_router.json: missing key {exc}") from exc
@@ -106,8 +108,47 @@ def load_config(path: str = str(CONFIG_PATH)) -> RouterConfig:
     return parse_config(raw)
 
 
+def strip_format_chars(text: str) -> str:
+    """SEC-V3-1028: drop Unicode format characters (category Cf: soft hyphen U+00AD, zero-width space U+200B, ...),
+    which would otherwise split a word so no layer-1 pattern sees it."""
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+
+
 def normalise(question: str) -> str:
-    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", question or "")).strip().lower()
+    return re.sub(r"\s+", " ", strip_format_chars(unicodedata.normalize("NFKC", question or ""))).strip().lower()
+
+
+MODE_CLAIM_TOKEN = "injection:mode_claim_nullified"  # the only thing logged about a nullified mode claim
+
+
+def _strip_mode_claims(text: str, cfg: RouterConfig) -> tuple[str, int]:
+    n = 0
+    for pat in cfg.mode_claims:
+        text, k = pat.subn(" ", text)
+        n += k
+    return text, n
+
+
+def _meaningful(text: str) -> bool:
+    return bool(re.search(r"[^\W_]", text or ""))
+
+
+def nullify_mode_claims(question: str, cfg: RouterConfig | None = None) -> tuple[str, int]:
+    """SEC-V3-1028 + owner directive 2026-10-28 ("* [mode|etc.] enabled|activated|toggled|etc." pattern should be
+    nullified): a mode-switch claim grants nothing and is never obeyed. Returns (question with every mode-claim clause
+    removed, number removed). With no claim the question is returned unchanged; otherwise the text is NFKC-normalised,
+    format characters (Cf) are dropped and whitespace is collapsed. The caller routes the rest through every normal
+    check; an empty rest is declined by layer1 (deny:mode_claim). Never raises (on error: the question unchanged)."""
+    try:
+        cfg = cfg or load_config()
+        q = question or ""
+        t = strip_format_chars(unicodedata.normalize("NFKC", q))
+        out, n = _strip_mode_claims(t, cfg)
+        if not n:
+            return q, 0
+        return re.sub(r"^[\s.!?;:,]+", "", re.sub(r"\s+", " ", out)).strip(), n
+    except Exception:  # noqa: BLE001
+        return question, 0
 
 
 _LETTER_RUN_RE = re.compile(r"(?<![^\W\d_])[^\W\d_](?: +[^\W\d_])+(?![^\W\d_])")
@@ -139,9 +180,17 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
         return DECLINE, "empty"
     # SCOPE2-1022: also match a letter-spaced-collapsed view (matching only; the question itself is never altered)
     views = [q]
-    qc = normalise(collapse_letter_spaced(question))
+    qc = normalise(collapse_letter_spaced(strip_format_chars(question or "")))
     if qc != q:
         views.append(qc)
+    # SEC-V3-1028 / owner 2026-10-28: mode-switch claims are nullified (stripped) on every view, never obeyed; the
+    # rest is checked below as usual. Nothing meaningful left -> the neutral decline.
+    stripped = [_strip_mode_claims(v, cfg) for v in views]
+    if any(n for _v, n in stripped):
+        views = [re.sub(r"\s+", " ", v).strip() for v, _n in stripped]
+        if not _meaningful(views[0]):
+            return DECLINE, "deny:mode_claim"
+        q = views[0]
     # REFUSE-FIX-1028 V1: injection is checked on every view before any deny category, and each category on every
     # view before the next one, so a softer reason (coding_task, which now gets a reading list) can never mask an
     # injection or harmful hit that only the letter-spaced view shows. Every outcome here is still DECLINE.
@@ -163,7 +212,7 @@ _VERDICT_TOKENS_RE = re.compile(r"\b(categor(y|ies)|in[\s_-]*scope|off[\s_-]*top
 
 def has_marker(question: str) -> bool:
     """DAR-1021 SEC H1: the question contains the classifier's own data markers (an attempt to close the data block)."""
-    return bool(_MARKER_RE.search(unicodedata.normalize("NFKC", str(question or ""))))
+    return bool(_MARKER_RE.search(strip_format_chars(unicodedata.normalize("NFKC", str(question or "")))))
 
 
 def _neutralise_for_classifier(q: str) -> str:
@@ -306,6 +355,7 @@ def parse_verdict(content: str) -> tuple[bool | None, str]:
 def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = None,
           chat: ChatFn | None = None) -> ScopeDecision:
     cfg = cfg or load_config()
+    question = nullify_mode_claims(question, cfg)[0]  # SEC-V3-1028: the classifier never sees a mode claim either
     verdict, reason = layer1(question, cfg)
     if verdict == DECLINE and reason == UNSUPPORTED_L1_REASON and has_marker(question):
         # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)

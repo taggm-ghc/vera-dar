@@ -167,7 +167,12 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     harness's baseline shape)."""
     from vera.scope_router import decline_text, route
 
-    from vera.scope_router import default_chat
+    from vera.scope_router import default_chat, nullify_mode_claims
+
+    question, _claims = nullify_mode_claims(question)  # SEC-V3-1028 / owner 2026-10-28: a mode-switch claim is
+    if _claims:  # stripped (never obeyed) and the rest is routed, answered and searched as usual; token-only log
+        from vera.scope_router import MODE_CLAIM_TOKEN
+        logging.getLogger("vera").info("scope %s", MODE_CLAIM_TOKEN)
 
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
