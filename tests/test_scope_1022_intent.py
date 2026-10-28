@@ -193,7 +193,9 @@ def test_injection_patterns_pinned_and_coding_task_kept():
     # noun r"\bsystem prompt\b" was replaced by a pattern aimed at VERA itself.
     # SEC-V3-1028: 9 -> 14: six reviewer-probed targeted patterns added; the reverse-order "enable ... mode" pattern
     # removed because mode-switch claims are now nullified, not refused (owner directive 2026-10-28; mode_claim_patterns).
-    assert len(raw["injection_patterns"]) == 14 and r"\bsystem prompt\b" not in raw["injection_patterns"]
+    # REL-FIX3-1028 CALIB-DELTA-1028 V277: 14 -> 15: the clause-led "reveal ... private/secret/... API credentials"
+    # pattern appended (tests/test_rel_fix3_1028.py); nothing removed.
+    assert len(raw["injection_patterns"]) == 15 and r"\bsystem prompt\b" not in raw["injection_patterns"]
     assert len(raw["mode_claim_patterns"]) == 2
     assert {r"\byou are now\b", r"\bpretend (to be|you are)\b"} <= set(raw["injection_patterns"])
     assert set(raw["deny_categories"]) == {"medical", "legal", "financial", "harmful", "coding_task"}
