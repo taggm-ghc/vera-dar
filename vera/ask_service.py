@@ -170,6 +170,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     from vera.scope_router import default_chat, nullify_mode_claims
 
     original = question  # REL-FIX3-1028 D1: injection and markers are judged on the un-stripped text (route, below)
+    from vera.scope_router import strip_instructions
+    question, _removed = strip_instructions(question)  # INJ-SEP-1028 (owner 2026-10-28, OD-1028(21) c3): a reliably
+    if _removed:  # separated injection sentence is discarded; the rest goes through every gate. Category-only log
+        from vera.scope_router import INSTRUCTION_REMOVED_TOKEN
+        logging.getLogger("vera").info("scope %s", INSTRUCTION_REMOVED_TOKEN)
     question, _claims = nullify_mode_claims(question)  # SEC-V3-1028 / owner 2026-10-28: a mode-switch claim is
     if _claims:  # stripped (never obeyed) and the rest is routed, answered and searched as usual; token-only log
         from vera.scope_router import MODE_CLAIM_TOKEN

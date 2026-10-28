@@ -202,15 +202,125 @@ def injection_unstripped(question: str, cfg: RouterConfig | None = None) -> bool
         return True
 
 
+# INJ-SEP-1028 (owner decision 2026-10-28 on OD-1028(21) clarification 3): reject the unauthorized instruction, not
+# automatically the research question. Conservative: only WHOLE sentences that match an injection pattern are removed
+# (like the mode-claim stripper); the rest is kept only when it is a well-formed standalone question, contains no
+# injection on any view and no data marker, and it then goes through every normal gate (layer 1 on the rest AND the
+# original deny categories, layer 2, catstep, evidence). A quoted span is masked (untrusted data, never obeyed) only
+# inside a third-person question about it. Anything else: the whole input is declined as before (deny:injection).
+INSTRUCTION_REMOVED_TOKEN = "injection:instruction_removed"  # the only thing logged about a removed instruction
+_QUOTE_RE = re.compile("\"[^\"\\n]{1,300}\"|\u201c[^\u201d\\n]{1,300}\u201d|\u2018[^\u2019\\n]{1,300}\u2019"
+                       "|(?<![^\\W_])'[^'\\n]{1,300}'(?![^\\W_])")
+_PH_RE = re.compile("\ue000(\\d+)\ue001")
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
+_INTERROG_RE = re.compile(r"^(what|why|how|which|who|whom|whose|when|where|is|are|was|were|does|do|did|has|have|had"
+                          r"|can|could|should|would|will|may|might)\b")
+_RESEARCH_VERB_RE = re.compile(r"^(explain|describe|summari[sz]e|compare|define|outline|discuss|review)\b")
+_META_START_RE = re.compile(r"^(what|why|how|which|who|where|when|is|are|was|were|does|do|did|has|have)\b")
+_CONNECTIVE_RE = re.compile(r"^(then|and|also|now|instead|so|but|next|finally|afterwards|after that|otherwise|plus|or"
+                            r"|additionally|furthermore|moreover|meanwhile|first|second|lastly)\b")
+_SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|u|ur|vera(-dar)?)\b")
+
+
+def separation_enabled(cfg: RouterConfig) -> bool:
+    """INJ-SEP-1028: config `injection_separation` (default true, the owner's decision); only an explicit false turns
+    it off, which restores the whole-input decline."""
+    return cfg.raw.get("injection_separation", True) is not False
+
+
+def _hits_injection(text: str, cfg: RouterConfig) -> bool:
+    return any(_any(cfg.injection, v) for v in _views(text))
+
+
+def _meta_quote_question(outer: str, cfg: RouterConfig) -> bool:
+    """A third-person interrogative ABOUT the quoted text (what/why/how/does ... ?), not directed at VERA."""
+    o = normalise(outer)
+    return (bool(_META_START_RE.match(o)) and o.endswith("?") and not _SECOND_PERSON_RE.search(o)
+            and not _hits_injection(outer, cfg))
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip()]
+
+
+def _well_formed(sentences: list[str]) -> bool:
+    """The remainder stands alone: 3+ words, no sentence opens with a connective that leans on removed text, and the
+    final sentence is an interrogative ending in '?' or opens with a research verb (explain, describe, ...)."""
+    norm = [normalise(s) for s in sentences]
+    if not norm or len(re.findall(r"[^\W_]+", " ".join(norm))) < 3 or any(_CONNECTIVE_RE.match(s) for s in norm):
+        return False
+    last = norm[-1]
+    return bool((_INTERROG_RE.match(last) and last.endswith("?")) or _RESEARCH_VERB_RE.match(last))
+
+
+def separate_instructions(question: str, cfg: RouterConfig) -> tuple[str, str, int] | None:
+    """INJ-SEP-1028: (rest, rest_for_matching, sentences_removed) or None when separation is unreliable (the caller
+    declines the whole input). rest keeps the user's own words (quoted data intact); rest_for_matching has eligible
+    quoted spans masked and is what layer 1 matches. Never raises (None on error)."""
+    try:
+        if not separation_enabled(cfg) or has_marker(question):
+            return None
+        t = strip_format_chars(unicodedata.normalize("NFKC", question or ""))
+        spans: list[str] = []
+
+        def _ph(m: re.Match) -> str:
+            spans.append(m.group(0))
+            return f"\ue000{len(spans) - 1}\ue001"
+
+        masked = _QUOTE_RE.sub(_ph, t.replace("\ue000", "").replace("\ue001", ""))
+        kept, kept_m, removed, quoted = [], [], 0, 0
+        for s in _sentences(masked):
+            out_s = _PH_RE.sub(lambda m: spans[int(m.group(1))], s)
+            match_s = out_s
+            if _PH_RE.search(s) and _meta_quote_question(_PH_RE.sub(" ", s), cfg):
+                match_s, quoted = _PH_RE.sub(' "x" ', s), quoted + 1  # untrusted data: masked, never matched as orders
+            if _hits_injection(match_s, cfg):
+                removed += 1
+                continue
+            kept.append(out_s)
+            kept_m.append(match_s)
+        if not kept or not (removed or quoted):
+            return None
+        rest, rest_m = " ".join(kept), " ".join(kept_m)
+        if _hits_injection(rest_m, cfg) or has_marker(rest):  # re-check the joined rest on every view
+            return None
+        if not _well_formed(_sentences(nullify_mode_claims(rest_m, cfg)[0])):
+            return None
+        return rest, rest_m, removed
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def strip_instructions(question: str, cfg: RouterConfig | None = None) -> tuple[str, int]:
+    """INJ-SEP-1028: (question with removed injection sentences, number removed). Unchanged (question, 0) when nothing
+    was removed or separation is unreliable (layer 1 then declines the whole input). Never raises."""
+    try:
+        cfg = cfg or load_config()
+        if not _hits_injection(question, cfg):
+            return question, 0
+        sep = separate_instructions(question, cfg)
+        if sep is None or not sep[2]:
+            return question, 0
+        return sep[0], sep[2]
+    except Exception:  # noqa: BLE001
+        return question, 0
+
+
 def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     """Return (ACCEPT|DECLINE|UNSURE, reason). Zero cost, deterministic."""
     q = normalise(question)
     if not q:
         return DECLINE, "empty"
-    views = _views(question)
-    # REL-FIX3-1028 D1: injection is checked on the UN-STRIPPED views first; a hit rejects the whole input
+    views = orig_views = _views(question)
+    separated = False
+    # REL-FIX3-1028 D1: injection is checked on the UN-STRIPPED views first. INJ-SEP-1028: a hit rejects the whole
+    # input unless the instruction separates reliably; the rest is then matched instead (original deny checked below)
     if any(_any(cfg.injection, v) for v in views):
-        return DECLINE, "deny:injection"
+        sep = separate_instructions(question, cfg)
+        if sep is None:
+            return DECLINE, "deny:injection"
+        views, separated = _views(sep[1]), True
+        q = views[0]
     # SEC-V3-1028 / owner 2026-10-28: mode-switch claims are nullified (stripped) on every view, never obeyed; the
     # rest is checked below as usual (injection again included). Nothing meaningful left -> the neutral decline.
     raw_views = views
@@ -229,6 +339,10 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     for name, pats in cfg.deny.items():
         if any(_any(pats, v) for v in deny_views):
             return DECLINE, f"deny:{name}"
+    # INJ-SEP-1028: removing an instruction never clears a deny rule the ORIGINAL matches (e.g. inside the removed
+    # sentence): that input keeps the plain injection decline, never a softer path such as the coding reading list
+    if separated and any(_any(pats, v) for pats in cfg.deny.values() for v in orig_views):
+        return DECLINE, "deny:injection"
     if _any(cfg.tool_names, q):
         return ACCEPT, "tool_name"
     if _any(cfg.ai_terms, q) and _any(cfg.dev_terms, q):
@@ -386,6 +500,7 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
           chat: ChatFn | None = None) -> ScopeDecision:
     cfg = cfg or load_config()
     original = question
+    question = strip_instructions(question, cfg)[0]  # INJ-SEP-1028: nor a removed instruction sentence
     question = nullify_mode_claims(question, cfg)[0]  # SEC-V3-1028: the classifier never sees a mode claim either
     # REL-FIX3-1028 D1: layer 1 runs on the ORIGINAL text (it checks injection before stripping mode claims itself),
     # and the marker check covers the original as well as the stripped text
