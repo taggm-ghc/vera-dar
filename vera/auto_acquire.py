@@ -545,6 +545,8 @@ def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url
             "landing_url": landing_url or cfg["resolve"]["landing_url_template"].format(pmcid=res["pmcid"]),
             "fulltext_url": final_url, "fulltext_format": (cfg.get("fetch") or {}).get("fulltext_format", "jats-xml"),
             "text_file": f"acquired/{did}.xml", "licence": res["licence"], "licence_url": res["licence_url"],
+            "licence_source": LICENCE_SOURCE_EPMC if res.get("pmcid") else LICENCE_SOURCE_JATS,  # PROVFIX-1028 (c)
+            "discovered_via": "europepmc" if res.get("pmcid") else "doi-landing",  # PROVFIX-1028 (f): the route
             "authors": authors, "published_year": year, "fetched_at": now_iso,
             "attribution": None, "verifier_status": icfg["verified_status"], "read_status": "VERBATIM"}
     if not doi:  # PLAN-NONDOI-1022: PMCID identity (doi stays None; the loader waives the DOI only for this kind)
@@ -629,6 +631,11 @@ def licence_elements_decision(elements: list, declared: str, icfg: dict) -> None
     fd = _family(declared)
     if len(fams) > 1 or fd is None or fams != {fd}:
         raise fl.Refused(codes["licence_mismatch"], "licence elements disagree with each other or the declared licence: held")
+
+
+# PROVFIX-1028 (c): provenance labels for where the declared licence of an automatically acquired document came from.
+LICENCE_SOURCE_EPMC = "Europe PMC licence field + JATS licence elements"
+LICENCE_SOURCE_JATS = "JATS licence elements"
 
 
 def build_plan(rec: dict, item: dict, meta: dict, cfg: dict, job: Job, score: float, value: dict, isbn: dict | None,

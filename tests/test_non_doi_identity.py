@@ -55,7 +55,11 @@ def test_ac1_doi_outputs_are_byte_identical_to_the_pre_change_tree():
     # sha256 of nondoi_golden.dumps(doi_outputs()) computed on the PRE-change tree (65af0ac + DAR-TRACE-1022 fix.diff),
     # work/nondoi-1022/golden/base.json; the post-change file (after.json) compared byte-equal with cmp.
     got = hashlib.sha256(nondoi_golden.dumps(nondoi_golden.doi_outputs()).encode("utf-8")).hexdigest()
-    assert got == "0f41c9faf40ec413bd46f518b5b985898bfd3da445d98e616437b193764c6bef"
+    # PROVFIX-1028: the pin moves ONLY for the label additions (discovered_via, item.licence_source, licence.content.source
+    # "Europe PMC licence field + JATS licence elements", licence.content.version, and the manifest_sha256 that hashes the
+    # item). A diff of before/after golden outputs showed no other change and no decision change. Previous pin:
+    # 0f41c9faf40ec413bd46f518b5b985898bfd3da445d98e616437b193764c6bef
+    assert got == "abcfe3010a5e4b19e32fbfc4f2f48948507a9053497f2d3d282440760e20866d"
 
 
 def test_ac1_doi_item_with_an_identifier_keeps_the_doi_identity():

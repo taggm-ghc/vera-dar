@@ -183,6 +183,13 @@ def _cc_family(url_or_id, cfg: dict) -> str | None:
     return "cc-" + re.sub(r"\s+", "-", m.group(1).strip()) + "-" + m.group(2)
 
 
+def licence_version(url_or_id) -> str | None:
+    """PROVFIX-1028 (e): the CC version stated in a licence URL or id ("4.0", "3.0"), else None. Label only."""
+    m = re.search(r"(?:/licen[sc]es/[a-z\-]+/|\bcc[\s\-]+by(?:[\s\-]+(?:nc|sa|nd))*[\s\-]+)(\d\.\d)\b",
+                  str(url_or_id or "").lower())
+    return m.group(1) if m else None
+
+
 def _public_domain_zero(rec: dict) -> bool:
     s = f"{rec.get('id') or ''} {rec.get('url') or ''}".lower()
     return "publicdomain/zero" in s or bool(re.search(r"\bcc0\b", s))
@@ -190,7 +197,13 @@ def _public_domain_zero(rec: dict) -> bool:
 
 def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
     """Returns the licence record for provenance; raises Refused on reject/hold."""
-    lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"), "source": "manifest declared"}}
+    # PROVFIX-1028 (c): the label names where the declared licence really came from. The curated manifest path sets
+    # no item["licence_source"] and keeps "manifest declared"; automatic acquisition names its real sources.
+    lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"),
+                       "source": item.get("licence_source") or "manifest declared"}}
+    ver = licence_version(item.get("licence_url")) or licence_version(item.get("licence"))
+    if ver:  # PROVFIX-1028 (e): additive label field; never read by any decision
+        lic["content"]["version"] = ver
     cand = {"url": item["fulltext_url"], "licence": lic, "stored_text_kind": cfg["stored_text_kind"],
             "gate_a_decision": None, "gate_a_rationale": ""}
     apply_licence_gate([cand])
@@ -219,6 +232,12 @@ def check_licence(item: dict, meta: dict, cfg: dict) -> dict:
         if cfg.get("embedded_licence_unknown_holds") is True and not fam_doc and not _public_domain_zero(emb):
             _refuse(cfg, "licence_hold", f"licence embedded in the document is not a recognised licence: held")
         lic["embedded"] = {"id": emb.get("id"), "url": emb.get("url"), "statement": emb.get("statement"),
+                           "source": "document"}
+    elif isinstance(meta.get("jats_licences"), list) and meta["jats_licences"]:
+        # PROVFIX-1028 (d): the converter's single-element read found no id/url, but the per-element JATS summary
+        # (already decided by licence_elements_decision) holds a licence element: record it (label only, no decision).
+        e0 = meta["jats_licences"][0] or {}
+        lic["embedded"] = {"id": e0.get("type"), "url": e0.get("href") or e0.get("ref"), "statement": e0.get("text"),
                            "source": "document"}
     return {"licence": lic, "licence_decision": d, "licence_rationale": cand["gate_a_rationale"].strip()}
 
@@ -265,6 +284,8 @@ def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | 
         "admitted_by": cfg["admitted_by"], "retrieved_at": now, "document_id": item["document_id"],
         "sections": meta.get("sections") or [], "citations": meta.get("citations") or [],
         "references": meta.get("references") or []}
+    if item.get("discovered_via"):  # PROVFIX-1028 (f): the discovery route (automatic acquisition); curated items omit it
+        provenance["discovered_via"] = str(item["discovered_via"])
     return {"document_id": item["document_id"], "canonical_url": cu, "url": item["landing_url"],
             "title": item["title"], "text": text, "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "provenance": provenance, "published": str(item["published_year"]),
@@ -283,7 +304,7 @@ def licence_observations_for(rec: dict, cfg: dict, run_id, candidate_id=None, no
     content = lic.get("content") or {}
     via = f"{content.get('source')}: {content.get('url')}"
     emb = lic.get("embedded")
-    if emb:
+    if emb and (emb.get("url") or emb.get("id")):
         via += f"; document: {emb.get('url') or emb.get('id')}"
     cand = {"url": p["url"], "doi": p["doi"], "licence_decision": p["licence_decision"],
             "stored_text_kind": cfg["stored_text_kind"], "gate_a_decision": None,

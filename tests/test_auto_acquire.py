@@ -44,7 +44,8 @@ def test_job_stores_open_access_full_text_with_full_provenance_and_g4_chunking()
     assert prov["text_sha256"] == fulldoc_db.hashlib.sha256(text.encode()).hexdigest() == prov["meta"]["text_sha256"]
     assert prov["doi"] == DOI and prov["licence_decision"] == "allow" and prov["verifier_status"] == "AUTO-VERIFIED"
     assert prov["licence"]["content"] == {"id": "cc by", "url": "https://creativecommons.org/licenses/by/",
-                                          "source": "manifest declared"}
+                                          "source": auto_acquire.LICENCE_SOURCE_EPMC}  # PROVFIX-1028 (c): was "manifest declared"
+    assert prov["discovered_via"] == "europepmc"  # PROVFIX-1028 (f)
     assert prov["licence"]["embedded"]["url"].startswith("https://creativecommons.org/licenses/by/")
     assert prov["admitted_by"] == A.cfg()["ingest_overlay"]["admitted_by"] and prov["read_status"] == "VERBATIM"
     assert prov["fulltext_url"].startswith("https://www.ebi.ac.uk/") and prov["raw_sha256"] and prov["fetched_at"]
