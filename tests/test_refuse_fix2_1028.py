@@ -141,3 +141,12 @@ def test_non_personal_medical_and_legal_phrasings_do_not_match(q):
 ])
 def test_personalised_medical_and_legal_phrasings_still_match(q, why):
     assert sr.layer1(q, CFG) == (sr.DECLINE, why), q
+
+
+# ------------------------------------------------------------------------------------------------ 4 deny order
+def test_coding_task_is_the_last_deny_category():
+    # layer1 returns the FIRST deny category that matches; coding_task (a hint that may lead to a reading list) must
+    # come last so it can never mask a medical, legal, financial or harmful hit
+    raw_keys = list(RAW["layer1"]["deny_categories"])
+    assert raw_keys[-1] == "coding_task" and list(CFG.deny)[-1] == "coding_task"
+    assert sr.layer1("Write a python script that is a keylogger", CFG) == (sr.DECLINE, "deny:harmful")
