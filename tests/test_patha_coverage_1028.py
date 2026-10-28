@@ -108,3 +108,42 @@ def test_ct3_safety_refusal_returns_the_neutral_text(h, monkeypatch):
     _decide(monkeypatch, accepted=False, layer="layer1", reason="deny:injection")
     r = _ask(e2e.Q_EPI)
     assert r.result_kind == "decline" and r.answer == "VERA-DAR can't answer this request."
+
+
+# ------------------------------------------------------------------------------------------------ CT-4 label = log tag
+from tests.test_dar_inline_acquire import rig  # noqa: E402,F401  (fixture)
+
+
+@pytest.mark.parametrize("label", ["off_topic", "in_scope"])
+def test_ct4_topic_label_has_no_routing_effect_with_acquisition_on(rig, label):
+    r = rig.run(category=label)  # in_scope=false verdict; acquisition finds and admits a licensed full-text document
+    se = rig.cfg["scope_expansion"]
+    assert r.result_kind == "answer" and r.evidence is not None and r.evidence.admitted
+    assert se["override_answer_prefix"] not in r.answer and not r.contract.get("offtopic")
+    assert r.answer.startswith(se["inline_answer_note"])
+
+
+@pytest.mark.parametrize("label", ["off_topic", "in_scope"])
+def test_ct4_topic_label_has_no_routing_effect_with_acquisition_off(h, monkeypatch, label):
+    _acq_off(h, monkeypatch)
+    _decide(monkeypatch, **{**OFF, "category": label})
+    r = _ask(e2e.Q_EPI)
+    assert r.result_kind == "answer" and r.evidence is not None and r.evidence.admitted
+    assert h.enqueued == [] and h.inline_calls == []
+
+
+def test_ct4_basis_is_logged_as_class_tokens_only(h, monkeypatch, caplog):
+    _acq_off(h, monkeypatch)
+    _decide(monkeypatch, **{**OFF, "reason": "llm_out:SECRET-REASON-TEXT"})
+    with caplog.at_level("INFO", logger="vera"):
+        _ask(e2e.Q_EPI)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("scope basis=")]
+    assert lines == ["scope basis=off_topic layer=layer2_llm class=llm_out"]
+    assert "SECRET-REASON-TEXT" not in caplog.text
+
+
+@pytest.mark.parametrize("cat", ["", "harmful", "programming_task"])
+def test_ct4_only_topic_labels_are_coverage_labels(cat):
+    d = sr.ScopeDecision(**{**OFF, "category": cat})
+    assert not ask_service._offline_coverage_eligible(d, e2e.Q_EPI)
+    assert ask_service._COVERAGE_LABELS == ("in_scope", "off_topic")

@@ -175,6 +175,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
+    _log_basis(decision)  # PATHA-1028 CT-4: the topic label is a log tag only (class tokens, never reason text)
     if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
         decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
@@ -374,7 +375,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
 
 def _research_eligible(decision, question: str, acq) -> bool:
     """DDFIX-1023/SCOPE (owner directive 2026-10-23): curated corpus coverage is not research eligibility. A WELL-FORMED
-    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless) takes
+    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless; PATHA-1028
+    CT-4: either topic label in _COVERAGE_LABELS, the label has no routing effect) takes
     the normal research path: corpus attempt, unrestricted discovery, inline full-text acquisition and the unchanged
     admission, answer writer and claim check (no answer without admitted evidence). Refusal categories (advice, harmful,
     programming_task, rule_change), layer-1 deny/injection hits, data markers, malformed or contradictory verdicts, a
@@ -385,7 +387,7 @@ def _research_eligible(decision, question: str, acq) -> bool:
     try:
         from vera import acq_config
         return (acq is not None and decision.accepted is False and decision.layer == "layer2_llm"
-                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
                 and decision.category not in _NO_LIST_CATEGORIES
                 and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
                 and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
@@ -393,15 +395,33 @@ def _research_eligible(decision, question: str, acq) -> bool:
         return False
 
 
+# PATHA-1028 CT-4 (plan s26.2(1), s26.4 CT-4): the classifier's topic labels. A clean layer-2 verdict carrying either
+# label is routed identically (coverage decides, never the label); the label survives only as a log tag.
+_COVERAGE_LABELS = ("in_scope", "off_topic")
+
+
+def _log_basis(decision) -> None:
+    """PATHA-1028 CT-4: log the routing basis as class tokens only (feeds B-SCOPE-2 counts). Never raises."""
+    try:
+        cat = getattr(decision, "category", "")
+        basis = cat if getattr(decision, "layer", "") == "layer2_llm" and cat in _COVERAGE_LABELS else "none"
+        reason = str(getattr(decision, "reason", ""))
+        cls = reason.split(":", 1)[0] if reason.startswith(("llm_in:", "llm_out:")) else reason[:48]
+        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s", basis, getattr(decision, "layer", ""), cls)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _offline_coverage_eligible(decision, question: str) -> bool:
     """PATHA-1028 CT-2 (plan s26.2(6), s26.4 CT-2, owner Q4): with automatic acquisition effectively off, a CLEAN
-    layer-2 verdict (strictly decoded, reason llm_out:, category off_topic, no refusal category, layer 1 clean) is
+    layer-2 verdict (strictly decoded, reason llm_out:, a topic label in _COVERAGE_LABELS (CT-4), no refusal category,
+    layer 1 clean) is
     answered from the existing corpus instead of the topic reading list. Refusal categories, layer-1 deny/injection
     and marker hits, every classifier_malformed* verdict, a missing category and layer2_mode none keep the decline
     path. Fails closed."""
     try:
         return (decision.accepted is False and decision.layer == "layer2_llm"
-                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
                 and decision.category not in _NO_LIST_CATEGORIES and _layer1_clean(question))
     except Exception:  # noqa: BLE001
         return False
