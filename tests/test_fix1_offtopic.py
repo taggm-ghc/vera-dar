@@ -139,12 +139,13 @@ def test_notice_has_no_secrets_or_hosts():
 
 
 def test_disclosure_mentions_offtopic_search_only_when_on(monkeypatch):
-    assert "outside its scope" in disclosure.disclosure_text()
+    # OD-1028(6): wording expectation updated (Path A, no topic restriction); marker is now "reading list of documents it has not read" / "collection VERA-DAR holds".
+    assert "collection VERA-DAR holds" in disclosure.disclosure_text()
     from vera import sources_sidebar as sb
-    assert "outside its scope" in sb.how_answers_text()
+    assert "collection VERA-DAR holds" in sb.how_answers_text()
     set_flag(monkeypatch, False)
-    assert "outside its scope" not in disclosure.disclosure_text()
-    assert "outside its scope" not in sb.how_answers_text()
+    assert "collection VERA-DAR holds" not in disclosure.disclosure_text()
+    assert "collection VERA-DAR holds" not in sb.how_answers_text()
 
 
 def test_discovery_panel_shows_notice_above_list():

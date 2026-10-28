@@ -95,17 +95,19 @@ def ask_help_text(fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
     return _HELP_FULLDOC if fulldoc_enabled(fulldoc_path) else _HELP_LIST
 
 
-_OFFTOPIC = (" For a question outside its scope VERA-DAR gives no answer, but it may still search published scholarly "
-             "sources for the question and list documents it has not read.")
+_OFFTOPIC = (" If the collection VERA-DAR holds covers a question, it answers from that collection; if it does not, "
+             "VERA-DAR may search published scholarly sources and give a reading list of documents it has not read, "
+             "which is not evidence for an answer. Some requests are refused for safety reasons.")
 
 
 # DAR-1021 (wording needs owner approval, DISC-E2): used instead of _OFFTOPIC only while automatic acquisition is on
 # AND scope_expansion.override_layer2_declines is true in config/auto_acquire.json.
-_OFFTOPIC_ANSWERING = (" For a question outside its scope VERA-DAR first lists published scholarly documents it has not read "
-                       "and searches for open-access full text on the question in the same request. If documents found "
-                       "this way pass its licence, content and relevance checks, VERA-DAR answers only from those "
-                       "documents, in the same way: brief quoted citations, each cited sentence "
-                       "checked by an AI model, unsupported sentences removed. Such answers may be wrong.")
+_OFFTOPIC_ANSWERING = (" If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full "
+                       "text on the question in the same request. If documents found this way pass its licence, content and "
+                       "relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted "
+                       "citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it "
+                       "gives a reading list of documents it has not read. Such answers may be wrong. Some requests are "
+                       "refused for safety reasons.")
 
 
 def _layer2_answering_on() -> bool:
