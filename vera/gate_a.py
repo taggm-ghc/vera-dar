@@ -13,11 +13,14 @@ Scores are 0-1, higher is better, for three factors:
 composite = 0.4*query_fit + 0.4*evidentiary_value + 0.2*cost_risk
 """
 import json
+import logging
 from vera import strict_json
 from dataclasses import dataclass
 
 from vera.cost_ledger import CostLedger
 from vera.generator_client import cost_usd as _gen_cost, generator_model, make_client
+
+logger = logging.getLogger("vera")
 
 MODEL = generator_model()  # config/vera_eval_run.json generator.model (FREEGEN-1028)
 WEIGHTS = {"query_fit": 0.4, "evidentiary_value": 0.4, "cost_risk": 0.2}
@@ -83,7 +86,7 @@ def _llm_cost(prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
     return _gen_cost(MODEL, prompt_tokens, completion_tokens), True  # unpriced model raises (fail closed)
 
 
-def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int, dict]:
+def _score_batch(question: str, batch: list[dict], llm_call, ledger, safe_cost: bool = False) -> dict[int, dict]:
     listing = [{"id": i, "title": c.get("title", ""), "url": c["url"],
                 "snippet": (c.get("snippet") or "")[:MAX_SNIPPET_CHARS]} for i, c in enumerate(batch)]
     messages = [
@@ -97,7 +100,19 @@ def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int
             ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=0.0, ok=False,
                           detail=f"{type(exc).__name__}: {exc}", units={"batch": len(batch)})
         return {}
-    cost, known = _llm_cost(pt, ct)
+    try:
+        cost, known = _llm_cost(pt, ct)
+    except Exception as exc:  # noqa: BLE001  unpriced model (fail closed)
+        if not safe_cost:  # eval / offline paths: an unpriced cost is an error (FREEGEN-1028)
+            raise
+        # FIXR-7DA-1028 (VER-REL7DA-1-1028 #2): the production /ask admission path never raises here. The batch is
+        # discarded unscored, so every candidate gets a "defer" decision; the class name (never the text) is logged.
+        logger.warning("gate A cost unpriced (%s): batch of %d deferred unscored", type(exc).__name__, len(batch))
+        if ledger:
+            ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=0.0, cost_known=False, ok=False,
+                          detail=type(exc).__name__, units={"prompt_tokens": pt, "completion_tokens": ct,
+                                                            "batch": len(batch)})
+        return {}
     if ledger:
         ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=cost, cost_known=known,
                       units={"prompt_tokens": pt, "completion_tokens": ct, "batch": len(batch)})
@@ -126,18 +141,21 @@ def score_candidates(
     *,
     cfg: GateAConfig | None = None,
     ledger: CostLedger | None = None,
+    safe_cost: bool = False,
 ) -> list[dict]:
     """Return copies of `candidates` plus gate_a_score, gate_a_decision, gate_a_rationale,
     gate_a_factors, ordered by score descending (unscored last). Input order is not trusted.
 
     gate_a_rationale is a human-readable string: per-factor reasons plus the threshold reason.
     max_fetch caps `fetch` decisions; overflow is demoted to `defer` with that stated.
+    safe_cost=True (production /ask admission only): an unpriced cost defers the batch with a logged class-name
+    reason instead of raising; the default (eval paths) raises.
     """
     cfg = cfg or GateAConfig()
     scored: list[dict] = []
     for start in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[start:start + BATCH_SIZE]
-        results = _score_batch(question, batch, llm_call, ledger)
+        results = _score_batch(question, batch, llm_call, ledger, safe_cost)
         for i, cand in enumerate(batch):
             row = dict(cand)
             res = results.get(i)
