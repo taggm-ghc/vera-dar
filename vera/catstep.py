@@ -1,26 +1,31 @@
-"""CATSTEP-1028 (plan s27): unknown-category -> categorise -> similarity -> topic check.
+"""CATSTEP-1028 (plan s27): unknown-category -> categorise -> proximity signal -> topic check.
 
 Owner 2026-10-28: "When the classifier replies "not in scope" but gives no recognised category, VERA should evaluate
 the prompt/query/question/statement to describe it as a category, then check existing topics for any that include
-that category, etc." and "VERA should only ever refuse forbidden/restricted/non-sanctioned topics" and "if a category
-is deemed too semantically similar to such, then those should also be logged refusals".
+that category, etc."; "Layer-2 remains the primary intent classifier. Category similarity may prompt further scrutiny
+but must not independently trigger a refusal based solely on subject vocabulary."; "Calibrate before enabling the new
+refusal behavior."; "category similarity alone never establishes prohibited intent."
 
 Runs ONLY for a well-formed layer-2 in_scope:false reply whose category is missing or not in the closed enum (plan
 s26.1 P10b), after the existing single retry, with a clean raw reply and a clean layer 1. Every other verdict
 (malformed, duplicate-key, non-ASCII, category_conflict, refusal_token, refusal-named, layer-1 hit) never reaches it.
 
 Outcomes: "anchor" / "field" (an existing topic includes the category), "unassigned" (no topic: an in-process topic
-PROPOSAL, divergence DV-CATSTEP-1), "refuse" (similar to a forbidden or restricted category, or the LLM step named a
-refusal category; logged with a closed reason token, divergence DV-CATSTEP-2). Invalid LLM-step output (malformed,
-duplicate or non-ASCII key, chat error) is nullified, not treated as misuse, and falls back to the previous safe
-decline (reason token "nullified:*"). No topic is refused for its subject or for being absent from the registry. Never stores or logs the raw question: only class
-tokens, a qhash, score buckets and keys built from FIXED vocabularies (the topic registry and the refusal anchors).
+PROPOSAL, divergence DV-CATSTEP-1), "refuse" (only when a MODEL names a refusal category: the scrutiny-mode layer-2
+re-check or the optional LLM step), "retrieval_only" (scrutiny re-check unavailable or malformed, or any fault: the
+record-only reading list, no generated answer). Proximity to the refusal categories is a secondary signal: mode
+"shadow" (shipped) only logs it (calibration data, DV-CATSTEP-2); "scrutiny" (built, not enabled) escalates a high
+score to the layer-2 re-check. Invalid LLM-step output is nullified (reason "nullified:*"), never read as misuse. No
+topic is refused for its subject or for being absent from the registry. Never stores or logs the raw question: only
+class tokens, a keyed qhash, score buckets and keys built from FIXED vocabularies (the topic registry and anchors).
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import math
+import os
 import re
 import threading
 import unicodedata
@@ -30,7 +35,8 @@ _LOG = logging.getLogger("vera")
 REASON_OK = "llm_out:catstep"
 # Decision reasons set by ask_service._catstep. Both prefixes never trigger acquisition (acq_config.trigger_for_decline)
 # and never qualify for a reading list or research (those need reason "llm_out:").
-REFUSE_PREFIX = "deny:catstep:"  # a refusal: similar to a forbidden/restricted category, or a refusal category named
+REFUSE_PREFIX = "deny:catstep:"  # a refusal: a refusal category named by the layer-2 re-check or the LLM step
+RETRIEVAL_ONLY_REASON = "llm_out:catstep_retrieval_only"  # category "": the record-only reading list, no answer
 NULLIFIED_PREFIX = "classifier_malformed:catstep:"  # invalid LLM-step output: the previous safe decline
 
 
@@ -48,9 +54,9 @@ _LOCK = threading.Lock()
 
 @dataclass(frozen=True)
 class Outcome:
-    status: str  # "anchor" | "field" | "unassigned" | "refuse" (a refusal, or the safe fallback after invalid output)
+    status: str  # "anchor" | "field" | "unassigned" | "refuse" | "retrieval_only" ("signal" = a log line only)
     key: str = UNASSIGNED
-    reason: str = ""  # closed token for a refusal, e.g. "refuse:similar_to:harmful"
+    reason: str = ""  # closed token, e.g. "refuse:recheck:<category>" or "retrieval_only:<cause>"
     refuse_category: str = ""  # a REFUSE_CATEGORIES value, when the refusal maps to one
     tokens: int = 0
     cost: float = 0.0
@@ -84,9 +90,22 @@ def applies(decision, question: str, cfg=None) -> bool:
         return False
 
 
+_SALT = os.urandom(32)  # SEC-CATSTEP-1028 item 5: per-process key, memory only (same pattern as auto_acquire._qkey)
+
+
 def qhash(question: str) -> str:
+    """Keyed HMAC-SHA256 (16 hex) of the NFKC/casefold/whitespace-collapsed question. The key is a per-process random
+    salt (the codebase holds no persistent server secret for this), so the value cannot be recomputed from a guessed
+    question outside the process and does not correlate across restarts or workers."""
     n = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(question or "")).casefold()).strip()
-    return hashlib.sha256(n.encode("utf-8")).hexdigest()[:16]
+    return hmac.new(_SALT, n.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
+
+
+def fold(text) -> str:
+    """SEC-CATSTEP-1028 item 1: proximity-matching normalisation. NFKC + casefold (as qhash and layer 1), then accents
+    folded (NFKD, combining marks dropped) so full-width and accented spellings of an anchor word still match."""
+    s = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", str(text or "")).casefold())
+    return "".join(c for c in s if not unicodedata.combining(c))
 
 
 def _bucket(score: float) -> str:
@@ -111,14 +130,29 @@ def category_key(question: str, reg) -> str:
 
 
 class _Refuse(Exception):
-    def __init__(self, token, category=""):
+    def __init__(self, token, category="", log=None):
         super().__init__(token)
-        self.token, self.category = token, category
+        self.token, self.category, self.log = token, category, dict(log or {})
+
+
+class _SimUnavailable(Exception):
+    pass
+
+
+SIM_MODES = ("off", "shadow", "scrutiny")
+
+
+def sim_mode(scfg: dict) -> str:
+    """unknown_category_step.similarity.mode: off | shadow | scrutiny. Missing or invalid -> "shadow" (log only)."""
+    m = (scfg.get("similarity") or {}).get("mode") if isinstance(scfg.get("similarity"), dict) else None
+    return m if m in SIM_MODES else "shadow"
 
 
 def similarity(question: str, scfg: dict) -> tuple[str, float, list]:
-    """(forbidden id or "", best score, matched fixed-vocabulary terms). BM25 (micro_topic.Registry) over the refusal
-    anchors in config. Raises _Refuse("refuse:similarity_unavailable") when it cannot be computed (fail closed)."""
+    """(anchor id with score >= threshold or "", best BM25 score, distinct anchor words hit). A SECONDARY SIGNAL only
+    (owner 2026-10-28: "category similarity alone never establishes prohibited intent"): it never refuses. Lexical, not
+    semantic (DV-CATSTEP-4). The question is folded (NFKC, casefold, accents) and registry-vocabulary tokens are dropped.
+    Raises _SimUnavailable when it cannot be computed (bad config, registry unreadable)."""
     from vera import micro_topic
     try:
         sim = scfg["similarity"]
@@ -126,20 +160,52 @@ def similarity(question: str, scfg: dict) -> tuple[str, float, list]:
         anchors = sim["anchors"]
         if not isinstance(anchors, dict) or not anchors or not math.isfinite(thr) or thr <= 0:
             raise ValueError("bad similarity config")
-        reg = micro_topic.Registry({"entries": [{"id": k, "anchor_text": v} for k, v in anchors.items()
+        reg = micro_topic.Registry({"entries": [{"id": k, "anchor_text": fold(v)} for k, v in anchors.items()
                                                 if isinstance(v, str) and v.strip()]})
         if len(reg.entries) != len(anchors):
             raise ValueError("bad anchor text")
-        topic_vocab = set(micro_topic.load_registry(_micro_cfg()).idf)  # a registered topic's words never refuse
-        query = " ".join(t for t in micro_topic.tokens(question) if t not in topic_vocab)
-        best = reg.best(query)
+        topic_vocab = set(micro_topic.load_registry(_micro_cfg()).idf)  # a registered topic's words never count
+        q = [t for t in micro_topic.tokens(fold(question)) if t not in topic_vocab]
+        qset = set(q)
+        best = None
+        for score, e in reg.scores(" ".join(q)):
+            cand = (round(score, 12), -reg.entries.index(e))
+            if best is None or cand > best[0]:
+                best = (cand, e["id"], float(score), sorted(qset & set(micro_topic.tokens(e.get("anchor_text")))))
     except Exception as exc:  # noqa: BLE001
-        raise _Refuse("refuse:similarity_unavailable") from exc
+        raise _SimUnavailable() from exc
     if best is None:
-        raise _Refuse("refuse:similarity_unavailable")
-    score, entry = best
-    terms = sorted(set(micro_topic.tokens(query)) & set(micro_topic.tokens(entry.get("anchor_text"))))[:MAX_KEY_TERMS]
-    return (entry["id"] if score >= thr else ""), float(score), terms
+        raise _SimUnavailable()
+    _c, ident, score, hits = best
+    return (ident if score >= thr else ""), score, hits[:MAX_KEY_TERMS]
+
+
+class _RetrievalOnly(Exception):
+    def __init__(self, token, log=None):
+        super().__init__(token)
+        self.token, self.log = token, dict(log or {})
+
+
+def _recheck(question, cfg, chat, model, pricing) -> tuple[str, int, float, int]:
+    """Scrutiny mode: ONE layer-2 re-check with the unchanged classifier prompt and strict decoder. Returns the refusal
+    category ("" = clean) and spend; raises _RetrievalOnly when the re-check is unavailable, malformed or names a refusal
+    word only in prose (never read as malicious intent)."""
+    from vera import scope_router as sr
+    try:
+        content, pt, ct = (chat or sr.default_chat)(sr.classifier_messages(question, cfg), model, cfg.layer2)
+    except Exception as exc:  # noqa: BLE001
+        raise _RetrievalOnly("retrieval_only:recheck_unavailable") from exc
+    cost = 0.0
+    if pricing is not None:
+        cost = round(pt / 1_000_000 * pricing.input + ct / 1_000_000 * pricing.output, 8)
+    d = sr._layer2_decision(content, pt, ct, cost, 1)
+    if d.category in sr.REFUSE_CATEGORIES:  # a refusal category named (incl. category_conflict / refusal_token)
+        return d.category, pt + ct, cost, 1
+    if d.reason == "classifier_malformed":  # malformed / duplicate or non-ASCII key: invalid output, not misuse
+        raise _RetrievalOnly("retrieval_only:recheck_malformed", {"tokens": pt + ct})
+    if sr._raw_names_refusal(content):
+        raise _RetrievalOnly("retrieval_only:recheck_refusal_word", {"tokens": pt + ct})
+    return "", pt + ct, cost, 1
 
 
 def _llm_field(question, scfg, cfg, chat, model, pricing, fields) -> tuple[str, int, float, int]:
@@ -207,13 +273,16 @@ def _emit(out: Outcome) -> Outcome:
 
 
 def categorise(question: str, cfg=None, chat=None, model: str = "", pricing=None) -> Outcome:
-    """plan s27.2-27.4. Order: anchor match (A4 BM25) -> similarity to every forbidden/restricted category (refuse when
-    too similar or not computable) -> optional LLM field step (ships off) -> topic key or proposal."""
+    """plan s27.2-27.4. Order: anchor match (A4 BM25) -> proximity signal (off | shadow: log only | scrutiny: layer-2
+    re-check on high similarity) -> optional LLM field step (ships off) -> topic key or proposal. Proximity never
+    refuses on its own (owner 2026-10-28)."""
     from vera import micro_topic
     from vera import scope_router as sr
     cfg = cfg or sr.load_config()
     qh = qhash(question)
     reg = None
+    tokens = calls = 0
+    cost = 0.0
     try:
         scfg = step_config(cfg)
         mcfg = _micro_cfg()
@@ -228,26 +297,38 @@ def categorise(question: str, cfg=None, chat=None, model: str = "", pricing=None
         akey = ""
         if b is not None and b[0] >= thr:
             akey = micro_topic.key_id(micro_topic._entry_key("registry", b[1]["id"], round(b[0], 4), reg, b[1].get("field")))
-        # (2) similarity to forbidden / restricted categories (always, also after an anchor match)
-        sim_id, sim_score, sim_terms = similarity(question, scfg)
-        if sim_id:
-            cat = sim_id if sim_id in sr.REFUSE_CATEGORIES else (scfg["similarity"].get("maps_to") or {}).get(sim_id, "")
-            cat = cat if cat in sr.REFUSE_CATEGORIES else "harmful"  # unknown mapping: the strictest category
-            raise _Refuse("refuse:similar_to:" + sim_id, cat)
+        # (2) proximity: a secondary signal, also after an anchor match
+        mode = sim_mode(scfg)
+        sim_b = "none"
+        if mode != "off":
+            try:
+                sim_id, sim_score, sim_terms = similarity(question, scfg)
+                sim_b = _bucket(sim_score)
+                _emit(Outcome("signal", log={"signal": "proximity", "mode": mode, "high": int(bool(sim_id)),
+                                             "id": sim_id or "none", "score": sim_b, "hits": len(sim_terms),
+                                             "key": ckey, "qhash": qh}))
+            except _SimUnavailable:
+                _emit(Outcome("signal", log={"signal": "proximity", "mode": mode, "error": "similarity_unavailable",
+                                             "qhash": qh}))
+                if mode == "scrutiny":
+                    raise _RetrievalOnly("retrieval_only:similarity_unavailable")
+                sim_id = ""
+            if mode == "scrutiny" and sim_id:
+                cat, tokens, cost, calls = _recheck(question, cfg, chat, model, pricing)
+                if cat:
+                    raise _Refuse("refuse:recheck:" + cat, cat, {"id": sim_id, "score": sim_b})
         if akey:
-            return _emit(Outcome("anchor", akey, log={"outcome": "anchor", "topic": akey, "key": ckey,
-                                                      "sim": _bucket(sim_score), "qhash": qh}))
+            return _emit(Outcome("anchor", akey, tokens=tokens, cost=cost, calls=calls,
+                                 log={"outcome": "anchor", "topic": akey, "key": ckey, "sim": sim_b, "qhash": qh}))
         # (3) optional LLM step (ships off: plan s27.2)
-        tokens = calls = 0
-        cost = 0.0
         if scfg.get("llm_step") is True:
             fields = {e.get("field") for e in (reg.entries if reg is not None else ()) if isinstance(e.get("field"), str)}
-            f, tokens, cost, calls = _llm_field(question, scfg, cfg, chat, model, pricing, fields)
+            f, t2, c2, n2 = _llm_field(question, scfg, cfg, chat, model, pricing, fields)
+            tokens, cost, calls = tokens + t2, round(cost + c2, 8), calls + n2
             if f:
                 key = "field:" + f
                 return _emit(Outcome("field", key, tokens=tokens, cost=cost, calls=calls,
-                                     log={"outcome": "field", "topic": key, "key": ckey, "sim": _bucket(sim_score),
-                                          "qhash": qh}))
+                                     log={"outcome": "field", "topic": key, "key": ckey, "sim": sim_b, "qhash": qh}))
         # (4) new category: proposal only
         cap = int(scfg.get("proposal_cap") or 0)
         nearest = b[1]["id"] if b is not None else "none"
@@ -255,14 +336,17 @@ def categorise(question: str, cfg=None, chat=None, model: str = "", pricing=None
         st = _propose(ckey, qh, nearest, bucket, cap) if cap > 0 else "dropped"
         return _emit(Outcome("unassigned", UNASSIGNED, tokens=tokens, cost=cost, calls=calls,
                              log={"outcome": "proposal", "proposal": st, "key": ckey, "nearest": nearest,
-                                  "score": bucket, "sim": _bucket(sim_score), "qhash": qh}))
-    except _Refuse as r:  # "nullified:*" = invalid LLM-step output (owner: invalid output, not misuse) -> safe fallback
-        return _emit(Outcome("refuse", reason=r.token, refuse_category=r.category,
+                                  "score": bucket, "sim": sim_b, "qhash": qh}))
+    except _Refuse as r:  # a refusal category named by a model (re-check or LLM step), or nullified LLM-step output
+        return _emit(Outcome("refuse", reason=r.token, refuse_category=r.category, tokens=tokens, cost=cost, calls=calls,
                              log={"outcome": r.token.split(":", 1)[0], "reason": r.token, "category": r.category or "none",
-                                  "key": _safe_key(question, reg), "qhash": qh, **_sim_log(question, r)}))
-    except Exception:  # noqa: BLE001  fail closed: any fault refuses (never researches)
-        return _emit(Outcome("refuse", reason="refuse:catstep_error", refuse_category="",
-                             log={"outcome": "refuse", "reason": "refuse:catstep_error", "qhash": qh}))
+                                  "key": _safe_key(question, reg), "qhash": qh, **r.log}))
+    except _RetrievalOnly as r:
+        return _emit(Outcome("retrieval_only", reason=r.token, tokens=tokens, cost=cost, calls=calls,
+                             log={"outcome": "retrieval_only", "reason": r.token, "qhash": qh}))
+    except Exception:  # noqa: BLE001  any fault: retrieval only (no answer, never a refusal, never research)
+        return _emit(Outcome("retrieval_only", reason="retrieval_only:catstep_error",
+                             log={"outcome": "retrieval_only", "reason": "retrieval_only:catstep_error", "qhash": qh}))
 
 
 def _safe_key(question, reg) -> str:
@@ -270,15 +354,3 @@ def _safe_key(question, reg) -> str:
         return category_key(question, reg)
     except Exception:  # noqa: BLE001
         return "q:" + qhash(question)
-
-
-def _sim_log(question, r) -> dict:
-    """Score bucket and matched FIXED-vocabulary terms for a similarity refusal (never question text)."""
-    if not r.token.startswith("refuse:similar_to:"):
-        return {}
-    try:
-        from vera import scope_router as sr
-        _id, score, terms = similarity(question, step_config(sr.load_config()))
-        return {"score": _bucket(score), "terms": "-".join(terms) or "none"}
-    except Exception:  # noqa: BLE001
-        return {"score": "bnan"}

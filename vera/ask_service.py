@@ -426,9 +426,10 @@ def _catstep(decision, question: str, model: str, pricing, chat):
     """CATSTEP-1028 (plan s27; owner 2026-10-28): a well-formed in_scope:false verdict with a missing or unrecognised
     category (D-P10b, after the single retry) is categorised instead of declined. An existing topic or no topic both
     become a clean coverage verdict (category off_topic, fixed reason llm_out:catstep, topic_key set), which then takes
-    the unchanged Path A gates (CT-1 / CT-2) exactly as a clean off_topic verdict. Similarity to a forbidden or
-    restricted category refuses (deny:catstep:*); invalid optional-LLM output falls back to the previous safe decline
-    (classifier_malformed:catstep:*). Any other verdict is returned unchanged. A fault returns the decision unchanged
+    the unchanged Path A gates (CT-1 / CT-2) exactly as a clean off_topic verdict. Only a model-named refusal category
+    refuses (deny:catstep:*; proximity alone never does); a retrieval-only outcome keeps category "" so the record-only
+    reading list follows (no answer, no acquisition); invalid optional-LLM output falls back to the previous safe
+    decline (classifier_malformed:catstep:*). Any other verdict is returned unchanged. A fault returns the decision unchanged
     (the previous decline path)."""
     try:
         from vera import catstep
@@ -439,6 +440,8 @@ def _catstep(decision, question: str, model: str, pricing, chat):
                  "llm_calls": decision.llm_calls + out.calls}
         if out.status == "refuse":
             return replace(decision, reason=catstep.decision_reason(out), category=out.refuse_category, **spend)
+        if out.status == "retrieval_only":  # scrutiny re-check unavailable/malformed or a fault: list only, no answer
+            return replace(decision, reason=catstep.RETRIEVAL_ONLY_REASON, category="", **spend)
         return replace(decision, category="off_topic", reason=catstep.REASON_OK, topic_key=out.key, **spend)
     except Exception:  # noqa: BLE001
         return decision
