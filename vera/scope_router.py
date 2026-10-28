@@ -144,6 +144,11 @@ def nullify_mode_claims(question: str, cfg: RouterConfig | None = None) -> tuple
         q = question or ""
         t = strip_format_chars(unicodedata.normalize("NFKC", q))
         out, n = _strip_mode_claims(t, cfg)
+        tc = collapse_letter_spaced(t)  # REL-FIX3-1028 D4: the same views as layer1 (a letter-spaced claim too)
+        if tc != t:
+            out_c, n_c = _strip_mode_claims(tc, cfg)
+            if n_c > n:
+                out, n = out_c, n_c
         if not n:
             return q, 0
         return re.sub(r"^[\s.!?;:,]+", "", re.sub(r"\s+", " ", out)).strip(), n
@@ -210,7 +215,7 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     stripped = [_strip_mode_claims(v, cfg) for v in views]
     if any(n for _v, n in stripped):
         views = [re.sub(r"\s+", " ", v).strip() for v, _n in stripped]
-        if not _meaningful(views[0]):
+        if not all(_meaningful(v) for v in views):  # REL-FIX3-1028 D4: any view that is only a claim
             return DECLINE, "deny:mode_claim"
         q = views[0]
     # REFUSE-FIX-1028 V1: injection is checked on every view before any deny category, and each category on every
