@@ -26,7 +26,7 @@ ACTUAL = {
     # _raw_names_refusal (346-352) skips the Q2 retry (326): one call, fixed decline, not a refusal category
     "P001": (1, "classifier_malformed", "", False),
     "P002": (2, "classifier_malformed", "", False),   # bad JSON: nullified (336-340), retried once (317-326), still malformed
-    "P003": (2, "llm_out:", "", False),               # unknown enum: parse_category "" (287-292) -> nullified, retry, then catstep path
+    "P003": (2, "classifier_malformed", "", False),   # OOE-A-PRESTAGE-1028: out-of-enum label -> invalid output, retry, safe decline (was catstep)
     "P004": (2, "llm_out:Unfamiliar area", "", False),  # absent category: same
     "P005": (1, "llm_out:", "harmful", False),        # in_scope=false + refusal category: not nullified; REFUSE_CATEGORIES
     "P006": (2, "classifier_malformed", "", False),   # prose: not JSON -> malformed, retried once
@@ -54,14 +54,14 @@ def test_fixture_actual_handling(pid):
     assert d.reason == reason and d.category == cat and d.raw_refusal_named is named
 
 
-@pytest.mark.parametrize("pid", ["P001", "P002", "P006"])
+@pytest.mark.parametrize("pid", ["P001", "P002", "P003", "P006"])
 def test_invalid_output_is_nullified_never_a_refusal_category(pid):
     d, _ = run(FIXTURES[pid][0])
     assert d.reason == "classifier_malformed" and d.category not in sr.REFUSE_CATEGORIES
     assert not catstep.applies(d, Q)  # the safe fixed decline; the category step never runs on it
 
 
-@pytest.mark.parametrize("pid", ["P003", "P004"])
+@pytest.mark.parametrize("pid", ["P004"])
 def test_unrecognised_or_absent_category_goes_to_catstep(pid):
     d, _ = run(FIXTURES[pid][0])
     assert catstep.applies(d, Q) is True
@@ -77,3 +77,28 @@ def test_p005_refusal_category_and_p008_reason_prose_not_refused():
     assert run(FIXTURES["P005"][0])[0].category in sr.REFUSE_CATEGORIES
     assert sr.refusal_token(FIXTURES["P008"][0]) == ""
     assert sr.refusal_token(FIXTURES["P001"][0]) == "harmful" or sr._strict_loads(FIXTURES["P001"][0]) is None
+
+
+# OOE-A-PRESTAGE-1028 (pending owner choice): an out-of-enum category label is invalid classifier output.
+@pytest.mark.parametrize("label", ["dangerous", "illegal", "novel_subject"])
+def test_ooe_out_of_enum_label_is_invalid_retry_then_fallback(label, caplog):
+    import logging
+    with caplog.at_level(logging.INFO, logger="vera"):
+        d, n = run('{"in_scope":false,"category":"%s","reason":"Q-secret-text"}' % label)
+    assert n == d.llm_calls == 2  # one retry, as for malformed replies
+    assert d.accepted is False and d.reason == "classifier_malformed" and d.category == ""
+    assert not catstep.applies(d, Q)
+    assert "label=" + label in caplog.text and "Q-secret-text" not in caplog.text and Q not in caplog.text
+
+
+@pytest.mark.parametrize("raw,reason", [('{"in_scope":false,"category":"off_topic"}', "llm_out:"),
+                                        ('{"in_scope":true,"category":"in_scope"}', "llm_in:")])
+def test_ooe_in_enum_label_unchanged(raw, reason):
+    d, n = run(raw)
+    assert n == 1 and d.reason.startswith(reason) and d.category in ("off_topic", "in_scope")
+
+
+@pytest.mark.parametrize("raw", ['{"in_scope":false}', '{"in_scope":false,"category":""}'])
+def test_ooe_empty_or_absent_category_still_catstep(raw):
+    d, _ = run(raw)
+    assert d.reason.startswith("llm_out:") and d.category == "" and catstep.applies(d, Q) is True

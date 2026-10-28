@@ -508,6 +508,9 @@ def parse_verdict(content: str) -> tuple[bool | None, str]:
     c = obj.get("category")
     if isinstance(c, str) and not unicodedata.normalize("NFKC", c).isascii():  # lookalike value, e.g. Cyrillic а
         return None, "classifier_malformed"
+    if isinstance(c, str) and c.strip() and c not in LAYER2_CATEGORIES:  # OOE-A-PRESTAGE-1028 (pending owner choice):
+        # a non-empty label outside the closed enum is invalid classifier output (OD-1028(21) c4), not user misuse
+        return None, "classifier_malformed"
     return obj["in_scope"], str(obj.get("reason", ""))[:200]
 
 
@@ -628,10 +631,24 @@ def _raw_names_refusal(content) -> bool:
         return True
 
 
+def _log_out_of_enum(content) -> None:
+    """OOE-A-PRESTAGE-1028: log the out-of-enum category label only (sanitised, <= 32 chars; never question text)."""
+    try:
+        obj = _strict_loads(content)
+        c = obj.get("category") if isinstance(obj, dict) else None
+        if isinstance(c, str) and c.strip() and c not in LAYER2_CATEGORIES and c.isascii():
+            import logging
+            logging.getLogger("vera").info("scope classifier out-of-enum category: label=%s",
+                                           re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32])
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int) -> ScopeDecision:
     """One classifier reply -> ScopeDecision (unchanged A1 rules; moved out of route for the Q2 retry)."""
     in_scope, why = parse_verdict(content)
     if in_scope is None:
+        _log_out_of_enum(content)
         return ScopeDecision(False, "layer2_llm", why, pt + ct, cost, calls)
     category = parse_category(content)
     if in_scope and category in REFUSE_CATEGORIES:  # SCOPE-1022: in_scope=true with an advice/harm/... category is a
