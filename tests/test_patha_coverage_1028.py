@@ -238,3 +238,61 @@ def test_q2_nullified_twice_gives_the_neutral_decline_and_no_search(h, monkeypat
     s = Search()
     r = _ask(Q_UNSURE, s)
     assert c.calls == 2 and r.result_kind != "answer" and h.answer_calls == [] and h.inline_calls == []
+
+
+# ------------------------------------------------------------------------------------------------ Q5 memory eligibility
+class FakeMemory:
+    reader = store = None  # no writer: the existing gate path is reached, nothing is written
+
+    def __init__(self):
+        self.recalls = []
+        self.cfg = {"max_writes_per_answer": 3}
+
+    def recall(self, q):
+        self.recalls.append(q)
+        return []
+
+    def recall_discovery(self, q):
+        return []
+
+
+def _http(h, monkeypatch, q, dec):
+    from fastapi.testclient import TestClient
+    main = h.install()
+    _decide(monkeypatch, **dec)
+    mems = []
+    monkeypatch.setattr(main, "memory_from_env", lambda block: mems.append(FakeMemory()) or mems[-1])
+    r = TestClient(main.app).post("/ask", json={"question": q}, headers={"X-API-Key": "k" * 20})
+    assert r.status_code == 200, r.text
+    return r.json(), mems
+
+
+def test_q5_formerly_off_topic_answer_enters_the_existing_memory_path(h, monkeypatch):
+    h.bundle()
+    _serve(monkeypatch, None)
+    monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
+    body, mems = _http(h, monkeypatch, e2e.Q_EPI, OFF)
+    assert body["result_kind"] == "answer"
+    assert len(mems) == 1 and mems[0].recalls == [e2e.Q_EPI]  # accepted=True: the same gate path as in-scope answers
+
+
+def test_q5_acquired_off_topic_answer_is_accepted_like_an_in_scope_answer(rig):
+    r = rig.run()
+    assert r.result_kind == "answer" and r.accepted is True
+
+
+@pytest.mark.parametrize("dec", [dict(accepted=False, layer="layer2_llm", reason="llm_out:x", category="harmful"),
+                                 dict(accepted=False, layer="layer2_llm", reason="classifier_malformed")])
+def test_q5_refusals_never_reach_memory(h, monkeypatch, dec):
+    h.bundle()
+    _serve(monkeypatch, None)
+    body, mems = _http(h, monkeypatch, e2e.Q_EPI, dec)
+    assert body["result_kind"] == "decline" and mems == []
+
+
+def test_q5_acq_off_uncovered_list_never_reaches_memory(h, monkeypatch):
+    h.bundle()
+    _serve(monkeypatch, None)
+    monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
+    body, mems = _http(h, monkeypatch, e2e.Q_NONE, OFF)
+    assert body["result_kind"] != "answer" and mems == []
