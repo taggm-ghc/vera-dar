@@ -16,9 +16,12 @@ CFG = sr.parse_config(RAW, "llm")
 
 
 def test_four_fields_named_in_scope_prompt_and_decline_text():
-    for text in (RAW["scope"], RAW["decline_template"], RAW["layer2"]["system_prompt"]):
+    for text in (RAW["scope"], RAW["layer2"]["system_prompt"]):
         for word in ("epidemiology", "climate science", "reproducibility", "ecology"):
             assert word in text
+    # OD-1028(6) Path A CT-3: topic never produces a refusal, so the neutral decline text names no field and no scope
+    for word in ("epidemiology", "climate science", "reproducibility", "ecology", "scope"):
+        assert word not in RAW["decline_template"]
     assert "AI in other fields" in RAW["layer2"]["system_prompt"]  # OUT list unchanged
     assert "scope_v2_note" in RAW and "poison" in RAW["scope_v2_note"] and "symptoms" in RAW["scope_v2_note"]
 

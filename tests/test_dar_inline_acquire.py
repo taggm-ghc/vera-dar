@@ -13,6 +13,14 @@ from tests import test_fulldoc_e2e as e2e
 from tests.test_acq_serve import BASE_NO_EPI, _decide, _serve, h  # noqa: F401  (h is a fixture)
 from vera import acq_config, ask_service, auto_acquire, fulldoc_answer, inline_acquire, scope_router
 
+
+@pytest.fixture(autouse=True)
+def _legacy_decline_path(monkeypatch):
+    """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
+    verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
+    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+
 REAL = inline_acquire.acquire  # the shared fixture h stubs it to "off"; these tests restore the real one
 OFF_Q = e2e.Q_EPI
 GROUND = (None, {**e2e.GROUNDING, "no_sources_text": "NO"})

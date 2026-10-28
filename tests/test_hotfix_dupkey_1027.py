@@ -144,7 +144,9 @@ def test_in_scope_reply_mentioning_harmful_is_not_over_refused(reason):  # T11a
 ])
 def test_well_formed_replies_unchanged(verdict, reason, accepted, cat):
     d = _route(json.dumps(verdict))
-    assert (d.accepted, d.reason, d.category, d.llm_calls) == (accepted, reason, cat, 1)
+    # Q2 / Path A: in_scope=false with a missing category is a nullified verdict -> one retry (2 calls), then decline
+    calls = 2 if (not accepted and cat == "") else 1
+    assert (d.accepted, d.reason, d.category, d.llm_calls) == (accepted, reason, cat, calls)
 
 
 # ------------------------------------------------------------------------------------------------ totality (T14)

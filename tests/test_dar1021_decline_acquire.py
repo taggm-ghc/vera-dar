@@ -9,6 +9,14 @@ from tests import test_fulldoc_e2e as e2e
 from tests.test_acq_serve import BASE_NO_EPI, _acquired_corpus, _decide, _serve, h  # noqa: F401  (h is a fixture)
 from vera import acq_config, ask_service, auto_acquire, disclosure, scope_router as sr
 
+
+@pytest.fixture(autouse=True)
+def _legacy_decline_path(monkeypatch):
+    """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
+    verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
+    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+
 OFF_Q = "What are key differences between boxing and mma?"
 SRC = [{"n": 1, "title": "Paper One", "url": "https://arxiv.org/abs/2401.00001", "published": "2025-01-01",
         "snippet": "S", "identifier": "arXiv:2401.00001", "provider": "arxiv", "retrieved_at": "2026-10-01"}]
@@ -83,7 +91,8 @@ def test_first_ask_reading_list_starts_acquisition(h, monkeypatch, override):
     assert r.result_kind == "reading_list" and r.accepted is False and r.sources == () and s.calls == [True]
     assert r.acquire_trigger == "decline" and r.contract["offtopic"] is True
     key = "reading_list_notice_answering" if override else "reading_list_notice_listing"
-    assert cfg["scope_expansion"][key] in r.answer and "outside VERA-DAR's curated scope" in r.answer
+    # OD-1028(6) Path A CT-3: the list notice no longer names a scope; it is the neutral offtopic_notice
+    assert cfg["scope_expansion"][key] in r.answer and sr.offtopic_notice() in r.answer
 
 
 @pytest.mark.parametrize("layer,reason,cat,q", [

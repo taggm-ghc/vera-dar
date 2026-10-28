@@ -499,6 +499,9 @@ def test_offtopic_discovery_reuses_the_reading_list_search_exactly(rig, monkeypa
             phase[0] = "list"
     monkeypatch.setattr(T, "Search", Spy)
     monkeypatch.setattr(acq_discovered, "discovery_results", tagged)
+    # OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): the restricted (decline-path) discovery is what this test pins; an off_topic verdict now takes
+    # the research path, so the reroute is switched off here (still reached by other allowed layer-2 out verdicts)
+    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
     rig.cfg["inline"]["use_discovered"] = True
     rig.setup(topic="clim")
     r = rig.run()

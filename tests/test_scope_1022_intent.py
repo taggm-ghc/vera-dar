@@ -226,11 +226,14 @@ def test_harmful_flow_refused_everywhere(flow, q, reason):
 def test_benign_flow_off_topic_lists_acquires_and_attempts_answer(flow, q):
     r = flow["ask"](q, OFF)
     assert flow["search"].calls, "reading list (literature discovery) was not searched"
-    assert r.acquire_trigger == "decline"  # background acquisition starts
-    if acq_config.override_layer2_declines(flow["acq"]):
-        assert flow["fulldoc"].calls and flow["fulldoc"].calls[0][1].get("acquired_only") is True
-        assert flow["inline"].calls  # inline acquisition attempted
     assert r.answer != sr.decline_text()
+    if acq_config.override_layer2_declines(flow["acq"]):  # OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic verdict takes the normal
+        # research path (corpus attempt, unrestricted discovery), never the off-topic refusal notice
+        assert flow["fulldoc"].calls and flow["fulldoc"].calls[0][1].get("acquired_only") is not True
+        assert flow["search"].calls[0] == ((), {})  # the unrestricted (in-scope) discovery search
+        assert not (r.contract or {}).get("offtopic") and sr.offtopic_notice() not in r.answer
+    else:
+        assert r.acquire_trigger == "decline"  # background acquisition starts
 
 
 @pytest.mark.parametrize("q", BENIGN[:6])

@@ -65,15 +65,18 @@ def test_layer2_decline_yields_reading_list(stubs):
     assert search.calls == [True]  # restricted (scholarly-only) search, once
     assert len(r.candidates) == 1 and r.candidates[0]["url"] == SRC[0]["url"]
     assert "SENTINEL-ABSTRACT" not in json.dumps(r.candidates)
-    assert "outside VERA-DAR's curated scope" in r.answer and "has not read" in r.answer and "gives no answer" in r.answer
+    # OD-1028(6) Path A CT-3: the notice is the neutral offtopic_notice (no scope sentence)
+    assert sr.offtopic_notice() in r.answer and "has not read" in r.answer and "gives no answer" in r.answer
     assert "qualified professional" in r.answer and r.answer != RAW["decline_template"]
-    assert r.contract["offtopic"] is True and r.contract["fallback"] is None and r.claims == () and r.tokens_used == 110
+    # Q2 / Path A: OUT has no category -> nullified -> one classifier retry, so both calls are counted (2 x 110)
+    assert r.contract["offtopic"] is True and r.contract["fallback"] is None and r.claims == () and r.tokens_used == 220
 
 
 def test_empty_search_gives_notice_plus_no_sources_text(stubs):
     r, _ = run(search=Search(sources=[]))
     assert r.result_kind == "reading_list" and r.candidates == () and "could not find published sources" in r.answer
-    assert "outside VERA-DAR's curated scope" in r.answer and r.accepted is False and r.sources == ()
+    # OD-1028(6) Path A CT-3: the notice is the neutral offtopic_notice (no scope sentence)
+    assert sr.offtopic_notice() in r.answer and r.accepted is False and r.sources == ()
 
 
 def test_search_exception_falls_back_to_refusal(stubs):

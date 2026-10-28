@@ -64,8 +64,9 @@ def test_unsure_goes_to_llm_and_counts_cost():
     calls = []
     d = sr.route("Who won the World Cup in 2014?", "m", _pricing(), cfg=cfg(), chat=fake_chat(
         '{"in_scope": false, "reason": "trivia"}', calls))
-    assert not d.accepted and d.layer == "layer2_llm" and d.llm_calls == 1 and d.tokens_used == 110
-    assert d.cost_usd == pytest.approx(100 / 1e6 * 0.1 + 10 / 1e6 * 0.4)
+    # Q2 / Path A: a reply with no category is a nullified verdict -> exactly one retry; both calls are counted
+    assert not d.accepted and d.layer == "layer2_llm" and d.llm_calls == 2 and d.tokens_used == 220 and len(calls) == 2
+    assert d.cost_usd == pytest.approx(2 * (100 / 1e6 * 0.1 + 10 / 1e6 * 0.4))
     sys_msg, user_msg = calls[0]
     assert sys_msg["role"] == "system" and "Who won the World Cup" in user_msg["content"]
     assert "Who won" not in sys_msg["content"]  # question only in the delimited user turn
@@ -112,7 +113,8 @@ def test_answer_in_scope_llm_decline_uses_template_not_model_text(monkeypatch):
     monkeypatch.setattr(sr, "default_chat", fake_chat('{"in_scope": false, "reason": "MODEL TEXT"}'))
     monkeypatch.setattr(ask_service, "answer_question", lambda *a: (_ for _ in ()).throw(AssertionError("answered")))
     r = ask_service.answer_in_scope("Who painted the Mona Lisa?", "m", _pricing())
-    assert r.answer == RAW["decline_template"] and "MODEL TEXT" not in r.answer and r.tokens_used == 110
+    # Q2 / Path A: no category -> nullified -> one retry (tokens of both calls), then the fixed decline
+    assert r.answer == RAW["decline_template"] and "MODEL TEXT" not in r.answer and r.tokens_used == 220
 
 
 def test_main_ask_routes_through_scope_router():
