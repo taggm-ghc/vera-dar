@@ -534,8 +534,12 @@ DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.clscat_categories (code, versio
                           "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
 # R1(b): the table owner is unlimited (trigger default-deny exempts it), so it must never be an application role.
 # Same list as the preflight in db/migrations/pending/012-DRAFT (all six appear in other migrations or code).
+# APP_ROLE_NAMES is the DEFAULT; the live value is config classifier_category_table.app_role_names (validated at load, see
+# app_role_names()). A -v override of the 012 login variables must be mirrored in that config value.
 APP_ROLE_NAMES = frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
                             "vera_pipeline_wo", "vera_eval_ro"})
+_APP_GROUP_NAMES = frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"})
+_ROLE_NAME_RE = re.compile(r"[a-z][a-z0-9_]{0,62}")
 DB_CATEGORY_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c "
                          "WHERE c.oid = CAST(:t AS regclass)")  # :t is the regclass text the EXISTS probe returned
 DB_CATEGORY_SQL_READONLY = "SET TRANSACTION READ ONLY"  # D8: first statement of the loader's transaction (until an ro engine is wired)
@@ -553,6 +557,18 @@ def category_table_settings(path=CONFIG_PATH) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def app_role_names(path=CONFIG_PATH) -> frozenset:
+    """The application role names the table owner must not be: config classifier_category_table.app_role_names, or the
+    default APP_ROLE_NAMES when absent. Invalid values fail closed (ScopeConfigError)."""
+    raw = category_table_settings(path).get("app_role_names")
+    if raw is None:
+        return APP_ROLE_NAMES
+    if (not isinstance(raw, list) or not raw or not all(isinstance(n, str) and _ROLE_NAME_RE.fullmatch(n) for n in raw)
+            or len(set(raw)) != len(raw) or not _APP_GROUP_NAMES <= set(raw)):
+        raise ScopeConfigError("classifier_category_table.app_role_names must be a list of unique role names including the three vera_vjay_* groups")
+    return frozenset(raw)
+
+
 def _select_rows(conn):
     """Table-exists probe then SELECT, on an open connection. None when the table is absent."""
     from sqlalchemy import text
@@ -560,7 +576,7 @@ def _select_rows(conn):
     if found is None:
         return None
     owner = conn.execute(text(DB_CATEGORY_SQL_OWNER), {"t": str(found)}).scalar()
-    if owner is None or str(owner) in APP_ROLE_NAMES:
+    if owner is None or str(owner) in app_role_names():
         raise ScopeConfigError("classifier category table owner is missing or an application role; failing closed")
     return [dict(r) for r in conn.execute(text(DB_CATEGORY_SQL_ROWS)).mappings().all()]
 

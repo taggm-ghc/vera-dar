@@ -310,8 +310,9 @@ DRAFT = (ROOT / "db" / "migrations" / "pending" / "012-DRAFT-classifier-categori
 def test_app_role_list_is_one_constant_and_matches_the_draft():
     assert sr.APP_ROLE_NAMES == frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
                                            "vera_pipeline_wo", "vera_eval_ro"})
-    pre = DRAFT.split("R1(a) preflight", 1)[1].split("CREATE TABLE", 1)[0]
+    pre = DRAFT.split("R1(a) preflight", 1)[1].split("Role preflight", 1)[0]
     assert set(re.findall(r"'(vera_\w+)'", pre)) >= {"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"}
+    assert all("current_setting('vera012.%s')" % k in pre for k in ("rw", "wo", "ro")) and "pg_has_role" not in pre
     assert "current_setting('vera012.rw')" in pre  # logins come from the psql variables (defaults = the three names below)
     head = DRAFT.split("BEGIN;", 1)[0]
     assert {"vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"} <= set(re.findall(r"vera_\w+", head))
@@ -375,3 +376,22 @@ def test_read_category_rows_propagates_owner_failure_as_scope_error():
 
     with pytest.raises(sr.ScopeConfigError, match="owner"):
         sr.read_category_rows(Eng())
+
+
+def test_app_role_names_from_config_equal_sql_defaults_and_validated(tmp_path):
+    import json
+    cfg = sr.category_table_settings()
+    assert frozenset(cfg["app_role_names"]) == sr.APP_ROLE_NAMES == sr.app_role_names()
+    sql_defaults = set(re.findall(r"\\set app_\w+_login (\w+)", DRAFT))
+    assert sql_defaults == sr.APP_ROLE_NAMES - {"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"}
+    assert "MIRROR" in DRAFT and "app_role_names" in DRAFT.split("BEGIN;", 1)[0]
+    def at(val):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps({"classifier_category_table": ({} if val is None else {"app_role_names": val})}))
+        return sr.app_role_names(f)
+    assert at(None) == sr.APP_ROLE_NAMES
+    assert at(sorted(sr.APP_ROLE_NAMES | {"x_login"})) >= sr.APP_ROLE_NAMES
+    for bad in ([], "vera_vjay_rw", ["vera_vjay_rw"], [1, "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"],
+                ["Bad Name", "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"], ["vera_vjay_wo", "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"]):
+        with pytest.raises(sr.ScopeConfigError):
+            at(bad)

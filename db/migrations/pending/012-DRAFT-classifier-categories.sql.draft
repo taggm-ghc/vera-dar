@@ -44,6 +44,8 @@
 --   Grants stay on the GROUP roles vera_vjay_ro / vera_vjay_rw (as 001-004). The LOGIN roles are named by psql variables, defaults
 --   from db/accounts/create_vera_accounts.sql: app_rw_login=vera_claude_code_rw (:20), app_wo_login=vera_pipeline_wo (:21),
 --   app_ro_login=vera_eval_ro (:23). Override after pre006 shows the live roles, e.g. -v app_rw_login=<live rw login>.
+--   MIRROR: an override via -v must also be set in config/scope_router.json classifier_category_table.app_role_names (the
+--   service's owner guard reads it); the defaults here equal that config's defaults (checked by a test).
 --   REVOKE ALL is applied to PUBLIC, the three groups and the three logins; the preflight RAISEs unless each group and login exists and
 --   each login inherits its group (pg_has_role USAGE); a final DO block before COMMIT RAISEs (rolling everything back) unless
 --   rw login has SELECT+INSERT, ro login has SELECT, and no app login has UPDATE/DELETE/TRUNCATE (wo login: nothing at all).

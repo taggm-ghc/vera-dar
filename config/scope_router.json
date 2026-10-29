@@ -84,6 +84,7 @@
     "read_from_db": false,
     "registration_enabled": false,
     "registration_state": "active",
+    "app_role_names": ["vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"],
     "note": "CATTAB-1028 (owner: a table means a table in the database). read_from_db: explicit true reads vera_vjay.clscat_categories (db/migrations/pending/012-DRAFT, not applied) when the table exists; only an ABSENT table (to_regclass NULL) falls back to config/classifier_categories.json (the seed), logged once; an unconfigured or unreachable DB or a failing SELECT stops the service from starting (fail closed); invalid origin=runtime rows are skipped and logged, any other invalid row is fatal; a table that exists but is invalid stops the service from starting. Only state=active rows classify; every seed refusing category must exist unchanged and active or startup fails. registration_enabled: explicit true allows enrol_nonrefusing_entry() to add non-refusing runtime rows (OD-1028(9)); default off; the 0.50 description-dissimilarity threshold is PROVISIONAL (reused, not calibrated for runtime candidates). registration_state: one of draft, active, suspended, retired for new runtime rows. Both toggles ship false until the migration is applied and the owner enables them."
   },
   "layer1": {
