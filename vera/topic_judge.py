@@ -79,6 +79,7 @@ class JudgeResult:
     budget_exhausted: bool = False
     covered: int = 0  # candidates that received a real yes/no verdict
     total: int = 0  # candidates submitted
+    rate_limited: int = 0  # rate-limited tries (not attempts, not counted calls; bounded by RATE_LIMITED_CEILING)
 
 
 def validate_judge_settings(settings: dict) -> dict | None:
@@ -153,29 +154,41 @@ def free_groq_entries(entries=None) -> list:
             and e.pricing.input == 0 and e.pricing.output == 0]
 
 
-def _ask_batch(entries, client_for, messages, n, cfg, used_tokens):
-    """(answers or None, model_id, latency_ms, calls, tokens, budget_exhausted) for one batch."""
+RATE_LIMITED_CEILING = 10  # fixed ceiling on rate-limited (429) tries per registration; each moves on to the next chain entry, no sleep
+
+
+def _ask_batch(entries, client_for, messages, n, cfg, used_tokens, calls_left=None, rl_left=None):
+    """(answers or None, model_id, latency_ms, calls, tokens, budget_exhausted, rate_limited) for one batch. `calls` counts every call
+    that was NOT rate-limited and never exceeds calls_left (the remaining max_calls_per_registration); a rate-limited try is not an attempt
+    and not a counted call (project rule) but is bounded by rl_left (the fixed ceiling) and recorded in `rate_limited`."""
     est = sum(len(m["content"]) for m in messages) // 3 + cfg["max_completion_tokens"]
-    attempts = calls = tokens = 0
+    calls_left = cfg["max_calls_per_registration"] if calls_left is None else calls_left
+    rl_left = RATE_LIMITED_CEILING if rl_left is None else rl_left
+    attempts = calls = tokens = rl = 0
     for e in entries:
         if attempts >= cfg["max_attempts"]:
             break
+        if calls >= calls_left or rl >= rl_left:
+            return None, "none", 0, calls, tokens, True, rl
         if used_tokens + tokens + est > cfg["max_tokens_per_registration"]:
-            return None, "none", 0, calls, tokens, True
+            return None, "none", 0, calls, tokens, True, rl
         t0 = time.monotonic()
         try:
             client = client_for(e)
             kw = {"extra_body": dict(e.extra_body)} if e.extra_body else {}
-            calls += 1
             resp = client.chat.completions.create(model=e.model, messages=messages, temperature=0, timeout=cfg["timeout_s"],
                                                   max_tokens=cfg["max_completion_tokens"], **kw)
         except Exception as exc:  # noqa: BLE001 - class only, never message text
-            if not _rate_limited(exc):  # project rule: a rate-limited try is not an attempt
+            if _rate_limited(exc):  # project rule: a rate-limited try is not an attempt (nor a counted call), but is bounded
+                rl += 1
+            else:
                 attempts += 1
+                calls += 1
             log.warning("topic judge call failed (%s) on %s", type(exc).__name__, e.label)
             continue
         ms = int((time.monotonic() - t0) * 1000)
         attempts += 1
+        calls += 1
         u = getattr(resp, "usage", None)
         tt = getattr(u, "total_tokens", None)
         tokens += tt if isinstance(tt, int) and not isinstance(tt, bool) and tt >= 0 else est
@@ -185,8 +198,8 @@ def _ask_batch(entries, client_for, messages, n, cfg, used_tokens):
             continue  # refusal-shaped or truncated: not a verdict
         ans = parse_reply(getattr(msg, "content", None), n)
         if ans is not None:
-            return ans, e.model, ms, calls, tokens, False
-    return None, "none", 0, calls, tokens, False
+            return ans, e.model, ms, calls, tokens, False, rl
+    return None, "none", 0, calls, tokens, False, rl
 
 
 def judge_equivalence(draft: dict, candidates: list, *, settings: dict, entries=None, client_for=None) -> JudgeResult:
@@ -213,8 +226,10 @@ def judge_equivalence(draft: dict, candidates: list, *, settings: dict, entries=
             res.budget_exhausted = res.budget_exhausted or bool(pool)
             res.verdicts += [unknown(c) for c in b]
             continue
-        ans, model, ms, calls, tokens, over = _ask_batch(pool, client_for, build_messages(draft, b, cfg), len(b), cfg, res.tokens)
+        ans, model, ms, calls, tokens, over, rl = _ask_batch(pool, client_for, build_messages(draft, b, cfg), len(b), cfg, res.tokens,
+                                                              cfg["max_calls_per_registration"] - res.calls, RATE_LIMITED_CEILING - res.rate_limited)
         res.calls += calls
+        res.rate_limited += rl
         res.tokens += tokens
         res.budget_exhausted = res.budget_exhausted or over
         if ans is None:

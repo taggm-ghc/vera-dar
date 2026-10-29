@@ -589,3 +589,25 @@ def test_e8_budget_bounds_calls_tokens_and_counts_unknown_beyond_budget():  # HA
     res = _judge(c, many, judge={"batch_size": 5, "max_calls_per_registration": 50, "max_tokens_per_registration": 2000, "max_completion_tokens": 100})
     assert len(c.calls) == res.calls and res.calls < 5 and res.covered == 5 * res.calls and res.total == 23 and res.budget_exhausted
     assert res.tokens <= 1800 and [v.verdict for v in res.verdicts][res.covered:] == ["unknown"] * (23 - res.covered)
+
+
+class _RL(Exception):
+    status_code = 429
+
+
+def test_non_rate_limited_calls_never_exceed_the_call_budget_and_rate_limited_retries_are_bounded():  # project rule: 429 is not an attempt
+    many = [{"topic_key": f"t-{i}", "label": f"Topic {i}", "anchor_text": "z" * 30, "state": "active"} for i in range(12)]
+    entries = [_entry(f"m{i}") for i in range(5)]
+    # mixed: ordinary failures and rate limits across a 5-entry chain; max_attempts 5 so the chain would allow 5 calls per batch
+    script = [RuntimeError("x"), _RL(), RuntimeError("y"), _RL(), RuntimeError("z")] * 6
+    c = FakeClient(script=script)
+    cfg = {"batch_size": 2, "max_calls_per_registration": 3, "max_attempts": 5}
+    res = tj.judge_equivalence({"label": "Draft", "anchor_text": "d" * 30}, many, settings={"judge": {**J_ON, **cfg}}, entries=entries, client_for=lambda e: c)
+    counted = [x for x in c.calls]
+    assert res.calls <= 3  # counted (non-rate-limited) calls never exceed max_calls_per_registration
+    assert len(c.calls) == res.calls + res.rate_limited and res.rate_limited <= tj.RATE_LIMITED_CEILING
+    assert res.budget_exhausted and {v.verdict for v in res.verdicts} == {"unknown"} and len(res.verdicts) == 12
+    # only rate limits: bounded by the fixed ceiling, zero counted calls, nothing hangs
+    c = FakeClient(script=[_RL()] * 500)
+    res = tj.judge_equivalence({"label": "Draft", "anchor_text": "d" * 30}, many, settings={"judge": {**J_ON, "batch_size": 2}}, entries=entries, client_for=lambda e: c)
+    assert res.calls == 0 and res.rate_limited == len(c.calls) <= tj.RATE_LIMITED_CEILING and {v.verdict for v in res.verdicts} == {"unknown"}

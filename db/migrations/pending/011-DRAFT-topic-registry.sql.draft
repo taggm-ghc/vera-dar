@@ -66,7 +66,7 @@
 --   HARDEN-FIX2 E5/E7/F2/F3: the daily cap is counted from a SEPARATE table topreg_judge_reservations (counts only: NO keys, NO text). One row
 --   (n judgments, mode) is inserted under a short advisory lock BEFORE any model call; rw has INSERT(n, mode) plus SELECT only, ro SELECT, wo
 --   nothing. n is bounded by CHECK (n BETWEEN 1 AND 2000): 2000 = the config maxima batch_size 20 x max_calls_per_registration 100 (validated
---   at load in vera.topic_judge), so one row cannot exhaust the budget. Verdict rows in topreg_judgments are written only once the outcome is
+--   at load in vera.topic_judge), so the per-row bound limits the size of a single insert only; the app role can still reach the daily cap by inserting many rows (accepted, LOW). Verdict rows in topreg_judgments are written only once the outcome is
 --   known, in the outcome's transaction (none for a rejected registration).
 \if :{?app_rw_login}
 \else
