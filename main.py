@@ -120,6 +120,18 @@ def startup_checks() -> None:
 
 startup_checks()
 
+# TOPICREG-1028 (fail loud): a key-like value in config/auto_acquire.json raises acq_config.ConfigError here (paths logged at ERROR, never
+# values). HARDEN-FIX2-011: the service DEGRADES instead of crashing: the refusal is logged at ERROR by load_config (paths only), acquisition
+# is marked off (every request-path caller already catches ConfigError and treats the feature as OFF), /health reports it (no values),
+# and answering stays up. test_acq_urls.py remains the CI gate for the tracked config.
+from vera import acq_config as _acq_config  # noqa: E402
+ACQ_CONFIG_REFUSED = False
+try:
+    _acq_config.load_config()
+except _acq_config.ConfigError:
+    ACQ_CONFIG_REFUSED = True
+    logger.error("acquisition config refused at startup: acquisition is OFF; answering stays up (see the config-refused log line for paths)")
+
 # OOE-APRIME-C-1028 D2: import the scope router at process start so the owner-curated classifier category table
 # (config/classifier_categories.json) is loaded and validated now; an invalid table raises ScopeConfigError and the
 # service does not start (fail closed). The lazy imports in the request paths stay as a second line.
@@ -492,7 +504,10 @@ def health():
         readiness = dar_health.cached_readiness()
     except Exception:  # noqa: BLE001
         readiness = None
-    return {"status": "ok", "dar": _dar_public_state(readiness)}
+    out = {"status": "ok", "dar": _dar_public_state(readiness)}
+    if ACQ_CONFIG_REFUSED:
+        out["acquisition"] = "off_config_refused"  # no paths or values
+    return out
 
 
 @app.get("/health/dar", dependencies=[Depends(verify_api_key)])

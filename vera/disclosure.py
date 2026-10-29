@@ -87,7 +87,10 @@ def auto_acquire_enabled() -> bool:
     gates: a service without the write account (the UI) over-discloses, never under-discloses. Unreadable = False is
     safe here because an unreadable acquisition config also switches the feature itself off (vera.acq_config)."""
     from vera import acq_config
-    return acq_config.flag_on(acq_config.load_config())
+    try:
+        return acq_config.flag_on(acq_config.load_config())
+    except acq_config.ConfigError:  # already logged at ERROR (paths only); startup raises, the request path degrades to OFF
+        return False
 
 
 def ask_help_text(fulldoc_path=FULLDOC_CONFIG_PATH) -> str:

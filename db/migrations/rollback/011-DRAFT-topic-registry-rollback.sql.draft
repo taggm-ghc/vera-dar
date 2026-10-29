@@ -1,0 +1,33 @@
+-- 011_vera_topic_registry ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the topic registry and every version row in it.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval.
+-- Requires a separate, same-turn owner approval and an admin (table-owner) account, on an isolated DB first. Export the table first.
+-- Never run via db/apply_migrations.py (its --dry-run executes on production; HZ-DAR-1).
+-- Non-destructive rollback is: set micro_topic.registry_table.read_from_db to false (the JSON seed is used again).
+-- Dependency order: triggers (reference the functions and the table), then the table (drops its indexes and constraints), then
+-- the functions (the guard uses is_owner). The schema vera_vjay is shared with other objects and is NOT dropped.
+-- WARNING: this DELETES the seed rows AND every runtime row (all versions, all states) with the table, and every judgment-log row (topreg_judgments) and reservation row (topreg_judge_reservations). Export first.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+-- Drops only the objects the forward file creates (IF EXISTS, no CASCADE); the schema is kept.
+BEGIN;
+
+DROP TRIGGER IF EXISTS topreg_no_truncate_trg ON vera_vjay.topreg_topics;
+DROP TRIGGER IF EXISTS topreg_c_activate_trg ON vera_vjay.topreg_topics;
+DROP TRIGGER IF EXISTS topreg_b_labels_trg ON vera_vjay.topreg_topics;
+DROP TRIGGER IF EXISTS topreg_a_guard_trg ON vera_vjay.topreg_topics;
+
+DROP INDEX IF EXISTS vera_vjay.topreg_judge_reservations_created_idx;
+DROP TABLE IF EXISTS vera_vjay.topreg_judge_reservations;
+DROP INDEX IF EXISTS vera_vjay.topreg_judgments_created_idx;
+DROP INDEX IF EXISTS vera_vjay.topreg_judgments_draft_idx;
+DROP TABLE IF EXISTS vera_vjay.topreg_judgments;
+DROP INDEX IF EXISTS vera_vjay.topreg_active_label_uq;
+DROP INDEX IF EXISTS vera_vjay.topreg_one_active_uq;
+DROP TABLE IF EXISTS vera_vjay.topreg_topics;
+
+DROP FUNCTION IF EXISTS vera_vjay.topreg_activate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.topreg_label_unique_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.topreg_forbid_truncate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.topreg_guard_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.topreg_is_owner_fn();
+
+COMMIT;

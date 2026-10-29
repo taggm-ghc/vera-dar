@@ -119,8 +119,66 @@ def test_load_config_refuses_a_key_like_value_and_names_only_the_path(tmp_path):
     pg.write_text(json.dumps(good))
     pb.write_text(json.dumps(bad))
     assert acq_config.load_config(pg) == good
-    assert acq_config.load_config(pb) is None
     assert acq_config.refuse_key_like_values(bad) == ["keys.openalex_api_key"]
+
+
+def test_load_config_fails_loud_with_paths_only_and_absent_or_unreadable_stays_none(tmp_path, caplog):
+    import json
+    from vera import acq_config
+    secret = "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2"
+    pb = tmp_path / "b.json"
+    pb.write_text(json.dumps({"enabled": True, "keys": {"openalex_api_key": secret}, "x": {"y": secret}}))
+    with caplog.at_level("ERROR", logger="vera"), pytest.raises(acq_config.ConfigError) as ei:
+        acq_config.load_config(pb)
+    assert "keys.openalex_api_key" in str(ei.value) and "x.y" in str(ei.value) and secret not in str(ei.value)
+    errs = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert errs and "keys.openalex_api_key" in errs[0].getMessage() and secret not in caplog.text
+    assert acq_config.load_config(tmp_path / "missing.json") is None
+    (tmp_path / "bad.json").write_text("{not json")
+    assert acq_config.load_config(tmp_path / "bad.json") is None
+    (tmp_path / "list.json").write_text("[1]")
+    assert acq_config.load_config(tmp_path / "list.json") is None
+
+
+def test_request_path_callers_degrade_to_off_on_config_error(monkeypatch):
+    from vera import acq_config, catstep, disclosure
+
+    def boom(*a, **k):
+        raise acq_config.ConfigError("acquisition config refused: key-like value at path(s) x")
+    monkeypatch.setattr(acq_config, "load_config", boom)
+    assert disclosure.auto_acquire_enabled() is False and disclosure._layer2_answering_on() is True
+    assert catstep._micro_cfg() == {}
+    from vera import ask_service, auto_acquire, search_providers
+    assert ask_service._acq_cfg_if_on() is None
+    assert auto_acquire.enqueue("q", "decline") != "ACQ-QUEUED"
+    assert search_providers.openalex_key_env_name({}) == "OPENALEX_API_KEY"  # falls back to the default name
+
+
+_MAP_PATH = "micro_topic.registry_table.refused_state_map."
+
+
+def test_refused_state_map_exemption_is_narrow_positive_and_negative():
+    from vera import acq_urls, topic_registry
+    assert acq_urls._REFUSED_STATE_NAMES == topic_registry.REFUSED_STATES
+    # positive: exactly this path, and ONLY the values banned, prohibited, secrets (HARDEN-FIX2 E6)
+    assert acq_urls.key_like_value("secrets", _MAP_PATH + "secret_leak") is False
+    assert acq_urls.key_like_value("banned", _MAP_PATH + "harmful") is False and acq_urls.key_like_value("prohibited", _MAP_PATH + "advice") is False
+    assert acq_urls.key_like_value("secrets", "micro_topic.registry_table.other.secret_leak") is True  # outside the exemption: still refused
+    assert acq_urls.key_like_value("secrets", "registry_table.refused_state_map.secret_leak") is True
+    assert acq_urls.key_like_value("secrets", _MAP_PATH + "secret_leak.deeper") is True
+    for v in ("harmful", "advice", "rule_change", "secret_leak", "abc", "banned1", "Banned", "banned "):
+        assert acq_urls._refused_map_value_ok(v, _MAP_PATH + "harmful") is False, v  # no category-code-shaped exemption any more
+    for v in ("banned", "prohibited", "secrets"):
+        assert acq_urls._refused_map_value_ok(v, _MAP_PATH + "harmful") is True
+        assert acq_urls._refused_map_value_ok(v, "micro_topic.registry_table.other.harmful") is False  # only under that path
+    # negative: a credential-like value under the exempt path is still refused
+    for v in ("sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2", "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4", "banned1", "Banned"):
+        assert acq_urls.key_like_value(v, _MAP_PATH + "harmful") is True, v
+    from vera import acq_config
+    ok = {"micro_topic": {"registry_table": {"refused_state_map": {"secret_leak": "secrets", "harmful": "banned"}}}}
+    assert acq_config.refuse_key_like_values(ok) == []
+    bad = {"micro_topic": {"registry_table": {"refused_state_map": {"harmful": "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2"}}}}
+    assert acq_config.refuse_key_like_values(bad) == [_MAP_PATH + "harmful"]
 
 
 # INC-1028-1: URL pass must mark (not drop) key-like params, with no literal key passed to redact_text.
@@ -269,3 +327,31 @@ def test_redact_text_free_text_separator_negatives(s):
 def test_shipped_auto_acquire_json_passes_path_aware_refusal():
     from vera import acq_config
     assert acq_config.refuse_key_like_values(json.loads((ROOT / "config" / "auto_acquire.json").read_text())) == []
+
+
+def test_main_loads_the_acquisition_config_at_startup_so_a_key_like_value_stops_the_service():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
+    assert "_acq_config.load_config()" in src and src.index("startup_checks()\n") < src.index("_acq_config.load_config()")
+
+
+def test_main_degrades_when_acq_config_refused(monkeypatch, caplog):
+    """HARDEN-FIX2: a refused acquisition config must not crash the service: ERROR log, acquisition off, /health reports it, no values."""
+    import importlib
+    import main
+    from vera import acq_config
+
+    def boom(*a, **k):
+        raise acq_config.ConfigError("acquisition config refused: key-like value at path(s) x.y")
+    monkeypatch.setattr(acq_config, "load_config", boom)
+    try:
+        with caplog.at_level("ERROR", logger="vera"):
+            m = importlib.reload(main)  # must not raise
+        assert m.ACQ_CONFIG_REFUSED is True
+        assert any("acquisition config refused at startup" in r.getMessage() for r in caplog.records)
+        h = m.health()
+        assert h["status"] == "ok" and h["acquisition"] == "off_config_refused"
+    finally:
+        monkeypatch.undo()
+        m = importlib.reload(main)
+    assert m.ACQ_CONFIG_REFUSED is False and "acquisition" not in m.health()

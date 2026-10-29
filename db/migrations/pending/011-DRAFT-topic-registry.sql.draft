@@ -1,0 +1,488 @@
+-- 011_vera_topic_registry.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007/008-DRAFT); rename only at approval.
+-- TOPICREG-1028 pre-stage DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- NUMBER 011: 007 is the DAR domain registry (untouched; vera/dar_store.py uses it). 008 = schema_migrations bootstrap (reserved
+-- by db/migration_guard.py), 009 = portal discovery, 010 = dynamic state, 011 = this topic registry, 012 = classifier categories.
+-- Owner decision 2026-10-28: the topic registry is a separate new migration, not a revision of 007.
+-- REQUIRES PostgreSQL 16 or newer: the role checks read pg_auth_members.inherit_option and .set_option (PG16+ columns).
+-- Production was last observed as PG 18.6 on 2026-10-21; UNCONFIRMED since.
+-- Replaces the in-config registry config/micro_topic_anchors.json (kept as SEED and FALLBACK). Owner: "when i speak of a table, i
+-- mean in the database"; accepted Q6 (registry in the DB), Q7 (normalized unique keys; proposals need curator approval), Q8 (key
+-- at acquisition), Q9 (read-time keying; backfill deferred).
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md rule 4), admin-run only, never via db/apply_migrations.py --dry-run
+-- (HZ-DAR-1). It is BATCHED with 008 and 010 under ONE PG 18 rehearsal on an isolated DB (none exists yet). The schema name
+-- vera_vjay and roles vera_vjay_wo/_rw/_ro are copied from 006/007/008; the schema name is still UNCONFIRMED by the owner.
+-- VERSIONING (OD-1028(40)-(43)): each version of a topic is its own row, UNIQUE (topic_key, version); at most one ACTIVE row per
+--   key (partial unique index); activating a row retires the previously active row of that key in the same transaction (trigger);
+--   content is IMMUTABLE after insert, only state may change (modified_at follows); no DELETE (retire instead).
+-- APP-PROPOSED TOPICS: owner decisions 2026-10-28: the current list (the seed) is active; a topic the app creates is written as
+--   'draft'; the app then checks it against the ACTIVE, RETIRED, BANNED, PROHIBITED and SECRETS topics and moves it draft -> 'suspended'
+--   (similar to any of them) or draft -> 'active' (similar to neither); if the check cannot run it stays 'draft'. The DB enforces the
+--   limits: an app role may INSERT only a BRAND-NEW key, version 1, origin 'runtime', state 'draft' (or a refused-topic state, see TOPICAL STATES); its ONLY UPDATEs are state
+--   draft -> active and draft -> suspended on rows with origin 'runtime' (column-level GRANT UPDATE (state) to rw plus the guard
+--   trigger, no SECURITY DEFINER). Every other change (other columns, other transitions, any seed row, DELETE, TRUNCATE) is
+--   owner-only. The similarity check is app code (lexical, PROVISIONAL), not DB-enforced.
+-- DUPLICATE vs DISTINCT (OD-1028(49), owner 2026-10-28): a 'match' means SEMANTIC EQUIVALENCE or PARAPHRASE only. A narrower
+--   topic inside an active topic, or a broader non-equivalent topic, is a DISTINCT micro-topic and is activated. parent_topic_key
+--   (nullable) records a known parent: supplied by the caller when the proposal context identifies one, never inferred by a
+--   similarity threshold; it must reference an existing ACTIVE key at insert time and is immutable (content). No acquisition
+--   cap or target is changed by this file.
+-- PRIVILEGE (default deny): only the TABLE OWNER (current_user = the owner read from pg_catalog) is privileged; every other
+--   role gets the app limits. The trigger itself has no role-membership test; the preflight below and the loader
+--   (vera/topic_registry.py) check BOTH directions: the owner must not be an app role or hold a usable (INHERIT or SET)
+--   membership in one, and no app role may be able to reach the owner. Run this file as the account that will own the table.
+-- Trigger functions carry SET search_path = pg_catalog, pg_temp and schema-qualified references.
+-- UNTESTED against a real PostgreSQL: triggers, partial unique indexes and CHECKs have never been executed.
+-- Rollback (destructive, separate approval): db/migrations/rollback/011-DRAFT-topic-registry-rollback.sql.draft
+-- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file.
+-- *** FINAL grant targets pending the owner's pre006 run (live roles); do not apply before that. ***
+-- ROLES (owner instruction OD-1028(56): verify grants against the actual application and administrative database roles before finalizing).
+--   Grants stay on the GROUP roles vera_vjay_ro / vera_vjay_rw (as 001-004). The LOGIN roles are named by psql variables, defaults
+--   from db/accounts/create_vera_accounts.sql: app_rw_login=vera_claude_code_rw, app_wo_login=vera_pipeline_wo, app_ro_login=vera_eval_ro.
+--   Override after pre006 shows the live roles, e.g. -v app_rw_login=<live rw login>. AN OVERRIDE VIA -v MUST BE MIRRORED in
+--   config/auto_acquire.json micro_topic.registry_table.app_roles (vera/topic_registry.py reads the names from there; defaults equal these). REVOKE ALL is applied on BOTH tables to PUBLIC,
+--   the three groups and the three logins; the preflight RAISEs unless each group and login exists and each login inherits its group
+--   (pg_has_role USAGE); a final DO block before COMMIT RAISEs (rolling everything back) unless, on both tables, the effective
+--   privileges are: rw login SELECT; topreg_topics column INSERT and UPDATE(state) only; topreg_judgments SELECT plus INSERT only; ro login
+--   SELECT; wo login nothing; no table-wide INSERT/UPDATE, no DELETE or TRUNCATE for any app login.
+-- REFUSED CATEGORIES (OD-1028(56), owner 2026-10-28, option ii): a banned/prohibited/secrets row is a FIXED PLACEHOLDER per refusal
+--   category code: key 'refused-<code, underscores as hyphens>', label 'refused <code>', anchor from the code only. No question text,
+--   no question-derived label, anchor, embedding or other identifying representation is stored. topreg_refused_chk enforces it. The
+--   association with a refused request is by category only (no topical matching against refused rows).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_wo_login=.. -v app_ro_login=..] -f <this file>   (no -1 needed: the file has its own BEGIN/COMMIT; ON_ERROR_STOP makes psql stop
+-- at the first error, so the open transaction is never committed and PostgreSQL rolls everything back).
+-- STRICTLY ADDITIVE: the first statement after BEGIN is the collision preflight; it RAISEs if the table or ANY function, trigger,
+-- index or constraint this file creates already exists ("already applied or name collision"). All CREATEs are plain (no
+-- existence-tolerant or replacing forms) and the schema is NOT created here: the preflight RAISEs if vera_vjay is absent. Nothing existing is altered.
+-- NAMING (OD-1028(50), owner 2026-10-28; work/additive-1028/NAMING.md): prefix topreg_ plus type suffixes _fn _trgfn _trg _idx _uq _chk _pk _fk.
+-- TOPICAL STATES (OD-1028(51)/(52)): draft, active, suspended, retired, banned, prohibited, secrets. banned/prohibited/secrets rows
+--   record REFUSED topic categories as FIXED PLACEHOLDERS (category code in column field; see REFUSED CATEGORIES; NEVER question text, OD-1028(35)).
+--   Key prefix 'refused-' is reserved for them (guard trigger rejects any other insert with it, OD-1028(57)). App roles may
+--   INSERT a brand-new key only with state draft, banned, prohibited or secrets (DB-enforced); the app's only UPDATE stays
+--   draft -> active or suspended; only the owner/admin may move a topic out of banned, prohibited or secrets.
+-- LIVE-CALIBRATION LOG (TOPICJUDGE-1028, OD-1028(54), same feature, still unapplied): table topreg_judgments records each free-LLM
+--   equivalence verdict (shadow or active mode) by KEYS and STATES only: NO question text, NO topic text (labels are reachable by key).
+--   App rw may INSERT (column-level) and SELECT only: no UPDATE, DELETE or TRUNCATE grant; the daily judgment cap is counted from it.
+--   HARDEN-FIX2 E5/E7/F2/F3: the daily cap is counted from a SEPARATE table topreg_judge_reservations (counts only: NO keys, NO text). One row
+--   (n judgments, mode) is inserted under a short advisory lock BEFORE any model call; rw has INSERT(n, mode) plus SELECT only, ro SELECT, wo
+--   nothing. n is bounded by CHECK (n BETWEEN 1 AND 2000): 2000 = the config maxima batch_size 20 x max_calls_per_registration 100 (validated
+--   at load in vera.topic_judge), so the per-row bound limits the size of a single insert only; the app role can still reach the daily cap by inserting many rows (accepted, LOW). Verdict rows in topreg_judgments are written only once the outcome is
+--   known, in the outcome's transaction (none for a rejected registration).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+-- psql variables are not expanded inside $$ bodies, so they are passed to the DO blocks as transaction-local settings.
+SELECT set_config('vera011.rw', :'app_rw_login', true), set_config('vera011.wo', :'app_wo_login', true),
+       set_config('vera011.ro', :'app_ro_login', true);
+
+-- Collision preflight (strictly additive): stop cleanly if the table or ANY object this file creates already exists.
+DO $$
+DECLARE n text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '011 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.topreg_topics') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_judgments') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_topics_topic_row_id_seq') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_judgments_id_seq') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_judge_reservations') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_judge_reservations_id_seq') IS NOT NULL
+     OR pg_catalog.to_regtype('vera_vjay.topreg_judge_reservations') IS NOT NULL
+     OR pg_catalog.to_regtype('vera_vjay.topreg_topics') IS NOT NULL
+     OR pg_catalog.to_regtype('vera_vjay.topreg_judgments') IS NOT NULL THEN
+    RAISE EXCEPTION '011 already applied or name collision';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['topreg_is_owner_fn','topreg_guard_trgfn','topreg_forbid_truncate_trgfn','topreg_label_unique_trgfn','topreg_activate_trgfn'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '011 already applied or name collision';
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['topreg_topics_pk','topreg_key_version_uq','topreg_one_active_uq','topreg_active_label_uq','topreg_judgments_pk','topreg_judgments_draft_idx','topreg_judgments_created_idx','topreg_judge_reservations_pk','topreg_judge_reservations_created_idx'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                WHERE c.relname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '011 already applied or name collision';
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['topreg_a_guard_trg','topreg_b_labels_trg','topreg_c_activate_trg','topreg_no_truncate_trg'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                WHERE t.tgname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '011 already applied or name collision';
+    END IF;
+  END LOOP;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE EXCEPTION '011 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+END $$;
+
+-- Preflight (R1, both directions): the table owner is unrestricted by the guard trigger, so this file must NOT run as an app role.
+-- (1) Raises if current_user or session_user IS, or DIRECTLY holds a USABLE membership (inherit_option OR set_option, PG16+; an
+-- ADMIN-only row, e.g. a CREATEROLE creator, does not count) in vera_vjay_wo / _rw / _ro.
+-- (2) Raises if any app role is able to reach current_user or session_user (pg_has_role MEMBER, which follows inheritance), because
+-- an app role that can become the owner would be unrestricted. Run it as the dedicated admin account that should own the table.
+DO $$
+DECLARE app text[] := ARRAY['vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro',
+                            current_setting('vera011.rw'), current_setting('vera011.wo'), current_setting('vera011.ro')];
+BEGIN
+  IF current_user = ANY (app) OR session_user = ANY (app)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                  JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+                  JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname = ANY (app)
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '011 must not run as, or as a member of, an app group or login role (vera_vjay_wo/_rw/_ro or the three app logins): the table owner is unrestricted.';
+  END IF;
+END $$;
+
+-- Role preflight: each group and each login must exist and each login must inherit its group (pg_has_role USAGE). pg_has_role is used ONLY
+-- here (and never in the run-as slice above, so a superuser cannot match there).
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera011.rw')],
+                                              ['vera_vjay_wo', current_setting('vera011.wo')],
+                                              ['vera_vjay_ro', current_setting('vera011.ro')]];
+BEGIN
+  FOR i IN 1 .. 3 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '011 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '011 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '011: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  -- inheritance preflight: no app group or login may be able to reach the account running this file (it would reach the table owner).
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro',
+                                           current_setting('vera011.rw'), current_setting('vera011.wo'), current_setting('vera011.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '011: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+END $$;
+
+CREATE TABLE vera_vjay.topreg_topics (
+    topic_row_id   BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.topreg_topics_topic_row_id_seq) CONSTRAINT topreg_topics_pk PRIMARY KEY,
+    -- topic_key: the NORMALIZED unique key (Q7): lowercase letters, digits, hyphen; app normalizes (NFKC, casefold, spaces to hyphen).
+    topic_key      TEXT NOT NULL CONSTRAINT topreg_key_chk CHECK (topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    -- version: NO DEFAULT. NULL on insert = next number (trigger); a supplied value must equal max+1.
+    version        INTEGER NOT NULL CONSTRAINT topreg_version_chk CHECK (version >= 1),
+    -- free text: printable ASCII only (no newline or control character), length-capped; never passed raw into prompts.
+    label          TEXT NOT NULL CONSTRAINT topreg_label_chk
+        CHECK (label ~ '^[ -~]+$' AND btrim(label) <> '' AND length(label) BETWEEN 3 AND 120),
+    field          TEXT NOT NULL CONSTRAINT topreg_field_chk
+        CHECK (field ~ '^[ -~]+$' AND btrim(field) <> '' AND length(field) BETWEEN 2 AND 60),
+    anchor_text    TEXT NOT NULL CONSTRAINT topreg_anchor_chk
+        CHECK (anchor_text ~ '^[ -~]+$' AND btrim(anchor_text) <> '' AND length(anchor_text) BETWEEN 20 AND 1200),
+    parent_openalex_topic TEXT NOT NULL DEFAULT 'none' CONSTRAINT topreg_parent_chk
+        CHECK (parent_openalex_topic ~ '^[A-Za-z0-9:_./-]{1,64}$'),
+    -- parent_topic_key (OD-1028(49)): nullable, content (immutable). Well-formed key; the guard trigger requires it to reference an
+    -- existing ACTIVE key at insert time. Supplied by the caller only; never inferred by a similarity threshold.
+    parent_topic_key TEXT CONSTRAINT topreg_parent_key_chk CHECK (parent_topic_key IS NULL OR parent_topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    origin         TEXT NOT NULL DEFAULT 'runtime' CONSTRAINT topreg_origin_chk CHECK (origin IN ('seed','runtime')),
+    state          TEXT NOT NULL DEFAULT 'draft' CONSTRAINT topreg_state_chk
+        CHECK (state IN ('draft','active','suspended','retired','banned','prohibited','secrets')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT topreg_key_version_uq UNIQUE (topic_key, version),
+    -- OD-1028(56): a refused row (banned/prohibited/secrets) is ONLY the fixed placeholder of a category code (held in field). HARDEN-FIX2
+    -- E4: field must be one of the ENUMERATED refuse-disposition category codes (harmful, advice, rule_change); a new code is added ONLY by a
+    -- migration that replaces this constraint (never by config or by an app write).
+    CONSTRAINT topreg_refused_chk CHECK (state NOT IN ('banned','prohibited','secrets') OR (
+        field IN ('harmful','advice','rule_change')
+        AND label = 'refused ' || field
+        AND topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')
+        AND anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'
+        AND parent_topic_key IS NULL AND parent_openalex_topic = 'none')),
+    -- HARDEN-FIX2 E4 (content check, binds the table OWNER too, unlike the guard trigger): the reserved key prefix 'refused-' may exist only
+    -- on a row of exactly the placeholder CONTENT shape. The check has NO state term (content is immutable), so the owner/admin-only exit of a
+    -- placeholder (banned -> retired etc., OD-1028(51)/(52)) stays possible; the state rule is the topreg_refused_chk implication and the guard trigger.
+    CONSTRAINT topreg_refused_key_chk CHECK (topic_key NOT LIKE 'refused-%' OR (
+        field IN ('harmful','advice','rule_change')
+        AND label = 'refused ' || field
+        AND topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')
+        AND anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'
+        AND parent_topic_key IS NULL AND parent_openalex_topic = 'none'))
+);
+
+-- At most one active row per key; at most one active row per normalized label.
+CREATE UNIQUE INDEX topreg_one_active_uq ON vera_vjay.topreg_topics (topic_key) WHERE state = 'active';
+CREATE UNIQUE INDEX topreg_active_label_uq
+    ON vera_vjay.topreg_topics ((pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(label), '\s+', ' ', 'g')))) WHERE state = 'active';
+
+-- Privileged = the table owner only (default deny). Everyone else, including other admins, gets the app limits.
+CREATE FUNCTION vera_vjay.topreg_is_owner_fn() RETURNS boolean LANGUAGE sql STABLE
+  SET search_path = pg_catalog, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  WHERE c.oid = 'vera_vjay.topreg_topics'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user)
+$f$;
+
+-- Fires first (trigger name order): non-owner limits, version numbering, content immutability.
+CREATE FUNCTION vera_vjay.topreg_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE
+  is_owner boolean := vera_vjay.topreg_is_owner_fn();
+  nxt integer;
+BEGIN
+  IF NOT is_owner AND TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'topreg_topics: DELETE not allowed for app roles';
+  END IF;
+  IF NOT is_owner AND TG_OP = 'UPDATE' AND (OLD.origin <> 'runtime' OR OLD.state <> 'draft' OR NEW.state NOT IN ('active','suspended')) THEN
+    RAISE EXCEPTION 'topreg_topics: app roles may only move a runtime draft row to active or suspended (leaving banned/prohibited/secrets is owner-only)';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;                                   -- owner only; retire instead (returning NULL would cancel the DELETE)
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    SELECT COALESCE(max(t.version), 0) + 1 INTO nxt FROM vera_vjay.topreg_topics t WHERE t.topic_key = NEW.topic_key;
+    IF NOT is_owner THEN
+      IF nxt <> 1 THEN
+        RAISE EXCEPTION 'topreg_topics: app roles may insert only brand-new keys';
+      END IF;
+      IF NEW.origin <> 'runtime' OR NEW.state NOT IN ('draft','banned','prohibited','secrets') OR NEW.parent_openalex_topic <> 'none' THEN
+        RAISE EXCEPTION 'topreg_topics: app roles may insert only origin=runtime, state=draft/banned/prohibited/secrets, no OpenAlex parent topic';
+      END IF;
+      IF NEW.topic_key LIKE 'refused-%' AND NEW.state NOT IN ('banned','prohibited','secrets') THEN
+        RAISE EXCEPTION 'topreg_topics: topic key prefix refused- is reserved for refused-category placeholder rows';
+      END IF;
+      IF NEW.state <> 'draft' AND NEW.parent_topic_key IS NOT NULL THEN
+        RAISE EXCEPTION 'topreg_topics: a refused-topic row (banned/prohibited/secrets) has no parent topic key';
+      END IF;
+      NEW.created_at := now();                    -- accounting fields are not caller-controlled
+    END IF;
+    IF NEW.parent_topic_key IS NOT NULL THEN
+      IF NEW.parent_topic_key = NEW.topic_key THEN
+        RAISE EXCEPTION 'topreg_topics: a topic cannot be its own parent';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics p WHERE p.topic_key = NEW.parent_topic_key AND p.state = 'active') THEN
+        RAISE EXCEPTION 'topreg_topics: parent_topic_key must reference an existing active topic key';
+      END IF;
+    END IF;
+    IF NEW.version IS NULL THEN
+      NEW.version := nxt;
+    ELSIF NEW.version <> nxt THEN
+      RAISE EXCEPTION 'topreg_topics: version % is wrong for key %, expected %', NEW.version, NEW.topic_key, nxt;
+    END IF;
+    NEW.modified_at := NEW.created_at;
+    RETURN NEW;
+  END IF;
+  -- UPDATE (owner, or an app role's draft -> active above): content is immutable for everyone; only state may change.
+  IF NEW.topic_key IS DISTINCT FROM OLD.topic_key OR NEW.version IS DISTINCT FROM OLD.version
+     OR NEW.label IS DISTINCT FROM OLD.label OR NEW.field IS DISTINCT FROM OLD.field
+     OR NEW.anchor_text IS DISTINCT FROM OLD.anchor_text OR NEW.parent_openalex_topic IS DISTINCT FROM OLD.parent_openalex_topic
+     OR NEW.parent_topic_key IS DISTINCT FROM OLD.parent_topic_key
+     OR NEW.origin IS DISTINCT FROM OLD.origin OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.topic_row_id IS DISTINCT FROM OLD.topic_row_id THEN
+    RAISE EXCEPTION 'topreg_topics: content is immutable; insert a new version instead (only state may change)';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    NEW.modified_at := now();
+  ELSE
+    NEW.modified_at := OLD.modified_at;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.topreg_forbid_truncate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NOT vera_vjay.topreg_is_owner_fn() THEN
+    RAISE EXCEPTION 'topreg_topics: TRUNCATE not allowed for app roles';
+  END IF;
+  RETURN NULL;
+END $f$;
+
+-- A normalized label may belong to only ONE key (any state): a duplicate topic under another key is rejected (Q7).
+CREATE FUNCTION vera_vjay.topreg_label_unique_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t
+              WHERE t.topic_key <> NEW.topic_key
+                AND pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(t.label), '\s+', ' ', 'g'))
+                  = pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(NEW.label), '\s+', ' ', 'g'))) THEN
+    RAISE EXCEPTION 'topreg_topics: label already belongs to another topic key';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+-- Activation: when a row becomes active, the OTHER active row of the same key (if one exists) becomes retired, same transaction.
+-- BEFORE trigger so the old row is retired before the partial unique index sees the new active row. The UPDATE runs only if
+-- another active row exists (so an app-role insert of a brand-new active key performs no UPDATE).
+CREATE FUNCTION vera_vjay.topreg_activate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NEW.state = 'active' AND (TG_OP = 'INSERT' OR OLD.state IS DISTINCT FROM 'active') THEN
+    IF EXISTS (SELECT 1 FROM vera_vjay.topreg_topics c
+                WHERE c.topic_key = NEW.topic_key AND c.state = 'active' AND c.topic_row_id IS DISTINCT FROM NEW.topic_row_id) THEN
+      UPDATE vera_vjay.topreg_topics c SET state = 'retired', modified_at = now()
+       WHERE c.topic_key = NEW.topic_key AND c.state = 'active' AND c.topic_row_id IS DISTINCT FROM NEW.topic_row_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE TRIGGER topreg_a_guard_trg BEFORE INSERT OR UPDATE OR DELETE ON vera_vjay.topreg_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topreg_guard_trgfn();
+CREATE TRIGGER topreg_b_labels_trg BEFORE INSERT ON vera_vjay.topreg_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topreg_label_unique_trgfn();
+CREATE TRIGGER topreg_c_activate_trg BEFORE INSERT OR UPDATE ON vera_vjay.topreg_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topreg_activate_trgfn();
+CREATE TRIGGER topreg_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.topreg_topics
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.topreg_forbid_truncate_trgfn();
+
+-- TOPICJUDGE-1028 live-calibration log: keys, states and the verdict only (no question text, no topic text). Append-only for the app.
+CREATE TABLE vera_vjay.topreg_judgments (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.topreg_judgments_id_seq) CONSTRAINT topreg_judgments_pk PRIMARY KEY,
+    draft_key       TEXT NOT NULL CONSTRAINT topreg_jdraft_key_chk CHECK (draft_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    candidate_key   TEXT NOT NULL CONSTRAINT topreg_jcand_key_chk CHECK (candidate_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    candidate_state TEXT NOT NULL CONSTRAINT topreg_jcand_state_chk CHECK (candidate_state IN ('active','retired')),
+    verdict         TEXT NOT NULL CONSTRAINT topreg_jverdict_chk CHECK (verdict IN ('yes','no','unknown')),
+    mode            TEXT NOT NULL CONSTRAINT topreg_jmode_chk CHECK (mode IN ('shadow','active')),
+    model_id        TEXT NOT NULL CONSTRAINT topreg_jmodel_chk CHECK (model_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$'),
+    latency_ms      INTEGER NOT NULL CONSTRAINT topreg_jlatency_chk CHECK (latency_ms >= 0),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX topreg_judgments_draft_idx ON vera_vjay.topreg_judgments (draft_key);
+CREATE INDEX topreg_judgments_created_idx ON vera_vjay.topreg_judgments (created_at);
+
+-- HARDEN-FIX2 E5/F2/F3: daily-cap reservations. Counts only: no draft key, no candidate key, no text.
+CREATE TABLE vera_vjay.topreg_judge_reservations (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.topreg_judge_reservations_id_seq) CONSTRAINT topreg_judge_reservations_pk PRIMARY KEY,
+    n          INTEGER NOT NULL CONSTRAINT topreg_jres_n_chk CHECK (n BETWEEN 1 AND 2000),
+    mode       TEXT NOT NULL CONSTRAINT topreg_jres_mode_chk CHECK (mode IN ('shadow','active')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX topreg_judge_reservations_created_idx ON vera_vjay.topreg_judge_reservations (created_at);
+
+-- Seed: the 10 entries of config/micro_topic_anchors.json (owner-run, origin 'seed', version 1, active). Idempotent: a key
+-- that already has any row is skipped (no ON CONFLICT: the version is trigger-assigned only when NULL).
+INSERT INTO vera_vjay.topreg_topics (topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state)
+SELECT v.topic_key, v.version, v.label, v.field, v.anchor_text, v.parent_openalex_topic, v.origin, v.state
+  FROM (VALUES
+    ('epi-infectious-outbreak', 1, 'Infectious disease outbreak epidemiology', 'epidemiology', 'epidemiology infectious disease outbreak transmission incidence prevalence surveillance cohort case-control mortality morbidity reproduction number vaccination vaccine efficacy seroprevalence pandemic epidemic contact tracing risk factors population health public health intervention confidence interval odds ratio hazard ratio cases deaths hospitalization pathogen infection viral bacterial symptoms outbreak investigation modelling serological estimates', 'none', 'seed', 'active'),
+    ('epi-chronic-cohort', 1, 'Chronic disease cohort and risk epidemiology', 'epidemiology', 'cohort study chronic disease cardiovascular cancer diabetes obesity risk factors incidence relative risk longitudinal follow-up participants exposure smoking diet physical activity mortality hazard ratio adjusted confounding observational study population-based registry screening prevention randomized trial meta-analysis systematic review epidemiological association prospective cohort bias sample size questionnaire incidence rates health outcomes', 'none', 'seed', 'active'),
+    ('eco-biodiversity', 1, 'Biodiversity and species ecology', 'ecology', 'ecology biodiversity species richness abundance habitat conservation extinction population dynamics community ecosystem functional diversity trophic food web invasive species predator prey biomass forest wetland grassland survey conservation biology endangered ecological niche field sampling transect census taxa diversity index species distribution wildlife monitoring protected areas', 'none', 'seed', 'active'),
+    ('eco-ecosystem-function', 1, 'Ecosystem function and nutrient cycling', 'ecology', 'ecosystem productivity nutrient cycling nitrogen phosphorus carbon soil microbial decomposition primary production photosynthesis plant growth freshwater marine lake river watershed disturbance fire resilience succession land use restoration vegetation ecosystem services carbon storage greenhouse flux plant litter microbial community biogeochemical ecological processes field experiment', 'none', 'seed', 'active'),
+    ('clim-warming', 1, 'Climate change and global warming', 'climate science', 'climate change global warming temperature anomaly greenhouse gas emissions carbon dioxide radiative forcing climate sensitivity sea level rise ice sheet glacier ocean heat uptake IPCC scenario projection attribution extreme weather heatwave drought precipitation atmospheric warming mitigation adaptation climate observations global mean surface temperature trend carbon budget emissions pathways warming impacts', 'none', 'seed', 'active'),
+    ('clim-modelling', 1, 'Climate modelling and projections', 'climate science', 'climate model simulation general circulation model CMIP ensemble downscaling bias correction reanalysis atmosphere ocean coupled model parameterization uncertainty internal variability ENSO monsoon aerosol cloud feedback paleoclimate reconstruction observational record forecast skill regional climate model resolution validation observations uncertainty quantification climate projections scenarios', 'none', 'seed', 'active'),
+    ('repro-research', 1, 'Research reproducibility and open science', 'reproducibility and software practice', 'reproducibility replication crisis open science preregistration data sharing transparency statistical power p-hacking publication bias replicability research integrity FAIR principles metadata provenance reproducible workflow computational reproducibility version control containers peer review registered report research practices questionable results scientific rigor open data code availability reporting standards guidelines', 'none', 'seed', 'active'),
+    ('repro-software', 1, 'Research software engineering practice', 'reproducibility and software practice', 'research software engineering scientific software testing continuous integration code review documentation version control git open source package dependency management software sustainability technical debt best practices unit tests reproducible build notebooks scripts developers maintainability software citation software quality research code practices survey scientists programming skills training testing workflows', 'none', 'seed', 'active'),
+    ('aicode-assistants', 1, 'AI coding assistants and code generation', 'AI coding assistants', 'AI coding assistant large language model code generation Copilot ChatGPT programming developers productivity code completion program synthesis prompt benchmark HumanEval pass rate bugs vulnerabilities security code quality software engineering autocomplete pair programming empirical study students novices software developers experiment tool usage accuracy generated programs educational computing study', 'none', 'seed', 'active'),
+    ('aicode-agents-eval', 1, 'LLM coding agents and evaluation', 'AI coding assistants', 'LLM agent software engineering automated program repair issue resolution SWE-bench test generation code review hallucination evaluation trust developer experience controlled experiment agentic tool use repository-level code language models fine-tuning debugging refactoring maintainability adoption survey software maintenance benchmark tasks agents autonomy limitations evaluation metrics generated patches', 'none', 'seed', 'active')
+  ) AS v(topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state)
+ WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = v.topic_key);
+
+-- Default deny, then exact grants. REVOKE ALL first so no inherited or earlier grant survives. rw gets column-level INSERT on only
+-- the columns the app supplies: topic_row_id (identity), version, created_at, modified_at and parent_openalex_topic are NOT
+-- grantable to it, so rw cannot choose topic_row_id (no OVERRIDING SYSTEM VALUE) and thereby the loader's ORDER BY.
+REVOKE ALL ON vera_vjay.topreg_topics FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.topreg_topics FROM %I, %I, %I',
+                            current_setting('vera011.rw'), current_setting('vera011.wo'), current_setting('vera011.ro'));
+END $$;
+GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_rw;
+GRANT INSERT (topic_key, label, field, anchor_text, parent_topic_key, origin, state) ON vera_vjay.topreg_topics TO vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.topreg_topics TO vera_vjay_rw;   -- draft -> active/suspended of runtime rows only (guard trigger)
+-- topreg_judgments: app rw may SELECT and INSERT only (no UPDATE, DELETE, TRUNCATE); id and created_at are not grantable to it.
+REVOKE ALL ON vera_vjay.topreg_judgments FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.topreg_judgments FROM %I, %I, %I',
+                            current_setting('vera011.rw'), current_setting('vera011.wo'), current_setting('vera011.ro'));
+END $$;
+GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_rw;
+GRANT INSERT (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) ON vera_vjay.topreg_judgments TO vera_vjay_rw;
+-- topreg_judge_reservations: rw SELECT plus INSERT (n, mode) only; ro SELECT; wo nothing.
+REVOKE ALL ON vera_vjay.topreg_judge_reservations FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.topreg_judge_reservations FROM %I, %I, %I',
+                            current_setting('vera011.rw'), current_setting('vera011.wo'), current_setting('vera011.ro'));
+END $$;
+GRANT SELECT ON vera_vjay.topreg_judge_reservations TO vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topreg_judge_reservations TO vera_vjay_rw;
+GRANT INSERT (n, mode) ON vera_vjay.topreg_judge_reservations TO vera_vjay_rw;
+
+-- Final privilege check against the actual login roles (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  rw text := current_setting('vera011.rw'); wo text := current_setting('vera011.wo'); ro text := current_setting('vera011.ro');
+  t text; r text; p text; c text; cols text[];
+BEGIN
+  FOREACH t IN ARRAY ARRAY['vera_vjay.topreg_topics', 'vera_vjay.topreg_judgments', 'vera_vjay.topreg_judge_reservations'] LOOP
+    IF NOT (pg_catalog.has_table_privilege(rw, t, 'SELECT') AND pg_catalog.has_table_privilege(ro, t, 'SELECT')) THEN
+      RAISE EXCEPTION '011 grant check failed: rw and ro logins need SELECT on %.', t;
+    END IF;
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN
+          RAISE EXCEPTION '011 grant check failed: login % holds table-wide % on %.', r, p, t;
+        END IF;
+      END LOOP;
+    END LOOP;
+    FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+      IF pg_catalog.has_table_privilege(wo, t, p) THEN
+        RAISE EXCEPTION '011 grant check failed: wo login holds % on % (wo gets no grant).', p, t;
+      END IF;
+    END LOOP;
+    -- the ro login holds no column-level write either
+    FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+      IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE')
+         OR pg_catalog.has_column_privilege(wo, t, c, 'INSERT') OR pg_catalog.has_column_privilege(wo, t, c, 'UPDATE') THEN
+        RAISE EXCEPTION '011 grant check failed: ro or wo login holds a column write privilege on %.', t;
+      END IF;
+    END LOOP;
+  END LOOP;
+  -- topreg_topics: rw column INSERT on exactly the app columns; column UPDATE on state only.
+  cols := ARRAY['topic_key','label','field','anchor_text','parent_topic_key','origin','state'];
+  FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.topreg_topics'::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_topics', c, 'INSERT') <> (c = ANY (cols)) THEN
+      RAISE EXCEPTION '011 grant check failed: rw column INSERT on topreg_topics is wrong for column %.', c;
+    END IF;
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_topics', c, 'UPDATE') <> (c = 'state') THEN
+      RAISE EXCEPTION '011 grant check failed: rw column UPDATE on topreg_topics must be state only (column %).', c;
+    END IF;
+  END LOOP;
+  -- topreg_judgments: rw SELECT plus INSERT on the app columns only; no UPDATE of any column.
+  cols := ARRAY['draft_key','candidate_key','candidate_state','verdict','mode','model_id','latency_ms'];
+  FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.topreg_judgments'::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_judgments', c, 'INSERT') <> (c = ANY (cols)) THEN
+      RAISE EXCEPTION '011 grant check failed: rw column INSERT on topreg_judgments is wrong for column %.', c;
+    END IF;
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_judgments', c, 'UPDATE') THEN
+      RAISE EXCEPTION '011 grant check failed: rw holds column UPDATE on topreg_judgments (column %).', c;
+    END IF;
+  END LOOP;
+  -- topreg_judge_reservations: rw INSERT on n and mode only; no UPDATE of any column.
+  cols := ARRAY['n','mode'];
+  FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.topreg_judge_reservations'::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_judge_reservations', c, 'INSERT') <> (c = ANY (cols)) THEN
+      RAISE EXCEPTION '011 grant check failed: rw column INSERT on topreg_judge_reservations is wrong for column %.', c;
+    END IF;
+    IF pg_catalog.has_column_privilege(rw, 'vera_vjay.topreg_judge_reservations', c, 'UPDATE') THEN
+      RAISE EXCEPTION '011 grant check failed: rw holds column UPDATE on topreg_judge_reservations (column %).', c;
+    END IF;
+  END LOOP;
+END $$;
+
+COMMIT;
