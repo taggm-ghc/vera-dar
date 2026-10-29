@@ -27,3 +27,14 @@ def test_academic_legality_questions_reach_layer2(q):
     "Is it legal to quote a source in my thesis? Also, is it legal to record my boss?"])
 def test_personalised_legal_still_declined(q):
     assert sr.layer1(q, CFG) == (sr.DECLINE, "deny:legal"), q
+
+
+@pytest.mark.parametrize("q", [
+    "Is it legal to quote a source in my thesis\u2026 record my boss",
+    "Is it legal to quote a source in my thesis... record my boss",
+    "Is it legal to quote a source in my thesis. Record my boss",
+    "Is it legal to quote a source in my thesis. Sue my landlord."])
+def test_ellipsis_and_period_do_not_hide_first_person(q):
+    import unicodedata
+    for form in (q, unicodedata.normalize("NFKC", q)):
+        assert sr.layer1(form, CFG) == (sr.DECLINE, "deny:legal"), form
