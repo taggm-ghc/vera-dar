@@ -51,7 +51,7 @@ class _Engine:
                 if "pg_get_userbyid" in q:
                     return _Res(rows=[{"owner": "adm", "app_memberships": 0, "current_reaches_owner": False, "session_reaches_owner": False}])
                 if "to_regclass" in q and q.startswith("SELECT to_regclass"):
-                    return _Res(scalar="vera_vjay.topic_registry")
+                    return _Res(scalar="vera_vjay.topreg_topics")
                 return _Res(rows=[dict(ROW)])
         return C()
 

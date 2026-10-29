@@ -15,6 +15,9 @@ ROLLBACK = ROOT / "db" / "migrations" / "rollback" / "011-DRAFT-topic-registry-r
 SEED_JSON = json.loads((ROOT / "config" / "micro_topic_anchors.json").read_text(encoding="utf-8"))["entries"]
 
 
+# OD-1028(50) (owner, 2026-10-28): the DB objects were renamed to the topreg_ prefix with type suffixes (work/additive-1028/NAMING.md).
+# The guard-test literals below were updated EXPLICITLY for that rename (vera_vjay.topic_registry -> vera_vjay.topreg_topics and the
+# object names; the regexes now match topreg_ as well as topic_registry); every assertion is kept.
 def _sql():
     return MIG.read_text(encoding="utf-8")
 
@@ -47,7 +50,7 @@ def test_drafts_exist_and_match_no_runner_glob():
 
 
 def test_header_states_owner_gate_batch_and_unconfirmed_schema():
-    head = _sql().split("\\set ON_ERROR_STOP")[0]
+    head = _sql().split("BEGIN;")[0]
     assert "NOT EXECUTED" in head and "OWNER-APPROVED DDL" in head
     assert "BATCHED with 008 and 010" in head and "PG 18" in head and "UNCONFIRMED" in head
     assert "PostgreSQL 16 or newer" in head and "PG 18.6 on 2026-10-21" in head and "UNCONFIRMED since" in head  # D1
@@ -68,7 +71,7 @@ def test_seed_equals_json_and_is_active():
 def test_seed_is_idempotent_without_on_conflict():
     code = _code(_sql())
     assert "ON CONFLICT" not in code.upper()
-    assert "WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.topic_registry t WHERE t.topic_key = v.topic_key)" in code
+    assert "WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = v.topic_key)" in code
 
 
 def test_version_has_no_default_and_state_default_is_draft():
@@ -76,7 +79,7 @@ def test_version_has_no_default_and_state_default_is_draft():
     col = re.search(r"\n\s+version\s+INTEGER[^,]*?CHECK \(version >= 1\),", code, re.S).group(0)
     assert "DEFAULT" not in col
     assert re.search(r"state\s+TEXT NOT NULL DEFAULT 'draft'", code)
-    assert "CHECK (state IN ('draft','active','suspended','retired'))" in code
+    assert "CHECK (state IN ('draft','active','suspended','retired','banned','prohibited','secrets'))" in code
     assert "UNIQUE (topic_key, version)" in code
     assert "WHERE state = 'active'" in code  # one active per key
     assert "created_at" in code and "modified_at" in code
@@ -84,26 +87,26 @@ def test_version_has_no_default_and_state_default_is_draft():
 
 def test_every_function_pins_search_path_and_no_membership_test():
     code = _code(_sql())
-    funcs = re.findall(r"CREATE OR REPLACE FUNCTION .*?\$f\$;?", code, re.S)
+    funcs = re.findall(r"CREATE FUNCTION .*?\$f\$;?", code, re.S)
     assert len(funcs) == 5
     for f in funcs:
         assert "SET search_path = pg_catalog, pg_temp" in f, f[:80]
-    assert code.count("pg_has_role") == 2 and "pg_has_role" not in code[code.index("FUNCTION vera_vjay.topic_registry_is_owner"):]
+    assert code.count("pg_has_role") == 2 and "pg_has_role" not in code[code.index("FUNCTION vera_vjay.topreg_is_owner_fn"):]
     assert "pg_get_userbyid(c.relowner) = current_user" in code  # default deny: only the table owner is privileged
 
 
 def test_app_role_insert_is_draft_only_and_new_key_only():
     code = _code(_sql())
-    g = code[code.index("FUNCTION vera_vjay.topic_registry_guard"):code.index("FUNCTION vera_vjay.topic_registry_forbid_truncate")]
+    g = code[code.index("FUNCTION vera_vjay.topreg_guard_trgfn"):code.index("FUNCTION vera_vjay.topreg_forbid_truncate_trgfn")]
     assert "NOT is_owner AND TG_OP = 'DELETE'" in g
     assert "nxt <> 1" in g and "brand-new keys" in g
-    assert "NEW.state <> 'draft'" in g and "NEW.origin <> 'runtime'" in g and "no OpenAlex parent topic" in g  # an 'active' app insert raises
+    assert "NEW.state NOT IN ('draft','banned','prohibited','secrets')" in g and "NEW.origin <> 'runtime'" in g and "no OpenAlex parent topic" in g  # an 'active' app insert raises
     assert "version % is wrong" in g and "NEW.version IS NULL" in g
 
 
 def test_app_role_update_only_runtime_draft_to_active():
     code = _code(_sql())
-    g = code[code.index("FUNCTION vera_vjay.topic_registry_guard"):code.index("FUNCTION vera_vjay.topic_registry_forbid_truncate")]
+    g = code[code.index("FUNCTION vera_vjay.topreg_guard_trgfn"):code.index("FUNCTION vera_vjay.topreg_forbid_truncate_trgfn")]
     assert ("NOT is_owner AND TG_OP = 'UPDATE' AND (OLD.origin <> 'runtime' OR OLD.state <> 'draft' "
             "OR NEW.state NOT IN ('active','suspended'))") in g  # suspended->active, seed rows, other transitions: owner only
     assert g.index("only move a runtime draft row to active or suspended") < g.index("content is immutable")  # immutability applies to all
@@ -113,21 +116,21 @@ def test_app_role_update_only_runtime_draft_to_active():
 
 def test_activate_trigger_updates_only_if_another_active_row_exists():
     code = _code(_sql())
-    a = code[code.index("FUNCTION vera_vjay.topic_registry_activate"):code.index("DROP TRIGGER IF EXISTS topic_registry_a_guard")]
-    assert a.index("IF EXISTS") < a.index("UPDATE vera_vjay.topic_registry")
+    a = code[code.index("FUNCTION vera_vjay.topreg_activate_trgfn"):code.index("CREATE TRIGGER topreg_a_guard_trg")]
+    assert a.index("IF EXISTS") < a.index("UPDATE vera_vjay.topreg_topics")
     assert "SET state = 'retired'" in a
 
 
 def test_exact_grants_column_update_state_only_for_rw():
     code = _code(_sql())
     grants = re.findall(r"GRANT .*?;", code)
-    assert grants == ["GRANT SELECT ON vera_vjay.topic_registry TO vera_vjay_ro;",
-                      "GRANT SELECT ON vera_vjay.topic_registry TO vera_vjay_rw;",
+    assert grants == ["GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_ro;",
+                      "GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_rw;",
                       "GRANT INSERT (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
-                      "ON vera_vjay.topic_registry TO vera_vjay_rw;",
-                      "GRANT UPDATE (state) ON vera_vjay.topic_registry TO vera_vjay_rw;"]  # D3: no table-wide INSERT
-    assert "REVOKE ALL ON vera_vjay.topic_registry FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
-    assert code.index("REVOKE ALL ON vera_vjay.topic_registry") < code.index("GRANT SELECT ON vera_vjay.topic_registry")
+                      "ON vera_vjay.topreg_topics TO vera_vjay_rw;",
+                      "GRANT UPDATE (state) ON vera_vjay.topreg_topics TO vera_vjay_rw;"]  # D3: no table-wide INSERT
+    assert "REVOKE ALL ON vera_vjay.topreg_topics FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
+    assert code.index("REVOKE ALL ON vera_vjay.topreg_topics") < code.index("GRANT SELECT ON vera_vjay.topreg_topics")
     ins = grants[2]
     for forbidden in ("topic_row_id", "version", "created_at", "modified_at", "parent_openalex_topic"):
         assert forbidden not in ins
@@ -145,8 +148,10 @@ def test_free_text_is_ascii_printable_and_capped():
 def test_rollback_drops_table_and_functions_only():
     r = _code(ROLLBACK.read_text(encoding="utf-8"))
     drops = re.findall(r"DROP (TABLE|FUNCTION) IF EXISTS (vera_vjay\.\w+)", r)
-    assert drops[0] == ("TABLE", "vera_vjay.topic_registry") and len(drops) == 6
+    assert ("TABLE", "vera_vjay.topreg_topics") in drops and len(drops) == 6
     assert not re.search(r"\b(DELETE|TRUNCATE|ALTER|UPDATE|INSERT)\b", r.upper())
+    assert re.search(r"^BEGIN;$", r, re.M) and r.rstrip().endswith("COMMIT;") and "CASCADE" not in r and "DROP SCHEMA" not in r
+    assert "DELETES the seed rows" in ROLLBACK.read_text(encoding="utf-8") and "psql -X -v ON_ERROR_STOP=1" in ROLLBACK.read_text(encoding="utf-8")
 
 
 # --- toggles and app-side SQL guard ---
@@ -163,7 +168,7 @@ def test_toggles_default_off_and_proposals_draft():
 def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_set():
     import ast
     allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
-               tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER}
+               tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED}
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
     for p in (ROOT / "vera").rglob("*.py"):
@@ -171,7 +176,7 @@ def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_se
         if "topic_registry" in src and p.name not in ("topic_registry.py",):
             mentioning.append(p.name)
         for node in ast.walk(ast.parse(src)):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and "vera_vjay.topic_registry" in node.value \
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and "vera_vjay.topreg_topics" in node.value \
                     and verbs.match(node.value):
                 assert p.name == "topic_registry.py" and node.value in allowed, (p.name, node.value)
     assert mentioning == ["micro_topic.py"]  # only the delegating hook; no other module touches the registry
@@ -182,7 +187,7 @@ def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_se
     assert "state = 'draft'" in tr.TOPIC_SQL_SUSPEND and "origin = 'runtime'" in tr.TOPIC_SQL_SUSPEND
     for s in allowed:
         assert not re.search(r"\b(DELETE|TRUNCATE|ALTER|COPY|DROP)\b|ON\s+CONFLICT", s, re.I), s
-    assert "topic_registry" not in (ROOT / "vera" / "scope_router.py").read_text(encoding="utf-8")
+    assert "topreg_topics" not in (ROOT / "vera" / "scope_router.py").read_text(encoding="utf-8")
 
 
 # --- loader (fakes) ---
@@ -221,7 +226,7 @@ class _Conn:
         if "pg_get_userbyid" in s:
             return _Res(rows=[self.owner])
         if "to_regclass" in s:
-            return _Res(scalar="vera_vjay.topic_registry" if self.exists else None)
+            return _Res(scalar="vera_vjay.topreg_topics" if self.exists else None)
         if s.startswith("SELECT topic_key"):
             return _Res(rows=self.rows)
         return _Res()
@@ -361,7 +366,11 @@ class _RDB:
                                     "parent_topic_key": params["parent"], "state": "draft", "origin": "runtime", "version": 1})
                     return _RR()
                 if q == tr.TOPIC_SQL_MATCHABLE:
-                    return _RR([r for r in db.rows if r["state"] in ("active", "retired")])
+                    return _RR([r for r in db.rows if r["state"] in ("active", "retired", "banned", "prohibited", "secrets")])
+                if q == tr.TOPIC_SQL_INSERT_REFUSED:
+                    db.rows.append({"topic_key": params["k"], "label": params["label"], "field": params["field"], "anchor_text": params["anchor"],
+                                    "parent_topic_key": None, "state": params["state"], "origin": "runtime", "version": 1})
+                    return _RR()
                 if q in (tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND):
                     new = "active" if q == tr.TOPIC_SQL_ACTIVATE else "suspended"
                     hit = [r for r in db.rows if r["topic_key"] == params["k"] and r["state"] == "draft" and r["origin"] == "runtime"]
@@ -570,7 +579,7 @@ def test_migration_preflight_refuses_app_role_runner():
     assert "current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')" in pre
     assert "pg_catalog.pg_auth_members" in pre and "RAISE EXCEPTION" in pre
     assert "pg_has_role(a.rolname, current_user, 'MEMBER')" in pre and "pg_has_role(a.rolname, session_user, 'MEMBER')" in pre  # D2
-    assert _sql().index("must not run as") < _sql().index("CREATE SCHEMA")
+    assert code.index("must not run as") < code.index("CREATE SCHEMA")
     assert "vera_vjay_wo" in (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text(encoding="utf-8")  # names exist
 
 
@@ -586,17 +595,17 @@ def test_no_dynamic_or_orm_construction_of_the_registry_table_name_in_vera_or_sc
                 def consts(n):
                     return [c.value for c in ast.walk(n) if isinstance(c, ast.Constant) and isinstance(c.value, str)]
                 joined = "".join(consts(node)) if isinstance(node, (ast.BinOp, ast.JoinedStr)) else ""
-                if isinstance(node, (ast.BinOp, ast.JoinedStr)) and re.search(r"topic_?reg|vera_vjay\.topic", joined):
+                if isinstance(node, (ast.BinOp, ast.JoinedStr)) and re.search(r"top(?:ic_)?reg|vera_vjay\.top", joined):
                     hits.append((p.name, "built string", joined[:60]))
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("format", "format_map", "join") \
-                        and re.search(r"topic_?reg|vera_vjay\.topic", "".join(consts(node))):
+                        and re.search(r"top(?:ic_)?reg|vera_vjay\.top", "".join(consts(node))):
                     hits.append((p.name, "format/join", ""))
                 fn = node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else \
                     node.func.attr if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) else ""
                 if fn in ("Table", "Column", "automap_base", "declarative_base", "reflect") and \
-                        re.search(r"topic_?reg", "".join(consts(node))):
+                        re.search(r"top(?:ic_)?reg", "".join(consts(node))):
                     hits.append((p.name, "orm", fn))
-                if isinstance(node, ast.Constant) and isinstance(node.value, str) and "vera_vjay.topic_registry" in node.value \
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and "vera_vjay.topreg_topics" in node.value \
                         and p.name not in own:
                     hits.append((p.name, "sql string outside topic_registry.py", node.value[:60]))
     assert hits == [], hits
@@ -606,9 +615,9 @@ def test_no_dynamic_or_orm_construction_of_the_registry_table_name_in_vera_or_sc
 # --- OD-1028(49): parent_topic_key (static SQL text; the triggers are never executed) and caller-supplied parent_key ---
 def test_parent_topic_key_column_check_trigger_and_immutability():
     code = _code(_sql())
-    assert "parent_topic_key TEXT CONSTRAINT topic_registry_parent_key_chk CHECK (parent_topic_key IS NULL OR parent_topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$')" in code
+    assert "parent_topic_key TEXT CONSTRAINT topreg_parent_key_chk CHECK (parent_topic_key IS NULL OR parent_topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$')" in code
     assert "parent_topic_key TEXT NOT NULL" not in code  # null is allowed
-    g = code[code.index("FUNCTION vera_vjay.topic_registry_guard"):code.index("FUNCTION vera_vjay.topic_registry_forbid_truncate")]
+    g = code[code.index("FUNCTION vera_vjay.topreg_guard_trgfn"):code.index("FUNCTION vera_vjay.topreg_forbid_truncate_trgfn")]
     assert "IF NEW.parent_topic_key IS NOT NULL THEN" in g
     assert "p.topic_key = NEW.parent_topic_key AND p.state = 'active'" in g and "must reference an existing active topic key" in g
     assert "cannot be its own parent" in g
@@ -688,3 +697,195 @@ def test_db_registry_and_absent_fallback_are_cached_with_ttl():
     finally:
         mt._now = __import__("time").monotonic
     assert mt._db_ttl({}) == mt.DEFAULT_DB_TTL and mt._db_ttl({"registry_table": {"cache_ttl_seconds": -1}}) == mt.DEFAULT_DB_TTL
+
+
+# --- OD-1028(50): strictly additive, transactional, collision preflight, names derived from the file (mirrors 012) ---
+def test_forward_is_strictly_additive_transactional_with_full_preflight():
+    sql = _sql()
+    code = _code(sql)
+    assert re.search(r"^BEGIN;$", sql, re.M) and sql.rstrip().endswith("COMMIT;") and [l for l in sql.splitlines() if l == "COMMIT;"] == ["COMMIT;"]
+    assert not re.search(r"CREATE OR REPLACE", code) and not re.search(r"CREATE (TABLE|UNIQUE INDEX|INDEX|FUNCTION|TRIGGER) IF NOT EXISTS", code)
+    assert "CREATE SCHEMA IF NOT EXISTS vera_vjay;" in code
+    assert "DROP " not in code and "\\set" not in code and "psql -X -v ON_ERROR_STOP=1" in sql
+    body = code.split("BEGIN;", 1)[1]
+    assert body.index("already applied or name collision") < body.index("CREATE SCHEMA") < body.index("CREATE TABLE")
+    pre = body[:body.index("CREATE SCHEMA")]
+    tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", code)
+    funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", code)
+    idx = re.findall(r"CREATE UNIQUE INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
+    trg = re.findall(r"CREATE TRIGGER (\w+)", code)
+    chk = re.findall(r"CONSTRAINT (\w+)\s+CHECK", code)
+    assert tables == ["vera_vjay.topreg_topics"] and len(funcs) == 5 and len(idx) == 4 and len(trg) == 4 and len(chk) == 9
+    assert "to_regclass('%s')" % tables[0] in pre
+    for n in funcs + idx + trg:  # derived from the file, so the preflight list cannot drift
+        assert "'%s'" % n in pre, n
+    assert all(re.fullmatch(r"topreg_\w+_(fn|trgfn)", f) for f in funcs)
+    assert all(re.fullmatch(r"topreg_\w+_trg", t) for t in trg)
+    assert all(re.fullmatch(r"topreg_\w+_(uq|pk)", i) for i in idx)
+    assert all(re.fullmatch(r"topreg_\w+_chk", c) for c in chk)
+    assert "pg_proc" in pre and "pg_namespace" in pre and "pg_trigger" in pre and "postgres://" not in pre
+    assert "topic_registry" not in code
+
+
+def test_rollback_drops_every_created_object_by_name():
+    code = _code(_sql())
+    r = _code(ROLLBACK.read_text(encoding="utf-8"))
+    for n in re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", code):
+        assert "DROP FUNCTION IF EXISTS vera_vjay.%s()" % n in r, n
+    for n in re.findall(r"CREATE TRIGGER (\w+)", code):
+        assert "DROP TRIGGER IF EXISTS %s ON vera_vjay.topreg_topics" % n in r, n
+    for n in re.findall(r"CREATE UNIQUE INDEX (\w+)", code):
+        assert "DROP INDEX IF EXISTS vera_vjay.%s;" % n in r, n
+
+
+# --- OD-1028(51)/(52): topical states ---
+def test_refused_states_db_rules_in_the_migration_text():
+    code = _code(_sql())
+    g = code[code.index("FUNCTION vera_vjay.topreg_guard_trgfn"):code.index("FUNCTION vera_vjay.topreg_forbid_truncate_trgfn")]
+    assert "'banned','prohibited','secrets'" in g  # app INSERT allow-list
+    assert "OLD.state <> 'draft' OR NEW.state NOT IN ('active','suspended')" in g  # leaving banned/prohibited/secrets is owner-only
+    assert "leaving banned/prohibited/secrets is owner-only" in g
+    assert "refused-topic row (banned/prohibited/secrets) has no parent topic key" in g
+    assert re.findall(r"GRANT UPDATE", code) == ["GRANT UPDATE"]  # the app's only UPDATE stays column state, draft -> active/suspended
+
+
+ROWS_CASE = [_row("act-one"), _row("ban-one", state="banned", origin="runtime", label="Neutral banned label")]
+
+
+@pytest.mark.parametrize("state", ["banned", "prohibited", "secrets", "suspended", "retired", "draft"])
+def test_non_active_rows_are_never_loaded_as_active(state):
+    data = tr.registry_data_from_rows([_row("act-one"), _row("other-one", state=state, origin="runtime", label="Neutral other label")])
+    assert [e["id"] for e in data["entries"]] == ["act-one"]
+
+
+def test_refused_rows_never_reach_the_registry_or_acquisition_users():
+    reg = mt.load_registry(ON, reader=lambda: (True, ROWS_CASE))
+    assert [e["id"] for e in reg.entries] == ["act-one"]
+    import ast
+    for name in ("acq_rounds.py", "catstep.py"):  # acquisition callers only see Registry entries, never refused rows
+        src = (ROOT / "vera" / name).read_text(encoding="utf-8")
+        assert "REFUSED_STATES" not in src and "refused_entries_from_rows" not in src and "register_refused_topic" not in src
+        ast.parse(src)
+    only_refused = [_row("ban-one", state="banned", origin="runtime", label="Neutral banned label")]
+    with pytest.raises(tr.TopicRegistryError):  # a table with only refused rows has no active row: fail closed
+        tr.registry_data_from_rows(only_refused)
+
+
+MAP = {"harmful": "banned", "advice": "prohibited", "rule_change": "prohibited", "secret_leak": "secrets"}
+MAP_LIST = [{"category_code": c, "state": st} for c, st in MAP.items()]
+REF_ON = {**REG_ON, "refused_state_map": MAP_LIST}
+
+
+def test_config_mapping_is_provisional_and_valid():
+    s = acq_config.load_config()["micro_topic"]["registry_table"]
+    assert s["refused_state_map"] == [{"category_code": c, "state": st} for c, st in MAP.items()] and s["refused_state_mapping_status"] == "PROVISIONAL"
+    assert tr.refused_state_mapping(s) == MAP
+    tr.validate_registry_settings(s)
+    dup = [{"category_code": "a_b", "state": "banned"}] * 2
+    for bad in ({}, {"refused_state_map": []}, {"refused_state_map": [{"category_code": "harmful", "state": "active"}]},
+                {"refused_state_map": [{"category_code": "Bad Code", "state": "banned"}]}, {"refused_state_map": "x"},
+                {"refused_state_map": dup}, {"refused_state_map": [{"category_code": "harmful"}]}):
+        with pytest.raises(tr.TopicRegistryError):
+            tr.refused_state_mapping(bad)
+        if "refused_state_map" in bad:
+            with pytest.raises(tr.TopicRegistryError):
+                tr.validate_registry_settings(bad)  # validated at load
+
+
+@pytest.mark.parametrize("code,state", sorted(MAP.items()))
+def test_register_refused_topic_stores_category_and_neutral_label_only(code, state, caplog):
+    db = _db()
+    with caplog.at_level("INFO", logger="vera"):
+        out = tr.register_refused_topic(None, code, "Neutral placeholder label", settings=REF_ON, engine=db)
+        out2 = tr.register_refused_topic(state, code, "Another neutral label", settings=REF_ON, engine=db)
+    assert out == {"key": "neutral-placeholder-label", "state": state} and out2["state"] == state
+    row = db.rows[1]
+    assert (row["state"], row["field"], row["label"], row["parent_topic_key"]) == (state, code, "Neutral placeholder label", None)
+    assert row["anchor_text"] == f"refused topic category {code}: Neutral placeholder label"  # only code + label: no question text
+    assert "placeholder" not in caplog.text and tr.TOPIC_SQL_INSERT not in db.log
+
+
+def test_register_refused_topic_refusals_write_nothing():
+    for st, code, label, cfg in ((None, "unknown_cat", "Neutral label", REF_ON), ("banned", "advice", "Neutral label", REF_ON),
+                                 (None, "harmful", "ab", REF_ON), (None, "harmful", "Is this a question?", REF_ON),
+                                 (None, "harmful", "x" * 61, REF_ON), (None, "harmful", "Line\nbreak label", REF_ON),
+                                 (None, "harmful", " leading space", REF_ON), (None, "harmful", "Neutral  label", REF_ON),
+                                 (None, "harmful", "Old topic", REF_ON), (None, "harmful", "Neutral label", {**REF_ON, "registration_enabled": False}),
+                                 (None, "harmful", "Neutral label", {**REG_ON}), (None, 5, "Neutral label", REF_ON)):
+        db = _db()
+        with pytest.raises((tr.RegistrationRefused, tr.TopicRegistryError)):
+            tr.register_refused_topic(st, code, label, settings=cfg, engine=db)
+        assert not any(q in (tr.TOPIC_SQL_INSERT_REFUSED, tr.TOPIC_SQL_INSERT) for q in db.log), (code, label)
+        assert len(db.rows) == 1
+
+
+def test_register_refused_topic_signature_takes_no_question_text():
+    import inspect
+    p = inspect.signature(tr.register_refused_topic).parameters
+    assert list(p)[:3] == ["state", "category_code", "label"] and not {"text", "question", "query", "content"} & set(p)
+
+
+@pytest.mark.parametrize("kind", ["banned", "prohibited", "secrets", "active", "retired"])
+def test_draft_similar_to_any_of_these_goes_to_suspended(kind, caplog):
+    db = _db(kind)
+    with caplog.at_level("INFO", logger="vera"):
+        out = _reg(db, EXISTING + " mu")
+    assert out["state"] == "suspended" and tr.TOPIC_SQL_SUSPEND in db.log and tr.TOPIC_SQL_ACTIVATE not in db.log
+    if kind in tr.REFUSED_STATES:
+        assert f"equivalent to a {kind} topic" in caplog.text and "old-topic" not in caplog.text
+
+
+def test_matching_a_refused_topic_is_a_suspension_not_a_refusal():
+    db = _db("banned")
+    out = _reg(db, EXISTING + " mu")  # returns normally: no RegistrationRefused is raised for a refused-topic match
+    assert out["state"] == "suspended"
+
+
+# scrutiny_flag: pure; extra scrutiny, never an automatic refusal
+ENTRIES = (("harmful", EXISTING), ("secret_leak", OTHER))
+
+
+def test_scrutiny_flag_pure_and_returns_category_or_none():
+    assert tr.scrutiny_flag(EXISTING + " mu", ENTRIES) == {"category_code": "harmful"}
+    assert tr.scrutiny_flag(OTHER + " mu", ENTRIES) == {"category_code": "secret_leak"}
+    assert tr.scrutiny_flag("completely unrelated cooking recipe words here", ENTRIES) == {"category_code": None}
+    assert tr.scrutiny_flag("anything", ()) == {"category_code": None} and tr.scrutiny_flag(None, ENTRIES) == {"category_code": None}
+    assert tr.scrutiny_flag("x", ENTRIES, similarity=lambda a, b: 1 / 0) == {"category_code": None}
+    rows = [_row("a-one"), {**_row("b-two", state="banned", origin="runtime"), "field": "harmful"}]
+    assert tr.refused_entries_from_rows(rows) == (("harmful", rows[1]["anchor_text"]),)
+
+
+def test_scrutiny_flag_is_pure_no_io_and_used_by_no_refusal_constructor():
+    import ast
+    tree = ast.parse((ROOT / "vera" / "topic_registry.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "scrutiny_flag")
+    names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+    assert not names & {"engine", "conn", "execute", "connect", "open", "db", "get_role_engine", "begin", "logging", "sqlalchemy"}
+    users = []
+    for p in list((ROOT / "vera").rglob("*.py")) + list((ROOT / "scripts").rglob("*.py")):
+        src = p.read_text(encoding="utf-8")
+        if "scrutiny_flag" in src and p.name != "topic_registry.py":
+            users.append(p.name)
+    assert users == []  # not wired into scope_router.refusal_token, catstep, the refusal path or anything else in this task
+    own = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+           if any(isinstance(c, ast.Name) and c.id == "scrutiny_flag" for c in ast.walk(n)) and n.name != "scrutiny_flag"]
+    assert own == []
+    assert "refus" not in "".join(n.name for n in ast.walk(ast.parse((ROOT / "vera" / "scope_router.py").read_text(encoding="utf-8")))
+                                  if isinstance(n, ast.FunctionDef) and "scrutiny" in n.name)
+
+
+# --- reviewer LOW: cache_ttl_seconds capped 0..3600, rejected at load ---
+@pytest.mark.parametrize("ttl", [0, 1, 300, 3600, 3600.0])
+def test_cache_ttl_in_range_loads(ttl):
+    mt.reset_for_tests()
+    cfg = {"registry_table": {"read_from_db": True, "cache_ttl_seconds": ttl}}
+    assert [e["id"] for e in mt.load_registry(cfg, reader=lambda: (True, [_row("z-new")])).entries] == ["z-new"]
+
+
+@pytest.mark.parametrize("ttl", [-1, 3601, 10 ** 9, "300", None, True, float("nan")])
+def test_cache_ttl_out_of_range_is_rejected_at_load(ttl):
+    mt.reset_for_tests()
+    cfg = {"registry_table": {"read_from_db": True, "cache_ttl_seconds": ttl}}
+    with pytest.raises(tr.TopicRegistryError):
+        mt.load_registry(cfg, reader=lambda: (True, [_row("z-new")]))
+    assert acq_config.load_config()["micro_topic"]["registry_table"]["cache_ttl_seconds"] == 300

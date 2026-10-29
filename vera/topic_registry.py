@@ -1,4 +1,4 @@
-"""TOPICREG-1028: DB-backed topic registry (vera_vjay.topic_registry, db/migrations/pending/011-DRAFT, NOT applied).
+"""TOPICREG-1028: DB-backed topic registry (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT, NOT applied).
 READ path (read_topic_rows, load_active_registry_data): SELECT only, in a READ ONLY transaction through the existing rw engine.
 WRITE path (register_proposed_topic): off by default (registry_table.registration_enabled); inserts one runtime 'draft' row and
 moves it to active or suspended. vera.micro_topic.load_registry delegates to the read path only, and only when
@@ -16,12 +16,18 @@ class TopicRegistryError(RuntimeError):
     so key_for_provenance does not turn it into 'unassigned')."""
 
 
-# TOPICREG-1028: the registry table (vera_vjay.topic_registry, db/migrations/pending/011-DRAFT, NOT applied). The JSON file is
+# TOPICREG-1028: the registry table (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT, NOT applied). The JSON file is
 # the SEED and the FALLBACK. Settings live in cfg["registry_table"]; only explicit boolean true enables a toggle.
-TOPIC_STATES = ("draft", "active", "suspended", "retired")
-TOPIC_SQL_EXISTS = "SELECT to_regclass('vera_vjay.topic_registry')"
+TOPIC_STATES = ("draft", "active", "suspended", "retired", "banned", "prohibited", "secrets")
+# OD-1028(51)/(52): refused-topic states. Such rows are NEVER loaded as active and NEVER trigger acquisition (registry_data_from_rows
+# builds entries from state == 'active' only). Only the owner/admin may move a row out of these states (DB trigger).
+REFUSED_STATES = ("banned", "prohibited", "secrets")
+CACHE_TTL_MAX = 3600  # reviewer LOW: registry_table.cache_ttl_seconds accepted range is 0..3600, else rejected at load
+REFUSED_LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 -]{1,58}[A-Za-z0-9]")  # neutral label: 3-60 chars, letters digits space hyphen only
+_CATEGORY_CODE = re.compile(r"[a-z][a-z_]{1,31}")
+TOPIC_SQL_EXISTS = "SELECT to_regclass('vera_vjay.topreg_topics')"
 TOPIC_SQL_ROWS = ("SELECT topic_key, version, label, field, anchor_text, parent_openalex_topic, parent_topic_key, origin, state "
-                  "FROM vera_vjay.topic_registry ORDER BY topic_row_id")
+                  "FROM vera_vjay.topreg_topics ORDER BY topic_row_id")
 # R1 (both directions): the table owner is unrestricted by the guard trigger. (a) the owner must not be, or hold a USABLE
 # (inherit_option OR set_option; PG16+ columns, ADMIN-only rows do not count) membership in, an app role; (b) the session
 # (current_user and session_user) must not be able to reach the owner (pg_has_role MEMBER follows inheritance).
@@ -32,7 +38,7 @@ TOPIC_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) AS owner, "
                    "AND r.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')) AS app_memberships, "
                    "pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER') AS current_reaches_owner, "
                    "pg_catalog.pg_has_role(session_user, c.relowner, 'MEMBER') AS session_reaches_owner "
-                   "FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('vera_vjay.topic_registry')")
+                   "FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('vera_vjay.topreg_topics')")
 _TOPIC_KEY = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 _PRINTABLE = re.compile(r"[ -~]+")
 _ROW_KEYS = {"topic_key", "version", "label", "field", "anchor_text", "parent_openalex_topic", "parent_topic_key", "origin", "state"}
@@ -50,6 +56,35 @@ def proposal_state(settings: dict) -> str:
     if st != "draft":
         raise TopicRegistryError(f"proposal_state must be 'draft', got {st!r}")
     return st
+
+
+def validate_registry_settings(settings: dict) -> None:
+    """Fail closed on invalid registry_table settings (called at load and before any registration). cache_ttl_seconds, when
+    present, must be a number in 0..3600; refused_state_map, when present, must be a valid mapping."""
+    if "cache_ttl_seconds" in settings:
+        v = settings["cache_ttl_seconds"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= CACHE_TTL_MAX:
+            raise TopicRegistryError(f"registry_table.cache_ttl_seconds must be a number in 0..{CACHE_TTL_MAX}")
+    if "refused_state_map" in settings:
+        refused_state_mapping(settings)
+
+
+def refused_state_mapping(settings: dict) -> dict:
+    """The PROVISIONAL category code -> refused state mapping from config registry_table.refused_state_map, validated: a non-empty
+    list of {"category_code", "state"} objects (a list because the tracked-config secret scanner refuses any value under a dotted
+    path containing the word "secret"), unique well-formed codes, states in REFUSED_STATES. Returned as a dict."""
+    lst = settings.get("refused_state_map")
+    if not isinstance(lst, list) or not lst:
+        raise TopicRegistryError("registry_table.refused_state_map is missing or empty")
+    out = {}
+    for e in lst:
+        if not isinstance(e, dict) or set(e) != {"category_code", "state"}:
+            raise TopicRegistryError("registry_table.refused_state_map has an invalid entry")
+        code, st = e["category_code"], e["state"]
+        if not isinstance(code, str) or not _CATEGORY_CODE.fullmatch(code) or st not in REFUSED_STATES or code in out:
+            raise TopicRegistryError("registry_table.refused_state_map has an invalid entry")
+        out[code] = st
+    return out
 
 
 def normalize_topic_key(text) -> str:
@@ -125,7 +160,8 @@ def registry_data_from_rows(rows) -> dict:
 
 def load_active_registry_data(cfg, reader=None):
     """Registry data dict from the DB's active rows, or None when the table is absent (caller uses the JSON seed).
-    Raises TopicRegistryError on any other problem (fail closed)."""
+    Raises TopicRegistryError on any other problem (fail closed), including invalid registry_table settings."""
+    validate_registry_settings(registry_table_settings(cfg))
     exists, rows = (reader or read_topic_rows)()
     if not exists:
         logging.getLogger("vera").warning("topic registry table absent: using the JSON seed")
@@ -134,19 +170,22 @@ def load_active_registry_data(cfg, reader=None):
 
 
 # --- runtime registration (OD-1028(9); owner 2026-10-28). Whole path OFF by default (registry_table.registration_enabled). ---
-TOPIC_SQL_KEY_EXISTS = "SELECT 1 FROM vera_vjay.topic_registry WHERE topic_key = :k"
-TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topic_registry "
-                       "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
-TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topic_registry WHERE topic_key = :p AND state = 'active'"
-TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topic_registry (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
+TOPIC_SQL_KEY_EXISTS = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :k"
+TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topreg_topics "
+                       "WHERE state IN ('active', 'retired', 'banned', 'prohibited', 'secrets') ORDER BY topic_row_id")
+TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :p AND state = 'active'"
+TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
                     "VALUES (:k, :label, :field, :anchor, :parent, 'runtime', 'draft')")
-TOPIC_SQL_ACTIVATE = ("UPDATE vera_vjay.topic_registry SET state = 'active' "
+TOPIC_SQL_INSERT_REFUSED = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
+                            "VALUES (:k, :label, :field, :anchor, NULL, 'runtime', :state)")
+TOPIC_SQL_ACTIVATE = ("UPDATE vera_vjay.topreg_topics SET state = 'active' "
                       "WHERE topic_key = :k AND version = 1 AND state = 'draft' AND origin = 'runtime'")
-TOPIC_SQL_SUSPEND = ("UPDATE vera_vjay.topic_registry SET state = 'suspended' "
+TOPIC_SQL_SUSPEND = ("UPDATE vera_vjay.topreg_topics SET state = 'suspended' "
                      "WHERE topic_key = :k AND version = 1 AND state = 'draft' AND origin = 'runtime'")
 TOPIC_SQL_LOCK = "SELECT pg_advisory_xact_lock(:n)"
-TOPIC_LOCK_ID = zlib.crc32(b"vera_vjay.topic_registry")  # one lock id serialises every registration (D6)
+TOPIC_LOCK_ID = zlib.crc32(b"vera_vjay.topreg_topics")  # one lock id serialises every registration (D6)
 SIMILARITY_MAX_DEFAULT = 0.50
+MATCH_ORDER = ("active", "retired", "banned", "prohibited", "secrets")  # which matched kind is reported first
 
 
 class RegistrationRefused(RuntimeError):
@@ -178,7 +217,7 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
                             parent_key=None) -> dict:
     """Register a NEW topic (OD-1028(9), OD-1028(49); owner 2026-10-28). Written as 'draft', then in the SAME transaction under
     pg_advisory_xact_lock its anchor text is scored (>= similarity_max = a MATCH, meaning semantic equivalence or paraphrase
-    ONLY) against every ACTIVE and RETIRED topic (other drafts and suspended topics are ignored). A narrower topic inside an
+    ONLY) against every ACTIVE, RETIRED, BANNED, PROHIBITED and SECRETS topic (other drafts and suspended topics are ignored). A narrower topic inside an
     active topic, or a broader non-equivalent topic, is NOT a match: it is a distinct micro-topic and is activated.
       equivalent to an active topic  -> draft -> 'suspended' (logged: match kind 'active' + the matched key)
       equivalent only to a retired   -> draft -> 'suspended' (logged: match kind 'retired' + the matched key)
@@ -193,6 +232,7 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
     if settings.get("registration_enabled") is not True:
         raise RegistrationRefused("runtime topic registration is disabled")
     proposal_state(settings)
+    validate_registry_settings(settings)
     limit = similarity_max(settings)
     label = _clean("label", label, *_TOPIC_LIMITS["label"])
     field = _clean("field", field, *_TOPIC_LIMITS["field"])
@@ -229,12 +269,15 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
                     return {"key": key, "state": "draft"}
                 if score >= limit:
                     matched.setdefault(r["state"], r["topic_key"])
-            kind = "active" if "active" in matched else ("retired" if "retired" in matched else None)
+            kind = next((k for k in MATCH_ORDER if k in matched), None)
             sql, state = (TOPIC_SQL_SUSPEND, "suspended") if kind else (TOPIC_SQL_ACTIVATE, "active")
             if conn.execute(text(sql), {"k": key}).rowcount != 1:
                 raise TopicRegistryError("topic transition affected an unexpected number of rows")
             if kind:
-                log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
+                if kind in REFUSED_STATES:  # a refused topic matched: suspended for owner review, never a refusal; category only
+                    log.info("topic proposal suspended: equivalent to a %s topic", kind)
+                else:
+                    log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
             else:
                 log.info("topic proposal activated")
             return {"key": key, "state": state}
@@ -242,3 +285,68 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         raise
     except Exception as exc:  # noqa: BLE001 - class only, no driver text, no user text
         raise TopicRegistryError(f"topic registration failed ({type(exc).__name__})") from None
+
+
+def register_refused_topic(state, category_code, label, *, settings: dict, engine=None) -> dict:
+    """Record a REFUSED topic (OD-1028(51)/(52)) as a banned, prohibited or secrets row. The caller supplies `category_code` from
+    an EXISTING refusal verdict (this function does not classify anything). The state comes from the PROVISIONAL config mapping
+    registry_table.refused_state_map (harmful -> banned; advice, rule_change -> prohibited; secret_leak -> secrets);
+    `state` may be None (derived) and, when given, must equal the mapped state. Stores ONLY the category code (column field) and a
+    neutral label (3-60 chars of letters, digits, space, hyphen), NEVER question text (OD-1028(35)): the anchor text is built from
+    the category code and the label alone. Refused before any write: disabled, unknown category, state mismatch, bad label, key
+    already present. The row is never loaded as active and never triggers acquisition. Returns {"key", "state"}."""
+    if settings.get("registration_enabled") is not True:
+        raise RegistrationRefused("runtime topic registration is disabled")
+    validate_registry_settings(settings)
+    mapping = refused_state_mapping(settings)
+    if not isinstance(category_code, str) or category_code not in mapping:
+        raise RegistrationRefused("category_code is not a configured refusal category")
+    mapped = mapping[category_code]
+    if state is not None and state != mapped:
+        raise RegistrationRefused("state does not match the configured mapping for this category")
+    if not isinstance(label, str) or not REFUSED_LABEL_RE.fullmatch(label) or "  " in label:
+        raise RegistrationRefused("label must be a neutral 3-60 character label of letters, digits, spaces and hyphens")
+    label = label.strip()
+    try:
+        key = normalize_topic_key(label)
+    except ValueError:
+        raise RegistrationRefused("label does not normalize to a valid topic key") from None
+    anchor = f"refused topic category {category_code}: {label}"
+    from sqlalchemy import text
+    if engine is None:
+        from vera import db
+        engine = db.get_role_engine("rw")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
+            if conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
+                raise RegistrationRefused("topic key already exists")
+            conn.execute(text(TOPIC_SQL_INSERT_REFUSED), {"k": key, "label": label, "field": category_code, "anchor": anchor, "state": mapped})
+        logging.getLogger("vera").info("refused topic recorded: state %s", mapped)
+        return {"key": key, "state": mapped}
+    except (RegistrationRefused, TopicRegistryError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - class only
+        raise TopicRegistryError(f"refused topic registration failed ({type(exc).__name__})") from None
+
+
+def refused_entries_from_rows(rows) -> tuple:
+    """((category_code, anchor_text), ...) for the banned/prohibited/secrets rows of validated DB rows; no I/O. For scrutiny_flag."""
+    return tuple((r["field"], r["anchor_text"]) for r in rows or () if isinstance(r, dict) and r.get("state") in REFUSED_STATES)
+
+
+def scrutiny_flag(text, refused_entries=(), *, similarity=lexical_similarity, threshold: float = SIMILARITY_MAX_DEFAULT) -> dict:
+    """PURE (no I/O). {"category_code": code or None}: the category of the first refused-topic entry whose anchor text scores at or
+    above `threshold` against `text`. It is a request for STRICTER INTENT REVIEW by a future caller ("extra scrutiny, not automatic
+    refusal", OD-1028(48)/(52)); a match must NEVER by itself cause a refusal, and nothing in this task calls it from a refusal path.
+    Any metric failure gives None."""
+    if not isinstance(text, str):
+        return {"category_code": None}
+    for code, anchor in refused_entries:
+        try:
+            score = similarity(text, anchor)
+        except Exception:  # noqa: BLE001 - fail to "no flag"; never refuse
+            continue
+        if not isinstance(score, bool) and isinstance(score, (int, float)) and score == score and score >= threshold:
+            return {"category_code": code}
+    return {"category_code": None}
