@@ -90,6 +90,11 @@ class PostgresStore:
         """Returns (source_id, version, is_new_row). Identical content under the same canonical URL
         reuses the existing version (schema forbids a duplicate); changed content becomes version N+1."""
         canon = normalize_url(fr.url)
+        from vera.url_key import legacy_keys
+        for k in [canon, *legacy_keys({"url": fr.url})]:  # R3NORM-1028: current key first, then a legacy-keyed row
+            if self._x("SELECT 1 FROM {S}.canonical_sources WHERE canonical_url=:u", {"u": k}).first() is not None:
+                canon = k
+                break
         self._x("INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) ON CONFLICT (canonical_url) DO NOTHING",
                 {"u": canon})
         cs = self._x("SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url=:u", {"u": canon}).scalar_one()

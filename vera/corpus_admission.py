@@ -146,8 +146,10 @@ class WoCorpusStore:
 
 
 def canonical_url(src: dict) -> str:
-    doi = str(src.get("doi") or "").strip().lower()
-    return f"https://doi.org/{doi}" if doi else str(src["url"]).strip().rstrip("/")
+    """R3 key for a NEW canonical source (R3NORM-1028: the single normaliser, vera.url_key.canonical_key).
+    Lookups must use vera.url_key.lookup_keys so rows stored under the old spelling are still found."""
+    from vera.url_key import canonical_key
+    return canonical_key({"doi": src.get("doi"), "url": src["url"]})
 
 
 def is_stored_document_source(src: dict) -> bool:

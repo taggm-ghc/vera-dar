@@ -265,7 +265,7 @@ def test_rerun_refused_by_hash_and_by_url(world, capsys):
     # hash only: new URLs, same text hash
     r3 = copy.deepcopy(rows)
     for r in r3:
-        r["source"]["canonical_url"] += "#other"
+        r["source"]["canonical_url"] += "-other"  # R3NORM-1028: was "#other"; a fragment-only variant is now (correctly) the same key
     with pytest.raises(fulltext_loader.IngestError, match="same text"):
         s.write_rows(_engine(spec), _engine(spec), r3, fulltext_loader.load_config(), report["n_spans"])
     assert _counts(spec) == before

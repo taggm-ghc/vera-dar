@@ -418,9 +418,13 @@ def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, 
     fn = getattr(deps, "stored_rows", None)
     if fn is None or not ranked:
         return ([], []), ranked
-    cus = [canonical_url({"doi": doi, "url": cand.get("url") or ""}) for _sc, doi, cand, _i in ranked]
+    from vera.url_key import legacy_keys
+    csrcs = [{"doi": doi, "url": cand.get("url") or ""} for _sc, doi, cand, _i in ranked]
+    cus = [canonical_url(s) for s in csrcs]
+    # R3NORM-1028 read-time compatibility: also ask for rows stored under the legacy spelling of each key
+    legacy = [dict.fromkeys(k for k in legacy_keys(s) if k not in cus) for s in csrcs]
     try:
-        srcs, spans = fn(cus)
+        srcs, spans = fn(cus + [k for ks in legacy for k in ks])
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline reuse failed (%s)", type(e).__name__)
         return ([], []), ranked
@@ -431,7 +435,8 @@ def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, 
     for sp in spans or ():
         by_src.setdefault(sp.get("source_id"), []).append(sp)
     take, rest = [], []
-    for cu, r in zip(cus, ranked):
+    for cu0, lks, r in zip(cus, legacy, ranked):
+        cu = next((k for k in [cu0, *lks] if k in newest), cu0)  # current key first, then a legacy-keyed row
         if cu in newest and len(take) < int(acq_config.bound(acq, "max_docs_per_job")):
             row = newest.pop(cu)
             if question is not None:
