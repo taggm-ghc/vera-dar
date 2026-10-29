@@ -448,7 +448,7 @@ def test_reservation_is_taken_before_the_call_and_a_failed_reservation_skips_the
     db = RDB(_rows("active", "retired"))
     c = FakeClient(answer=_answers(lambda _: "no"))
     assert _reg(db, c, "active")["state"] == "active"
-    assert db.jres == [{"dk": "new-topic-one", "m": "active", "n": 2}] and len(c.calls) == 1
+    assert db.jres == [{"m": "active", "n": 2}] and len(c.calls) == 1
     db = RDB(_rows("active", "retired"), fail_reserve=True)  # the reservation row cannot be inserted: NO Groq call
     c = FakeClient(answer=_answers(lambda _: "no"))
     assert _reg(db, c, "active")["state"] == "draft" and not c.calls and db.jlog == [] and db.jres == []
@@ -575,3 +575,17 @@ def test_guard_judge_module_has_no_other_provider_no_paid_model_no_question_para
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "judge_equivalence")
     assert not [a.arg for a in fn.args.args + fn.args.kwonlyargs if "question" in a.arg]
     assert "load_chain" in src and "openai_enabled=False" in src
+
+
+def test_e8_budget_bounds_calls_tokens_and_counts_unknown_beyond_budget():  # HARDEN-FIX2 E8 focused proof
+    many = [{"topic_key": f"t-{i}", "label": f"Topic {i}", "anchor_text": "z" * 30, "state": "active"} for i in range(23)]
+    # call budget: 3 calls x batch 5 = 15 covered of 23, exactly 3 calls, 8 unknown
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    res = _judge(c, many, judge={"batch_size": 5, "max_calls_per_registration": 3})
+    assert len(c.calls) == 3 and (res.covered, res.total, res.calls) == (15, 23, 3) and res.budget_exhausted
+    assert [v.verdict for v in res.verdicts] == ["no"] * 15 + ["unknown"] * 8 and len(res.verdicts) == 23
+    # token budget: each call reports 900 tokens; 2000 allows two calls (second estimate fits), the third is refused before any call
+    c = FakeClient(answer=_answers(lambda _: "no"), tokens=900)
+    res = _judge(c, many, judge={"batch_size": 5, "max_calls_per_registration": 50, "max_tokens_per_registration": 2000, "max_completion_tokens": 100})
+    assert len(c.calls) == res.calls and res.calls < 5 and res.covered == 5 * res.calls and res.total == 23 and res.budget_exhausted
+    assert res.tokens <= 1800 and [v.verdict for v in res.verdicts][res.covered:] == ["unknown"] * (23 - res.covered)

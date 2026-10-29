@@ -5,7 +5,7 @@
 -- Non-destructive rollback is: set micro_topic.registry_table.read_from_db to false (the JSON seed is used again).
 -- Dependency order: triggers (reference the functions and the table), then the table (drops its indexes and constraints), then
 -- the functions (the guard uses is_owner). The schema vera_vjay is shared with other objects and is NOT dropped.
--- WARNING: this DELETES the seed rows AND every runtime row (all versions, all states) with the table, and every judgment-log row (topreg_judgments). Export first.
+-- WARNING: this DELETES the seed rows AND every runtime row (all versions, all states) with the table, and every judgment-log row (topreg_judgments) and reservation row (topreg_judge_reservations). Export first.
 -- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
 -- Drops only the objects the forward file creates (IF EXISTS, no CASCADE); the schema is kept.
 BEGIN;
@@ -15,6 +15,8 @@ DROP TRIGGER IF EXISTS topreg_c_activate_trg ON vera_vjay.topreg_topics;
 DROP TRIGGER IF EXISTS topreg_b_labels_trg ON vera_vjay.topreg_topics;
 DROP TRIGGER IF EXISTS topreg_a_guard_trg ON vera_vjay.topreg_topics;
 
+DROP INDEX IF EXISTS vera_vjay.topreg_judge_reservations_created_idx;
+DROP TABLE IF EXISTS vera_vjay.topreg_judge_reservations;
 DROP INDEX IF EXISTS vera_vjay.topreg_judgments_created_idx;
 DROP INDEX IF EXISTS vera_vjay.topreg_judgments_draft_idx;
 DROP TABLE IF EXISTS vera_vjay.topreg_judgments;

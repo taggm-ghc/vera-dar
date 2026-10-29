@@ -231,12 +231,12 @@ TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topr
                        "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
 TOPIC_SQL_MATCHABLE_JUDGE = ("SELECT topic_key, version, label, anchor_text, state, modified_at FROM vera_vjay.topreg_topics "
                              "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
-# HARDEN-FIX2 E5: the daily cap sums RESERVATION rows (verdict 'reserved'; latency_ms holds the number of judgments reserved), taken under a
-# short advisory lock BEFORE any model call, so concurrent registrations cannot overshoot it.
-TOPIC_SQL_JUDGE_DAY_COUNT = ("SELECT COALESCE(sum(latency_ms), 0)::bigint FROM vera_vjay.topreg_judgments "
-                             "WHERE verdict = 'reserved' AND created_at > now() - interval '1 day'")
-TOPIC_SQL_JUDGE_RESERVE = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
-                           "VALUES (:dk, :dk, 'none', 'reserved', :m, 'none', :n)")
+# HARDEN-FIX2 E5/F2/F3: the daily cap sums n over topreg_judge_reservations (counts only, no keys or text), reserved under a short advisory
+# lock BEFORE any model call, so concurrent registrations cannot overshoot it. n is bounded by the table CHECK (1..2000 = 20 x 100, the
+# validated config maxima batch_size x max_calls_per_registration).
+TOPIC_SQL_JUDGE_DAY_COUNT = ("SELECT COALESCE(sum(n), 0)::bigint FROM vera_vjay.topreg_judge_reservations "
+                             "WHERE created_at > now() - interval '1 day'")
+TOPIC_SQL_JUDGE_RESERVE = "INSERT INTO vera_vjay.topreg_judge_reservations (n, mode) VALUES (:n, :m)"
 TOPIC_SQL_JUDGMENT_INSERT = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
                              "VALUES (:dk, :ck, :cs, :v, :m, :mid, :ms)")
 # OD-1028(57), when the judge is not in active mode (disabled or shadow): EXACT duplicate = an existing row with the same normalized topic_key
@@ -305,7 +305,7 @@ def _reserve(engine, key, n, cfg, log) -> bool:
             if isinstance(today, bool) or not isinstance(today, int) or today + n > cfg["max_judgments_per_day"]:
                 log.warning("topic judge skipped (daily budget exhausted or the judgment log is unavailable)")
                 return False
-            conn.execute(text(TOPIC_SQL_JUDGE_RESERVE), {"dk": key, "m": cfg["mode"], "n": n})
+            conn.execute(text(TOPIC_SQL_JUDGE_RESERVE), {"m": cfg["mode"], "n": n})
         return True
     except Exception as exc:  # noqa: BLE001 - class only
         log.warning("topic judge skipped (the judgment could not be reserved: %s)", type(exc).__name__)

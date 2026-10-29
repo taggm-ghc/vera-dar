@@ -135,14 +135,19 @@ def test_exact_grants_column_update_state_only_for_rw():
                       "GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_ro;",
                       "GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_rw;",
                       "GRANT INSERT (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
-                      "ON vera_vjay.topreg_judgments TO vera_vjay_rw;"]  # D3: no table-wide INSERT
+                      "ON vera_vjay.topreg_judgments TO vera_vjay_rw;",
+                      "GRANT SELECT ON vera_vjay.topreg_judge_reservations TO vera_vjay_ro;",
+                      "GRANT SELECT ON vera_vjay.topreg_judge_reservations TO vera_vjay_rw;",
+                      "GRANT INSERT (n, mode) ON vera_vjay.topreg_judge_reservations TO vera_vjay_rw;"]  # D3: no table-wide INSERT; wo gets nothing
     assert "REVOKE ALL ON vera_vjay.topreg_topics FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
     assert code.index("REVOKE ALL ON vera_vjay.topreg_topics") < code.index("GRANT SELECT ON vera_vjay.topreg_topics")
     assert "REVOKE ALL ON vera_vjay.topreg_judgments FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
-    for t in ("topreg_topics", "topreg_judgments"):  # the three logins too, from the psql variables
+    assert "REVOKE ALL ON vera_vjay.topreg_judge_reservations FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
+    assert not [g for g in grants if "reservations" in g and "vera_vjay_wo" in g]
+    for t in ("topreg_topics", "topreg_judgments", "topreg_judge_reservations"):  # the three logins too, from the psql variables
         assert "REVOKE ALL ON vera_vjay.%s FROM %%I, %%I, %%I" % t in code, t
     ins = grants[2]
-    assert not [g for g in grants if "topreg_judgments" in g and re.search(r"UPDATE|DELETE|TRUNCATE|ALL", g)]
+    assert not [g for g in grants if ("topreg_judgments" in g or "reservations" in g) and re.search(r"UPDATE|DELETE|TRUNCATE|ALL", g)]
     for forbidden in ("topic_row_id", "version", "created_at", "modified_at", "parent_openalex_topic"):
         assert forbidden not in ins
     assert "BEFORE TRUNCATE" in code
@@ -159,7 +164,7 @@ def test_free_text_is_ascii_printable_and_capped():
 def test_rollback_drops_table_and_functions_only():
     r = _code(ROLLBACK.read_text(encoding="utf-8"))
     drops = re.findall(r"DROP (TABLE|FUNCTION) IF EXISTS (vera_vjay\.\w+)", r)
-    assert drops == [("TABLE", "vera_vjay.topreg_judgments"), ("TABLE", "vera_vjay.topreg_topics"), ("FUNCTION", "vera_vjay.topreg_activate_trgfn"),
+    assert drops == [("TABLE", "vera_vjay.topreg_judge_reservations"), ("TABLE", "vera_vjay.topreg_judgments"), ("TABLE", "vera_vjay.topreg_topics"), ("FUNCTION", "vera_vjay.topreg_activate_trgfn"),
                      ("FUNCTION", "vera_vjay.topreg_label_unique_trgfn"), ("FUNCTION", "vera_vjay.topreg_forbid_truncate_trgfn"),
                      ("FUNCTION", "vera_vjay.topreg_guard_trgfn"), ("FUNCTION", "vera_vjay.topreg_is_owner_fn")]  # D7: full order (tables, then functions)
     assert r.index("DROP TRIGGER IF EXISTS topreg_a_guard_trg") < r.index("DROP TABLE IF EXISTS vera_vjay.topreg_topics") < r.index("DROP FUNCTION")
@@ -742,7 +747,7 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     idx = re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
     trg = re.findall(r"CREATE TRIGGER (\w+)", code)
     chk = re.findall(r"CONSTRAINT (\w+)\s+CHECK", code)
-    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 19
+    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments", "vera_vjay.topreg_judge_reservations"] and len(funcs) == 5 and len(idx) == 9 and len(trg) == 4 and len(chk) == 20
     for t in tables:
         assert "to_regclass('%s')" % t in pre, t
     for n in funcs + idx + trg:  # derived from the file, so the preflight list cannot drift
@@ -755,9 +760,10 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     assert "topic_registry" not in code
     # D4: identity sequences are named explicitly and, with the row types, collision-checked
     assert "SEQUENCE NAME vera_vjay.topreg_topics_topic_row_id_seq" in code and "SEQUENCE NAME vera_vjay.topreg_judgments_id_seq" in code
-    for n in ("topreg_topics_topic_row_id_seq", "topreg_judgments_id_seq"):
+    assert "SEQUENCE NAME vera_vjay.topreg_judge_reservations_id_seq" in code
+    for n in ("topreg_topics_topic_row_id_seq", "topreg_judgments_id_seq", "topreg_judge_reservations_id_seq"):
         assert "to_regclass('vera_vjay.%s')" % n in pre, n
-    for t in ("topreg_topics", "topreg_judgments"):
+    for t in ("topreg_topics", "topreg_judgments", "topreg_judge_reservations"):
         assert "to_regtype('vera_vjay.%s')" % t in pre, t
 
 
@@ -1021,7 +1027,8 @@ def test_refused_category_enumerated_list_and_content_check_cover_the_owner_too(
     assert "field IN ('harmful','advice','rule_change')" in chk1 and "^[a-z][a-z_]" not in chk1
     j = code.index("CONSTRAINT topreg_refused_key_chk")
     chk2 = code[j:code.index(");", j)]
-    for frag in ("topic_key NOT LIKE 'refused-%'", "state IN ('banned','prohibited','secrets')", "field IN ('harmful','advice','rule_change')",
+    assert "state" not in chk2  # F1: content only; the owner's admin-only exit (banned -> retired) stays possible
+    for frag in ("topic_key NOT LIKE 'refused-%'", "field IN ('harmful','advice','rule_change')",
                  "label = 'refused ' || field", "topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')", "parent_topic_key IS NULL"):
         assert frag in chk2, frag
     # the enumerated list equals the configured refuse-disposition categories (extended only by migration)
@@ -1047,3 +1054,35 @@ def test_a_non_draft_or_seed_row_of_the_key_is_not_rejudged():
     for st, origin in (("suspended", "runtime"), ("active", "runtime"), ("draft", "seed")):
         db = _RDB([_draft_row(st, origin)])
         assert _reg(db, OTHER)["state"] == "duplicate" and tr.TOPIC_SQL_ACTIVATE not in db.log
+
+
+def test_owner_exit_of_a_placeholder_banned_to_retired_is_allowed_by_the_check_text():  # HARDEN-FIX2 F1
+    """The two CHECKs, evaluated on the row text: a placeholder row moved banned -> retired keeps its content, so topreg_refused_key_chk
+    (content only) holds; topreg_refused_chk is an implication on the refused states and is vacuous for 'retired'."""
+    code = _code(_sql())
+    j = code.index("CONSTRAINT topreg_refused_key_chk")
+    chk2 = code[j:code.index(");", j)]
+    assert "state" not in chk2
+    assert code[code.index("CONSTRAINT topreg_refused_chk"):j].lstrip().startswith("CONSTRAINT topreg_refused_chk CHECK (state NOT IN ('banned','prohibited','secrets') OR")
+    ph = tr.refused_placeholder("harmful")
+    row = {"topic_key": ph["key"], "field": ph["field"], "label": ph["label"], "anchor_text": ph["anchor"], "parent_topic_key": None}
+    def key_chk(r):  # python mirror of the SQL content check
+        return (not r["topic_key"].startswith("refused-")) or (r["field"] in ("harmful", "advice", "rule_change") and r["label"] == "refused " + r["field"]
+                and r["topic_key"] == "refused-" + r["field"].replace("_", "-") and r["anchor_text"] == "refused topic category " + r["field"] + ": fixed placeholder, no question text"
+                and r["parent_topic_key"] is None)
+    assert key_chk({**row, "state": "banned"}) and key_chk({**row, "state": "retired"})  # state is irrelevant to the content check
+    assert not key_chk({**row, "label": "other"})  # a non-placeholder with the reserved prefix is still refused
+
+
+def test_reservation_table_is_counts_only_and_bounded():  # HARDEN-FIX2 F2/F3
+    code = _code(_sql())
+    i = code.index("CREATE TABLE vera_vjay.topreg_judge_reservations")
+    t = code[i:code.index(");", i)]
+    assert re.findall(r"^\s+(\w+)\s", t.split("(", 1)[1], re.M) == ["id", "n", "mode", "created_at"]
+    assert "n BETWEEN 1 AND 2000" in t
+    assert "draft_key" not in t and "candidate" not in t
+    from vera import topic_judge as tj
+    hi = tj._INT_RANGES["batch_size"][1] * tj._INT_RANGES["max_calls_per_registration"][1]
+    assert hi == 2000  # the CHECK bound equals the validated config maxima
+    assert "verdict IN ('yes','no','unknown'))" in code and "'reserved'" not in code and "jreserved" not in code
+    assert "candidate_state IN ('active','retired'))" in code
