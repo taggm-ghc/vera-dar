@@ -59,6 +59,11 @@ def proposal_state(settings: dict) -> str:
 
 
 def validate_registry_settings(settings: dict) -> None:
+    from vera import topic_judge  # TOPICJUDGE-1028: a present judge block must be valid even while disabled
+    try:
+        topic_judge.validate_judge_settings(settings)
+    except topic_judge.JudgeConfigError as exc:
+        raise TopicRegistryError(str(exc)) from None
     """Fail closed on invalid registry_table settings (called at load and before any registration). cache_ttl_seconds, when
     present, must be a number in 0..3600; refused_state_map, when present, must be a valid mapping."""
     if "cache_ttl_seconds" in settings:
@@ -173,6 +178,11 @@ def load_active_registry_data(cfg, reader=None):
 TOPIC_SQL_KEY_EXISTS = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :k"
 TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topreg_topics "
                        "WHERE state IN ('active', 'retired', 'banned', 'prohibited', 'secrets') ORDER BY topic_row_id")
+TOPIC_SQL_MATCHABLE_JUDGE = ("SELECT topic_key, version, label, anchor_text, state, modified_at FROM vera_vjay.topreg_topics "
+                             "WHERE state IN ('active', 'retired', 'banned', 'prohibited', 'secrets') ORDER BY topic_row_id")
+TOPIC_SQL_JUDGE_DAY_COUNT = "SELECT count(*) FROM vera_vjay.topreg_judgments WHERE created_at > now() - interval '1 day'"
+TOPIC_SQL_JUDGMENT_INSERT = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
+                             "VALUES (:dk, :ck, :cs, :v, :m, :mid, :ms)")
 TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :p AND state = 'active'"
 TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
                     "VALUES (:k, :label, :field, :anchor, :parent, 'runtime', 'draft')")
@@ -213,6 +223,69 @@ def similarity_max(settings: dict) -> float:
     return float(v)
 
 
+def _sig(r) -> tuple:
+    return (r["topic_key"], r.get("version"), r["state"], r.get("modified_at"))
+
+
+def _judge_phase(engine, settings, key, label, anchor):
+    """Runs BEFORE the advisory lock (no lock is held across a network call). Returns None when the judge is off, else
+    {"mode", "sigs", "verdicts"}: a read-only snapshot of the candidate topics, the judge verdicts for EVERY candidate (unknown on any
+    failure or an exhausted budget), and a best-effort log of the verdicts to topreg_judgments (own transaction; keys and states only, no
+    question text; a logging failure never changes the outcome)."""
+    from sqlalchemy import text
+    from vera import topic_judge
+    try:
+        cfg = topic_judge.validate_judge_settings(settings)
+    except topic_judge.JudgeConfigError as exc:
+        raise TopicRegistryError(str(exc)) from None
+    if cfg is None:
+        return None
+    log = logging.getLogger("vera")
+    with engine.begin() as conn:
+        rows = [dict(r) for r in conn.execute(text(TOPIC_SQL_MATCHABLE_JUDGE)).mappings().all() if r["topic_key"] != key]
+        try:
+            today = conn.execute(text(TOPIC_SQL_JUDGE_DAY_COUNT)).scalar()
+        except Exception:  # noqa: BLE001 - class only; the table may be absent: the judge cannot run
+            today = None
+    over_day = isinstance(today, bool) or not isinstance(today, int) or today + len(rows) > cfg["max_judgments_per_day"]
+    cands = [{"topic_key": r["topic_key"], "label": r["label"], "anchor_text": r["anchor_text"], "state": r["state"]} for r in rows]
+    if over_day:
+        log.warning("topic judge skipped (daily budget exhausted or the judgment log is unavailable)")
+        verdicts = [topic_judge.Verdict(c["topic_key"], c["state"], "unknown") for c in cands]
+    else:
+        verdicts = topic_judge.judge_equivalence({"label": label, "anchor_text": anchor}, cands, settings=settings).verdicts
+    try:
+        if not over_day:
+            with engine.begin() as conn:
+                for v in verdicts:
+                    conn.execute(text(TOPIC_SQL_JUDGMENT_INSERT), {"dk": key, "ck": v.candidate_key, "cs": v.candidate_state, "v": v.verdict,
+                                                                 "m": cfg["mode"], "mid": v.model_id, "ms": v.latency_ms})
+    except Exception as exc:  # noqa: BLE001
+        log.warning("topic judgments could not be logged (%s)", type(exc).__name__)
+    return {"mode": cfg["mode"], "sigs": {_sig(r) for r in rows}, "verdicts": verdicts}
+
+
+def _judge_outcome(conn, plan, key, log):
+    """ACTIVE mode, under the lock. (state, kind, matched_key) or None for 'stay draft'. Topics activated or changed since the judge
+    call are NOT re-judged under the lock (no network call while it is held): the draft is kept (fail closed) and can be retried."""
+    from sqlalchemy import text
+    now = [dict(r) for r in conn.execute(text(TOPIC_SQL_MATCHABLE_JUDGE)).mappings().all() if r["topic_key"] != key]
+    if {_sig(r) for r in now} != plan["sigs"]:
+        log.warning("topic proposal kept as draft (candidate topics changed during the judge call)")
+        return None
+    matched = {}
+    for v in plan["verdicts"]:
+        if v.verdict == "yes":
+            matched.setdefault(v.candidate_state, v.candidate_key)
+    kind = next((k for k in MATCH_ORDER if k in matched), None)
+    if kind:
+        return "suspended", kind, matched[kind]
+    if any(v.verdict != "no" for v in plan["verdicts"]):
+        log.warning("topic proposal kept as draft (judge verdict unknown)")
+        return None
+    return "active", None, None
+
+
 def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine=None, similarity=lexical_similarity,
                             parent_key=None) -> dict:
     """Register a NEW topic (OD-1028(9), OD-1028(49); owner 2026-10-28). Written as 'draft', then in the SAME transaction under
@@ -226,6 +299,10 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
     a known topic); it must be a well-formed key naming an ACTIVE topic (refused before any write otherwise; the DB trigger
     enforces it too) and is stored immutably as parent_topic_key. It is NEVER inferred from similarity; None = no parent.
     Acquisition caps and targets are unaffected.
+    TOPICJUDGE-1028 (OD-1028(54)), only when registry_table.judge.enabled is true: a free Groq model judges equivalence against EVERY
+    candidate BEFORE the lock (vera.topic_judge). SHADOW (default once enabled): verdicts are logged to topreg_judgments, the draft is not
+    transitioned by the judge. ACTIVE: any 'yes' -> suspended, all 'no' -> active, any 'unknown' (or candidates changed since the judge
+    call) -> stays draft; the lexical metric is log-only. A verdict never causes a refusal.
       the check cannot run (the metric raises or returns a non-number) -> stays 'draft' (fail closed)
     A database error rolls the whole transaction back (nothing written). Rows are never deleted; logs carry no user text.
     `similarity(a, b)` is the pluggable metric (default: PROVISIONAL lexical). Returns {"key", "state"}."""
@@ -249,6 +326,7 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         engine = db.get_role_engine("rw")
     log = logging.getLogger("vera")
     try:
+        plan = _judge_phase(engine, settings, key, label, anchor)  # TOPICJUDGE-1028: before the lock; None = judge off
         with engine.begin() as conn:
             conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
             if conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
@@ -256,6 +334,23 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
             if parent_key is not None and conn.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent_key}).first() is None:
                 raise RegistrationRefused("parent_key does not name an active topic")
             conn.execute(text(TOPIC_SQL_INSERT), {"k": key, "label": label, "field": field, "anchor": anchor, "parent": parent_key})
+            if plan is not None and plan["mode"] == "active":
+                # ACTIVE judge mode: the verdicts decide; the lexical stand-in is LOG-ONLY (its outcome is logged, never used).
+                out = _judge_outcome(conn, plan, key, log)
+                if out is None:
+                    return {"key": key, "state": "draft"}
+                state, kind, mkey = out
+                if conn.execute(text(TOPIC_SQL_SUSPEND if kind else TOPIC_SQL_ACTIVATE), {"k": key}).rowcount != 1:
+                    raise TopicRegistryError("topic transition affected an unexpected number of rows")
+                try:
+                    lex = [r["topic_key"] for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all()
+                           if r["topic_key"] != key and similarity(anchor, r["anchor_text"]) >= limit]
+                except Exception:  # noqa: BLE001
+                    lex = None
+                log.info("topic proposal %s by judge (%s); lexical stand-in (log only) matched %s", state,
+                         "equivalent to a %s topic" % kind if kind else "no equivalent topic", "n/a" if lex is None else len(lex))
+                return {"key": key, "state": state}
+            # judge off, or SHADOW mode (the judge never transitions the draft; the lexical stand-in still decides, as before)
             matched = {}  # kind -> first matched key; 'active' wins over 'retired'
             for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all():
                 if r["topic_key"] == key:

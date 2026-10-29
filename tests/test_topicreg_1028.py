@@ -128,10 +128,15 @@ def test_exact_grants_column_update_state_only_for_rw():
                       "GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_rw;",
                       "GRANT INSERT (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
                       "ON vera_vjay.topreg_topics TO vera_vjay_rw;",
-                      "GRANT UPDATE (state) ON vera_vjay.topreg_topics TO vera_vjay_rw;"]  # D3: no table-wide INSERT
+                      "GRANT UPDATE (state) ON vera_vjay.topreg_topics TO vera_vjay_rw;",
+                      "GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_ro;",
+                      "GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_rw;",
+                      "GRANT INSERT (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
+                      "ON vera_vjay.topreg_judgments TO vera_vjay_rw;"]  # D3: no table-wide INSERT
     assert "REVOKE ALL ON vera_vjay.topreg_topics FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
     assert code.index("REVOKE ALL ON vera_vjay.topreg_topics") < code.index("GRANT SELECT ON vera_vjay.topreg_topics")
     ins = grants[2]
+    assert not [g for g in grants if "topreg_judgments" in g and re.search(r"UPDATE|DELETE|TRUNCATE|ALL", g)]
     for forbidden in ("topic_row_id", "version", "created_at", "modified_at", "parent_openalex_topic"):
         assert forbidden not in ins
     assert "BEFORE TRUNCATE" in code
@@ -148,7 +153,7 @@ def test_free_text_is_ascii_printable_and_capped():
 def test_rollback_drops_table_and_functions_only():
     r = _code(ROLLBACK.read_text(encoding="utf-8"))
     drops = re.findall(r"DROP (TABLE|FUNCTION) IF EXISTS (vera_vjay\.\w+)", r)
-    assert ("TABLE", "vera_vjay.topreg_topics") in drops and len(drops) == 6
+    assert ("TABLE", "vera_vjay.topreg_topics") in drops and len(drops) == 7 and ("TABLE", "vera_vjay.topreg_judgments") in drops
     assert not re.search(r"\b(DELETE|TRUNCATE|ALTER|UPDATE|INSERT)\b", r.upper())
     assert re.search(r"^BEGIN;$", r, re.M) and r.rstrip().endswith("COMMIT;") and "CASCADE" not in r and "DROP SCHEMA" not in r
     assert "DELETES the seed rows" in ROLLBACK.read_text(encoding="utf-8") and "psql -X -v ON_ERROR_STOP=1" in ROLLBACK.read_text(encoding="utf-8")
@@ -168,7 +173,8 @@ def test_toggles_default_off_and_proposals_draft():
 def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_set():
     import ast
     allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
-               tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED}
+               tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED,
+                   tr.TOPIC_SQL_MATCHABLE_JUDGE}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
     for p in (ROOT / "vera").rglob("*.py"):
@@ -712,16 +718,17 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     pre = body[:body.index("CREATE SCHEMA")]
     tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", code)
     funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", code)
-    idx = re.findall(r"CREATE UNIQUE INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
+    idx = re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
     trg = re.findall(r"CREATE TRIGGER (\w+)", code)
     chk = re.findall(r"CONSTRAINT (\w+)\s+CHECK", code)
-    assert tables == ["vera_vjay.topreg_topics"] and len(funcs) == 5 and len(idx) == 4 and len(trg) == 4 and len(chk) == 9
-    assert "to_regclass('%s')" % tables[0] in pre
+    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 16
+    for t in tables:
+        assert "to_regclass('%s')" % t in pre, t
     for n in funcs + idx + trg:  # derived from the file, so the preflight list cannot drift
         assert "'%s'" % n in pre, n
     assert all(re.fullmatch(r"topreg_\w+_(fn|trgfn)", f) for f in funcs)
     assert all(re.fullmatch(r"topreg_\w+_trg", t) for t in trg)
-    assert all(re.fullmatch(r"topreg_\w+_(uq|pk)", i) for i in idx)
+    assert all(re.fullmatch(r"topreg_\w+_(uq|pk|idx)", i) for i in idx)
     assert all(re.fullmatch(r"topreg_\w+_chk", c) for c in chk)
     assert "pg_proc" in pre and "pg_namespace" in pre and "pg_trigger" in pre and "postgres://" not in pre
     assert "topic_registry" not in code
@@ -734,8 +741,10 @@ def test_rollback_drops_every_created_object_by_name():
         assert "DROP FUNCTION IF EXISTS vera_vjay.%s()" % n in r, n
     for n in re.findall(r"CREATE TRIGGER (\w+)", code):
         assert "DROP TRIGGER IF EXISTS %s ON vera_vjay.topreg_topics" % n in r, n
-    for n in re.findall(r"CREATE UNIQUE INDEX (\w+)", code):
+    for n in re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", code):
         assert "DROP INDEX IF EXISTS vera_vjay.%s;" % n in r, n
+    for t in re.findall(r"CREATE TABLE vera_vjay\.(\w+)", code):
+        assert "DROP TABLE IF EXISTS vera_vjay.%s;" % t in r, t
 
 
 # --- OD-1028(51)/(52): topical states ---

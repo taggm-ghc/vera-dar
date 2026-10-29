@@ -45,6 +45,9 @@
 --   record REFUSED topic categories (category code in column field, neutral label; NEVER question text, OD-1028(35)). App roles may
 --   INSERT a brand-new key only with state draft, banned, prohibited or secrets (DB-enforced); the app's only UPDATE stays
 --   draft -> active or suspended; only the owner/admin may move a topic out of banned, prohibited or secrets.
+-- LIVE-CALIBRATION LOG (TOPICJUDGE-1028, OD-1028(54), same feature, still unapplied): table topreg_judgments records each free-LLM
+--   equivalence verdict (shadow or active mode) by KEYS and STATES only: NO question text, NO topic text (labels are reachable by key).
+--   App rw may INSERT (column-level) and SELECT only: no UPDATE, DELETE or TRUNCATE grant; the daily judgment cap is counted from it.
 BEGIN;
 
 -- Collision preflight (strictly additive): stop cleanly if the table or ANY object this file creates already exists.
@@ -54,13 +57,16 @@ BEGIN
   IF pg_catalog.to_regclass('vera_vjay.topreg_topics') IS NOT NULL THEN
     RAISE EXCEPTION '011 already applied or name collision';
   END IF;
+  IF pg_catalog.to_regclass('vera_vjay.topreg_judgments') IS NOT NULL THEN
+    RAISE EXCEPTION '011 already applied or name collision';
+  END IF;
   FOREACH n IN ARRAY ARRAY['topreg_is_owner_fn','topreg_guard_trgfn','topreg_forbid_truncate_trgfn','topreg_label_unique_trgfn','topreg_activate_trgfn'] LOOP
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
                 WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
       RAISE EXCEPTION '011 already applied or name collision';
     END IF;
   END LOOP;
-  FOREACH n IN ARRAY ARRAY['topreg_topics_pk','topreg_key_version_uq','topreg_one_active_uq','topreg_active_label_uq'] LOOP
+  FOREACH n IN ARRAY ARRAY['topreg_topics_pk','topreg_key_version_uq','topreg_one_active_uq','topreg_active_label_uq','topreg_judgments_pk','topreg_judgments_draft_idx','topreg_judgments_created_idx'] LOOP
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
                 WHERE c.relname = n AND ns.nspname = 'vera_vjay') THEN
       RAISE EXCEPTION '011 already applied or name collision';
@@ -256,6 +262,21 @@ CREATE TRIGGER topreg_c_activate_trg BEFORE INSERT OR UPDATE ON vera_vjay.topreg
 CREATE TRIGGER topreg_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.topreg_topics
   FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.topreg_forbid_truncate_trgfn();
 
+-- TOPICJUDGE-1028 live-calibration log: keys, states and the verdict only (no question text, no topic text). Append-only for the app.
+CREATE TABLE vera_vjay.topreg_judgments (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT topreg_judgments_pk PRIMARY KEY,
+    draft_key       TEXT NOT NULL CONSTRAINT topreg_jdraft_key_chk CHECK (draft_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    candidate_key   TEXT NOT NULL CONSTRAINT topreg_jcand_key_chk CHECK (candidate_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    candidate_state TEXT NOT NULL CONSTRAINT topreg_jcand_state_chk CHECK (candidate_state IN ('active','retired','banned','prohibited','secrets')),
+    verdict         TEXT NOT NULL CONSTRAINT topreg_jverdict_chk CHECK (verdict IN ('yes','no','unknown')),
+    mode            TEXT NOT NULL CONSTRAINT topreg_jmode_chk CHECK (mode IN ('shadow','active')),
+    model_id        TEXT NOT NULL CONSTRAINT topreg_jmodel_chk CHECK (model_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$'),
+    latency_ms      INTEGER NOT NULL CONSTRAINT topreg_jlatency_chk CHECK (latency_ms >= 0),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX topreg_judgments_draft_idx ON vera_vjay.topreg_judgments (draft_key);
+CREATE INDEX topreg_judgments_created_idx ON vera_vjay.topreg_judgments (created_at);
+
 -- Seed: the 10 entries of config/micro_topic_anchors.json (owner-run, origin 'seed', version 1, active). Idempotent: a key
 -- that already has any row is skipped (no ON CONFLICT: the version is trigger-assigned only when NULL).
 INSERT INTO vera_vjay.topreg_topics (topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state)
@@ -282,5 +303,10 @@ GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_ro;
 GRANT SELECT ON vera_vjay.topreg_topics TO vera_vjay_rw;
 GRANT INSERT (topic_key, label, field, anchor_text, parent_topic_key, origin, state) ON vera_vjay.topreg_topics TO vera_vjay_rw;
 GRANT UPDATE (state) ON vera_vjay.topreg_topics TO vera_vjay_rw;   -- draft -> active/suspended of runtime rows only (guard trigger)
+-- topreg_judgments: app rw may SELECT and INSERT only (no UPDATE, DELETE, TRUNCATE); id and created_at are not grantable to it.
+REVOKE ALL ON vera_vjay.topreg_judgments FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topreg_judgments TO vera_vjay_rw;
+GRANT INSERT (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) ON vera_vjay.topreg_judgments TO vera_vjay_rw;
 
 COMMIT;
