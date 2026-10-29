@@ -52,12 +52,19 @@ CHILD_PATH = "/usr/bin:/bin"
 GATE_TMP_REL = "tmp/release-gate"   # per-run TMPDIR parent under the repo (gitignored `tmp/`); explicit, no /tmp fallback
 # S-1: the tracked root pytest.ini is pinned (`-c`, `--rootdir`), so no ancestor or untracked pytest config is read.
 PYTEST_CONFIG_NAMES = ("pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg")
+# GATEFIX-1029: the suite is launched THROUGH the sanctioned runner (tests/vera_test_boundary.py RUNNER_MESSAGE: "the
+# release gate must launch through it too"). The boundary honours the gate nonce only inside an already isolated
+# session and has no re-exec fallback, so a bare `python -m pytest` child exits 78 on any host with a non-lo interface.
+# The runner builds the namespaces and masks, forwards only a valid 32-hex VERA_GATE_NONCE (sandbox_env), and itself
+# pins `-I -B -X pycache_prefix=... -m pytest -c <root>/pytest.ini --rootdir <root> -p no:cacheprovider` (S-1).
+RUNNER_SCRIPT = "scripts/vera_test_runner.py"
+SUITE_ARGS = ("-q", "tests", "--ignore=tests/test_m2_integration.py")
 
 
-def pytest_argv(root) -> list:
+def suite_argv(root, python=None) -> list:
+    """Pure: the gate's suite command, `<python> -I -B <root>/scripts/vera_test_runner.py -- <SUITE_ARGS>`."""
     root = Path(root)
-    return ["-I", "-B", "-m", "pytest", "-c", str(root / "pytest.ini"), "--rootdir", str(root), "-p", "no:cacheprovider",
-            "-q", "tests", "--ignore=tests/test_m2_integration.py"]
+    return [python or sys.executable, "-I", "-B", str(root / RUNNER_SCRIPT), "--", *SUITE_ARGS]
 
 
 def inherited_pytest_configs(root, is_file=os.path.isfile) -> list:
@@ -134,7 +141,8 @@ def launch_refusals(environ, flags) -> list[str]:
 def check_tests(root: Path = ROOT) -> list[str]:
     """Run the suite and require nonce-bound proof of OS-level network isolation (K2.S-b): the run's pytest child must
     print exactly one VERA-ISOLATION-EVIDENCE line carrying this run's random nonce. The child gets an allowlisted
-    environment (L4-A, S-2) and the pinned root pytest.ini (S-1); the run is REFUSED, before anything is spawned, if
+    environment (L4-A, S-2) and is launched through scripts/vera_test_runner.py (GATEFIX-1029), which pins the root
+    pytest.ini (S-1) and builds the isolated session; the run is REFUSED, before anything is spawned, if
     PYTEST_ADDOPTS is set or any other pytest config file could be found. The child runs in its own session and its
     whole process group is SIGKILLed before the leader is reaped (D-B5-1 S-2, via _run); the per-run TMPDIR is removed
     only after that, and echoed child output is made printable (G-8)."""
@@ -155,15 +163,17 @@ def check_tests(root: Path = ROOT) -> list[str]:
         return [f"test run refused (S-2): per-run TMPDIR base {why}"]
     tmpdir = tempfile.mkdtemp(prefix="vera-gate-", dir=str(base))
     env = child_env(_child_env(os.environ), nonce, tmpdir)   # INT-1 M-1: L4-A/S-2 allowlist over the G-3 deny filter
-    cmd = [sys.executable, *pytest_argv(root)]
+    cmd = suite_argv(root)                                   # GATEFIX-1029: through the sanctioned runner
     try:  # D-B5-1 G-3/S-2: own session; the whole group is killed before the leader is reaped (INT-1 M-2)
         p = _run(cmd, cwd=root, timeout=PYTEST_TIMEOUT_S, env=env, tmpdir=tmpdir)
     except subprocess.TimeoutExpired:
         return [f"test suite exceeded {PYTEST_TIMEOUT_S}s"]
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    if p.returncode == 78:
-        return ["test network isolation unavailable on this host (exit 78)"]
+    if p.returncode in (64, 78):   # vera_test_runner EXIT_REFUSED / EXIT_ISOLATION (boundary refusals are 78 too)
+        what = ("test run refused by the sanctioned runner (exit 64)" if p.returncode == 64 else
+                "test isolation was not established for this run (exit 78: the runner or the test boundary refused)")
+        return [what] + [_printable(x) for x in (p.stderr or "").strip().splitlines()[-5:]]
     lines = [ln for ln in (p.stdout or "").strip().splitlines() if ln.strip()]
     summary = lines[-1] if lines else "(no output)"
     if p.returncode != 0:

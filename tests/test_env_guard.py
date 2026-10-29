@@ -1958,12 +1958,59 @@ def test_gate_passes_with_exact_line_and_rc0(monkeypatch, gate_repo):
     assert g.check_tests(gate_repo) == []
 
 
-def test_gate_reports_exit_78_as_isolation_unavailable(monkeypatch, gate_repo):
+def test_gate_reports_exit_78_as_isolation_not_established(monkeypatch, gate_repo):
     g = _gate()
     monkeypatch.setattr(g.subprocess, "run", _fake_run(78, lambda n: ""))
-    assert g.check_tests(gate_repo) == ["test network isolation unavailable on this host (exit 78)"]
+    out = g.check_tests(gate_repo)
+    assert out == ["test isolation was not established for this run (exit 78: the runner or the test boundary refused)"]
+    assert "unavailable on this host" not in out[0]                     # GATEFIX-1029: no misleading host claim
+    def refused(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 64, stdout="", stderr="vera_test_runner: refused: x\x1b[2J\n")
+    monkeypatch.setattr(g.subprocess, "run", refused)
+    assert g.check_tests(gate_repo) == ["test run refused by the sanctioned runner (exit 64)",
+                                        "vera_test_runner: refused: x?[2J"]                 # G-8: printable echo
     monkeypatch.setattr(g.subprocess, "run", _fake_run(1, lambda n: f"1 failed\nVERA-ISOLATION-EVIDENCE netns=isolated nonce={n}\n"))
     assert g.check_tests(gate_repo)[0].startswith("pytest exit 1")
+
+
+def test_gate_launches_suite_through_sanctioned_runner(monkeypatch, gate_repo):
+    """GATEFIX-1029: check_tests runs `<python> -I -B <root>/scripts/vera_test_runner.py -- -q tests --ignore=...`
+    (never a bare `python -m pytest`, which the boundary refuses with 78 outside an isolated session), with the
+    allowlisted child env, the per-run TMPDIR, cwd=root and the suite timeout. No process is spawned (faked run)."""
+    g = _gate()
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((list(cmd), kw))
+        return subprocess.CompletedProcess(cmd, 0, stdout=f"VERA-ISOLATION-EVIDENCE netns=isolated nonce="
+                                           f"{kw['env']['VERA_GATE_NONCE']}\n", stderr="")
+    monkeypatch.setattr(g.subprocess, "run", run)
+    assert g.check_tests(gate_repo) == [] and len(calls) == 1
+    cmd, kw = calls[0]
+    assert cmd == [sys.executable, "-I", "-B", str(gate_repo / "scripts" / "vera_test_runner.py"), "--",
+                   "-q", "tests", "--ignore=tests/test_m2_integration.py"]
+    assert "-m" not in cmd and "pytest" not in cmd                       # no direct pytest launch
+    env = kw["env"]
+    assert kw["cwd"] == gate_repo and kw["timeout"] == g.PYTEST_TIMEOUT_S and env["PATH"] == "/usr/bin:/bin"
+    assert Path(env["TMPDIR"]).parent == gate_repo / "tmp" / "release-gate" and not Path(env["TMPDIR"]).exists()
+    assert re.fullmatch(r"[0-9a-f]{32}", env["VERA_GATE_NONCE"])
+
+
+def test_gate_suite_args_pass_the_runner_and_the_nonce_is_forwarded():
+    """GATEFIX-1029: the gate's suite args are accepted by the runner's own validator (no pinned/refused option), and
+    the runner's sandbox env carries the gate child's nonce (and nothing else of it but USER). Pure; nothing spawned."""
+    g = _gate()
+    spec = importlib.util.spec_from_file_location("vera_test_runner_g", REPO / "scripts" / "vera_test_runner.py")
+    r = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(r)
+    pyargs, bad = r.validate_args(list(g.SUITE_ARGS), str(REPO))
+    assert bad == [] and pyargs == ["-q", "tests", "--ignore", "tests/test_m2_integration.py"]   # runner splits =
+    nonce = "0123456789abcdef0123456789abcdef"
+    child = g.child_env({"HOME": "/h", "USER": "u", "LANG": "C", "SECRET_X": "s"}, nonce, "/gate/tmp")
+    assert r.launch_refusals(child, True) == []
+    box = r.sandbox_env(child)
+    assert box["VERA_GATE_NONCE"] == nonce and box[r.RUNNER_MARKER] == "1" and "SECRET_X" not in box
+    assert box["HOME"] == r.SANDBOX_HOME and box["PATH"] == r.FIXED_PATH
 
 
 def test_a2_unchanged_by_isolation_check():
