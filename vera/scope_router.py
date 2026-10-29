@@ -222,7 +222,7 @@ _META_START_RE = re.compile(r"^(what|why|how|which|who|where|when)\s+(is|are|was
                             r"|could|would|should|might|may|will)\b")
 _CONNECTIVE_RE = re.compile(r"^(then|and|also|now|instead|so|but|next|finally|afterwards|after that|otherwise|plus|or"
                             r"|additionally|furthermore|moreover|meanwhile|first|second|lastly)\b")
-_SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|u|ur|vera(-dar)?)\b")
+_SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|yourselves|u|ur|thee|thou|thy|thine|ye|vera(-dar)?)\b")
 
 
 def separation_enabled(cfg: RouterConfig) -> bool:
