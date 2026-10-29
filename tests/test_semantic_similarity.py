@@ -626,3 +626,86 @@ def test_manifest_walk_errors_are_raised(model_dir, monkeypatch):
     monkeypatch.setattr(ss.os, "walk", walk)
     with pytest.raises(PermissionError):
         ss.manifest_text(d, REV)
+
+
+# ---- SEMSIM-RELEASE-1028: release-time attestation; runtime never loads the model ----
+def test_release_guard_api_import_graph_never_loads_fastembed_or_adapter():
+    # Subprocess-free (a child process is refused by tests/vera_test_boundary.py). Static: no runtime module imports
+    # vera.semantic_similarity or scripts.* at all (the adapter is release-time only); dynamic: importing the API
+    # does not load fastembed or onnxruntime.
+    import importlib
+    for m in ("main", "vera.scope_router", "vera.catstep"):
+        importlib.import_module(m)
+    assert not [m for m in sys.modules if m.split(".")[0] in ("fastembed", "onnxruntime")]
+    offenders = []
+    for p in _py_files():
+        for n in ast.walk(_tree(p)):
+            names = []
+            if isinstance(n, ast.Import):
+                names = [a.name for a in n.names]
+            elif isinstance(n, ast.ImportFrom):
+                names = [n.module or ""] + [f"{n.module}.{a.name}" for a in n.names]
+            if any(x.split(".")[0] in ("fastembed", "onnxruntime", "scripts") or x == "vera.semantic_similarity"
+                   or x.startswith("vera.semantic_similarity.") for x in names):
+                offenders.append(str(p.relative_to(ROOT)))
+    # runtime modules may reference the module only if allow-listed; today none do
+    assert not offenders, offenders
+
+
+def test_release_requirements_separate_and_pinned():
+    runtime = (ROOT / "requirements.txt").read_text().lower()
+    assert "fastembed" not in runtime and "onnxruntime" not in runtime
+    dev = (ROOT / "requirements-dev.txt").read_text().lower()
+    assert "fastembed" not in dev and "onnxruntime" not in dev
+    rel = (ROOT / "requirements-release.txt").read_text()
+    assert "fastembed==0.9.0" in rel and "onnxruntime==1.31.0" in rel and "2-week-age" in rel
+    assert "requirements-release" not in (ROOT / "Dockerfile").read_text()
+
+
+def _attest_tool():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("attest_tool_1028", ROOT / "scripts" / "attest_category_descriptions.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_attestation_tool_refuses_null_threshold_and_offline_unset(tmp_path):
+    tool = _attest_tool()
+    from vera import scope_router as sr
+    cfg = {"threshold_category": None, "max_input_chars": 2000, "model_revision": "r"}
+    with pytest.raises(tool.AttestationRefused):
+        tool.build_attestation(sr.CATEGORY_TABLE, cfg, ss.FakeEmbedder() if hasattr(ss, "FakeEmbedder") else None, "a" * 64)
+    out = tmp_path / "att.json"
+    assert tool.main({}, out) == 2 and not out.exists()  # HF_HUB_OFFLINE missing
+    assert tool.main({"HF_HUB_OFFLINE": "1"}, out) == 2 and not out.exists()  # shipped threshold is null
+
+
+def test_attestation_tool_writes_and_runtime_verifies_hash_only():
+    import json
+    tool = _attest_tool()
+    from vera import scope_router as sr
+    class Emb:
+        def embed(self, texts):
+            return [[1.0, 0.0] if i % 2 else [0.0, 1.0] for i, _ in enumerate(texts)]
+    cfg = {"threshold_category": 1.0, "max_input_chars": 2000, "model_revision": "r"}
+    rows = sr.CATEGORY_TABLE[:2]
+    att = tool.build_attestation(rows, cfg, Emb(), "b" * 64, now="2026-10-28T00:00:00Z")
+    assert set(att) == {"schema", "descriptions_sha256", "model_manifest_sha256", "model_revision", "threshold_category",
+                        "max_pairwise_score", "max_pair", "tool_version", "attested_at"}
+    assert att["max_pairwise_score"] == 0.0 and att["descriptions_sha256"] == sr.descriptions_sha256(rows)
+    sr.verify_attestation(att, rows)  # matches
+    with pytest.raises(tool.AttestationRefused):  # score >= threshold -> refused
+        tool.build_attestation(rows, {**cfg, "threshold_category": 0.0}, Emb(), "b" * 64)
+    raw = json.loads((ROOT / "config" / "classifier_categories.json").read_text())
+    full = sr.descriptions_sha256(sr.CATEGORY_TABLE)
+    good = {"schema": sr.ATTESTATION_SCHEMA, "descriptions_sha256": full}
+    assert sr.parse_categories({**raw, "attestation_required": True}, good)
+    for bad in (None, {**good, "descriptions_sha256": "0" * 64}, {"schema": "x", "descriptions_sha256": full}):
+        with pytest.raises(sr.ScopeConfigError):
+            sr.parse_categories({**raw, "attestation_required": True}, bad)
+    edited = json.loads(json.dumps(raw))
+    edited["categories"][0]["description"] += " extra"
+    with pytest.raises(sr.ScopeConfigError):
+        sr.parse_categories({**edited, "attestation_required": True}, good)
+    assert raw["attestation_required"] is False and sr.parse_categories(raw)  # default off: no attestation needed

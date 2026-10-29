@@ -1,5 +1,9 @@
 """SEMSIM-S4 (OD-1028(48)): one shared interface for meaning-based similarity.
 
+RUNTIME USE IS NOT PERMITTED (SEMSIM-RELEASE-1028): the Render API has 512 MB at about 80% peak and the local model
+(about 230 MB) must never load in the API. This module is RELEASE-TIME ONLY (scripts/attest_category_descriptions.py,
+on the owner machine or build host, needs requirements-release.txt). The shipped config stays enabled=false.
+
 Two uses, calibrated separately: topic matching ("topic") and category comparison ("category").
 Outputs are only "similar", "dissimilar" or "unknown". Similarity is an input to callers; it never
 establishes prohibited intent and never triggers a refusal (guarded by tests/test_semantic_similarity.py).

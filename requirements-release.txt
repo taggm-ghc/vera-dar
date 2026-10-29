@@ -1,0 +1,9 @@
+# RELEASE/BUILD-TIME TOOLS ONLY (SEMSIM-RELEASE-1028). NOT runtime. Never add these to requirements.txt and never
+# install them in the API image: the Render API has 512 MB (about 80% peak) and the local embedding model (about
+# 230 MB) must never load there. Used only by scripts/attest_category_descriptions.py on the owner's machine or the
+# build host. Install with: pip install -r requirements-release.txt
+#
+# Pins are the S0-verified versions. Transitive dependencies (numpy, tokenizers, huggingface-hub, pillow, ...) are NOT
+# pinned here yet: each still needs the 2-week-age check before use.
+fastembed==0.9.0
+onnxruntime==1.31.0

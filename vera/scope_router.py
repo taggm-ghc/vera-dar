@@ -15,6 +15,7 @@ The default OpenAI client (default_chat with client=None) raises OpenAIFallbackD
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -465,8 +466,33 @@ def description_similarity(a: str, b: str) -> float:
     return max(stem, _jaccard(_trigrams(a), _trigrams(b)))
 
 
-def parse_categories(raw) -> tuple[Category, ...]:
-    """Validate the category table; any fault is a ScopeConfigError (fail closed). Returns an immutable tuple."""
+ATTESTATION_PATH = Path(__file__).resolve().parent.parent / "config" / "category_attestation.json"
+ATTESTATION_SCHEMA = "vera-category-attestation-v1"
+
+
+def descriptions_sha256(rows) -> str:
+    """SEMSIM-RELEASE-1028: sha256 of the canonical "code TAB description" lines sorted by code. Shared by the release-time
+    attestation tool (scripts/attest_category_descriptions.py) and the runtime check, so both hash the same bytes."""
+    pairs = sorted((r.code, r.description) for r in rows)
+    return hashlib.sha256("\n".join(f"{c}\t{d}" for c, d in pairs).encode("ascii")).hexdigest()
+
+
+def verify_attestation(att, rows) -> None:
+    """Runtime check (no model, no embedding library): the attestation's description hash must equal the hash of the
+    current descriptions. Any other fault is also a ScopeConfigError (fail closed). The score, threshold and model hash
+    are release-time facts and are NOT recomputed here."""
+    where = "category_attestation.json"
+    if not isinstance(att, dict) or att.get("schema") != ATTESTATION_SCHEMA:
+        raise ScopeConfigError(f"{where}: missing or unknown schema")
+    want = att.get("descriptions_sha256")
+    if not isinstance(want, str) or want != descriptions_sha256(rows):
+        raise ScopeConfigError(f"{where}: descriptions changed since attestation (re-run the release-time attestation tool)")
+
+
+def parse_categories(raw, attestation=None) -> tuple[Category, ...]:
+    """Validate the category table; any fault is a ScopeConfigError (fail closed). Returns an immutable tuple.
+    SEMSIM-RELEASE-1028: when raw["attestation_required"] is literally true (default off), `attestation` must match the
+    current descriptions (verify_attestation)."""
     where = "classifier_categories.json"
     rows = raw.get("categories") if isinstance(raw, dict) else None
     if not isinstance(rows, list) or not rows:
@@ -510,11 +536,17 @@ def parse_categories(raw) -> tuple[Category, ...]:
             if score >= DESCRIPTION_SIMILARITY_MAX:
                 raise ScopeConfigError(f"{where}: descriptions of {a.code} and {b.code} are too similar "
                                        f"(score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
+    if raw.get("attestation_required") is True:
+        verify_attestation(attestation, out)
     return tuple(out)
 
 
 def load_categories(path: str | Path = CATEGORIES_PATH) -> tuple[Category, ...]:
-    return parse_categories(_read_owner_json(path, "classifier category table"))
+    raw = _read_owner_json(path, "classifier category table")
+    att = None
+    if isinstance(raw, dict) and raw.get("attestation_required") is True:
+        att = _read_owner_json(ATTESTATION_PATH, "category attestation")
+    return parse_categories(raw, att)
 
 
 CATEGORY_TABLE: tuple[Category, ...] = load_categories()
