@@ -232,6 +232,19 @@ _CONNECTIVE_RE = re.compile(r"^(then|and|also|now|instead|so|but|next|finally|af
 _SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|yourselves|u|ur|thee|thou|thy|thine|ye|vera(-dar)?)\b")
 
 
+# L1FP-1028 (V130, V249): "Analyze this quoted string as data: "<text>"" is a research request about a quoted span, not an
+# order. Fully anchored on the MASKED sentence (the quote is already replaced by "x"): research verb + this/the quoted
+# <noun> + "as data", nothing else, no second person. The quote stays masked (never matched, never obeyed) and the
+# input goes to layer 2 (masked_quote), exactly like a third-person wh-question about a quote.
+_DATA_QUOTE_RE = re.compile(r"^(analy[sz]e|examine) (this|the) quoted (string|text|instruction|phrase|sentence|command)"
+                            r" as data ?:? \"x\" ?\.?$")
+
+
+def _data_quote_request(masked: str) -> bool:
+    n = normalise(masked)
+    return bool(_DATA_QUOTE_RE.match(n)) and not _SECOND_PERSON_RE.search(n)
+
+
 def separation_enabled(cfg: RouterConfig) -> bool:
     """INJ-SEP-1028: config `injection_separation`; only an explicit boolean true enables it (INJSEP-SECREVIEW-1028
     D4: fail closed like offtopic_enabled; the shipped config sets true). Off restores the whole-input decline."""
@@ -266,7 +279,7 @@ def _well_formed(sentences: list[str], quoted: bool = False) -> bool:
         if _CONNECTIVE_RE.match(s) or _SECOND_PERSON_RE.search(s):
             return False
         if quoted:
-            ok = bool(_META_START_RE.match(s)) and s.endswith("?")
+            ok = (bool(_META_START_RE.match(s)) and s.endswith("?")) or bool(_DATA_QUOTE_RE.match(s))  # L1FP-1028
         else:
             ok = bool((_INTERROG_RE.match(s) and s.endswith("?")) or _RESEARCH_VERB_RE.match(s))
         if not ok:
@@ -293,7 +306,8 @@ def separate_instructions(question: str, cfg: RouterConfig) -> tuple[str, str, i
         for s in _sentences(masked):
             out_s = _PH_RE.sub(lambda m: spans[int(m.group(1))], s)
             match_s = out_s
-            if _PH_RE.search(s) and _meta_quote_question(_PH_RE.sub(" ", s), cfg):
+            if _PH_RE.search(s) and (_meta_quote_question(_PH_RE.sub(" ", s), cfg)
+                                     or _data_quote_request(_PH_RE.sub(' "x" ', s))):
                 match_s, quoted = _PH_RE.sub(' "x" ', s), quoted + 1  # untrusted data: masked, never matched as orders
             if _hits_injection(match_s, cfg):
                 removed += 1
