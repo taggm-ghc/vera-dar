@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 
 TOOL_VERSION = "1"
 OUT_PATH = ROOT / "config" / "category_attestation.json"
-CATEGORIES_FILE = ROOT / "config" / ("classifier_" + "categories.json")
+CATEGORIES_FILE = ROOT / "config" / "classifier_categories.json"
 
 
 class AttestationRefused(Exception):
