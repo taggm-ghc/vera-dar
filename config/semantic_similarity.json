@@ -1,0 +1,12 @@
+{
+  "_comment": "SEMSIM-S4 (OD-1028(48)): meaning-based similarity for topic matching and category comparison. Thresholds are calibrated SEPARATELY and ship null (uncalibrated): any decision with a null threshold returns 'unknown'. Similarity alone never establishes prohibited intent or triggers a refusal. model_sha256 is the manifest hash (vera.semantic_similarity.manifest_sha256) over every file in the model dir, bound to model_revision; verified inside warm() before load. Deployment must set HF_HUB_OFFLINE=1.",
+  "enabled": false,
+  "shadow": true,
+  "model_name": "PLACEHOLDER_FILL_FROM_S0 (bge-small-en-v1.5 per OD-1028(48))",
+  "model_revision": "PLACEHOLDER_PINNED_REVISION_FROM_S0",
+  "model_sha256": "PLACEHOLDER_SHA256_FROM_S0",
+  "model_cache_env": "VERA_SEMSIM_MODEL_DIR",
+  "threshold_topic": null,
+  "threshold_category": null,
+  "max_input_chars": 2000
+}

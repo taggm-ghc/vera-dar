@@ -182,6 +182,17 @@ Update 2026-10-07:
 - **Test count.** The 178-passed figure above is stale: `pytest tests` was 965 passed, 3 skipped on 2026-10-12.
 - **Hosting.** The hosting database plan was upgraded (2026-10-12); the earlier 2026-10-17 expiry no longer applies. The database remains the shared production instance.
 
+## Migration apply history per database (2026-10-29)
+The files stay where they are (`pending/`, `.sql.draft` names unchanged); this table records where each was applied. Numbers and file contents are not changed after application.
+
+| Migration | File (sha256 prefix) | Legacy `vera_vjay` | `vera_dar_db` |
+| --- | --- | --- | --- |
+| 006 licence observations | `pending/006_vera_licence_observations.sql` (`c7c55a43`) | applied 2026-10-09 (owner-approved, commit f1f044a) | applied 2026-10-29 by the owner, verified (OD-1028(59)) |
+| 011 topic registry | `pending/011-DRAFT-topic-registry.sql.draft` (`311b1cdc`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
+| 012 classifier categories | `pending/012-DRAFT-classifier-categories.sql.draft` (`f8267e6c`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
+
+Rollbacks in `rollback/` were not used. The runtime switches for 011 and 012 (`read_from_db`, `registration_enabled`, the topic judge) ship off.
+
 ## Migration 007 (domain registry, DRAFT) role order
 `pending/007-DRAFT-domain-registry.sql.draft` fails closed. Required order: (1) roles via `db/accounts/create_vera_accounts.sql`, (2) migrations 001-005, (3) 007. If `vera_vjay_wo` or `vera_vjay_ro` is missing, 007 raises in its first statement, before any DDL (run with `psql -1`), instead of skipping the grants and leaving later writes to fail with "permission denied for table research_domains". `vera_vjay_rw` stays optional (NOTICE, grant skipped). Grants: RO = SELECT; WO = INSERT plus SELECT (domain_id). Still a draft: not executed, pending owner Approval 1.
 

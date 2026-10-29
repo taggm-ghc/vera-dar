@@ -59,6 +59,42 @@ def test_table_is_read_only_at_runtime():
             assert f.name == "scope_router.py", f
             assert "CATEGORIES_PATH = " in src and "write_text" not in src and "json.dump" not in src
             assert not re.search(r"open\([^)]*['\"][wa]", src)
+        if "classifier_categories" in src:
+            assert f.name in ("scope_router.py", "category_table.py"), f
+            assert (f.name == "category_table.py" or "CATEGORIES_PATH = " in src) and "write_text" not in src and "json.dump" not in src
+            assert not re.search(r"open\([^)]*['\"][wa]", src)
+    from vera import category_table as ct
+    for mod in (sr, ct):
+        assert not [n for n in dir(mod) if re.match(r"(save|write|add|set|update|register)_?categor", n, re.I)]
+    # scripts/: only the release tool may name the table (read) and it writes only config/category_attestation.json
+    for f in (ROOT / "scripts").rglob("*.py"):
+        src = f.read_text(errors="ignore")
+        if "classifier_categories" in src:
+            assert f.name == "attest_category_descriptions.py", f
+            assert "json.dump(" not in src and not re.search(r"open\([^)]*['\"][wa]", src)
+            writes = re.findall(r"(\w+)\.write_text\(", src)
+            assert writes == ["out_path"], writes  # the only write; out_path defaults to OUT_PATH below
+            assert 'OUT_PATH = ROOT / "config" / "category_attestation.json"' in src
+            assert "CATEGORIES_FILE.write" not in src and "CATEGORIES_FILE.open" not in src
+
+
+def test_check_attestation_false_only_in_release_tool():
+    import ast
+    callers = []
+    files = list((ROOT / "vera").rglob("*.py")) + [ROOT / "main.py", ROOT / "streamlit_app.py"] \
+        + list((ROOT / "pages").rglob("*.py")) + list((ROOT / "scripts").rglob("*.py"))
+    for f in files:
+        if not f.exists():
+            continue
+        for n in ast.walk(ast.parse(f.read_text())):
+            if isinstance(n, ast.Call):
+                for kw in n.keywords:
+                    if kw.arg == "check_attestation" and not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
+                        callers.append(f.relative_to(ROOT).as_posix())
+                fn = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+                if fn == "parse_categories" and len(n.args) >= 4:  # positional 4th arg
+                    callers.append(f.relative_to(ROOT).as_posix() + ":positional")
+    assert callers == ["scripts/attest_category_descriptions.py"], callers
 
 
 # OD-1028(38) ("the table is read-only at runtime; no writer exists", the earlier regex guard) is SUPERSEDED IN PART by
