@@ -43,10 +43,11 @@ VERDICTS = ("yes", "no", "unknown")
 MODES = ("shadow", "active")
 DEFAULTS = {"enabled": False, "mode": "shadow", "batch_size": 5, "timeout_s": 15.0, "max_attempts": 2,
             "max_calls_per_registration": 12, "max_tokens_per_registration": 12000, "max_completion_tokens": 256,
-            "max_judgments_per_day": 400, "max_text_chars": 600}
+            "max_judgments_per_day": 400, "max_text_chars": 600, "max_retry_after_s": 10.0}
 _INT_RANGES = {"batch_size": (1, 20), "max_attempts": (1, 5), "max_calls_per_registration": (1, 100),
                "max_tokens_per_registration": (100, 200000), "max_completion_tokens": (16, 2048), "max_judgments_per_day": (1, 100000),
                "max_text_chars": (40, 1200)}
+_FLOAT_RANGES = {"timeout_s": (1, 60), "max_retry_after_s": (0, 60)}
 _STRIP = re.compile(r"DATA-(?:BEGIN|END)", re.I)
 SYSTEM_PROMPT = (
     "You compare topic descriptions. For each numbered candidate decide whether it is EQUIVALENT to the draft topic. "
@@ -105,10 +106,11 @@ def validate_judge_settings(settings: dict) -> dict | None:
         v = cfg[k]
         if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
             raise JudgeConfigError(f"registry_table.judge.{k} must be an integer in {lo}..{hi}")
-    t = cfg["timeout_s"]
-    if isinstance(t, bool) or not isinstance(t, (int, float)) or not 1 <= t <= 60:
-        raise JudgeConfigError("registry_table.judge.timeout_s must be a number in 1..60")
-    cfg["timeout_s"] = float(t)
+    for k, (lo, hi) in _FLOAT_RANGES.items():
+        t = cfg[k]
+        if isinstance(t, bool) or not isinstance(t, (int, float)) or not lo <= t <= hi:
+            raise JudgeConfigError(f"registry_table.judge.{k} must be a number in {lo}..{hi}")
+        cfg[k] = float(t)
     return cfg if cfg["enabled"] else None
 
 
@@ -154,18 +156,37 @@ def free_groq_entries(entries=None) -> list:
             and e.pricing.input == 0 and e.pricing.output == 0]
 
 
-RATE_LIMITED_CEILING = 10  # fixed ceiling on rate-limited (429) tries per registration; each moves on to the next chain entry, no sleep
+RATE_LIMITED_CEILING = 10  # fixed ceiling on rate-limited (429) tries per registration
+_sleep = time.sleep  # injectable for tests. The judge runs BEFORE the registry's advisory lock and outside every DB transaction: sleeping here never holds a lock.
 
 
-def _ask_batch(entries, client_for, messages, n, cfg, used_tokens, calls_left=None, rl_left=None):
+def _retry_after_s(exc):
+    """Seconds from a Retry-After header on the error's response (delta-seconds or HTTP-date), or None when absent/garbled."""
+    try:
+        from vera.rate_limit import parse_retry_after
+        hdrs = getattr(getattr(exc, "response", None), "headers", None)
+        v = hdrs.get("retry-after") if hdrs is not None else None
+        return parse_retry_after(v, time.time())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ask_batch(entries, client_for, messages, n, cfg, used_tokens, calls_left=None, rl_left=None, wait=None):
     """(answers or None, model_id, latency_ms, calls, tokens, budget_exhausted, rate_limited) for one batch. `calls` counts every call
     that was NOT rate-limited and never exceeds calls_left (the remaining max_calls_per_registration); a rate-limited try is not an attempt
-    and not a counted call (project rule) but is bounded by rl_left (the fixed ceiling) and recorded in `rate_limited`."""
+    and not a counted call (project rule) but is bounded by rl_left (the fixed ceiling) and recorded in `rate_limited`.
+    On a 429 WITH a Retry-After: if it is within max_retry_after_s and the remaining total wait (wait[0], 3 x max_retry_after_s per registration),
+    sleep that long and retry the SAME entry (the project rule: follow Retry-After); a longer Retry-After stops the judge (all remaining
+    verdicts unknown) instead of waiting. A 429 WITHOUT a Retry-After moves to the next chain entry (a different model has its own limit)."""
+    wait = [3 * cfg["max_retry_after_s"]] if wait is None else wait
     est = sum(len(m["content"]) for m in messages) // 3 + cfg["max_completion_tokens"]
     calls_left = cfg["max_calls_per_registration"] if calls_left is None else calls_left
     rl_left = RATE_LIMITED_CEILING if rl_left is None else rl_left
     attempts = calls = tokens = rl = 0
-    for e in entries:
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
         if attempts >= cfg["max_attempts"]:
             break
         if calls >= calls_left or rl >= rl_left:
@@ -181,6 +202,14 @@ def _ask_batch(entries, client_for, messages, n, cfg, used_tokens, calls_left=No
         except Exception as exc:  # noqa: BLE001 - class only, never message text
             if _rate_limited(exc):  # project rule: a rate-limited try is not an attempt (nor a counted call), but is bounded
                 rl += 1
+                ra = _retry_after_s(exc)
+                if ra is not None:
+                    if ra > cfg["max_retry_after_s"] or ra > wait[0]:
+                        log.warning("topic judge stopped: Retry-After longer than the allowed wait")
+                        return None, "none", 0, calls, tokens, True, rl
+                    wait[0] -= ra
+                    _sleep(ra)
+                    i -= 1  # retry the same entry after the wait
             else:
                 attempts += 1
                 calls += 1
@@ -220,6 +249,7 @@ def judge_equivalence(draft: dict, candidates: list, *, settings: dict, entries=
         log.warning("topic judge has no client (%s)", type(exc).__name__)
         pool = []
     client_for = client_for or (lambda e: e.client())
+    wait = [3 * cfg["max_retry_after_s"]]  # total Retry-After wait allowed per registration
     batches = [candidates[i:i + cfg["batch_size"]] for i in range(0, len(candidates), cfg["batch_size"])]
     for b in batches:
         if not pool or res.calls >= cfg["max_calls_per_registration"] or res.budget_exhausted:
@@ -227,7 +257,7 @@ def judge_equivalence(draft: dict, candidates: list, *, settings: dict, entries=
             res.verdicts += [unknown(c) for c in b]
             continue
         ans, model, ms, calls, tokens, over, rl = _ask_batch(pool, client_for, build_messages(draft, b, cfg), len(b), cfg, res.tokens,
-                                                              cfg["max_calls_per_registration"] - res.calls, RATE_LIMITED_CEILING - res.rate_limited)
+                                                              cfg["max_calls_per_registration"] - res.calls, RATE_LIMITED_CEILING - res.rate_limited, wait)
         res.calls += calls
         res.rate_limited += rl
         res.tokens += tokens

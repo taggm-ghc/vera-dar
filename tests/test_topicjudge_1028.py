@@ -611,3 +611,40 @@ def test_non_rate_limited_calls_never_exceed_the_call_budget_and_rate_limited_re
     c = FakeClient(script=[_RL()] * 500)
     res = tj.judge_equivalence({"label": "Draft", "anchor_text": "d" * 30}, many, settings={"judge": {**J_ON, "batch_size": 2}}, entries=entries, client_for=lambda e: c)
     assert res.calls == 0 and res.rate_limited == len(c.calls) <= tj.RATE_LIMITED_CEILING and {v.verdict for v in res.verdicts} == {"unknown"}
+
+
+class _RA(Exception):
+    status_code = 429
+
+    def __init__(self, ra):
+        self.response = NS(headers={"retry-after": str(ra)})
+
+
+def test_retry_after_is_honoured_within_the_bound_longer_yields_unknown_and_missing_moves_on(monkeypatch):
+    waits = []
+    monkeypatch.setattr(tj, "_sleep", waits.append)
+    cands = [{"topic_key": "t-1", "label": "Topic 1", "anchor_text": "z" * 30, "state": "active"}]
+    d = {"label": "Draft", "anchor_text": "d" * 30}
+    ok = _answers(lambda _: "no")
+    run = lambda c, entries, **j: tj.judge_equivalence(d, cands, settings={"judge": {**J_ON, **j}}, entries=entries, client_for=lambda e: c)
+    # 3 s within the bound: sleep 3 s, retry the SAME entry (one entry only), get the verdict; the 429 is not a counted call
+    c = FakeClient(script=[_RA(3)], answer=ok)
+    res = run(c, [_entry("m1")])
+    assert waits == [3.0] and res.verdicts[0].verdict == "no" and res.calls == 1 and res.rate_limited == 1 and len(c.calls) == 2
+    # longer than max_retry_after_s (10): no wait, no further call, unknown
+    waits.clear()
+    c = FakeClient(script=[_RA(60)], answer=ok)
+    res = run(c, [_entry("m1"), _entry("m2")])
+    assert waits == [] and res.verdicts[0].verdict == "unknown" and len(c.calls) == 1 and res.budget_exhausted
+    # a lower configured maximum applies
+    c = FakeClient(script=[_RA(3)], answer=ok)
+    assert run(c, [_entry("m1")], max_retry_after_s=2).verdicts[0].verdict == "unknown" and waits == []
+    # total wait per registration is bounded (3 x max): repeated 10 s waits stop after three
+    c = FakeClient(script=[_RA(10)] * 8, answer=ok)
+    res = run(c, [_entry("m1")])
+    assert sum(waits) <= 30 and res.verdicts[0].verdict == "unknown" and res.rate_limited <= tj.RATE_LIMITED_CEILING
+    # no Retry-After: move to the next chain entry without sleeping
+    waits.clear()
+    c = FakeClient(script=[_RL()], answer=ok)
+    res = run(c, [_entry("m1"), _entry("m2")])
+    assert waits == [] and res.verdicts[0].verdict == "no" and [k["model"] for k in c.calls] == ["m1", "m2"]
