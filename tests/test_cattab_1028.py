@@ -11,7 +11,7 @@ import pytest
 from vera import scope_router as sr
 
 ROOT = Path(__file__).resolve().parent.parent
-MIG = ROOT / "db" / "migrations" / "pending" / "008-DRAFT-classifier-categories.sql.draft"
+MIG = ROOT / "db" / "migrations" / "pending" / "012-DRAFT-classifier-categories.sql.draft"
 SEED = sr.load_categories()
 
 
@@ -417,7 +417,7 @@ def test_migration_review_fixes_d1_to_d4_d8_d9_text():
 
 
 def test_rollback_draft_drops_in_dependency_order_and_is_owner_gated():
-    rb = (ROOT / "db" / "migrations" / "rollback" / "008-DRAFT-classifier-categories-rollback.sql.draft").read_text()
+    rb = (ROOT / "db" / "migrations" / "rollback" / "012-DRAFT-classifier-categories-rollback.sql.draft").read_text()
     assert "NOT EXECUTED" in rb and "DESTRUCTIVE" in rb and "owner" in rb.lower()
     order = [rb.index(x) for x in ("DROP TRIGGER IF EXISTS classifier_categories_a_guard", "DROP TABLE IF EXISTS vera_vjay.classifier_categories",
                                    "DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_guard", "classifier_categories_is_owner()")]

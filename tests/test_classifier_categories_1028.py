@@ -302,7 +302,7 @@ def test_guard_f_ignores_docstrings_and_allowed_texts():
 
 
 # ---- CATTAB-FIX2 R1: owner / migration preflight ----
-DRAFT = (ROOT / "db" / "migrations" / "pending" / "008-DRAFT-classifier-categories.sql.draft").read_text()
+DRAFT = (ROOT / "db" / "migrations" / "pending" / "012-DRAFT-classifier-categories.sql.draft").read_text()
 
 
 def test_app_role_list_is_one_constant_and_matches_the_draft():
@@ -311,6 +311,8 @@ def test_app_role_list_is_one_constant_and_matches_the_draft():
     pre = DRAFT.split("R1(a) preflight", 1)[1].split("CREATE SCHEMA", 1)[0]
     assert set(re.findall(r"'(vera_\w+)'", pre)) >= sr.APP_ROLE_NAMES
     assert "pg_auth_members" in pre and "pg_has_role" not in pre and "current_user" in pre and "RAISE EXCEPTION" in pre
+    assert "(m.inherit_option OR m.set_option)" in pre  # PG16+ ADMIN-only rows must not lock out the owner
+    assert "PG 18.6" in pre and "dedicated owner role" in pre
     src = (ROOT / "vera" / "scope_router.py").read_text()
     assert src.count("vera_claude_code_rw") == 1  # no scattered literals
 

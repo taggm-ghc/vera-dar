@@ -523,7 +523,7 @@ def load_categories(path: str | Path = CATEGORIES_PATH) -> tuple[Category, ...]:
 
 
 # CATTAB-1028 (owner: "when i speak of a table, i mean in the database"): the table lives in vera_vjay.classifier_categories
-# (db/migrations/pending/008-DRAFT, NOT applied). The JSON file stays the SEED and the FALLBACK. Settings (explicit boolean
+# (db/migrations/pending/012-DRAFT, NOT applied). The JSON file stays the SEED and the FALLBACK. Settings (explicit boolean
 # true only; missing or any other value = off) live in scope_router.json under "classifier_category_table".
 CATEGORY_STATES = ("draft", "active", "suspended", "retired")
 CATEGORY_ORIGINS = ("seed", "runtime")
@@ -533,7 +533,7 @@ DB_CATEGORY_SQL_ROWS = ("SELECT code, description, disposition, refusal_rank, al
 DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.classifier_categories (code, version, description, disposition, aliases, origin, state) "
                           "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
 # R1(b): the table owner is unlimited (trigger default-deny exempts it), so it must never be an application role.
-# Same list as the preflight in db/migrations/pending/008-DRAFT (all six appear in other migrations or code).
+# Same list as the preflight in db/migrations/pending/012-DRAFT (all six appear in other migrations or code).
 APP_ROLE_NAMES = frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
                             "vera_pipeline_wo", "vera_eval_ro"})
 DB_CATEGORY_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c "

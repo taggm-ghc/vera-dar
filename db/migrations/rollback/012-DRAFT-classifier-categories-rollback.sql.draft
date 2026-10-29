@@ -1,5 +1,5 @@
--- 008_vera_classifier_categories ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the classifier category table and every row
--- (seed rows, runtime rows, every version). Owner-gated like the forward draft (db/migrations/pending/008-DRAFT-...).
+-- 012_vera_classifier_categories ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the classifier category table and every row
+-- (seed rows, runtime rows, every version). Owner-gated like the forward draft (db/migrations/pending/012-DRAFT-...).
 -- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval.
 -- Needs the owner's separate, same-turn approval, the TABLE OWNER role (the triggers are owner-only by design), an isolated DB, and
 -- an export of the table first. Never run via db/apply_migrations.py (its --dry-run executes on production; HZ-DAR-1).

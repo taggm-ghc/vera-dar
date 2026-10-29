@@ -1,10 +1,11 @@
--- 008_vera_classifier_categories.sql
+-- 012_vera_classifier_categories.sql
 -- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007-DRAFT); rename only at approval.
 -- CATTAB-1028 pre-stage DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
 -- Owner declaration 2026-10-28: "when i speak of a table, i mean in the database". This is the layer-2 classifier category
 -- table (today config/classifier_categories.json, the seed and the fallback). APPLYING IT NEEDS OWNER-APPROVED DDL in that turn
 -- (AGENTS.md rule 4), admin-run only, never via db/apply_migrations.py --dry-run (HZ-DAR-1).
--- RELATION TO OTHERS: sibling of the 007 domain/topic registry draft; to be batched with 007 and 010 under ONE PG 18 rehearsal
+-- NUMBERING: 008 bootstrap (reserved, db/migration_guard.py BOOTSTRAP_NAME), 009 portal discovery, 010 dynamic state, 011 topic registry, 012 classifier categories (this file; the topic registry draft on disk is still named 007-DRAFT until renumbered).
+-- RELATION TO OTHERS: sibling of the 007 domain/topic registry draft; to be batched with the 011 and 010 drafts under ONE PG 18 rehearsal
 -- on an isolated DB (none exists yet). The schema name vera_vjay and roles vera_vjay_wo/_rw/_ro are copied from 006/007; the
 -- schema name is still UNCONFIRMED by the owner.
 -- VERSIONING MODEL: each version of a category is its own row, UNIQUE (code, version), versions numbered 1,2,3 by trigger.
@@ -36,20 +37,25 @@
 --   * OWNER GUARD: the table owner is unlimited, so the preflight below refuses to run as an app role (or a direct member of one);
 --     vera/scope_router.py also fails closed at startup if the table owner is an app role (APP_ROLE_NAMES).
 --   * UNTESTED against a real PostgreSQL: the triggers, the partial unique indexes and the CHECKs have never been executed.
--- Rollback (destructive, separate approval, owner-gated like this file): db/migrations/rollback/008-DRAFT-classifier-categories-rollback.sql.draft
+-- Rollback (destructive, separate approval, owner-gated like this file): db/migrations/rollback/012-DRAFT-classifier-categories-rollback.sql.draft
 -- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file.
 \set ON_ERROR_STOP on
 
 -- R1(a) preflight: the owner (this session's role) must not be an app role nor DIRECTLY granted one (pg_auth_members by name,
 -- not the inherited-membership function, so a superuser is not caught).
+-- PG16+ NOTE: this relies on the pg_auth_members columns inherit_option and set_option (PostgreSQL 16+). A CREATEROLE admin that
+-- created the vera_vjay_* roles automatically holds an ADMIN-only membership row (inherit_option = false, set_option = false);
+-- that row confers neither privileges nor SET ROLE, so only a membership with (inherit_option OR set_option) is counted.
+-- Production was last observed as PG 18.6 (2026-10-21, unconfirmed since). 012 should preferably run as a dedicated owner role.
 DO $$ BEGIN
   IF current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')
      OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
                 JOIN pg_catalog.pg_roles mem ON mem.oid = m.member
                 JOIN pg_catalog.pg_roles grp ON grp.oid = m.roleid
                 WHERE mem.rolname = current_user
+                  AND (m.inherit_option OR m.set_option)
                   AND grp.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')) THEN
-    RAISE EXCEPTION '008 must be run as the table-owner role, not an application role or a direct member of one.';
+    RAISE EXCEPTION '012 must be run as the table-owner role, not an application role or a direct member of one.';
   END IF;
 END $$;
 
@@ -57,7 +63,7 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_wo')
      OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_ro')
      OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_rw') THEN
-    RAISE EXCEPTION '008 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
+    RAISE EXCEPTION '012 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
   END IF;
 END $$;
 
