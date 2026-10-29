@@ -55,7 +55,7 @@ def test_table_is_read_only_at_runtime():
     # no code path writes the JSON seed file
     for f in (ROOT / "vera").rglob("*.py"):
         src = f.read_text(errors="ignore")
-        if "classifier_categories" in src:
+        if "clscat_categories" in src:
             assert f.name == "scope_router.py", f
             assert "CATEGORIES_PATH = " in src and "write_text" not in src and "json.dump" not in src
             assert not re.search(r"open\([^)]*['\"][wa]", src)
@@ -67,7 +67,9 @@ def test_table_is_read_only_at_runtime():
 import ast  # noqa: E402
 
 _SQL_VERBS = re.compile(r"\b(UPDATE|DELETE|TRUNCATE|ALTER|COPY|ON\s+CONFLICT)\b", re.I)
-_TABLE_SQL = re.compile(r"\b(FROM|INTO|UPDATE|TABLE|JOIN|COPY|ON)\s+(vera_vjay\.)?classifier_categories\b|vera_vjay\.classifier_categories", re.I)
+# OWNER DECISION 2026-10-28 ("the tables and funtions should be disambiguated by prefix & suffix as appropriate"):
+# the table is renamed classifier_categories -> clscat_categories; the guards below track the new literal explicitly (sanctioned rename, not an evasion).
+_TABLE_SQL = re.compile(r"\b(FROM|INTO|UPDATE|TABLE|JOIN|COPY|ON)\s+(vera_vjay\.)?clscat_categories\b|vera_vjay\.clscat_categories", re.I)
 _SOURCES = sorted((ROOT / "vera").rglob("*.py")) + [ROOT / "main.py"]
 _GUARD_SOURCES = _SOURCES + sorted((ROOT / "scripts").rglob("*.py"))  # R2: scripts/ too
 
@@ -98,16 +100,16 @@ def test_guard_a_only_three_sql_texts_name_the_table_and_none_mutate_it():
     # every other SQL-like text near the table in any vera/ source: no mutating verb. Per file that names the table,
     # no string constant (other than the three) holds a mutating SQL verb or ON CONFLICT.
     for f, v in _string_constants():
-        if v in allowed or "classifier_categories" not in f.read_text(errors="ignore"):
+        if v in allowed or "clscat_categories" not in f.read_text(errors="ignore"):
             continue
         assert not _SQL_VERBS.search(v) or not re.search(r"\b(SELECT|INSERT|SET|FROM|INTO|WHERE)\b", v), (f.name, v[:60])
     for v in allowed - {sr.DB_CATEGORY_SQL_INSERT}:
         assert not _SQL_VERBS.search(v)
     ins = sr.DB_CATEGORY_SQL_INSERT
-    assert ins.startswith("INSERT INTO vera_vjay.classifier_categories") and "ON CONFLICT" not in ins.upper()
+    assert ins.startswith("INSERT INTO vera_vjay.clscat_categories") and "ON CONFLICT" not in ins.upper()
     assert not _SQL_VERBS.search(ins.replace("INSERT", ""))
     # the lock statement names no table and no mutation
-    assert "classifier_categories" not in sr.DB_CATEGORY_SQL_LOCK
+    assert "clscat_categories" not in sr.DB_CATEGORY_SQL_LOCK
 
 
 def test_guard_b_insert_is_brand_new_non_refusing_only():
@@ -262,18 +264,18 @@ def _name_violations(tree, allowed, fname):
     bad = []
     for n in ast.walk(tree):
         if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip \
-                and "classifier_categories" in n.value and n.value not in allowed:
+                and "clscat_categories" in n.value and n.value not in allowed:
             bad.append((fname, "constant", n.value[:50]))
         if isinstance(n, ast.Call) and ast.unparse(n.func).split(".")[-1] == "Table" and n.args \
-                and isinstance(n.args[0], ast.Constant) and n.args[0].value == "classifier_categories":
-            bad.append((fname, "Table", "classifier_categories"))
+                and isinstance(n.args[0], ast.Constant) and n.args[0].value == "clscat_categories":
+            bad.append((fname, "Table", "clscat_categories"))
     return bad
 
 
 def _allowed_texts():
     # the three SQL texts plus two non-SQL labels (JSON seed filename, error-message prefix) that name no table access
     return {sr.DB_CATEGORY_SQL_EXISTS, sr.DB_CATEGORY_SQL_ROWS, sr.DB_CATEGORY_SQL_INSERT,
-            "classifier_categories.json", "classifier_categories (db)"}
+            "classifier_categories.json", "clscat_categories (db)"}
 
 
 def test_guard_f_no_other_string_names_the_table_in_vera_main_scripts():
@@ -286,18 +288,18 @@ def test_guard_f_no_other_string_names_the_table_in_vera_main_scripts():
 
 
 @pytest.mark.parametrize("src", [
-    'q = "SELECT * FROM vera_vjay." + "classifier_categories"',
-    'q = "DELETE FROM x.classifier_categories WHERE {}".format(1)',
-    'name = f"UPDATE classifier_categories SET a={x}"',
-    'from sqlalchemy import Table\nt = Table("classifier_categories", md)',
-    'import sqlalchemy as sa\nt = sa.Table("classifier_categories", md)',
+    'q = "SELECT * FROM vera_vjay." + "clscat_categories"',
+    'q = "DELETE FROM x.clscat_categories WHERE {}".format(1)',
+    'name = f"UPDATE clscat_categories SET a={x}"',
+    'from sqlalchemy import Table\nt = Table("clscat_categories", md)',
+    'import sqlalchemy as sa\nt = sa.Table("clscat_categories", md)',
 ], ids=["plus", "format", "fstring", "Table", "sa-Table"])
 def test_guard_f_detects_evasions(src):
     assert _name_violations(ast.parse(src), _allowed_texts(), "x.py")
 
 
 def test_guard_f_ignores_docstrings_and_allowed_texts():
-    assert _name_violations(ast.parse('"""classifier_categories"""\nx = 1'), set(), "x.py") == []
+    assert _name_violations(ast.parse('"""clscat_categories"""\nx = 1'), set(), "x.py") == []
     assert _name_violations(ast.parse(f"x = {sr.DB_CATEGORY_SQL_ROWS!r}"), _allowed_texts(), "x.py") == []
 
 
@@ -328,7 +330,7 @@ class _OwnerConn:
 
     def scalar(self):
         if "to_regclass" in self.cur:
-            return "vera_vjay.classifier_categories" if self.exists else None
+            return "vera_vjay.clscat_categories" if self.exists else None
         return self.owner if "relowner" in self.cur else None
 
     def mappings(self):
@@ -348,8 +350,8 @@ def test_owner_app_role_or_missing_fails_closed_without_host(owner):
 def test_non_app_owner_passes_and_owner_query_names_no_table():
     c = _OwnerConn("vera_owner_admin")
     assert sr._select_rows(c) == []
-    assert c.log[1][1] == {"t": "vera_vjay.classifier_categories"}
-    assert "classifier_categories" not in sr.DB_CATEGORY_SQL_OWNER
+    assert c.log[1][1] == {"t": "vera_vjay.clscat_categories"}
+    assert "clscat_categories" not in sr.DB_CATEGORY_SQL_OWNER
     assert sr._select_rows(_OwnerConn("x", exists=False)) is None
 
 

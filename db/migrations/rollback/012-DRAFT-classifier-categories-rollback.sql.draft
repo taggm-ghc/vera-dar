@@ -7,19 +7,24 @@
 -- config/scope_router.json (the service then reads the JSON seed), then REVOKE INSERT from vera_vjay_rw.
 -- Dependency order: triggers (reference the functions and the table), then the table (drops its indexes and constraints), then
 -- the functions (the guard uses is_owner). The schema vera_vjay is shared with other objects and is NOT dropped.
-\set ON_ERROR_STOP on
+-- WARNING: this DELETES the seed rows AND every runtime row (all versions) with the table. Export first.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+-- Drops only the objects the forward file creates (IF EXISTS, no CASCADE); the schema is kept.
+BEGIN;
 
-DROP TRIGGER IF EXISTS classifier_categories_no_truncate ON vera_vjay.classifier_categories;
-DROP TRIGGER IF EXISTS classifier_categories_c_activate ON vera_vjay.classifier_categories;
-DROP TRIGGER IF EXISTS classifier_categories_b_labels ON vera_vjay.classifier_categories;
-DROP TRIGGER IF EXISTS classifier_categories_a_guard ON vera_vjay.classifier_categories;
+DROP TRIGGER IF EXISTS clscat_no_truncate_trg ON vera_vjay.clscat_categories;
+DROP TRIGGER IF EXISTS clscat_c_activate_trg ON vera_vjay.clscat_categories;
+DROP TRIGGER IF EXISTS clscat_b_labels_trg ON vera_vjay.clscat_categories;
+DROP TRIGGER IF EXISTS clscat_a_guard_trg ON vera_vjay.clscat_categories;
 
-DROP INDEX IF EXISTS vera_vjay.classifier_categories_rank_key;
-DROP INDEX IF EXISTS vera_vjay.classifier_categories_one_active_key;
-DROP TABLE IF EXISTS vera_vjay.classifier_categories;
+DROP INDEX IF EXISTS vera_vjay.clscat_rank_uq;
+DROP INDEX IF EXISTS vera_vjay.clscat_one_active_uq;
+DROP TABLE IF EXISTS vera_vjay.clscat_categories;
 
-DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_forbid_truncate();
-DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_activate();
-DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_label_unique();
-DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_guard();
-DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_is_owner();
+DROP FUNCTION IF EXISTS vera_vjay.clscat_forbid_truncate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.clscat_activate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.clscat_label_unique_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.clscat_guard_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.clscat_is_owner_fn();
+
+COMMIT;

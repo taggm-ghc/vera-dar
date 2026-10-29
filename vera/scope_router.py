@@ -522,15 +522,15 @@ def load_categories(path: str | Path = CATEGORIES_PATH) -> tuple[Category, ...]:
     return parse_categories(_read_owner_json(path, "classifier category table"))
 
 
-# CATTAB-1028 (owner: "when i speak of a table, i mean in the database"): the table lives in vera_vjay.classifier_categories
+# CATTAB-1028 (owner: "when i speak of a table, i mean in the database"): the table lives in vera_vjay.clscat_categories
 # (db/migrations/pending/012-DRAFT, NOT applied). The JSON file stays the SEED and the FALLBACK. Settings (explicit boolean
 # true only; missing or any other value = off) live in scope_router.json under "classifier_category_table".
 CATEGORY_STATES = ("draft", "active", "suspended", "retired")
 CATEGORY_ORIGINS = ("seed", "runtime")
-DB_CATEGORY_SQL_EXISTS = "SELECT to_regclass('vera_vjay.classifier_categories')"
+DB_CATEGORY_SQL_EXISTS = "SELECT to_regclass('vera_vjay.clscat_categories')"
 DB_CATEGORY_SQL_ROWS = ("SELECT code, description, disposition, refusal_rank, aliases, origin, state, version "
-                        "FROM vera_vjay.classifier_categories ORDER BY category_id")
-DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.classifier_categories (code, version, description, disposition, aliases, origin, state) "
+                        "FROM vera_vjay.clscat_categories ORDER BY category_id")
+DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.clscat_categories (code, version, description, disposition, aliases, origin, state) "
                           "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
 # R1(b): the table owner is unlimited (trigger default-deny exempts it), so it must never be an application role.
 # Same list as the preflight in db/migrations/pending/012-DRAFT (all six appear in other migrations or code).
@@ -627,7 +627,7 @@ def parse_db_rows(rows, seed: tuple[Category, ...]) -> tuple[tuple[Category, ...
     superseded versions) never classify but are validated and count in the dissimilarity check against every row of every
     OTHER code. Every seed category (harmful, rule_change, advice, programming_task, in_scope, off_topic) must have exactly
     one active row whose disposition and rank equal the seed's, so a new version cannot silently turn a refusal off."""
-    where = "classifier_categories (db)"
+    where = "clscat_categories (db)"
     if not isinstance(rows, list) or not rows:
         raise ScopeConfigError(f"{where}: table exists but has no rows")
     keys = {"code", "description", "disposition", "refusal_rank", "aliases", "origin", "state", "version"}

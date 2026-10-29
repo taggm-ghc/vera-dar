@@ -223,7 +223,7 @@ class _FakeConn:
         return self
 
     def scalar(self):
-        return "vera_vjay.classifier_categories" if self.exists else None
+        return "vera_vjay.clscat_categories" if self.exists else None
 
     def mappings(self):
         return self
@@ -358,13 +358,13 @@ SQL = MIG.read_text()
 
 
 def test_migration_seed_matches_json_seed_with_version_and_active():
-    m = re.search(r"INSERT INTO vera_vjay\.classifier_categories.*?\(VALUES\s*(.*?)\)\s+AS v\(", SQL, re.S)
+    m = re.search(r"INSERT INTO vera_vjay\.clscat_categories.*?\(VALUES\s*(.*?)\)\s+AS v\(", SQL, re.S)
     rows = re.findall(r"\('([a-z_]+)', 1, '([^']*)', '([a-z_]+)', (NULL::integer|\d+), '\{\}'::text\[\], 'seed', 'active'\)", m.group(1))
     assert len(rows) == 6
     got = {r[0]: (r[1], r[2], None if r[3].startswith("NULL") else int(r[3])) for r in rows}
     assert got == {c.code: (c.description, c.disposition, c.refusal_rank) for c in SEED}
     assert "state          TEXT NOT NULL DEFAULT 'active'" in SQL
-    assert "WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.classifier_categories t WHERE t.code = v.code)" in SQL
+    assert "WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.clscat_categories t WHERE t.code = v.code)" in SQL
     assert "ON CONFLICT" not in SQL and "Idempotent per code" in SQL
 
 
@@ -372,8 +372,8 @@ def test_migration_text_privileges_and_checks():
     assert "CHECK (state IN ('draft','active','suspended','retired'))" in SQL
     assert "CHECK (disposition IN ('in_scope','off_topic','refuse','unsupported_use'))" in SQL
     assert "REVOKE UPDATE, DELETE, TRUNCATE" in SQL
-    assert "GRANT SELECT ON vera_vjay.classifier_categories TO vera_vjay_ro" in SQL
-    assert "GRANT SELECT, INSERT ON vera_vjay.classifier_categories TO vera_vjay_rw" in SQL
+    assert "GRANT SELECT ON vera_vjay.clscat_categories TO vera_vjay_ro" in SQL
+    assert "GRANT SELECT, INSERT ON vera_vjay.clscat_categories TO vera_vjay_rw" in SQL
     assert not re.search(r"GRANT[^;]*(UPDATE|DELETE|TRUNCATE)[^;]*TO", SQL)
     assert "origin <> 'runtime' OR (disposition IN ('in_scope','off_topic')" in SQL
     assert "TIMESTAMPTZ" in SQL and "UNCONFIRMED" in SQL and "007" in SQL and "OWNER-APPROVED DDL" in SQL
@@ -386,7 +386,7 @@ def test_migration_text_versions_as_rows():
     assert re.search(r"UNIQUE INDEX[^;]*\(refusal_rank\)\s+WHERE state = 'active' AND refusal_rank IS NOT NULL", SQL)
     assert "content is immutable" in SQL and "NEW.description IS DISTINCT FROM OLD.description" in SQL
     assert "SET state = 'retired', modified_at = now()" in SQL  # activation retires the previous active row
-    assert "BEFORE INSERT OR UPDATE ON vera_vjay.classifier_categories\n  FOR EACH ROW EXECUTE FUNCTION vera_vjay.classifier_categories_activate" in SQL
+    assert "BEFORE INSERT OR UPDATE ON vera_vjay.clscat_categories\n  FOR EACH ROW EXECUTE FUNCTION vera_vjay.clscat_activate_trgfn" in SQL
     assert "app roles may insert only brand-new codes" in SQL
     assert "OLD.version + 1" not in SQL  # the in-place version bump is gone
     assert "c.state = 'active' AND c.code <> NEW.code" in SQL  # aliases unique across active rows of other codes
@@ -398,9 +398,9 @@ def test_no_secret_in_draft():
 
 def test_migration_review_fixes_d1_to_d4_d8_d9_text():
     # D1: retire-UPDATE only when another active row of the code exists
-    act = SQL[SQL.index("FUNCTION vera_vjay.classifier_categories_activate"):SQL.index("DROP TRIGGER IF EXISTS classifier_categories_a_guard")]
-    assert re.search(r"AND EXISTS \(SELECT 1 FROM vera_vjay\.classifier_categories c\s+WHERE c\.code = NEW\.code AND c\.state = 'active'", act)
-    assert act.index("AND EXISTS") < act.index("UPDATE vera_vjay.classifier_categories")
+    act = SQL[SQL.index("FUNCTION vera_vjay.clscat_activate_trgfn"):SQL.index("CREATE TRIGGER clscat_a_guard_trg")]
+    assert re.search(r"AND EXISTS \(SELECT 1 FROM vera_vjay\.clscat_categories c\s+WHERE c\.code = NEW\.code AND c\.state = 'active'", act)
+    assert act.index("AND EXISTS") < act.index("UPDATE vera_vjay.clscat_categories")
     # D2: default-deny, owner-only, no pg_has_role/MEMBER and no is_app_role
     assert "pg_has_role" not in SQL and "MEMBER" not in SQL and "is_app_role" not in SQL
     assert "pg_catalog.pg_get_userbyid(c.relowner) = current_user" in SQL and "MUST BE RUN AS THE OWNER ROLE" in SQL
@@ -409,7 +409,7 @@ def test_migration_review_fixes_d1_to_d4_d8_d9_text():
     assert not re.search(r"version\s+INTEGER NOT NULL DEFAULT", SQL)
     assert "IF NEW.version IS NULL THEN" in SQL and "NEW.version <> nxt" in SQL
     # D4: every function pins search_path
-    funcs = re.findall(r"CREATE OR REPLACE FUNCTION [^\n]*\n?[^$]*?\$f\$", SQL)
+    funcs = re.findall(r"CREATE FUNCTION [^\n]*\n?[^$]*?\$f\$", SQL)
     assert len(funcs) == 5 and all("SET search_path = pg_catalog, pg_temp" in f for f in funcs)
     # D8 / D9 documentation
     assert "wo: NO grant at all" in SQL and "006 and 007 grant wo INSERT" in SQL
@@ -419,7 +419,33 @@ def test_migration_review_fixes_d1_to_d4_d8_d9_text():
 def test_rollback_draft_drops_in_dependency_order_and_is_owner_gated():
     rb = (ROOT / "db" / "migrations" / "rollback" / "012-DRAFT-classifier-categories-rollback.sql.draft").read_text()
     assert "NOT EXECUTED" in rb and "DESTRUCTIVE" in rb and "owner" in rb.lower()
-    order = [rb.index(x) for x in ("DROP TRIGGER IF EXISTS classifier_categories_a_guard", "DROP TABLE IF EXISTS vera_vjay.classifier_categories",
-                                   "DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_guard", "classifier_categories_is_owner()")]
+    assert re.search(r"^BEGIN;$", rb, re.M) and rb.rstrip().endswith("COMMIT;") and "CASCADE" not in "\n".join(l for l in rb.splitlines() if not l.startswith("--"))
+    assert "DELETES the seed rows" in rb and "DROP SCHEMA" not in rb
+    order = [rb.index(x) for x in ("DROP TRIGGER IF EXISTS clscat_a_guard_trg", "DROP TABLE IF EXISTS vera_vjay.clscat_categories",
+                                   "DROP FUNCTION IF EXISTS vera_vjay.clscat_guard_trgfn", "clscat_is_owner_fn()")]
     assert order == sorted(order)
     assert "DROP SCHEMA" not in rb and "postgres://" not in rb
+
+
+def test_forward_is_strictly_additive_transactional_with_full_preflight():
+    assert re.search(r"^BEGIN;$", SQL, re.M) and SQL.rstrip().endswith("COMMIT;") and [l for l in SQL.splitlines() if l == "COMMIT;"] == ["COMMIT;"]
+    assert all(re.fullmatch(r"clscat_\w+_(fn|trgfn)", f) for f in re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", SQL))
+    assert all(n.endswith(("_trg", "_uq", "_pk", "_chk")) for n in re.findall(r"CREATE TRIGGER (\w+)|CONSTRAINT (\w+)", SQL) for n in n if n)
+    assert "OR REPLACE" not in SQL and "DROP " not in SQL.replace("DROP TABLE", "")
+    assert not re.search(r"CREATE TABLE IF NOT EXISTS", SQL) and not re.search(r"INDEX IF NOT EXISTS", SQL)
+    assert "psql -X -v ON_ERROR_STOP=1" in SQL
+    body = SQL.split("BEGIN;", 1)[1]
+    first = body.index("already applied or name collision")
+    assert first < body.index("CREATE SCHEMA") < body.index("CREATE TABLE")
+    pre = body[:body.index("CREATE SCHEMA")]
+    # names derived from the file itself, so this cannot drift
+    tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", SQL)
+    funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", SQL)
+    idx = re.findall(r"CREATE UNIQUE INDEX (\w+)", SQL) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", SQL)
+    trg = re.findall(r"CREATE TRIGGER (\w+)", SQL)
+    assert len(tables) == 1 and len(funcs) == 5 and len(idx) == 4 and len(trg) == 4
+    assert "to_regclass('%s')" % tables[0] in pre
+    for n in funcs + idx + trg:
+        assert "'%s'" % n in pre, n
+    assert "pg_proc" in pre and "pg_namespace" in pre and "pg_trigger" in pre
+    assert "postgres://" not in pre
