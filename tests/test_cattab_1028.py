@@ -343,7 +343,7 @@ def test_enrolment_runs_lock_read_insert_in_one_transaction():
     sqls = [q for q, _ in eng.log]
     assert sqls[0] == sr.DB_CATEGORY_SQL_LOCK and "pg_advisory_xact_lock" in sqls[0]
     assert eng.log[0][1] == {"k": sr.ENROL_ADVISORY_LOCK_KEY} == {"k": 10281}
-    assert sqls[1] == sr.DB_CATEGORY_SQL_EXISTS and sqls[2] == sr.DB_CATEGORY_SQL_ROWS
+    assert sqls[1] == sr.DB_CATEGORY_SQL_EXISTS and sqls[2] == sr.DB_CATEGORY_SQL_OWNER and sqls[3] == sr.DB_CATEGORY_SQL_ROWS
     assert sqls[-1] == sr.DB_CATEGORY_SQL_INSERT and eng.committed and row["code"] == "reading_group"
     # a refused candidate under the lock writes nothing and rolls back
     eng2 = _TxnEngine(True, _rows())

@@ -31,10 +31,27 @@
 --     description or a new alias passes the core check; the dissimilarity and alias-collision checks still apply) and it does
 --     not stop an owner from ADDING further refusing codes.
 --   * Accounting: created_at (default now()), modified_at (set on state change), version (row identity, not a counter bump).
+--   * KNOWN LIMITATION (residual, not fixed): a direct runtime INSERT (rw account) can squat a brand-new code ahead of a later
+--     legitimate runtime row for the same code, because the first insert wins the unique (code, version) slot.
+--   * OWNER GUARD: the table owner is unlimited, so the preflight below refuses to run as an app role (or a direct member of one);
+--     vera/scope_router.py also fails closed at startup if the table owner is an app role (APP_ROLE_NAMES).
 --   * UNTESTED against a real PostgreSQL: the triggers, the partial unique indexes and the CHECKs have never been executed.
 -- Rollback (destructive, separate approval, owner-gated like this file): db/migrations/rollback/008-DRAFT-classifier-categories-rollback.sql.draft
 -- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file.
 \set ON_ERROR_STOP on
+
+-- R1(a) preflight: the owner (this session's role) must not be an app role nor DIRECTLY granted one (pg_auth_members by name,
+-- not the inherited-membership function, so a superuser is not caught).
+DO $$ BEGIN
+  IF current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                JOIN pg_catalog.pg_roles mem ON mem.oid = m.member
+                JOIN pg_catalog.pg_roles grp ON grp.oid = m.roleid
+                WHERE mem.rolname = current_user
+                  AND grp.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')) THEN
+    RAISE EXCEPTION '008 must be run as the table-owner role, not an application role or a direct member of one.';
+  END IF;
+END $$;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_wo')

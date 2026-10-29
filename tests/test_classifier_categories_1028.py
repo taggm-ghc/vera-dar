@@ -69,6 +69,7 @@ import ast  # noqa: E402
 _SQL_VERBS = re.compile(r"\b(UPDATE|DELETE|TRUNCATE|ALTER|COPY|ON\s+CONFLICT)\b", re.I)
 _TABLE_SQL = re.compile(r"\b(FROM|INTO|UPDATE|TABLE|JOIN|COPY|ON)\s+(vera_vjay\.)?classifier_categories\b|vera_vjay\.classifier_categories", re.I)
 _SOURCES = sorted((ROOT / "vera").rglob("*.py")) + [ROOT / "main.py"]
+_GUARD_SOURCES = _SOURCES + sorted((ROOT / "scripts").rglob("*.py"))  # R2: scripts/ too
 
 
 def _docstring_nodes(tree):
@@ -253,3 +254,117 @@ def test_near_duplicate_description_rejected_naming_both_codes_and_score():
 def test_clearly_distinct_new_description_accepted():
     rows = sr.parse_categories(_with(_new_row("questions seeking private details of a named person")))
     assert rows[-1].code == "new_cat" and isinstance(rows, tuple)
+
+
+# ---- CATTAB-FIX2 R2: hardened AST guard (string building, sqlalchemy Table, scripts/) ----
+def _name_violations(tree, allowed, fname):
+    skip = _docstring_nodes(tree)
+    bad = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip \
+                and "classifier_categories" in n.value and n.value not in allowed:
+            bad.append((fname, "constant", n.value[:50]))
+        if isinstance(n, ast.Call) and ast.unparse(n.func).split(".")[-1] == "Table" and n.args \
+                and isinstance(n.args[0], ast.Constant) and n.args[0].value == "classifier_categories":
+            bad.append((fname, "Table", "classifier_categories"))
+    return bad
+
+
+def _allowed_texts():
+    # the three SQL texts plus two non-SQL labels (JSON seed filename, error-message prefix) that name no table access
+    return {sr.DB_CATEGORY_SQL_EXISTS, sr.DB_CATEGORY_SQL_ROWS, sr.DB_CATEGORY_SQL_INSERT,
+            "classifier_categories.json", "classifier_categories (db)"}
+
+
+def test_guard_f_no_other_string_names_the_table_in_vera_main_scripts():
+    bad = []
+    for f in _GUARD_SOURCES:
+        allowed = _allowed_texts() if (f.name == "scope_router.py" and f.parent.name == "vera") else set()
+        bad += _name_violations(ast.parse(f.read_text(errors="ignore")), allowed, f.name)
+    assert bad == [], bad
+    assert any(f.parent.name == "scripts" for f in _GUARD_SOURCES)
+
+
+@pytest.mark.parametrize("src", [
+    'q = "SELECT * FROM vera_vjay." + "classifier_categories"',
+    'q = "DELETE FROM x.classifier_categories WHERE {}".format(1)',
+    'name = f"UPDATE classifier_categories SET a={x}"',
+    'from sqlalchemy import Table\nt = Table("classifier_categories", md)',
+    'import sqlalchemy as sa\nt = sa.Table("classifier_categories", md)',
+], ids=["plus", "format", "fstring", "Table", "sa-Table"])
+def test_guard_f_detects_evasions(src):
+    assert _name_violations(ast.parse(src), _allowed_texts(), "x.py")
+
+
+def test_guard_f_ignores_docstrings_and_allowed_texts():
+    assert _name_violations(ast.parse('"""classifier_categories"""\nx = 1'), set(), "x.py") == []
+    assert _name_violations(ast.parse(f"x = {sr.DB_CATEGORY_SQL_ROWS!r}"), _allowed_texts(), "x.py") == []
+
+
+# ---- CATTAB-FIX2 R1: owner / migration preflight ----
+DRAFT = (ROOT / "db" / "migrations" / "pending" / "008-DRAFT-classifier-categories.sql.draft").read_text()
+
+
+def test_app_role_list_is_one_constant_and_matches_the_draft():
+    assert sr.APP_ROLE_NAMES == frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
+                                           "vera_pipeline_wo", "vera_eval_ro"})
+    pre = DRAFT.split("R1(a) preflight", 1)[1].split("CREATE SCHEMA", 1)[0]
+    assert set(re.findall(r"'(vera_\w+)'", pre)) >= sr.APP_ROLE_NAMES
+    assert "pg_auth_members" in pre and "pg_has_role" not in pre and "current_user" in pre and "RAISE EXCEPTION" in pre
+    src = (ROOT / "vera" / "scope_router.py").read_text()
+    assert src.count("vera_claude_code_rw") == 1  # no scattered literals
+
+
+class _OwnerConn:
+    def __init__(self, owner, exists=True):
+        self.owner, self.exists, self.log = owner, exists, []
+
+    def execute(self, stmt, params=None):
+        self.cur = str(stmt)
+        self.log.append((self.cur, params))
+        return self
+
+    def scalar(self):
+        if "to_regclass" in self.cur:
+            return "vera_vjay.classifier_categories" if self.exists else None
+        return self.owner if "relowner" in self.cur else None
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
+@pytest.mark.parametrize("owner", sorted(sr.APP_ROLE_NAMES) + [None])
+def test_owner_app_role_or_missing_fails_closed_without_host(owner):
+    with pytest.raises(sr.ScopeConfigError, match="owner") as e:
+        sr._select_rows(_OwnerConn(owner))
+    assert "@" not in str(e.value) and "host" not in str(e.value).lower()
+
+
+def test_non_app_owner_passes_and_owner_query_names_no_table():
+    c = _OwnerConn("vera_owner_admin")
+    assert sr._select_rows(c) == []
+    assert c.log[1][1] == {"t": "vera_vjay.classifier_categories"}
+    assert "classifier_categories" not in sr.DB_CATEGORY_SQL_OWNER
+    assert sr._select_rows(_OwnerConn("x", exists=False)) is None
+
+
+def test_read_category_rows_propagates_owner_failure_as_scope_error():
+    class Eng:
+        def connect(self):
+            return _Ctx(_OwnerConn("vera_vjay_rw"))
+
+    class _Ctx:
+        def __init__(self, c):
+            self.c = c
+
+        def __enter__(self):
+            return self.c
+
+        def __exit__(self, *a):
+            return False
+
+    with pytest.raises(sr.ScopeConfigError, match="owner"):
+        sr.read_category_rows(Eng())

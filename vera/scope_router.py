@@ -532,6 +532,12 @@ DB_CATEGORY_SQL_ROWS = ("SELECT code, description, disposition, refusal_rank, al
                         "FROM vera_vjay.classifier_categories ORDER BY category_id")
 DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.classifier_categories (code, version, description, disposition, aliases, origin, state) "
                           "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
+# R1(b): the table owner is unlimited (trigger default-deny exempts it), so it must never be an application role.
+# Same list as the preflight in db/migrations/pending/008-DRAFT (all six appear in other migrations or code).
+APP_ROLE_NAMES = frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
+                            "vera_pipeline_wo", "vera_eval_ro"})
+DB_CATEGORY_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c "
+                         "WHERE c.oid = CAST(:t AS regclass)")  # :t is the regclass text the EXISTS probe returned
 DB_CATEGORY_SQL_READONLY = "SET TRANSACTION READ ONLY"  # D8: first statement of the loader's transaction (until an ro engine is wired)
 DB_CATEGORY_SQL_LOCK = "SELECT pg_advisory_xact_lock(:k)"  # names no table; transaction-scoped, released at commit/rollback
 # Fixed, documented advisory-lock key for runtime enrolment (D6): serialises concurrent enrol_nonrefusing_entry calls so the
@@ -550,8 +556,12 @@ def category_table_settings(path=CONFIG_PATH) -> dict:
 def _select_rows(conn):
     """Table-exists probe then SELECT, on an open connection. None when the table is absent."""
     from sqlalchemy import text
-    if conn.execute(text(DB_CATEGORY_SQL_EXISTS)).scalar() is None:
+    found = conn.execute(text(DB_CATEGORY_SQL_EXISTS)).scalar()
+    if found is None:
         return None
+    owner = conn.execute(text(DB_CATEGORY_SQL_OWNER), {"t": str(found)}).scalar()
+    if owner is None or str(owner) in APP_ROLE_NAMES:
+        raise ScopeConfigError("classifier category table owner is missing or an application role; failing closed")
     return [dict(r) for r in conn.execute(text(DB_CATEGORY_SQL_ROWS)).mappings().all()]
 
 
@@ -569,6 +579,8 @@ def read_category_rows(engine=None, *, env=None, engine_factory=None):
         with engine.connect() as conn:
             conn.execute(text(DB_CATEGORY_SQL_READONLY))
             return _select_rows(conn)
+    except ScopeConfigError:
+        raise
     except Exception as exc:  # noqa: BLE001 - only the exception class is reported
         raise ScopeConfigError(f"classifier category table unreadable ({type(exc).__name__}); failing closed") from None
 
