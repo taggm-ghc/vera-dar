@@ -4,8 +4,8 @@
 -- Owner declaration 2026-10-28: "when i speak of a table, i mean in the database". This is the layer-2 classifier category
 -- table (today config/classifier_categories.json, the seed and the fallback). APPLYING IT NEEDS OWNER-APPROVED DDL in that turn
 -- (AGENTS.md rule 4), admin-run only, never via db/apply_migrations.py --dry-run (HZ-DAR-1).
--- NUMBERING: 008 bootstrap (reserved, db/migration_guard.py BOOTSTRAP_NAME), 009 portal discovery, 010 dynamic state, 011 topic registry, 012 classifier categories (this file; the topic registry draft on disk is still named 007-DRAFT until renumbered).
--- RELATION TO OTHERS: sibling of the 007 domain/topic registry draft; to be batched with the 011 and 010 drafts under ONE PG 18 rehearsal
+-- NUMBERING: 008 bootstrap (reserved, db/migration_guard.py BOOTSTRAP_NAME), 009 portal discovery, 010 dynamic state, 011 topic registry, 012 classifier categories (this file). The topic registry draft 011 lives in a separate branch (topicreg-1028).
+-- RELATION TO OTHERS: to be batched with 010 (dynamic state) and 011 (topic registry) under ONE PG 18 rehearsal; unrelated to 007 (the DAR domain registry, unchanged).
 -- on an isolated DB (none exists yet). The schema name vera_vjay and roles vera_vjay_wo/_rw/_ro are copied from 006/007; the
 -- schema name is still UNCONFIRMED by the owner.
 -- VERSIONING MODEL: each version of a category is its own row, UNIQUE (code, version), versions numbered 1,2,3 by trigger.
