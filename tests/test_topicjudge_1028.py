@@ -245,8 +245,12 @@ class RDB:
                     db.rows.append({"topic_key": p["k"], "label": p["label"], "anchor_text": p["anchor"], "parent_topic_key": p["parent"],
                                     "state": "draft", "origin": "runtime", "version": 1, "modified_at": 1})
                     return _RR()
+                if q == tr.TOPIC_SQL_DUPLICATE:
+                    norm = lambda t: re.sub(r"\s+", " ", t.strip()).lower()
+                    hit = [r for r in db.rows if r["topic_key"] == p["k"] or (r["state"] in ("active", "retired", "suspended", "draft") and norm(r["label"]) == p["nl"])]
+                    return _RR([1] if hit else [])
                 if q in (tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_MATCHABLE_JUDGE):
-                    return _RR([r for r in db.rows if r["state"] in ("active", "retired", "banned", "prohibited", "secrets")])
+                    return _RR([r for r in db.rows if r["state"] in ("active", "retired")])  # refused rows are never candidates (OD-1028(56))
                 if q == tr.TOPIC_SQL_JUDGE_DAY_COUNT:
                     return _RR(scalar=db.jcount)
                 if q == tr.TOPIC_SQL_JUDGMENT_INSERT:
@@ -269,7 +273,7 @@ def _rows(*states):
             for s in states]
 
 
-ALL5 = ("active", "retired", "banned", "prohibited", "secrets")
+ALL5 = ("active", "retired")  # name kept: the candidate set is now active + retired only
 LEX_NO = "quasar pulsar nebula galaxy orbit comet asteroid planet cosmos stellar"
 
 
@@ -291,8 +295,8 @@ def _state(db, key="new-topic-one"):
     return [r["state"] for r in db.rows if r["topic_key"] == key]
 
 
-def test_candidate_set_is_active_retired_banned_prohibited_secrets_only_and_every_one_is_judged():
-    rows = _rows(*ALL5) + _rows("draft", "suspended")
+def test_candidate_set_is_active_retired_only_and_every_one_is_judged():
+    rows = _rows(*ALL5) + _rows("draft", "suspended", "banned", "prohibited", "secrets")  # refused placeholder rows are never candidates
     db = RDB(rows)
     c = FakeClient(answer=_answers(lambda _: "no"))
     out = _reg(db, c, "active")
@@ -313,14 +317,38 @@ def test_judgment_log_holds_keys_states_verdicts_only_never_question_or_topic_te
     assert "label" not in sql and "anchor" not in sql and "question" not in sql
 
 
-def test_shadow_mode_judge_never_transitions_the_draft_and_the_lexical_stand_in_still_decides():
+def test_shadow_non_duplicate_activates_even_when_the_judge_says_yes_and_the_verdict_is_logged():  # OD-1028(57)
     db = RDB(_rows("active"))
-    out = _reg(db, FakeClient(answer=_answers(lambda _: "yes")), "shadow")  # judge says equivalent, lexical says distinct
-    assert out["state"] == "active" and _state(db) == ["active"]  # the judge's 'yes' changed nothing
+    out = _reg(db, FakeClient(answer=_answers(lambda _: "yes")), "shadow")  # judge says equivalent: never blocks
+    assert out["state"] == "active" and _state(db) == ["active"]
     assert [j["v"] for j in db.jlog] == ["yes"] and db.jlog[0]["m"] == "shadow"
-    # lexically equal text + judge 'no': lexical (unchanged shadow behaviour) suspends; the judge does not
+    # lexically equal text + judge 'no': the lexical metric is log-only in shadow mode, so the draft is still activated
     db = RDB([{**_rows("active")[0], "anchor_text": LEX_NO}])
-    assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow")["state"] == "suspended"
+    out = _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow")
+    assert out["state"] == "active" and _state(db) == ["active"] and [j["v"] for j in db.jlog] == ["no"]
+    assert tr.TOPIC_SQL_SUSPEND not in db.stmts
+
+
+@pytest.mark.parametrize("label,state_of_existing", [("t active", "active"), ("t active", "retired"), ("t active", "suspended"), ("t active", "draft"),
+                                                     ("Topic   ACTIVE", "active"), ("topic active", "retired"), ("topic active", "suspended"),
+                                                     ("topic active", "draft")])
+def test_shadow_exact_duplicate_key_or_normalized_label_is_suspended_and_verdicts_still_logged(label, state_of_existing):
+    row = {**_rows("active")[0], "state": state_of_existing}
+    db = RDB([row])
+    out = _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow", rows_label=label)
+    same_key = label == "t active"  # the existing topic itself is not a judge candidate for its own key
+    judged = state_of_existing in ("active", "retired") and not same_key
+    assert [j["m"] for j in db.jlog] == (["shadow"] if judged else [])  # the verdicts are logged whenever there is a candidate
+    assert out["state"] == "suspended" and len(db.rows) == 1  # nothing written: the DB unique key/label controls stay
+    assert tr.TOPIC_SQL_INSERT not in db.stmts and tr.TOPIC_SQL_ACTIVATE not in db.stmts
+
+
+def test_reserved_refused_prefix_is_rejected_before_any_write():  # OD-1028(57)
+    for label in ("refused harmful", "Refused-Anything", "refused topic about cooking"):
+        db = RDB(_rows("active"))
+        with pytest.raises(tr.RegistrationRefused):
+            _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow", rows_label=label)
+        assert db.stmts == [] and len(db.rows) == 1 and db.jlog == []
 
 
 def test_shadow_logging_failure_never_changes_the_outcome():
@@ -328,8 +356,7 @@ def test_shadow_logging_failure_never_changes_the_outcome():
     assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow")["state"] == "active" and db.jlog == []
 
 
-@pytest.mark.parametrize("yes_for,state", [("Topic active", "suspended"), ("Topic retired", "suspended"), ("Topic banned", "suspended"),
-                                           ("Topic prohibited", "suspended"), ("Topic secrets", "suspended"), (None, "active")])
+@pytest.mark.parametrize("yes_for,state", [("Topic active", "suspended"), ("Topic retired", "suspended"), (None, "active")])
 def test_active_mode_yes_suspends_all_no_activates(yes_for, state):
     db = RDB(_rows(*ALL5))
     out = _reg(db, FakeClient(answer=_answers(lambda l: "yes" if l == yes_for else "no")), "active")
@@ -411,7 +438,7 @@ def test_guard_no_refusal_constructor_uses_the_judge():
     fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     judge_names = {"topic_judge", "judge_equivalence", "_judge_phase", "_judge_outcome", "TOPIC_SQL_JUDGMENT_INSERT", "TOPIC_SQL_MATCHABLE_JUDGE",
                    "TOPIC_SQL_JUDGE_DAY_COUNT", "validate_judge_settings", "Verdict"}
-    for name in ("register_refused_topic", "scrutiny_flag", "refused_entries_from_rows", "refused_state_mapping"):
+    for name in ("ensure_refused_category", "scrutiny_flag", "refused_placeholder", "refused_state_mapping"):
         assert not (_names(fns[name]) & judge_names), name
         src = ast.get_source_segment((VERA / "topic_registry.py").read_text(encoding="utf-8"), fns[name])
         assert "topic_judge" not in src and "judge" not in src.lower(), name
@@ -430,7 +457,7 @@ def test_guard_only_topic_registry_imports_the_judge_and_nothing_on_a_refusal_pa
     # no raise-RegistrationRefused statement lies inside a judge-reading function
     tree = ast.parse(reg)
     for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in ("_judge_phase", "_judge_outcome")):
-        assert not [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id in ("RegistrationRefused", "register_refused_topic")]
+        assert not [n for n in ast.walk(fn) if isinstance(n, ast.Name) and n.id in ("RegistrationRefused", "ensure_refused_category")]
 
 
 def test_guard_judge_module_has_no_other_provider_no_paid_model_no_question_param():

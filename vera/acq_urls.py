@@ -109,6 +109,19 @@ def _pin_path(path: str) -> bool:
     return p in SHA_PIN_PATHS or bool(_SHA_PIN_DOC.fullmatch(p)) or any(p.endswith("." + x) for x in SHA_PIN_PATHS)
 
 
+# Explicit, narrow exemption: values (state names) under exactly micro_topic.registry_table.refused_state_map.<category code>. Only a
+# refused state name or a category-code-shaped value passes there; any credential-like value under that path is still refused.
+_REFUSED_MAP_PATH = re.compile(r"micro_topic\.registry_table\.refused_state_map\.[a-z][a-z_]{1,31}")
+_CATEGORY_CODE_VALUE = re.compile(r"[a-z][a-z_]{1,31}")
+
+
+_REFUSED_STATE_NAMES = ("banned", "prohibited", "secrets")  # equals the registry module's REFUSED_STATES (a test pins it; no import here)
+
+
+def _refused_map_value_ok(s: str, path: str) -> bool:
+    return bool(_REFUSED_MAP_PATH.fullmatch(path.lstrip("."))) and (s in _REFUSED_STATE_NAMES or bool(_CATEGORY_CODE_VALUE.fullmatch(s)))
+
+
 def key_like_value(v, path: str | None = None) -> bool:
     """Does a config value look like a secret?
     path=None: shape-only heuristic (weak: lowercase kebab/snake and hex digests pass).
@@ -131,6 +144,8 @@ def key_like_value(v, path: str | None = None) -> bool:
         if _ENV_NAME.fullmatch(s) or re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)+", s):
             return False
         return not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", s)
+    if _REFUSED_MAP_PATH.fullmatch(path.lstrip(".")):
+        return not _refused_map_value_ok(s, path)
     leaf = path.rsplit(".", 1)[-1]
     if leaf.lower().endswith("_env"):
         return not _ENV_ONLY.fullmatch(s)

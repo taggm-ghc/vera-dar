@@ -120,6 +120,11 @@ def startup_checks() -> None:
 
 startup_checks()
 
+# TOPICREG-1028 (fail loud): a key-like value in config/auto_acquire.json raises acq_config.ConfigError here (paths logged at ERROR, never
+# values) so the service does not start; request-path callers catch it and treat the feature as OFF.
+from vera import acq_config as _acq_config  # noqa: E402
+_acq_config.load_config()
+
 # OOE-APRIME-C-1028 D2: import the scope router at process start so the owner-curated classifier category table
 # (config/classifier_categories.json) is loaded and validated now; an invalid table raises ScopeConfigError and the
 # service does not start (fail closed). The lazy imports in the request paths stay as a second line.

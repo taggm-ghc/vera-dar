@@ -91,7 +91,10 @@ def test_every_function_pins_search_path_and_no_membership_test():
     assert len(funcs) == 5
     for f in funcs:
         assert "SET search_path = pg_catalog, pg_temp" in f, f[:80]
-    assert code.count("pg_has_role") == 2 and "pg_has_role" not in code[code.index("FUNCTION vera_vjay.topreg_is_owner_fn"):]
+    runas = code[code.index("DECLARE app text[]"):code.index("-- Role preflight") if "-- Role preflight" in code else code.index("DO $$\nDECLARE g text")]
+    assert "pg_has_role" not in runas  # D11: the run-as (R1) slice has no pg_has_role, so a superuser cannot match there
+    assert "pg_has_role" not in code[code.index("FUNCTION vera_vjay.topreg_is_owner_fn"):code.index("CREATE TABLE vera_vjay.topreg_judgments")]
+    assert "pg_has_role(l, g, 'USAGE')" in code  # only in the separate role/inheritance preflight
     assert "pg_get_userbyid(c.relowner) = current_user" in code  # default deny: only the table owner is privileged
 
 
@@ -135,6 +138,9 @@ def test_exact_grants_column_update_state_only_for_rw():
                       "ON vera_vjay.topreg_judgments TO vera_vjay_rw;"]  # D3: no table-wide INSERT
     assert "REVOKE ALL ON vera_vjay.topreg_topics FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
     assert code.index("REVOKE ALL ON vera_vjay.topreg_topics") < code.index("GRANT SELECT ON vera_vjay.topreg_topics")
+    assert "REVOKE ALL ON vera_vjay.topreg_judgments FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
+    for t in ("topreg_topics", "topreg_judgments"):  # the three logins too, from the psql variables
+        assert "REVOKE ALL ON vera_vjay.%s FROM %%I, %%I, %%I" % t in code, t
     ins = grants[2]
     assert not [g for g in grants if "topreg_judgments" in g and re.search(r"UPDATE|DELETE|TRUNCATE|ALL", g)]
     for forbidden in ("topic_row_id", "version", "created_at", "modified_at", "parent_openalex_topic"):
@@ -153,7 +159,10 @@ def test_free_text_is_ascii_printable_and_capped():
 def test_rollback_drops_table_and_functions_only():
     r = _code(ROLLBACK.read_text(encoding="utf-8"))
     drops = re.findall(r"DROP (TABLE|FUNCTION) IF EXISTS (vera_vjay\.\w+)", r)
-    assert ("TABLE", "vera_vjay.topreg_topics") in drops and len(drops) == 7 and ("TABLE", "vera_vjay.topreg_judgments") in drops
+    assert drops == [("TABLE", "vera_vjay.topreg_judgments"), ("TABLE", "vera_vjay.topreg_topics"), ("FUNCTION", "vera_vjay.topreg_activate_trgfn"),
+                     ("FUNCTION", "vera_vjay.topreg_label_unique_trgfn"), ("FUNCTION", "vera_vjay.topreg_forbid_truncate_trgfn"),
+                     ("FUNCTION", "vera_vjay.topreg_guard_trgfn"), ("FUNCTION", "vera_vjay.topreg_is_owner_fn")]  # D7: full order (tables, then functions)
+    assert r.index("DROP TRIGGER IF EXISTS topreg_a_guard_trg") < r.index("DROP TABLE IF EXISTS vera_vjay.topreg_topics") < r.index("DROP FUNCTION")
     assert not re.search(r"\b(DELETE|TRUNCATE|ALTER|UPDATE|INSERT)\b", r.upper())
     assert re.search(r"^BEGIN;$", r, re.M) and r.rstrip().endswith("COMMIT;") and "CASCADE" not in r and "DROP SCHEMA" not in r
     assert "DELETES the seed rows" in ROLLBACK.read_text(encoding="utf-8") and "psql -X -v ON_ERROR_STOP=1" in ROLLBACK.read_text(encoding="utf-8")
@@ -174,7 +183,7 @@ def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_se
     import ast
     allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
                tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED,
-                   tr.TOPIC_SQL_MATCHABLE_JUDGE}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
+                   tr.TOPIC_SQL_MATCHABLE_JUDGE, tr.TOPIC_SQL_DUPLICATE, tr.TOPIC_SQL_REFUSED_EXISTING}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
     for p in (ROOT / "vera").rglob("*.py"):
@@ -224,7 +233,7 @@ class _Conn:
     def __exit__(self, *a):
         return False
 
-    def execute(self, stmt):
+    def execute(self, stmt, params=None):
         s = str(stmt)
         self.log.append(s)
         if self.fail == "exists" and "to_regclass" in s:
@@ -310,7 +319,7 @@ def test_read_topic_rows_is_read_only_txn_and_hides_driver_text():
 
 
 def test_key_for_provenance_does_not_swallow_registry_error():
-    def boom():
+    def boom(**kw):
         raise tr.TopicRegistryError("x")
     cfg = {"registry_table": {"read_from_db": True}, "count_min_score": {"anchor_bm25": {"scholarly": 2.0}}}
     import unittest.mock as um
@@ -372,7 +381,9 @@ class _RDB:
                                     "parent_topic_key": params["parent"], "state": "draft", "origin": "runtime", "version": 1})
                     return _RR()
                 if q == tr.TOPIC_SQL_MATCHABLE:
-                    return _RR([r for r in db.rows if r["state"] in ("active", "retired", "banned", "prohibited", "secrets")])
+                    return _RR([r for r in db.rows if r["state"] in ("active", "retired")])
+                if q == tr.TOPIC_SQL_REFUSED_EXISTING:
+                    return _RR([r for r in db.rows if r["topic_key"] == params["k"]])
                 if q == tr.TOPIC_SQL_INSERT_REFUSED:
                     db.rows.append({"topic_key": params["k"], "label": params["label"], "field": params["field"], "anchor_text": params["anchor"],
                                     "parent_topic_key": None, "state": params["state"], "origin": "runtime", "version": 1})
@@ -544,7 +555,7 @@ def test_loader_fails_closed_when_table_owner_is_an_app_role():
         assert "owned by an app role" in str(ei.value)
     eng = _Engine(rows=[_row("a-one")])
     assert tr.read_topic_rows(eng)[0] is True
-    assert tr.TOPIC_APP_ROLES == ("vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro")
+    assert tr.TOPIC_APP_ROLES == ("vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_pipeline_wo", "vera_claude_code_rw", "vera_eval_ro")
     with pytest.raises(tr.TopicRegistryError):  # absent owner row (cannot verify) = fail closed too
         class E2(_Engine):
             pass
@@ -552,7 +563,7 @@ def test_loader_fails_closed_when_table_owner_is_an_app_role():
         e._a = (True, [_row("a-one")], None, None)
         orig = _Conn.execute
         try:
-            _Conn.execute = lambda s, stmt: _Res(rows=[]) if "pg_get_userbyid" in str(stmt) else orig(s, stmt)
+            _Conn.execute = lambda s, stmt, params=None: _Res(rows=[]) if "pg_get_userbyid" in str(stmt) else orig(s, stmt, params)
             tr.read_topic_rows(e)
         finally:
             _Conn.execute = orig
@@ -575,18 +586,26 @@ def test_loader_fails_closed_when_session_can_reach_the_owner():  # D2
 def test_membership_counts_only_usable_rows_pg16():  # D1
     assert "(m.inherit_option OR m.set_option)" in tr.TOPIC_SQL_OWNER
     pre = _code(_sql())
-    pre = pre[pre.index("DO $$ BEGIN", pre.index("requires roles")) + 1:pre.index("CREATE SCHEMA")]
+    pre = pre[pre.index("DECLARE app text[]"):pre.index("CREATE TABLE vera_vjay.topreg_topics")]
     assert "AND (m.inherit_option OR m.set_option)" in pre
 
 
 def test_migration_preflight_refuses_app_role_runner():
     code = _code(_sql())
-    pre = code[code.index("DO $$ BEGIN", code.index("requires roles")) + 1:code.index("CREATE SCHEMA")]
-    assert "current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')" in pre
-    assert "pg_catalog.pg_auth_members" in pre and "RAISE EXCEPTION" in pre
-    assert "pg_has_role(a.rolname, current_user, 'MEMBER')" in pre and "pg_has_role(a.rolname, session_user, 'MEMBER')" in pre  # D2
-    assert code.index("must not run as") < code.index("CREATE SCHEMA")
-    assert "vera_vjay_wo" in (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text(encoding="utf-8")  # names exist
+    runas = code[code.index("DECLARE app text[]"):code.index("-- Role preflight") if "-- Role preflight" in code else code.index("DO $$\nDECLARE g text")]
+    # the run-as (R1) slice names the groups AND the three logins (from the psql variables), current_user AND session_user, direct membership
+    for g in ("'vera_vjay_wo'", "'vera_vjay_rw'", "'vera_vjay_ro'", "current_setting('vera011.rw')", "current_setting('vera011.wo')", "current_setting('vera011.ro')"):
+        assert g in runas, g
+    assert "current_user = ANY (app) OR session_user = ANY (app)" in runas
+    assert "pg_catalog.pg_auth_members" in runas and "(m.inherit_option OR m.set_option)" in runas and "RAISE EXCEPTION" in runas
+    assert "pg_has_role" not in runas  # a superuser would match pg_has_role MEMBER everywhere; only the separate role preflight uses it
+    role_pre = code[code.index("DO $$\nDECLARE g text"):code.index("CREATE TABLE vera_vjay.topreg_topics")]
+    assert "pg_has_role(l, g, 'USAGE')" in role_pre
+    assert "pg_has_role(a.rolname, current_user, 'MEMBER')" in role_pre and "pg_has_role(a.rolname, session_user, 'MEMBER')" in role_pre  # D2 kept
+    assert code.index("must not run as") < code.index("CREATE TABLE vera_vjay.topreg_topics")
+    acc = (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text(encoding="utf-8")
+    for name in ("vera_vjay_wo", "vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"):
+        assert name in acc  # names exist
 
 
 def test_no_dynamic_or_orm_construction_of_the_registry_table_name_in_vera_or_scripts():
@@ -711,17 +730,17 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     code = _code(sql)
     assert re.search(r"^BEGIN;$", sql, re.M) and sql.rstrip().endswith("COMMIT;") and [l for l in sql.splitlines() if l == "COMMIT;"] == ["COMMIT;"]
     assert not re.search(r"CREATE OR REPLACE", code) and not re.search(r"CREATE (TABLE|UNIQUE INDEX|INDEX|FUNCTION|TRIGGER) IF NOT EXISTS", code)
-    assert "CREATE SCHEMA IF NOT EXISTS vera_vjay;" in code
-    assert "DROP " not in code and "\\set" not in code and "psql -X -v ON_ERROR_STOP=1" in sql
+    assert "CREATE SCHEMA" not in code and "IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay')" in code  # D5
+    assert "DROP " not in code and "psql -X -v ON_ERROR_STOP=1" in sql
     body = code.split("BEGIN;", 1)[1]
-    assert body.index("already applied or name collision") < body.index("CREATE SCHEMA") < body.index("CREATE TABLE")
-    pre = body[:body.index("CREATE SCHEMA")]
+    assert body.index("already applied or name collision") < body.index("CREATE TABLE")
+    pre = body[:body.index("CREATE TABLE")]
     tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", code)
     funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", code)
     idx = re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
     trg = re.findall(r"CREATE TRIGGER (\w+)", code)
     chk = re.findall(r"CONSTRAINT (\w+)\s+CHECK", code)
-    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 16
+    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 17
     for t in tables:
         assert "to_regclass('%s')" % t in pre, t
     for n in funcs + idx + trg:  # derived from the file, so the preflight list cannot drift
@@ -732,6 +751,12 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     assert all(re.fullmatch(r"topreg_\w+_chk", c) for c in chk)
     assert "pg_proc" in pre and "pg_namespace" in pre and "pg_trigger" in pre and "postgres://" not in pre
     assert "topic_registry" not in code
+    # D4: identity sequences are named explicitly and, with the row types, collision-checked
+    assert "SEQUENCE NAME vera_vjay.topreg_topics_topic_row_id_seq" in code and "SEQUENCE NAME vera_vjay.topreg_judgments_id_seq" in code
+    for n in ("topreg_topics_topic_row_id_seq", "topreg_judgments_id_seq"):
+        assert "to_regclass('vera_vjay.%s')" % n in pre, n
+    for t in ("topreg_topics", "topreg_judgments"):
+        assert "to_regtype('vera_vjay.%s')" % t in pre, t
 
 
 def test_rollback_drops_every_created_object_by_name():
@@ -780,88 +805,124 @@ def test_refused_rows_never_reach_the_registry_or_acquisition_users():
         tr.registry_data_from_rows(only_refused)
 
 
-MAP = {"harmful": "banned", "advice": "prohibited", "rule_change": "prohibited", "secret_leak": "secrets"}
-MAP_LIST = [{"category_code": c, "state": st} for c, st in MAP.items()]
-REF_ON = {**REG_ON, "refused_state_map": MAP_LIST}
+MAP = {"harmful": "banned", "advice": "prohibited", "rule_change": "prohibited"}  # no code maps to secrets (admin-only, D3)
+REF_ON = {**REG_ON, "refused_state_map": MAP}
 
 
-def test_config_mapping_is_provisional_and_valid():
+def test_config_mapping_is_provisional_valid_and_has_no_secrets_code():
     s = acq_config.load_config()["micro_topic"]["registry_table"]
-    assert s["refused_state_map"] == [{"category_code": c, "state": st} for c, st in MAP.items()] and s["refused_state_mapping_status"] == "PROVISIONAL"
-    assert tr.refused_state_mapping(s) == MAP
+    assert s["refused_state_map"] == MAP and s["refused_state_mapping_status"] == "PROVISIONAL"
+    assert tr.refused_state_mapping(s) == MAP and "secrets" not in MAP.values() and "secret_leak" not in s["refused_state_map"]
     tr.validate_registry_settings(s)
-    dup = [{"category_code": "a_b", "state": "banned"}] * 2
-    for bad in ({}, {"refused_state_map": []}, {"refused_state_map": [{"category_code": "harmful", "state": "active"}]},
-                {"refused_state_map": [{"category_code": "Bad Code", "state": "banned"}]}, {"refused_state_map": "x"},
-                {"refused_state_map": dup}, {"refused_state_map": [{"category_code": "harmful"}]}):
+    for bad in ({}, {"refused_state_map": {}}, {"refused_state_map": {"harmful": "active"}}, {"refused_state_map": {"Bad Code": "banned"}},
+                {"refused_state_map": "x"}, {"refused_state_map": [{"category_code": "harmful", "state": "banned"}]},
+                {"refused_state_map": {"secret_leak": "secrets"}},  # D3: not a classifier category with disposition refuse
+                {"refused_state_map": {"in_scope": "banned"}}, {"refused_state_map": {"programming_task": "banned"}},  # not a 'refuse' disposition
+                {"refused_state_map": {"harmful": "secrets", "unknown_code": "banned"}}):
         with pytest.raises(tr.TopicRegistryError):
             tr.refused_state_mapping(bad)
         if "refused_state_map" in bad:
             with pytest.raises(tr.TopicRegistryError):
                 tr.validate_registry_settings(bad)  # validated at load
+    from vera import scope_router as sr
+    assert tr.refusal_category_codes() == frozenset(c.code for c in sr.CATEGORY_TABLE if c.disposition == "refuse") and set(MAP) <= tr.refusal_category_codes()
+
+
+def test_placeholder_content_is_fixed_and_matches_the_db_check_text():
+    ph = tr.refused_placeholder("rule_change")
+    assert ph == {"key": "refused-rule-change", "label": "refused rule_change", "field": "rule_change",
+                  "anchor": "refused topic category rule_change: fixed placeholder, no question text"}
+    code = _code(_sql())
+    chk = code[code.index("CONSTRAINT topreg_refused_chk"):code.index(");", code.index("CONSTRAINT topreg_refused_chk"))]
+    for frag in ("state NOT IN ('banned','prohibited','secrets')", "field ~ '^[a-z][a-z_]{1,31}$'", "label = 'refused ' || field",
+                 "topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')",
+                 "anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'",
+                 "parent_topic_key IS NULL", "parent_openalex_topic = 'none'"):
+        assert frag in chk, frag
+    assert ph["anchor"] == "refused topic category " + ph["field"] + ": fixed placeholder, no question text" and len(ph["anchor"]) >= 20
+    for bad in ("Bad", "a", "x" * 33, "a-b", None, 5):
+        with pytest.raises(tr.RegistrationRefused):
+            tr.refused_placeholder(bad)
 
 
 @pytest.mark.parametrize("code,state", sorted(MAP.items()))
-def test_register_refused_topic_stores_category_and_neutral_label_only(code, state, caplog):
+def test_ensure_refused_category_inserts_the_fixed_placeholder_once_and_is_idempotent(code, state, caplog):
     db = _db()
     with caplog.at_level("INFO", logger="vera"):
-        out = tr.register_refused_topic(None, code, "Neutral placeholder label", settings=REF_ON, engine=db)
-        out2 = tr.register_refused_topic(state, code, "Another neutral label", settings=REF_ON, engine=db)
-    assert out == {"key": "neutral-placeholder-label", "state": state} and out2["state"] == state
+        out = tr.ensure_refused_category(code, settings=REF_ON, engine=db)
+        out2 = tr.ensure_refused_category(code, settings=REF_ON, engine=db)
+    ph = tr.refused_placeholder(code)
+    assert out == {"key": ph["key"], "state": state, "created": True} and out2 == {"key": ph["key"], "state": state, "created": False}
+    assert len(db.rows) == 2  # one refused row per (state, category_code); the second call wrote nothing
     row = db.rows[1]
-    assert (row["state"], row["field"], row["label"], row["parent_topic_key"]) == (state, code, "Neutral placeholder label", None)
-    assert row["anchor_text"] == f"refused topic category {code}: Neutral placeholder label"  # only code + label: no question text
-    assert "placeholder" not in caplog.text and tr.TOPIC_SQL_INSERT not in db.log
+    assert (row["state"], row["field"], row["label"], row["anchor_text"], row["parent_topic_key"]) == (state, code, ph["label"], ph["anchor"], None)
+    assert db.log.count(tr.TOPIC_SQL_INSERT_REFUSED) == 1 and tr.TOPIC_SQL_INSERT not in db.log and db.log[0] == tr.TOPIC_SQL_LOCK
+    assert ph["label"] not in caplog.text
 
 
-def test_register_refused_topic_refusals_write_nothing():
-    for st, code, label, cfg in ((None, "unknown_cat", "Neutral label", REF_ON), ("banned", "advice", "Neutral label", REF_ON),
-                                 (None, "harmful", "ab", REF_ON), (None, "harmful", "Is this a question?", REF_ON),
-                                 (None, "harmful", "x" * 61, REF_ON), (None, "harmful", "Line\nbreak label", REF_ON),
-                                 (None, "harmful", " leading space", REF_ON), (None, "harmful", "Neutral  label", REF_ON),
-                                 (None, "harmful", "Old topic", REF_ON), (None, "harmful", "Neutral label", {**REF_ON, "registration_enabled": False}),
-                                 (None, "harmful", "Neutral label", {**REG_ON}), (None, 5, "Neutral label", REF_ON)):
+def test_ensure_refused_category_refusals_write_nothing():
+    for code, cfg in (("unknown_cat", REF_ON), ("secret_leak", REF_ON), ("in_scope", REF_ON), ("Harmful", REF_ON), (5, REF_ON), (None, REF_ON),
+                      ("harmful", {**REF_ON, "registration_enabled": False}), ("harmful", {**REG_ON}), ("harmful x", REF_ON)):
         db = _db()
         with pytest.raises((tr.RegistrationRefused, tr.TopicRegistryError)):
-            tr.register_refused_topic(st, code, label, settings=cfg, engine=db)
-        assert not any(q in (tr.TOPIC_SQL_INSERT_REFUSED, tr.TOPIC_SQL_INSERT) for q in db.log), (code, label)
+            tr.ensure_refused_category(code, settings=cfg, engine=db)
+        assert not any(q in (tr.TOPIC_SQL_INSERT_REFUSED, tr.TOPIC_SQL_INSERT) for q in db.log), code
         assert len(db.rows) == 1
 
 
-def test_register_refused_topic_signature_takes_no_question_text():
+def test_ensure_refused_category_conflicting_existing_row_is_an_error_not_an_overwrite():
+    db = _db()
+    ph = tr.refused_placeholder("harmful")
+    db.rows.append({"topic_key": ph["key"], "label": ph["label"], "field": "harmful", "anchor_text": ph["anchor"], "state": "prohibited",
+                    "origin": "runtime", "version": 1, "parent_topic_key": None})
+    with pytest.raises(tr.TopicRegistryError):
+        tr.ensure_refused_category("harmful", settings=REF_ON, engine=db)
+    assert len(db.rows) == 2 and tr.TOPIC_SQL_INSERT_REFUSED not in db.log
+
+
+def test_ensure_refused_category_takes_no_label_or_question_text():
     import inspect
-    p = inspect.signature(tr.register_refused_topic).parameters
-    assert list(p)[:3] == ["state", "category_code", "label"] and not {"text", "question", "query", "content"} & set(p)
+    p = inspect.signature(tr.ensure_refused_category).parameters
+    assert list(p)[:1] == ["category_code"] and {"settings", "engine"} == set(p) - {"category_code"}
+    assert not {"label", "text", "question", "query", "content", "anchor", "state"} & set(p)
+    assert not hasattr(tr, "register_refused_topic") and not hasattr(tr, "REFUSED_LABEL_RE") and not hasattr(tr, "refused_entries_from_rows")
 
 
-@pytest.mark.parametrize("kind", ["banned", "prohibited", "secrets", "active", "retired"])
-def test_draft_similar_to_any_of_these_goes_to_suspended(kind, caplog):
+@pytest.mark.parametrize("kind", ["active", "retired"])
+def test_draft_similar_to_active_or_retired_goes_to_suspended(kind):
     db = _db(kind)
-    with caplog.at_level("INFO", logger="vera"):
-        out = _reg(db, EXISTING + " mu")
+    out = _reg(db, EXISTING + " mu")
     assert out["state"] == "suspended" and tr.TOPIC_SQL_SUSPEND in db.log and tr.TOPIC_SQL_ACTIVATE not in db.log
-    if kind in tr.REFUSED_STATES:
-        assert f"equivalent to a {kind} topic" in caplog.text and "old-topic" not in caplog.text
 
 
-def test_matching_a_refused_topic_is_a_suspension_not_a_refusal():
-    db = _db("banned")
-    out = _reg(db, EXISTING + " mu")  # returns normally: no RegistrationRefused is raised for a refused-topic match
-    assert out["state"] == "suspended"
+@pytest.mark.parametrize("kind", ["banned", "prohibited", "secrets"])
+def test_refused_rows_are_never_text_matched_against_a_draft(kind):  # OD-1028(56): category-level association only
+    db = _db(kind)
+    out = _reg(db, EXISTING + " mu")  # same text as the refused row's anchor: no text similarity against refused rows
+    assert out["state"] == "active" and tr.TOPIC_SQL_SUSPEND not in db.log
+    assert "banned" not in tr.TOPIC_SQL_MATCHABLE and "secrets" not in tr.TOPIC_SQL_MATCHABLE_JUDGE and tr.MATCH_ORDER == ("active", "retired")
 
 
-# scrutiny_flag: pure; extra scrutiny, never an automatic refusal
-ENTRIES = (("harmful", EXISTING), ("secret_leak", OTHER))
+def test_reserved_prefix_is_rejected_for_proposals_and_guarded_in_the_db_text():  # OD-1028(57)
+    for label in ("refused harmful", "Refused-Thing Here"):
+        db = _db()
+        with pytest.raises(tr.RegistrationRefused):
+            _reg(db, OTHER, label=label)
+        assert db.log == [] and len(db.rows) == 1
+    code = _code(_sql())
+    g = code[code.index("FUNCTION vera_vjay.topreg_guard_trgfn"):code.index("FUNCTION vera_vjay.topreg_forbid_truncate_trgfn")]
+    assert "NEW.topic_key LIKE 'refused-%' AND NEW.state NOT IN ('banned','prohibited','secrets')" in g and tr.RESERVED_KEY_PREFIX == "refused-"
 
 
-def test_scrutiny_flag_pure_and_returns_category_or_none():
-    assert tr.scrutiny_flag(EXISTING + " mu", ENTRIES) == {"category_code": "harmful"}
-    assert tr.scrutiny_flag(OTHER + " mu", ENTRIES) == {"category_code": "secret_leak"}
-    assert tr.scrutiny_flag("completely unrelated cooking recipe words here", ENTRIES) == {"category_code": None}
-    assert tr.scrutiny_flag("anything", ()) == {"category_code": None} and tr.scrutiny_flag(None, ENTRIES) == {"category_code": None}
-    assert tr.scrutiny_flag("x", ENTRIES, similarity=lambda a, b: 1 / 0) == {"category_code": None}
-    rows = [_row("a-one"), {**_row("b-two", state="banned", origin="runtime"), "field": "harmful"}]
-    assert tr.refused_entries_from_rows(rows) == (("harmful", rows[1]["anchor_text"]),)
+# scrutiny_flag: pure, category level only; extra scrutiny, never an automatic refusal
+def test_scrutiny_flag_is_category_level_pure_and_returns_category_state_or_none():
+    for code, st in MAP.items():
+        assert tr.scrutiny_flag(code, REF_ON) == {"category_code": code, "state": st}
+    none = {"category_code": None, "state": None}
+    assert tr.scrutiny_flag("secret_leak", REF_ON) == none and tr.scrutiny_flag("unknown_cat", REF_ON) == none
+    assert tr.scrutiny_flag("completely unrelated cooking recipe words here", REF_ON) == none  # text is never matched
+    assert tr.scrutiny_flag(None, REF_ON) == none and tr.scrutiny_flag(5, REF_ON) == none and tr.scrutiny_flag("harmful", {}) == none
+    assert tr.scrutiny_flag("harmful", {"refused_state_map": {"harmful": "active"}}) == none  # invalid map -> no flag, no raise
 
 
 def test_scrutiny_flag_is_pure_no_io_and_used_by_no_refusal_constructor():
@@ -869,7 +930,8 @@ def test_scrutiny_flag_is_pure_no_io_and_used_by_no_refusal_constructor():
     tree = ast.parse((ROOT / "vera" / "topic_registry.py").read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "scrutiny_flag")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
-    assert not names & {"engine", "conn", "execute", "connect", "open", "db", "get_role_engine", "begin", "logging", "sqlalchemy"}
+    assert not names & {"engine", "conn", "execute", "connect", "open", "db", "get_role_engine", "begin", "logging", "sqlalchemy",
+                        "similarity", "lexical_similarity", "description_similarity"}
     users = []
     for p in list((ROOT / "vera").rglob("*.py")) + list((ROOT / "scripts").rglob("*.py")):
         src = p.read_text(encoding="utf-8")
@@ -879,8 +941,58 @@ def test_scrutiny_flag_is_pure_no_io_and_used_by_no_refusal_constructor():
     own = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
            if any(isinstance(c, ast.Name) and c.id == "scrutiny_flag" for c in ast.walk(n)) and n.name != "scrutiny_flag"]
     assert own == []
-    assert "refus" not in "".join(n.name for n in ast.walk(ast.parse((ROOT / "vera" / "scope_router.py").read_text(encoding="utf-8")))
-                                  if isinstance(n, ast.FunctionDef) and "scrutiny" in n.name)
+
+
+# --- D11: app role names come from ONE config value, validated at load; the 011 draft's psql defaults equal them ---
+def test_app_roles_config_defaults_equal_the_011_psql_variable_defaults_and_the_account_script():
+    cfg = acq_config.load_config()["micro_topic"]["registry_table"]["app_roles"]
+    assert cfg == tr.DEFAULT_APP_ROLES
+    head = _sql().split("BEGIN;", 1)[0]
+    dflt = dict(re.findall(r"\\set (app_(?:rw|wo|ro)_login) (\w+)", head))
+    assert dflt == {"app_rw_login": cfg["logins"]["rw"], "app_wo_login": cfg["logins"]["wo"], "app_ro_login": cfg["logins"]["ro"]}
+    acc = (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text(encoding="utf-8")
+    for n in list(cfg["logins"].values()) + list(cfg["groups"].values()):
+        assert n in acc
+    assert "MUST BE MIRRORED in" in head and "registry_table.app_roles" in head  # header note about -v overrides
+    assert tr.app_role_names(None) == tr.TOPIC_APP_ROLES == tuple(cfg["groups"][k] for k in ("wo", "rw", "ro")) + tuple(cfg["logins"][k] for k in ("wo", "rw", "ro"))
+    assert "FINAL grant targets pending the owner's pre006 run" in head
+
+
+@pytest.mark.parametrize("bad", [
+    "x", {}, {"groups": {}}, {"groups": tr.DEFAULT_APP_ROLES["groups"]},
+    {**tr.DEFAULT_APP_ROLES, "extra": 1},
+    {"groups": {**tr.DEFAULT_APP_ROLES["groups"], "rw": "Bad Name"}, "logins": tr.DEFAULT_APP_ROLES["logins"]},
+    {"groups": {**tr.DEFAULT_APP_ROLES["groups"], "rw": "x'; DROP TABLE y; --"}, "logins": tr.DEFAULT_APP_ROLES["logins"]},
+    {"groups": tr.DEFAULT_APP_ROLES["groups"], "logins": {**tr.DEFAULT_APP_ROLES["logins"], "rw": tr.DEFAULT_APP_ROLES["groups"]["rw"]}},
+    {"groups": tr.DEFAULT_APP_ROLES["groups"], "logins": {**tr.DEFAULT_APP_ROLES["logins"], "ro": 5}},
+])
+def test_app_roles_config_is_validated_at_load(bad):
+    with pytest.raises(tr.TopicRegistryError):
+        tr.validate_registry_settings({"app_roles": bad})
+    with pytest.raises(tr.TopicRegistryError):
+        tr.app_roles_config({"app_roles": bad})
+
+
+def test_owner_check_uses_the_configured_role_names():
+    custom = {"groups": {"wo": "g_wo", "rw": "g_rw", "ro": "g_ro"}, "logins": {"wo": "l_wo", "rw": "l_rw", "ro": "l_ro"}}
+    assert tr.app_role_names({"app_roles": custom}) == ("g_wo", "g_rw", "g_ro", "l_wo", "l_rw", "l_ro")
+    eng = _Engine(rows=[_row("a-one")], owner={**GOOD_OWNER, "owner": "l_rw"})
+    with pytest.raises(tr.TopicRegistryError):  # the owner is a CONFIGURED login: refused
+        tr.read_topic_rows(eng, roles=tr.app_role_names({"app_roles": custom}))
+    assert tr.read_topic_rows(_Engine(rows=[_row("a-one")], owner={**GOOD_OWNER, "owner": "l_rw"}))[0] is True  # default names do not include it
+    for login in ("vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"):
+        with pytest.raises(tr.TopicRegistryError):
+            tr.read_topic_rows(_Engine(rows=[_row("a-one")], owner={**GOOD_OWNER, "owner": login}))
+
+
+def test_final_privilege_check_and_revoke_text_in_the_011_draft():
+    code = _code(_sql())
+    fin = code[code.index("-- Final") if "-- Final" in code else code.index("rw text := current_setting"):]
+    assert fin.rstrip().endswith("COMMIT;") and "has_table_privilege" in fin and "has_column_privilege" in fin
+    for frag in ("'UPDATE'", "'DELETE'", "'TRUNCATE'", "ARRAY['topic_key','label','field','anchor_text','parent_topic_key','origin','state']",
+                 "ARRAY['draft_key','candidate_key','candidate_state','verdict','mode','model_id','latency_ms']", "= 'state'"):
+        assert frag in fin, frag
+    assert code.index("GRANT INSERT (draft_key") < code.index("rw text := current_setting")
 
 
 # --- reviewer LOW: cache_ttl_seconds capped 0..3600, rejected at load ---

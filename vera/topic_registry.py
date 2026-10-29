@@ -6,6 +6,7 @@ cfg["registry_table"]["read_from_db"] is boolean true (default off).
 "Match" (duplicate) means SEMANTIC EQUIVALENCE or PARAPHRASE only (OD-1028(49)); narrower or broader non-equivalent topics are distinct."""
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import zlib
@@ -23,7 +24,6 @@ TOPIC_STATES = ("draft", "active", "suspended", "retired", "banned", "prohibited
 # builds entries from state == 'active' only). Only the owner/admin may move a row out of these states (DB trigger).
 REFUSED_STATES = ("banned", "prohibited", "secrets")
 CACHE_TTL_MAX = 3600  # reviewer LOW: registry_table.cache_ttl_seconds accepted range is 0..3600, else rejected at load
-REFUSED_LABEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 -]{1,58}[A-Za-z0-9]")  # neutral label: 3-60 chars, letters digits space hyphen only
 _CATEGORY_CODE = re.compile(r"[a-z][a-z_]{1,31}")
 TOPIC_SQL_EXISTS = "SELECT to_regclass('vera_vjay.topreg_topics')"
 TOPIC_SQL_ROWS = ("SELECT topic_key, version, label, field, anchor_text, parent_openalex_topic, parent_topic_key, origin, state "
@@ -31,14 +31,53 @@ TOPIC_SQL_ROWS = ("SELECT topic_key, version, label, field, anchor_text, parent_
 # R1 (both directions): the table owner is unrestricted by the guard trigger. (a) the owner must not be, or hold a USABLE
 # (inherit_option OR set_option; PG16+ columns, ADMIN-only rows do not count) membership in, an app role; (b) the session
 # (current_user and session_user) must not be able to reach the owner (pg_has_role MEMBER follows inheritance).
-TOPIC_APP_ROLES = ("vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro")
+# D11: the group and login role names come from ONE config value, registry_table.app_roles (validated at load); these are the defaults
+# (they equal the psql-variable defaults of the 011 draft and db/accounts/create_vera_accounts.sql). An -v override of the draft's
+# app_*_login variables must be mirrored in config/auto_acquire.json.
+DEFAULT_APP_ROLES = {"groups": {"wo": "vera_vjay_wo", "rw": "vera_vjay_rw", "ro": "vera_vjay_ro"},
+                     "logins": {"wo": "vera_pipeline_wo", "rw": "vera_claude_code_rw", "ro": "vera_eval_ro"}}
+_ROLE_NAME = re.compile(r"[a-z][a-z0-9_]{1,62}")
+_ROLE_KINDS = ("wo", "rw", "ro")
+
+
+def app_roles_config(settings: dict | None) -> dict:
+    """Validated {"groups": {...}, "logins": {...}} from registry_table.app_roles (default DEFAULT_APP_ROLES when absent): exactly the
+    kinds wo/rw/ro in each of groups and logins, well-formed role names, all six distinct. Anything else raises TopicRegistryError."""
+    raw = (settings or {}).get("app_roles", DEFAULT_APP_ROLES)
+    if not isinstance(raw, dict) or set(raw) != {"groups", "logins"}:
+        raise TopicRegistryError("registry_table.app_roles must have exactly groups and logins")
+    out, names = {}, []
+    for part in ("groups", "logins"):
+        d = raw[part]
+        if not isinstance(d, dict) or set(d) != set(_ROLE_KINDS):
+            raise TopicRegistryError(f"registry_table.app_roles.{part} must have exactly wo, rw and ro")
+        for k in _ROLE_KINDS:
+            v = d[k]
+            if not isinstance(v, str) or not _ROLE_NAME.fullmatch(v):
+                raise TopicRegistryError(f"registry_table.app_roles.{part}.{k} is not a valid role name")
+            names.append(v)
+        out[part] = {k: d[k] for k in _ROLE_KINDS}
+    if len(set(names)) != 6:
+        raise TopicRegistryError("registry_table.app_roles names must be six distinct roles")
+    return out
+
+
+def app_role_names(settings: dict | None = None) -> tuple:
+    """The six role names (groups wo, rw, ro, then logins wo, rw, ro) from config, validated."""
+    r = app_roles_config(settings)
+    return tuple(r["groups"][k] for k in _ROLE_KINDS) + tuple(r["logins"][k] for k in _ROLE_KINDS)
+
+
 TOPIC_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) AS owner, "
                    "(SELECT count(*) FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid "
                    "WHERE m.member = c.relowner AND (m.inherit_option OR m.set_option) "
-                   "AND r.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')) AS app_memberships, "
+                   "AND r.rolname = ANY (:roles)) AS app_memberships, "
                    "pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER') AS current_reaches_owner, "
                    "pg_catalog.pg_has_role(session_user, c.relowner, 'MEMBER') AS session_reaches_owner "
-                   "FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('vera_vjay.topreg_topics')")
+                   "FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('vera_vjay.topreg_topics')")  # :roles = the six names from app_role_names()
+
+
+TOPIC_APP_ROLES = app_role_names(None)
 _TOPIC_KEY = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 _PRINTABLE = re.compile(r"[ -~]+")
 _ROW_KEYS = {"topic_key", "version", "label", "field", "anchor_text", "parent_openalex_topic", "parent_topic_key", "origin", "state"}
@@ -70,26 +109,37 @@ def validate_registry_settings(settings: dict) -> None:
         v = settings["cache_ttl_seconds"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= CACHE_TTL_MAX:
             raise TopicRegistryError(f"registry_table.cache_ttl_seconds must be a number in 0..{CACHE_TTL_MAX}")
+    app_roles_config(settings)
     if "refused_state_map" in settings:
         refused_state_mapping(settings)
 
 
+def refusal_category_codes() -> frozenset:
+    """Classifier category codes whose disposition is 'refuse' (vera.scope_router.CATEGORY_TABLE; the single source)."""
+    from vera.scope_router import CATEGORY_TABLE
+    return frozenset(c.code for c in CATEGORY_TABLE if c.disposition == "refuse")
+
+
 def refused_state_mapping(settings: dict) -> dict:
-    """The PROVISIONAL category code -> refused state mapping from config registry_table.refused_state_map, validated: a non-empty
-    list of {"category_code", "state"} objects (a list because the tracked-config secret scanner refuses any value under a dotted
-    path containing the word "secret"), unique well-formed codes, states in REFUSED_STATES. Returned as a dict."""
-    lst = settings.get("refused_state_map")
-    if not isinstance(lst, list) or not lst:
+    """The PROVISIONAL category code -> refused state mapping from config registry_table.refused_state_map, validated at load:
+    a non-empty object whose keys are classifier categories with disposition 'refuse' and whose values are in REFUSED_STATES.
+    `secrets` has NO code in the shipped map (admin-only) until a real secret-leak refusal code exists in the category table."""
+    m = settings.get("refused_state_map")
+    if not isinstance(m, dict) or not m:
         raise TopicRegistryError("registry_table.refused_state_map is missing or empty")
-    out = {}
-    for e in lst:
-        if not isinstance(e, dict) or set(e) != {"category_code", "state"}:
+    known = refusal_category_codes()
+    for code, st in m.items():
+        if not isinstance(code, str) or not _CATEGORY_CODE.fullmatch(code) or code not in known or st not in REFUSED_STATES:
             raise TopicRegistryError("registry_table.refused_state_map has an invalid entry")
-        code, st = e["category_code"], e["state"]
-        if not isinstance(code, str) or not _CATEGORY_CODE.fullmatch(code) or st not in REFUSED_STATES or code in out:
-            raise TopicRegistryError("registry_table.refused_state_map has an invalid entry")
-        out[code] = st
-    return out
+    return dict(m)
+
+
+def refused_placeholder(category_code: str) -> dict:
+    """The FIXED placeholder row content for a refusal category code (OD-1028(56)); mirrored by the DB's topreg_refused_chk."""
+    if not isinstance(category_code, str) or not _CATEGORY_CODE.fullmatch(category_code):
+        raise RegistrationRefused("category_code is not well-formed")
+    return {"key": "refused-" + category_code.replace("_", "-"), "label": "refused " + category_code, "field": category_code,
+            "anchor": "refused topic category " + category_code + ": fixed placeholder, no question text"}
 
 
 def normalize_topic_key(text) -> str:
@@ -101,7 +151,7 @@ def normalize_topic_key(text) -> str:
     return s
 
 
-def read_topic_rows(engine=None, *, env=None, engine_factory=None):
+def read_topic_rows(engine=None, *, env=None, engine_factory=None, roles=None):
     """(table_exists, rows). Reads in a READ ONLY transaction through the existing rw engine (SELECT only). A missing
     table gives (False, []); every other failure raises TopicRegistryError (class name only, never a URL or driver text)."""
     try:
@@ -114,8 +164,9 @@ def read_topic_rows(engine=None, *, env=None, engine_factory=None):
             conn.execute(text("SET TRANSACTION READ ONLY"))
             if conn.execute(text(TOPIC_SQL_EXISTS)).scalar() is None:
                 return False, []
-            owner = conn.execute(text(TOPIC_SQL_OWNER)).mappings().first()
-            if not owner or owner["owner"] in TOPIC_APP_ROLES or owner["app_memberships"]:
+            role_names = TOPIC_APP_ROLES if roles is None else tuple(roles)
+            owner = conn.execute(text(TOPIC_SQL_OWNER), {"roles": list(role_names)}).mappings().first()
+            if not owner or owner["owner"] in role_names or owner["app_memberships"]:
                 raise TopicRegistryError("topic registry table is owned by an app role (or its owner is a member of one)")
             if owner.get("current_reaches_owner") is not False or owner.get("session_reaches_owner") is not False:
                 raise TopicRegistryError("the app session can reach the topic registry table owner (or this could not be verified)")
@@ -167,7 +218,7 @@ def load_active_registry_data(cfg, reader=None):
     """Registry data dict from the DB's active rows, or None when the table is absent (caller uses the JSON seed).
     Raises TopicRegistryError on any other problem (fail closed), including invalid registry_table settings."""
     validate_registry_settings(registry_table_settings(cfg))
-    exists, rows = (reader or read_topic_rows)()
+    exists, rows = (reader or functools.partial(read_topic_rows, roles=app_role_names(registry_table_settings(cfg))))()
     if not exists:
         logging.getLogger("vera").warning("topic registry table absent: using the JSON seed")
         return None
@@ -177,17 +228,23 @@ def load_active_registry_data(cfg, reader=None):
 # --- runtime registration (OD-1028(9); owner 2026-10-28). Whole path OFF by default (registry_table.registration_enabled). ---
 TOPIC_SQL_KEY_EXISTS = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :k"
 TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topreg_topics "
-                       "WHERE state IN ('active', 'retired', 'banned', 'prohibited', 'secrets') ORDER BY topic_row_id")
+                       "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
 TOPIC_SQL_MATCHABLE_JUDGE = ("SELECT topic_key, version, label, anchor_text, state, modified_at FROM vera_vjay.topreg_topics "
-                             "WHERE state IN ('active', 'retired', 'banned', 'prohibited', 'secrets') ORDER BY topic_row_id")
+                             "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
 TOPIC_SQL_JUDGE_DAY_COUNT = "SELECT count(*) FROM vera_vjay.topreg_judgments WHERE created_at > now() - interval '1 day'"
 TOPIC_SQL_JUDGMENT_INSERT = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
                              "VALUES (:dk, :ck, :cs, :v, :m, :mid, :ms)")
+# OD-1028(57) SHADOW mode: EXACT duplicate = same normalized topic_key, or the same normalized label (lower, whitespace-collapsed, as the
+# unique label index/trigger) as an existing active, retired, suspended or draft topic.
+TOPIC_SQL_DUPLICATE = ("SELECT topic_key FROM vera_vjay.topreg_topics WHERE topic_key = :k OR (state IN ('active', 'retired', 'suspended', 'draft') "
+                       "AND lower(regexp_replace(btrim(label), '\\s+', ' ', 'g')) = :nl) ORDER BY topic_row_id LIMIT 1")
+RESERVED_KEY_PREFIX = "refused-"  # OD-1028(57): reserved for the fixed refused-category placeholder rows; a proposal can never use it
 TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :p AND state = 'active'"
 TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
                     "VALUES (:k, :label, :field, :anchor, :parent, 'runtime', 'draft')")
 TOPIC_SQL_INSERT_REFUSED = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
                             "VALUES (:k, :label, :field, :anchor, NULL, 'runtime', :state)")
+TOPIC_SQL_REFUSED_EXISTING = "SELECT state, field FROM vera_vjay.topreg_topics WHERE topic_key = :k AND version = 1"
 TOPIC_SQL_ACTIVATE = ("UPDATE vera_vjay.topreg_topics SET state = 'active' "
                       "WHERE topic_key = :k AND version = 1 AND state = 'draft' AND origin = 'runtime'")
 TOPIC_SQL_SUSPEND = ("UPDATE vera_vjay.topreg_topics SET state = 'suspended' "
@@ -195,7 +252,7 @@ TOPIC_SQL_SUSPEND = ("UPDATE vera_vjay.topreg_topics SET state = 'suspended' "
 TOPIC_SQL_LOCK = "SELECT pg_advisory_xact_lock(:n)"
 TOPIC_LOCK_ID = zlib.crc32(b"vera_vjay.topreg_topics")  # one lock id serialises every registration (D6)
 SIMILARITY_MAX_DEFAULT = 0.50
-MATCH_ORDER = ("active", "retired", "banned", "prohibited", "secrets")  # which matched kind is reported first
+MATCH_ORDER = ("active", "retired")  # refused rows are never text-matched (OD-1028(56)): category-level association only
 
 
 class RegistrationRefused(RuntimeError):
@@ -300,8 +357,9 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
     enforces it too) and is stored immutably as parent_topic_key. It is NEVER inferred from similarity; None = no parent.
     Acquisition caps and targets are unaffected.
     TOPICJUDGE-1028 (OD-1028(54)), only when registry_table.judge.enabled is true: a free Groq model judges equivalence against EVERY
-    candidate BEFORE the lock (vera.topic_judge). SHADOW (default once enabled): verdicts are logged to topreg_judgments, the draft is not
-    transitioned by the judge. ACTIVE: any 'yes' -> suspended, all 'no' -> active, any 'unknown' (or candidates changed since the judge
+    candidate BEFORE the lock (vera.topic_judge). SHADOW (default once enabled; OD-1028(57)): verdicts are logged to topreg_judgments and
+    never decide; the draft goes to 'suspended' (nothing written) only if it is an EXACT duplicate (normalized key or label of an active,
+    retired, suspended or draft topic), else to 'active'; the lexical metric is log-only. A key with the reserved 'refused-' prefix is refused. ACTIVE: any 'yes' -> suspended, all 'no' -> active, any 'unknown' (or candidates changed since the judge
     call) -> stays draft; the lexical metric is log-only. A verdict never causes a refusal.
       the check cannot run (the metric raises or returns a non-number) -> stays 'draft' (fail closed)
     A database error rolls the whole transaction back (nothing written). Rows are never deleted; logs carry no user text.
@@ -318,6 +376,8 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         key = normalize_topic_key(label)
     except ValueError:
         raise RegistrationRefused("label does not normalize to a valid topic key") from None
+    if key.startswith(RESERVED_KEY_PREFIX):
+        raise RegistrationRefused("topic key uses the reserved refused-category prefix")
     if parent_key is not None and (not isinstance(parent_key, str) or not _TOPIC_KEY.fullmatch(parent_key) or parent_key == key):
         raise RegistrationRefused("parent_key must be a well-formed topic key other than the new key")
     from sqlalchemy import text
@@ -329,7 +389,16 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         plan = _judge_phase(engine, settings, key, label, anchor)  # TOPICJUDGE-1028: before the lock; None = judge off
         with engine.begin() as conn:
             conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
-            if conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
+            shadow = plan is not None and plan["mode"] == "shadow"
+            if shadow:
+                # OD-1028(57): only an EXACT duplicate is held back. The DB's unique key/label controls make a duplicate row unwritable, so
+                # nothing is written: the outcome is 'suspended' (not recorded). Judge verdicts were already logged and never decide.
+                nl = re.sub(r"\s+", " ", label.strip()).lower()
+                dup = conn.execute(text(TOPIC_SQL_DUPLICATE), {"k": key, "nl": nl}).first()
+                if dup is not None:
+                    log.info("topic proposal suspended (shadow mode): exact duplicate; nothing written")
+                    return {"key": key, "state": "suspended"}
+            elif conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
                 raise RegistrationRefused("topic key already exists")
             if parent_key is not None and conn.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent_key}).first() is None:
                 raise RegistrationRefused("parent_key does not name an active topic")
@@ -350,7 +419,18 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
                 log.info("topic proposal %s by judge (%s); lexical stand-in (log only) matched %s", state,
                          "equivalent to a %s topic" % kind if kind else "no equivalent topic", "n/a" if lex is None else len(lex))
                 return {"key": key, "state": state}
-            # judge off, or SHADOW mode (the judge never transitions the draft; the lexical stand-in still decides, as before)
+            if shadow:
+                # SHADOW (OD-1028(57)): not an exact duplicate -> active whatever the judge said; the lexical metric is LOG-ONLY.
+                try:
+                    lex = [r["topic_key"] for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all()
+                           if r["topic_key"] != key and similarity(anchor, r["anchor_text"]) >= limit]
+                except Exception:  # noqa: BLE001
+                    lex = None
+                if conn.execute(text(TOPIC_SQL_ACTIVATE), {"k": key}).rowcount != 1:
+                    raise TopicRegistryError("topic transition affected an unexpected number of rows")
+                log.info("topic proposal activated (shadow mode; lexical stand-in, log only, matched %s)", "n/a" if lex is None else len(lex))
+                return {"key": key, "state": "active"}
+            # judge off: the lexical stand-in decides, as before
             matched = {}  # kind -> first matched key; 'active' wins over 'retired'
             for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all():
                 if r["topic_key"] == key:
@@ -369,10 +449,7 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
             if conn.execute(text(sql), {"k": key}).rowcount != 1:
                 raise TopicRegistryError("topic transition affected an unexpected number of rows")
             if kind:
-                if kind in REFUSED_STATES:  # a refused topic matched: suspended for owner review, never a refusal; category only
-                    log.info("topic proposal suspended: equivalent to a %s topic", kind)
-                else:
-                    log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
+                log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
             else:
                 log.info("topic proposal activated")
             return {"key": key, "state": state}
@@ -382,31 +459,21 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         raise TopicRegistryError(f"topic registration failed ({type(exc).__name__})") from None
 
 
-def register_refused_topic(state, category_code, label, *, settings: dict, engine=None) -> dict:
-    """Record a REFUSED topic (OD-1028(51)/(52)) as a banned, prohibited or secrets row. The caller supplies `category_code` from
-    an EXISTING refusal verdict (this function does not classify anything). The state comes from the PROVISIONAL config mapping
-    registry_table.refused_state_map (harmful -> banned; advice, rule_change -> prohibited; secret_leak -> secrets);
-    `state` may be None (derived) and, when given, must equal the mapped state. Stores ONLY the category code (column field) and a
-    neutral label (3-60 chars of letters, digits, space, hyphen), NEVER question text (OD-1028(35)): the anchor text is built from
-    the category code and the label alone. Refused before any write: disabled, unknown category, state mismatch, bad label, key
-    already present. The row is never loaded as active and never triggers acquisition. Returns {"key", "state"}."""
+def ensure_refused_category(category_code, *, settings: dict, engine=None) -> dict:
+    """OD-1028(56): make sure the FIXED placeholder row for a refusal category exists (one row per category code: key
+    'refused-<code>', label 'refused <code>', anchor generated from the code only). Idempotent insert-if-absent under the advisory
+    lock; it takes NO label, question text or any other text, and rejects anything but a configured refusal category code. The state
+    comes from the PROVISIONAL config map registry_table.refused_state_map (harmful -> banned; advice, rule_change -> prohibited;
+    `secrets` is admin-only until a real secret-leak refusal code exists). The row is never loaded as active, never triggers
+    acquisition and is never text-matched. An existing row with another state or field is a TopicRegistryError (not overwritten).
+    Returns {"key", "state", "created": bool}."""
     if settings.get("registration_enabled") is not True:
         raise RegistrationRefused("runtime topic registration is disabled")
     validate_registry_settings(settings)
     mapping = refused_state_mapping(settings)
     if not isinstance(category_code, str) or category_code not in mapping:
         raise RegistrationRefused("category_code is not a configured refusal category")
-    mapped = mapping[category_code]
-    if state is not None and state != mapped:
-        raise RegistrationRefused("state does not match the configured mapping for this category")
-    if not isinstance(label, str) or not REFUSED_LABEL_RE.fullmatch(label) or "  " in label:
-        raise RegistrationRefused("label must be a neutral 3-60 character label of letters, digits, spaces and hyphens")
-    label = label.strip()
-    try:
-        key = normalize_topic_key(label)
-    except ValueError:
-        raise RegistrationRefused("label does not normalize to a valid topic key") from None
-    anchor = f"refused topic category {category_code}: {label}"
+    state, ph = mapping[category_code], refused_placeholder(category_code)
     from sqlalchemy import text
     if engine is None:
         from vera import db
@@ -414,34 +481,32 @@ def register_refused_topic(state, category_code, label, *, settings: dict, engin
     try:
         with engine.begin() as conn:
             conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
-            if conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
-                raise RegistrationRefused("topic key already exists")
-            conn.execute(text(TOPIC_SQL_INSERT_REFUSED), {"k": key, "label": label, "field": category_code, "anchor": anchor, "state": mapped})
-        logging.getLogger("vera").info("refused topic recorded: state %s", mapped)
-        return {"key": key, "state": mapped}
+            row = conn.execute(text(TOPIC_SQL_REFUSED_EXISTING), {"k": ph["key"]}).mappings().first()
+            if row is not None:
+                if row["state"] != state or row["field"] != category_code:
+                    raise TopicRegistryError("refused category placeholder exists with a different state")
+                return {"key": ph["key"], "state": state, "created": False}
+            conn.execute(text(TOPIC_SQL_INSERT_REFUSED), {"k": ph["key"], "label": ph["label"], "field": ph["field"],
+                                                          "anchor": ph["anchor"], "state": state})
+        logging.getLogger("vera").info("refused category placeholder recorded: state %s", state)
+        return {"key": ph["key"], "state": state, "created": True}
     except (RegistrationRefused, TopicRegistryError):
         raise
     except Exception as exc:  # noqa: BLE001 - class only
-        raise TopicRegistryError(f"refused topic registration failed ({type(exc).__name__})") from None
+        raise TopicRegistryError(f"refused category registration failed ({type(exc).__name__})") from None
 
 
-def refused_entries_from_rows(rows) -> tuple:
-    """((category_code, anchor_text), ...) for the banned/prohibited/secrets rows of validated DB rows; no I/O. For scrutiny_flag."""
-    return tuple((r["field"], r["anchor_text"]) for r in rows or () if isinstance(r, dict) and r.get("state") in REFUSED_STATES)
-
-
-def scrutiny_flag(text, refused_entries=(), *, similarity=lexical_similarity, threshold: float = SIMILARITY_MAX_DEFAULT) -> dict:
-    """PURE (no I/O). {"category_code": code or None}: the category of the first refused-topic entry whose anchor text scores at or
-    above `threshold` against `text`. It is a request for STRICTER INTENT REVIEW by a future caller ("extra scrutiny, not automatic
-    refusal", OD-1028(48)/(52)); a match must NEVER by itself cause a refusal, and nothing in this task calls it from a refusal path.
-    Any metric failure gives None."""
-    if not isinstance(text, str):
-        return {"category_code": None}
-    for code, anchor in refused_entries:
-        try:
-            score = similarity(text, anchor)
-        except Exception:  # noqa: BLE001 - fail to "no flag"; never refuse
-            continue
-        if not isinstance(score, bool) and isinstance(score, (int, float)) and score == score and score >= threshold:
-            return {"category_code": code}
-    return {"category_code": None}
+def scrutiny_flag(category_code, settings: dict) -> dict:
+    """PURE (no I/O), CATEGORY LEVEL ONLY (OD-1028(56)): {"category_code": code or None, "state": mapped refused state or None} for a
+    classifier category code named by an EXISTING refusal verdict, via registry_table.refused_state_map. There is no text matching
+    and no similarity against refused rows (they hold only fixed placeholders). It is a request for STRICTER INTENT REVIEW by a future
+    caller ("extra scrutiny, not automatic refusal", OD-1028(48)/(52)); it must NEVER by itself cause a refusal. Unmapped, invalid
+    or non-string input, or an invalid map, gives None."""
+    none = {"category_code": None, "state": None}
+    if not isinstance(category_code, str):
+        return none
+    try:
+        st = refused_state_mapping(settings).get(category_code)
+    except TopicRegistryError:
+        return none
+    return none if st is None else {"category_code": category_code, "state": st}

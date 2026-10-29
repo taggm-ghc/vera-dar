@@ -117,7 +117,10 @@ def _bucket(score: float) -> str:
 
 def _micro_cfg() -> dict:
     from vera import acq_config
-    return (acq_config.load_config() or {}).get("micro_topic") or {}
+    try:
+        return (acq_config.load_config() or {}).get("micro_topic") or {}
+    except acq_config.ConfigError:  # logged at ERROR by load_config; the request path degrades to no registry config
+        return {}
 
 
 def category_key(question: str, reg) -> str:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import unicodedata
 from functools import lru_cache
@@ -21,14 +22,26 @@ CONFIG_PATH = ROOT / "config" / "auto_acquire.json"
 _TRUE = ("true", "1", "yes", "on")
 
 
+class ConfigError(RuntimeError):
+    """The tracked acquisition config holds a key-like value (a secret must live in the environment). The message names only dotted
+    config PATHS, never values."""
+
+
 def load_config(path: Path = CONFIG_PATH) -> dict | None:
-    """The parsed config, or None when absent/unreadable/not an object (=> feature OFF)."""
+    """The parsed config, or None when absent/unreadable/not an object (=> feature OFF). Raises ConfigError (after logging the
+    offending dotted paths, never values, at ERROR) when the config holds a key-like value (ACQ S4-0 L1/L4c): startup fails
+    loud instead of silently switching the feature off. Request-path callers catch ConfigError and treat it as OFF."""
     try:
         cfg = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(cfg, dict) or refuse_key_like_values(cfg):
-        return None  # ACQ S4-0 L1/L4c: a tracked config holding a key-like value is refused (feature OFF)
+    if not isinstance(cfg, dict):
+        return None
+    bad = refuse_key_like_values(cfg)
+    if bad:
+        msg = "acquisition config refused: key-like value at path(s) " + ", ".join(bad)
+        logging.getLogger("vera").error(msg)
+        raise ConfigError(msg)
     return cfg
 
 
