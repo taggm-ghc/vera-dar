@@ -10,6 +10,13 @@ maximum is >= the threshold; else writes config/category_attestation.json (descr
 threshold, max pairwise score, tool version, timestamp). The runtime only compares the descriptions hash
 (vera.scope_router.verify_attestation) when classifier_categories.json sets attestation_required true.
 
+Process control, not authentication: anyone can compute the descriptions hash without the model, so the hash alone is
+not proof the model ran. The owner COMMITS config/category_attestation.json as part of the release; at runtime the
+file's model_manifest_sha256 and threshold_category must also equal config/semantic_similarity.json (threshold non-null).
+The tool parses the table with check_attestation=False (vera.category_table), so the owner can edit descriptions and
+re-attest while attestation_required stays true; scope_router (the API import) would refuse the stale table, this tool
+never imports it.
+
 Usage: HF_HUB_OFFLINE=1 VERA_SEMSIM_MODEL_DIR=<dereferenced model dir> python scripts/attest_category_descriptions.py
 """
 from __future__ import annotations
@@ -26,6 +33,7 @@ if str(ROOT) not in sys.path:
 
 TOOL_VERSION = "1"
 OUT_PATH = ROOT / "config" / "category_attestation.json"
+CATEGORIES_FILE = ROOT / "config" / ("classifier_" + "categories.json")
 
 
 class AttestationRefused(Exception):
@@ -34,7 +42,7 @@ class AttestationRefused(Exception):
 
 def build_attestation(rows, cfg: dict, embedder, model_manifest_sha256: str, now: str | None = None) -> dict:
     """Pure core (testable with a fake embedder): max pairwise score over `rows`, gated by the category threshold."""
-    from vera import scope_router as sr
+    from vera import category_table as sr
     from vera import semantic_similarity as ss
 
     thr = cfg.get("threshold_category")
@@ -72,7 +80,7 @@ def main(environ=os.environ, out_path: Path = OUT_PATH) -> int:
     try:
         if environ.get("HF_HUB_OFFLINE") != "1":
             raise AttestationRefused("HF_HUB_OFFLINE=1 is required")
-        from vera import scope_router as sr
+        from vera import category_table as sr
         from vera import semantic_similarity as ss
 
         cfg = dict(ss._load_config())
@@ -83,7 +91,9 @@ def main(environ=os.environ, out_path: Path = OUT_PATH) -> int:
         if not ss.warm(cfg, environ):
             raise AttestationRefused("model did not load (pins, VERA_SEMSIM_MODEL_DIR, manifest hash)")
         ad = ss._adapter(cfg, environ)
-        att = build_attestation(sr.load_categories(), cfg, ad, cfg["model_sha256"])
+        raw = json.loads(CATEGORIES_FILE.read_text(encoding="utf-8"))
+        rows = sr.parse_categories(raw, check_attestation=False)  # D-D: re-attest even when the table is stale
+        att = build_attestation(rows, cfg, ad, cfg["model_sha256"])
         out_path.write_text(json.dumps(att, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"attested: max pairwise {att['max_pairwise_score']} < threshold {att['threshold_category']}; wrote {out_path.name}")
         return 0

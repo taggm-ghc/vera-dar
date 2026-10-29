@@ -694,18 +694,50 @@ def test_attestation_tool_writes_and_runtime_verifies_hash_only():
     assert set(att) == {"schema", "descriptions_sha256", "model_manifest_sha256", "model_revision", "threshold_category",
                         "max_pairwise_score", "max_pair", "tool_version", "attested_at"}
     assert att["max_pairwise_score"] == 0.0 and att["descriptions_sha256"] == sr.descriptions_sha256(rows)
-    sr.verify_attestation(att, rows)  # matches
+    sr.verify_attestation(att, rows, {"threshold_category": 1.0, "model_sha256": "b" * 64})  # matches
     with pytest.raises(tool.AttestationRefused):  # score >= threshold -> refused
         tool.build_attestation(rows, {**cfg, "threshold_category": 0.0}, Emb(), "b" * 64)
     raw = json.loads((ROOT / "config" / "classifier_categories.json").read_text())
     full = sr.descriptions_sha256(sr.CATEGORY_TABLE)
-    good = {"schema": sr.ATTESTATION_SCHEMA, "descriptions_sha256": full}
-    assert sr.parse_categories({**raw, "attestation_required": True}, good)
-    for bad in (None, {**good, "descriptions_sha256": "0" * 64}, {"schema": "x", "descriptions_sha256": full}):
+    sem = {"threshold_category": 0.8, "model_sha256": "c" * 64}
+    good = {"schema": sr.ATTESTATION_SCHEMA, "descriptions_sha256": full, "threshold_category": 0.8,
+            "model_manifest_sha256": "c" * 64}
+    on = {**raw, "attestation_required": True}
+    assert sr.parse_categories(on, good, sem)
+    for bad in (None, {**good, "descriptions_sha256": "0" * 64}, {**good, "schema": "x"},
+                {**good, "threshold_category": 0.7}, {**good, "model_manifest_sha256": "d" * 64}):  # D-C
         with pytest.raises(sr.ScopeConfigError):
-            sr.parse_categories({**raw, "attestation_required": True}, bad)
+            sr.parse_categories(on, bad, sem)
+    for badsem in (None, {**sem, "threshold_category": None}, {**sem, "model_sha256": "d" * 64}):  # D-C
+        with pytest.raises(sr.ScopeConfigError):
+            sr.parse_categories(on, good, badsem)
     edited = json.loads(json.dumps(raw))
     edited["categories"][0]["description"] += " extra"
     with pytest.raises(sr.ScopeConfigError):
-        sr.parse_categories({**edited, "attestation_required": True}, good)
+        sr.parse_categories({**edited, "attestation_required": True}, good, sem)
+    assert sr.parse_categories({**edited, "attestation_required": True}, None, None, check_attestation=False)  # D-D
     assert raw["attestation_required"] is False and sr.parse_categories(raw)  # default off: no attestation needed
+
+
+def test_attestation_flag_must_be_literal_bool_and_no_control_chars():  # D-A, D-B
+    import json
+    from vera import scope_router as sr
+    raw = json.loads((ROOT / "config" / "classifier_categories.json").read_text())
+    for v in ("true", "false", 1, 0, None, "yes"):
+        with pytest.raises(sr.ScopeConfigError):
+            sr.parse_categories({**raw, "attestation_required": v})
+    for ch in ("\t", "\n", "\r", "\x01", "\x1f", "\x7f"):
+        for field in ("description", "code"):
+            e = json.loads(json.dumps(raw))
+            e["categories"][0][field] = e["categories"][0][field] + ch + ("ab" if field == "code" else " x")
+            with pytest.raises(sr.ScopeConfigError):
+                sr.parse_categories(e)
+    e = json.loads(json.dumps(raw))
+    e["categories"][0]["description"] = "tail\t"
+    with pytest.raises(sr.ScopeConfigError):
+        sr.parse_categories(e)
+
+
+def test_release_tool_does_not_import_scope_router():  # D-D
+    src = (ROOT / "scripts" / "attest_category_descriptions.py").read_text()
+    assert "import scope_router" not in src and "check_attestation=False" in src

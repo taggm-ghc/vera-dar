@@ -56,8 +56,8 @@ def test_table_is_read_only_at_runtime():
     for f in (ROOT / "vera").rglob("*.py"):
         src = f.read_text(errors="ignore")
         if "classifier_categories" in src:
-            assert f.name == "scope_router.py", f
-            assert "CATEGORIES_PATH = " in src and "write_text" not in src and "json.dump" not in src
+            assert f.name in ("scope_router.py", "category_table.py"), f
+            assert (f.name == "category_table.py" or "CATEGORIES_PATH = " in src) and "write_text" not in src and "json.dump" not in src
             assert not re.search(r"open\([^)]*['\"][wa]", src)
     assert not [n for n in dir(sr) if re.match(r"(save|write|add|set|update|register)_?categor", n, re.I)]
 
