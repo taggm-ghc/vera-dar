@@ -150,3 +150,13 @@ def test_coding_task_is_the_last_deny_category():
     raw_keys = list(RAW["layer1"]["deny_categories"])
     assert raw_keys[-1] == "coding_task" and list(CFG.deny)[-1] == "coding_task"
     assert sr.layer1("Write a python script that is a keylogger", CFG) == (sr.DECLINE, "deny:harmful")
+
+
+# FINAL-REVIEW-1028 D4 (OD-1028(21) c1, (38)): a label-only-invalid reply twice under a coding hint is unsupported use
+@pytest.mark.parametrize("reply", [_reply(False, "dangerous"), _reply(True, "novel_subject")])
+def test_coding_hint_label_only_invalid_twice_takes_unsupported_use_path(stubs, monkeypatch, reply):
+    chat = Count(reply)
+    monkeypatch.setattr(sr, "default_chat", chat)
+    d = sr.route(CODE_Q, "m")
+    assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task", 2)
+    assert sr.unsupported_use(d) and sr.offtopic_applies(d)

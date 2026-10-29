@@ -124,6 +124,7 @@ startup_checks()
 # (config/classifier_categories.json) is loaded and validated now; an invalid table raises ScopeConfigError and the
 # service does not start (fail closed). The lazy imports in the request paths stay as a second line.
 import vera.scope_router as _scope_router  # noqa: E402,F401
+_scope_router.load_config()  # FINAL-REVIEW-1028 D3: scope_router.json + rendered category slots fail closed at start
 
 # DAR readiness (codes only, read-only; the probe is bounded by config/dar_health.json timeouts). The startup line is
 # logged from a daemon thread so import/startup is never delayed by the DB probe. Never raises.

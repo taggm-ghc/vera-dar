@@ -139,7 +139,7 @@ def test_two_different_ooe_labels_both_logged(caplog):  # review D3
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
     assert len(calls) == 2 and catstep.applies(d, Q)
-    assert "label=dangerous,risky?x? outcome=catstep_after_retry" in caplog.text
+    assert "label=dangerous,nonlabel outcome=catstep_after_retry" in caplog.text
 
 
 def test_ooe_label_then_bad_json_still_declines(caplog):
@@ -175,3 +175,28 @@ def test_ooe_in_enum_label_unchanged(raw, reason):
 def test_ooe_empty_or_absent_category_still_catstep(raw):
     d, _ = run(raw)
     assert d.reason.startswith("llm_out:") and d.category == "" and catstep.applies(d, Q) is True
+
+
+# FINAL-REVIEW-1028 D1/D2/D4
+def test_d1_in_scope_true_label_twice_logs_accepted_after_retry(caplog):
+    import logging
+    raw = '{"in_scope":true,"category":"dangerous"}'
+    chat, calls = _seq(raw, raw)
+    with caplog.at_level(logging.INFO, logger="vera"):
+        d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
+    assert len(calls) == 2 and d.accepted is True and d.category == ""
+    assert "outcome=accepted_after_retry" in caplog.text and "retry_resolved" not in caplog.text
+
+
+def test_d2_echoed_question_in_category_is_never_logged(caplog):
+    import logging
+    echo = "jazz brushes drummers"  # short (<32 chars) question text echoed into category
+    raw = '{"in_scope":false,"category":"%s"}' % echo
+    chat, calls = _seq(raw, raw)
+    with caplog.at_level(logging.INFO, logger="vera"):
+        sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
+    assert echo not in caplog.text and "label=nonlabel" in caplog.text
+    assert sr._ooe_label('{"in_scope":false,"category":"Novel_Subject"}') == "novel_subject"
+    assert sr._ooe_label('{"in_scope":false,"category":"x" }') == "x"
+    assert sr._ooe_label('{"in_scope":false,"category":"a b"}') == "nonlabel"
+    assert sr._ooe_label('{"in_scope":false,"category":"%s"}' % ("a" * 33)) == "nonlabel"

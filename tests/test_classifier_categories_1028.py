@@ -137,6 +137,9 @@ def test_category_table_is_validated_at_service_start():
     tree = ast.parse((ROOT / "main.py").read_text())
     top = [n for n in tree.body if isinstance(n, ast.Import)]
     assert any(a.name == "vera.scope_router" for n in top for a in n.names)
+    calls = [n for n in tree.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+             and ast.unparse(n.value.func) == "_scope_router.load_config"]
+    assert calls, "FINAL-REVIEW-1028 D3: main.py must call _scope_router.load_config() at startup"
     import main
     assert main._scope_router is sr and sr.CATEGORY_TABLE
 

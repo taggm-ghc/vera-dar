@@ -47,6 +47,7 @@ class ScopeDecision:
     category: str = ""  # DAR-1021: layer-2 verdict category ("" when absent or not in LAYER2_CATEGORIES)
     raw_refusal_named: bool = False  # CATSTEP-1028 (plan s27.1 C1): the final raw reply names a refusal word (lenient)
     topic_key: str = ""  # CATSTEP-1028 (plan s27.3): topic key derived by vera/catstep.py ("" = step not run)
+    ooe_label: bool = False  # FINAL-REVIEW-1028 D4: final reply was invalid ONLY for an out-of-enum label (A' path)
 
 
 @dataclass(frozen=True)
@@ -718,6 +719,9 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
             if label_only and not _raw_names_refusal(content):  # OOE-APRIME-C-1028 (A'): still out-of-enum after the
                 # retry -> no recognised category: the absent-category path (catstep gates: layer 1, intent_clean, ...)
                 d = _layer2_decision(content, pt, ct, cost, calls, unknown_label_ok=True)
+                if d.reason.startswith(("llm_out:", "llm_in:")) and d.category == "":
+                    from dataclasses import replace as _replace_l
+                    d = _replace_l(d, ooe_label=True)
             if calls > 1:
                 import logging
                 logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
@@ -729,6 +733,8 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
                     outcome = "catstep_after_retry"  # out-of-enum or absent category: the catstep path (its gates)
                 elif d.reason.startswith("classifier_malformed") or d.raw_refusal_named:
                     outcome = "declined"
+                elif d.accepted and d.category == "":
+                    outcome = "accepted_after_retry"  # FINAL-REVIEW-1028 D1: in_scope=true, label still out-of-enum
                 else:
                     outcome = "retry_resolved"
                 import logging
@@ -774,6 +780,9 @@ def _coding_hint(question: str, model: str, pricing, cfg: RouterConfig, chat: Ch
             return d  # advice / harmful / rule_change (clean, refusal_token or category_conflict): existing refusal
         if d.reason.startswith(("llm_out:", "llm_in:")) and d.category in CODING_HINT_CONFIRM:
             return ScopeDecision(False, "layer1", UNSUPPORTED_L1_REASON, d.tokens_used, d.cost_usd, d.llm_calls)
+        if d.ooe_label and d.category == "" and not d.raw_refusal_named:  # FINAL-REVIEW-1028 D4 (OD-1028(21), (38)):
+            # a label-only-invalid reply twice is never a decline solely for the label: unsupported use + reading list
+            return ScopeDecision(False, "layer1", UNSUPPORTED_L1_REASON, d.tokens_used, d.cost_usd, d.llm_calls)
         return _coding_fallback("l2_malformed", d)
     except Exception:  # noqa: BLE001  fail closed
         return ScopeDecision(False, "layer1", f"{UNSUPPORTED_L1_REASON}:l2_unavailable")
@@ -805,7 +814,8 @@ def _ooe_label(content) -> str:
         obj = _strict_loads(content)
         c = obj.get("category") if isinstance(obj, dict) else None
         if isinstance(c, str) and c.strip() and not resolve_label(c) and c.isascii():
-            return re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32]
+            lab = c.strip().lower()  # FINAL-REVIEW-1028 D2: only a label-shaped token is ever logged
+            return lab if re.fullmatch(r"[a-z][a-z0-9_]{0,31}", lab) else "nonlabel"
     except Exception:  # noqa: BLE001
         pass
     return ""
