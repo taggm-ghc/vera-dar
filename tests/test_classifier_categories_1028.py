@@ -52,14 +52,111 @@ def test_table_is_read_only_at_runtime():
     assert isinstance(row.aliases, tuple)
     with pytest.raises(TypeError):
         sr.CATEGORY_ALIASES["x"] = "in_scope"
-    # no writer exists: the table file is named only by the loader's read path, and no module opens it for writing
+    # no code path writes the JSON seed file
     for f in (ROOT / "vera").rglob("*.py"):
         src = f.read_text(errors="ignore")
-        if "classifier_categories" in src:
+        if "clscat_categories" in src:
             assert f.name == "scope_router.py", f
             assert "CATEGORIES_PATH = " in src and "write_text" not in src and "json.dump" not in src
             assert not re.search(r"open\([^)]*['\"][wa]", src)
-    assert not [n for n in dir(sr) if re.match(r"(save|write|add|set|update|register)_?categor", n, re.I)]
+
+
+# OD-1028(38) ("the table is read-only at runtime; no writer exists", the earlier regex guard) is SUPERSEDED IN PART by
+# OD-1028(39)/(42): the DB table may receive runtime INSERTs of brand-new, non-refusing codes through ONE gated function.
+# The regex guard was defeated by naming the function enrol_nonrefusing_entry, so it is replaced by explicit assertions.
+import ast  # noqa: E402
+
+_SQL_VERBS = re.compile(r"\b(UPDATE|DELETE|TRUNCATE|ALTER|COPY|ON\s+CONFLICT)\b", re.I)
+# OWNER DECISION 2026-10-28 ("the tables and funtions should be disambiguated by prefix & suffix as appropriate"):
+# the table is renamed classifier_categories -> clscat_categories; the guards below track the new literal explicitly (sanctioned rename, not an evasion).
+_TABLE_SQL = re.compile(r"\b(FROM|INTO|UPDATE|TABLE|JOIN|COPY|ON)\s+(vera_vjay\.)?clscat_categories\b|vera_vjay\.clscat_categories", re.I)
+_SOURCES = sorted((ROOT / "vera").rglob("*.py")) + [ROOT / "main.py"]
+_GUARD_SOURCES = _SOURCES + sorted((ROOT / "scripts").rglob("*.py"))  # R2: scripts/ too
+
+
+def _docstring_nodes(tree):
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body \
+                and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant):
+            out.add(id(n.body[0].value))
+    return out
+
+
+def _string_constants():
+    for f in _SOURCES:
+        tree = ast.parse(f.read_text(errors="ignore"))
+        skip = _docstring_nodes(tree)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip:
+                yield f, n.value
+
+
+def test_guard_a_only_three_sql_texts_name_the_table_and_none_mutate_it():
+    assert not hasattr(sr, "DB_CATEGORY_SQL_UPDATE") and not hasattr(sr, "DB_CATEGORY_SQL_DELETE")
+    allowed = {sr.DB_CATEGORY_SQL_EXISTS, sr.DB_CATEGORY_SQL_ROWS, sr.DB_CATEGORY_SQL_INSERT}
+    named = {v for f, v in _string_constants() if _TABLE_SQL.search(v)}
+    assert named == allowed, named ^ allowed
+    # every other SQL-like text near the table in any vera/ source: no mutating verb. Per file that names the table,
+    # no string constant (other than the three) holds a mutating SQL verb or ON CONFLICT.
+    for f, v in _string_constants():
+        if v in allowed or "clscat_categories" not in f.read_text(errors="ignore"):
+            continue
+        assert not _SQL_VERBS.search(v) or not re.search(r"\b(SELECT|INSERT|SET|FROM|INTO|WHERE)\b", v), (f.name, v[:60])
+    for v in allowed - {sr.DB_CATEGORY_SQL_INSERT}:
+        assert not _SQL_VERBS.search(v)
+    ins = sr.DB_CATEGORY_SQL_INSERT
+    assert ins.startswith("INSERT INTO vera_vjay.clscat_categories") and "ON CONFLICT" not in ins.upper()
+    assert not _SQL_VERBS.search(ins.replace("INSERT", ""))
+    # the lock statement names no table and no mutation
+    assert "clscat_categories" not in sr.DB_CATEGORY_SQL_LOCK
+
+
+def test_guard_b_insert_is_brand_new_non_refusing_only():
+    ins = " ".join(sr.DB_CATEGORY_SQL_INSERT.split())
+    assert "(code, version, description, disposition, aliases, origin, state)" in ins
+    assert "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)" in ins
+    assert "refusal_rank" not in ins and ":version" not in ins and ":origin" not in ins and ":aliases" not in ins
+    assert re.findall(r":(\w+)", ins) == ["code", "description", "disposition", "state"]  # no app-supplied version/origin/rank
+
+
+def test_guard_c_only_enrol_nonrefusing_entry_references_the_insert():
+    refs = []
+    for f in _SOURCES:
+        tree = ast.parse(f.read_text(errors="ignore"))
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                body = ast.dump(fn)
+                if "DB_CATEGORY_SQL_INSERT" in body and not any(
+                        isinstance(o, (ast.FunctionDef, ast.AsyncFunctionDef)) and o is not fn and "DB_CATEGORY_SQL_INSERT" in ast.dump(o)
+                        for o in ast.walk(fn)):
+                    refs.append((f.name, fn.name))
+        # module-level (non-function) uses other than the definition itself
+        for n in tree.body:
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and "DB_CATEGORY_SQL_INSERT" in ast.dump(n):
+                assert isinstance(n, ast.Assign) and n.targets[0].id == "DB_CATEGORY_SQL_INSERT", (f.name, ast.unparse(n)[:80])
+    assert refs == [("scope_router.py", "enrol_nonrefusing_entry")], refs
+    on = {"registration_enabled": True}
+    for disp in ("refuse", "unsupported_use"):
+        with pytest.raises(sr.RegistrationRefused):
+            sr.enrol_nonrefusing_entry("ok_code", "notes about a local seminar timetable", disp, settings=on, rows=[],
+                                       writer=lambda r: 1 / 0)
+    for flag in (None, False, "true", 1, "yes"):
+        with pytest.raises(sr.RegistrationRefused):
+            sr.enrol_nonrefusing_entry("ok_code", "notes about a local seminar timetable", settings={"registration_enabled": flag},
+                                       rows=[], writer=lambda r: 1 / 0)
+
+
+def test_guard_d_shipped_config_registration_disabled():
+    cfg = json.loads((ROOT / "config" / "scope_router.json").read_text())["classifier_category_table"]
+    assert cfg["registration_enabled"] is False and cfg["read_from_db"] is False
+    assert sr.category_table_settings()["registration_enabled"] is False
+
+
+def test_guard_e_docstring_states_the_write_limit():
+    doc = " ".join(sr.enrol_nonrefusing_entry.__doc__.split())
+    assert "Runtime writes are limited to brand-new, non-refusing codes" in doc
+    assert "OD-1028(9)/(39)/(42)" in doc
 
 
 def _with(mutate):
@@ -159,3 +256,142 @@ def test_near_duplicate_description_rejected_naming_both_codes_and_score():
 def test_clearly_distinct_new_description_accepted():
     rows = sr.parse_categories(_with(_new_row("questions seeking private details of a named person")))
     assert rows[-1].code == "new_cat" and isinstance(rows, tuple)
+
+
+# ---- CATTAB-FIX2 R2: hardened AST guard (string building, sqlalchemy Table, scripts/) ----
+def _name_violations(tree, allowed, fname):
+    skip = _docstring_nodes(tree)
+    bad = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip \
+                and "clscat_categories" in n.value and n.value not in allowed:
+            bad.append((fname, "constant", n.value[:50]))
+        if isinstance(n, ast.Call) and ast.unparse(n.func).split(".")[-1] == "Table" and n.args \
+                and isinstance(n.args[0], ast.Constant) and n.args[0].value == "clscat_categories":
+            bad.append((fname, "Table", "clscat_categories"))
+    return bad
+
+
+def _allowed_texts():
+    # the three SQL texts plus two non-SQL labels (JSON seed filename, error-message prefix) that name no table access
+    return {sr.DB_CATEGORY_SQL_EXISTS, sr.DB_CATEGORY_SQL_ROWS, sr.DB_CATEGORY_SQL_INSERT,
+            "classifier_categories.json", "clscat_categories (db)"}
+
+
+def test_guard_f_no_other_string_names_the_table_in_vera_main_scripts():
+    bad = []
+    for f in _GUARD_SOURCES:
+        allowed = _allowed_texts() if (f.name == "scope_router.py" and f.parent.name == "vera") else set()
+        bad += _name_violations(ast.parse(f.read_text(errors="ignore")), allowed, f.name)
+    assert bad == [], bad
+    assert any(f.parent.name == "scripts" for f in _GUARD_SOURCES)
+
+
+@pytest.mark.parametrize("src", [
+    'q = "SELECT * FROM vera_vjay." + "clscat_categories"',
+    'q = "DELETE FROM x.clscat_categories WHERE {}".format(1)',
+    'name = f"UPDATE clscat_categories SET a={x}"',
+    'from sqlalchemy import Table\nt = Table("clscat_categories", md)',
+    'import sqlalchemy as sa\nt = sa.Table("clscat_categories", md)',
+], ids=["plus", "format", "fstring", "Table", "sa-Table"])
+def test_guard_f_detects_evasions(src):
+    assert _name_violations(ast.parse(src), _allowed_texts(), "x.py")
+
+
+def test_guard_f_ignores_docstrings_and_allowed_texts():
+    assert _name_violations(ast.parse('"""clscat_categories"""\nx = 1'), set(), "x.py") == []
+    assert _name_violations(ast.parse(f"x = {sr.DB_CATEGORY_SQL_ROWS!r}"), _allowed_texts(), "x.py") == []
+
+
+# ---- CATTAB-FIX2 R1: owner / migration preflight ----
+DRAFT = (ROOT / "db" / "migrations" / "pending" / "012-DRAFT-classifier-categories.sql.draft").read_text()
+
+
+def test_app_role_list_is_one_constant_and_matches_the_draft():
+    assert sr.APP_ROLE_NAMES == frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
+                                           "vera_pipeline_wo", "vera_eval_ro"})
+    pre = DRAFT.split("R1(a) preflight", 1)[1].split("Role preflight", 1)[0]
+    assert set(re.findall(r"'(vera_\w+)'", pre)) >= {"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"}
+    assert all("current_setting('vera012.%s')" % k in pre for k in ("rw", "wo", "ro")) and "pg_has_role" not in pre
+    assert "current_setting('vera012.rw')" in pre  # logins come from the psql variables (defaults = the three names below)
+    head = DRAFT.split("BEGIN;", 1)[0]
+    assert {"vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"} <= set(re.findall(r"vera_\w+", head))
+    assert "pg_auth_members" in pre and "current_user" in pre and "RAISE EXCEPTION" in pre
+    assert "(m.inherit_option OR m.set_option)" in pre  # PG16+ ADMIN-only rows must not lock out the owner
+    assert "PG 18.6" in pre and "dedicated owner role" in pre
+    src = (ROOT / "vera" / "scope_router.py").read_text()
+    assert src.count("vera_claude_code_rw") == 1  # no scattered literals
+
+
+class _OwnerConn:
+    def __init__(self, owner, exists=True):
+        self.owner, self.exists, self.log = owner, exists, []
+
+    def execute(self, stmt, params=None):
+        self.cur = str(stmt)
+        self.log.append((self.cur, params))
+        return self
+
+    def scalar(self):
+        if "to_regclass" in self.cur:
+            return "vera_vjay.clscat_categories" if self.exists else None
+        return self.owner if "relowner" in self.cur else None
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
+@pytest.mark.parametrize("owner", sorted(sr.APP_ROLE_NAMES) + [None])
+def test_owner_app_role_or_missing_fails_closed_without_host(owner):
+    with pytest.raises(sr.ScopeConfigError, match="owner") as e:
+        sr._select_rows(_OwnerConn(owner))
+    assert "@" not in str(e.value) and "host" not in str(e.value).lower()
+
+
+def test_non_app_owner_passes_and_owner_query_names_no_table():
+    c = _OwnerConn("vera_owner_admin")
+    assert sr._select_rows(c) == []
+    assert c.log[1][1] == {"t": "vera_vjay.clscat_categories"}
+    assert "clscat_categories" not in sr.DB_CATEGORY_SQL_OWNER
+    assert sr._select_rows(_OwnerConn("x", exists=False)) is None
+
+
+def test_read_category_rows_propagates_owner_failure_as_scope_error():
+    class Eng:
+        def connect(self):
+            return _Ctx(_OwnerConn("vera_vjay_rw"))
+
+    class _Ctx:
+        def __init__(self, c):
+            self.c = c
+
+        def __enter__(self):
+            return self.c
+
+        def __exit__(self, *a):
+            return False
+
+    with pytest.raises(sr.ScopeConfigError, match="owner"):
+        sr.read_category_rows(Eng())
+
+
+def test_app_role_names_from_config_equal_sql_defaults_and_validated(tmp_path):
+    import json
+    cfg = sr.category_table_settings()
+    assert frozenset(cfg["app_role_names"]) == sr.APP_ROLE_NAMES == sr.app_role_names()
+    sql_defaults = set(re.findall(r"\\set app_\w+_login (\w+)", DRAFT))
+    assert sql_defaults == sr.APP_ROLE_NAMES - {"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"}
+    assert "MIRROR" in DRAFT and "app_role_names" in DRAFT.split("BEGIN;", 1)[0]
+    def at(val):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps({"classifier_category_table": ({} if val is None else {"app_role_names": val})}))
+        return sr.app_role_names(f)
+    assert at(None) == sr.APP_ROLE_NAMES
+    assert at(sorted(sr.APP_ROLE_NAMES | {"x_login"})) >= sr.APP_ROLE_NAMES
+    for bad in ([], "vera_vjay_rw", ["vera_vjay_rw"], [1, "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"],
+                ["Bad Name", "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"], ["vera_vjay_wo", "vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"]):
+        with pytest.raises(sr.ScopeConfigError):
+            at(bad)
