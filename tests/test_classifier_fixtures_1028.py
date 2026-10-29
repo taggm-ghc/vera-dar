@@ -124,6 +124,24 @@ def test_ooe_retry_resolving_to_in_enum_value(caplog):
     assert "label=dangerous" in caplog.text and "outcome=retry_resolved" in caplog.text
 
 
+def test_ooe_label_then_absent_category_logs_catstep(caplog):  # review D3
+    import logging
+    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"reason":"r"}')
+    with caplog.at_level(logging.INFO, logger="vera"):
+        d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
+    assert len(calls) == 2 and d.reason == "llm_out:r" and d.category == "" and catstep.applies(d, Q)
+    assert "label=dangerous outcome=catstep_after_retry" in caplog.text and "retry_resolved" not in caplog.text
+
+
+def test_two_different_ooe_labels_both_logged(caplog):  # review D3
+    import logging
+    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"category":"risky<x>"}')
+    with caplog.at_level(logging.INFO, logger="vera"):
+        d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
+    assert len(calls) == 2 and catstep.applies(d, Q)
+    assert "label=dangerous,risky?x? outcome=catstep_after_retry" in caplog.text
+
+
 def test_ooe_label_then_bad_json_still_declines(caplog):
     import logging
     chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"category":')

@@ -413,16 +413,18 @@ def default_chat(messages: list[dict], model: str, l2: dict, client=None,
 # OOE-APRIME-C-1028 (OD-1028(38), owner "a' + c"): the layer-2 categories come from ONE owner-curated, versioned table,
 # config/classifier_categories.json. Read-only at runtime: loaded once at import into immutable structures (frozen rows,
 # tuples, frozensets, a read-only alias map); no code path writes or extends it (the model never creates a research
-# route). An invalid table raises ScopeConfigError at import (fail closed, startup error).
+# route). An invalid table raises ScopeConfigError at import; main.py imports this module at process start
+# (OOE-APRIME-C-1028 D2), so a bad table stops the service from starting, and any later lazy import fails too.
 CATEGORIES_PATH = Path(__file__).resolve().parent.parent / "config" / "classifier_categories.json"
 DISPOSITIONS = ("in_scope", "off_topic", "refuse", "unsupported_use")  # the dispositions the code implements
 REFUSING_DISPOSITIONS = frozenset({"refuse", "unsupported_use"})  # never answered, listed as normal research, or acquired
 # Owner rule 2026-10-28 ("a new C entry must have a significantly dissimlar description from all other descriptions").
-# Calibration (config description_similarity_note): on the six shipped descriptions the pairwise token-set Jaccard max
-# is 0.250 (advice vs harmful); 0.50 = max + 0.25 margin. Re-calibrate when a row is added.
+# Calibration (config description_similarity_note; measure = description_similarity): on the six shipped descriptions
+# the pairwise max is 0.203 (harmful vs rule_change); 0.50 = max + 0.297 margin. Re-calibrate when a row is added.
 DESCRIPTION_SIMILARITY_MAX = 0.50
 _DESC_STOPWORDS = frozenset("a an the and or of to for in on at by with about any your you only is are be it this that "
-                            "as from".split())
+                            "as from defined below".split())  # "defined below": a prompt cross-reference, not meaning
+_DESC_SUFFIXES = ("ations", "ation", "ising", "ized", "ised", "ing", "ers", "ed", "es", "ly", "s")
 _CODE_RE = re.compile(r"[a-z][a-z_]{1,31}")
 
 
@@ -435,11 +437,31 @@ class Category:
     aliases: tuple[str, ...]
 
 
+def _desc_stem(w: str) -> str:
+    for suf in _DESC_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            return w[:-len(suf)]
+    return w
+
+
+def _desc_tokens(t: str) -> frozenset:
+    return frozenset(re.findall(r"[a-z]+", t.lower())) - _DESC_STOPWORDS
+
+
+def _jaccard(x: frozenset, y: frozenset) -> float:
+    return len(x & y) / len(x | y) if x | y else 1.0
+
+
+def _trigrams(t: str) -> frozenset:
+    s_ = " ".join(sorted(_desc_tokens(t)))
+    return frozenset(s_[k:k + 3] for k in range(len(s_) - 2))
+
+
 def description_similarity(a: str, b: str) -> float:
-    """Token-set Jaccard of lowercased word tokens, stopwords removed (deterministic, stdlib)."""
-    ta = frozenset(re.findall(r"[a-z]+", a.lower())) - _DESC_STOPWORDS
-    tb = frozenset(re.findall(r"[a-z]+", b.lower())) - _DESC_STOPWORDS
-    return len(ta & tb) / len(ta | tb) if ta | tb else 1.0
+    """OOE-APRIME-C-1028 D1 (review): max of (a) Jaccard of suffix-stemmed content tokens and (b) character-trigram
+    Jaccard over the sorted content tokens; lowercased, stopwords removed. Deterministic, stdlib only."""
+    stem = _jaccard(frozenset(map(_desc_stem, _desc_tokens(a))), frozenset(map(_desc_stem, _desc_tokens(b))))
+    return max(stem, _jaccard(_trigrams(a), _trigrams(b)))
 
 
 def parse_categories(raw) -> tuple[Category, ...]:
@@ -679,7 +701,7 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
     messages = classifier_messages(question, cfg)
     retries = int(cfg.layer2.get("malformed_retry", 1))
     pt = ct = calls = 0
-    ooe_label = None  # OOE-APRIME-C-1028: the last label-only invalid reply, for the label log
+    ooe_labels: list[str] = []  # OOE-APRIME-C-1028: sanitised labels of label-only invalid replies, for the label log
     while True:  # PATHA-1028 Q2: at most 1 + malformed_retry (<= 2) classifier calls
         content, p_, c_ = (chat or default_chat)(messages, model, cfg.layer2)
         pt, ct, calls = pt + p_, ct + c_, calls + 1
@@ -689,23 +711,29 @@ def _classify(question: str, model: str, pricing, cfg: RouterConfig, chat: ChatF
         d = _layer2_decision(content, pt, ct, cost, calls)
         label_only = d.reason == "classifier_malformed" and _label_only_invalid(content)
         if label_only:
-            ooe_label = content
+            lab = _ooe_label(content)
+            if lab and lab not in ooe_labels:
+                ooe_labels.append(lab)
         if calls > retries or not _nullified(d) or _raw_names_refusal(content):
-            outcome = ""
             if label_only and not _raw_names_refusal(content):  # OOE-APRIME-C-1028 (A'): still out-of-enum after the
                 # retry -> no recognised category: the absent-category path (catstep gates: layer 1, intent_clean, ...)
                 d = _layer2_decision(content, pt, ct, cost, calls, unknown_label_ok=True)
-                outcome = "catstep_after_retry"
-            elif ooe_label is not None:
-                outcome = "declined" if d.reason == "classifier_malformed" else "retry_resolved"
-            if outcome:
-                _log_out_of_enum(ooe_label, outcome)
             if calls > 1:
                 import logging
                 logging.getLogger("vera").info("scope classifier retry: calls=%d nullified=%s", calls, _nullified(d))
             if d.reason.startswith("llm_out:") and d.category == "" and _raw_names_refusal(content):
                 from dataclasses import replace as _replace
                 d = _replace(d, raw_refusal_named=True)  # CATSTEP-1028 C1: never categorised (keeps the decline)
+            if ooe_labels:  # OOE-APRIME-C-1028 D3: the outcome that actually happens (logged after it is final)
+                if d.reason.startswith("llm_out:") and d.category == "" and not d.raw_refusal_named:
+                    outcome = "catstep_after_retry"  # out-of-enum or absent category: the catstep path (its gates)
+                elif d.reason.startswith("classifier_malformed") or d.raw_refusal_named:
+                    outcome = "declined"
+                else:
+                    outcome = "retry_resolved"
+                import logging
+                logging.getLogger("vera").info("scope classifier out-of-enum category: label=%s outcome=%s",
+                                               ",".join(ooe_labels), outcome)
             return d
 
 
@@ -770,18 +798,17 @@ def _raw_names_refusal(content) -> bool:
         return True
 
 
-def _log_out_of_enum(content, outcome: str) -> None:
-    """OOE-A-PRESTAGE-1028: log the out-of-enum category label only (sanitised, <= 32 chars; never question text).
-    OOE-APRIME-C-1028: outcome = retry_resolved | catstep_after_retry | declined (the retry was malformed otherwise)."""
+def _ooe_label(content) -> str:
+    """OOE-A-PRESTAGE-1028: the out-of-enum category label only, sanitised (<= 32 chars; never question text); ""
+    when there is none."""
     try:
         obj = _strict_loads(content)
         c = obj.get("category") if isinstance(obj, dict) else None
         if isinstance(c, str) and c.strip() and not resolve_label(c) and c.isascii():
-            import logging
-            logging.getLogger("vera").info("scope classifier out-of-enum category: label=%s outcome=%s",
-                                           re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32], outcome)
+            return re.sub(r"[^A-Za-z0-9_ -]", "?", c)[:32]
     except Exception:  # noqa: BLE001
         pass
+    return ""
 
 
 def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int, unknown_label_ok: bool = False) -> ScopeDecision:

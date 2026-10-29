@@ -95,14 +95,50 @@ def test_invalid_table_file_is_a_load_error():
 
 def test_shipped_descriptions_pass_with_calibrated_margin():
     """Owner rule 2026-10-28: 'a new C entry must have a significantly dissimlar description from all other
-    descriptions'. Calibration: token-set Jaccard (lowercased word tokens, stopwords removed) over the six shipped
-    descriptions has pairwise max 0.250 (advice vs harmful: 'request', 'defined', 'below'); the next is 0.125.
-    DESCRIPTION_SIMILARITY_MAX = 0.50 = max + 0.25 margin, so all six pass and a pair sharing half its distinct content
-    words is rejected. Re-calibrate when a row is added."""
-    scores = [sr.description_similarity(a.description, b.description)
-              for a, b in itertools.combinations(sr.CATEGORY_TABLE, 2)]
-    assert round(max(scores), 3) == 0.25 and sr.DESCRIPTION_SIMILARITY_MAX == 0.50
-    assert max(scores) + 0.25 <= sr.DESCRIPTION_SIMILARITY_MAX
+    descriptions'. Measure (review D1): max(Jaccard of suffix-stemmed content tokens, character-trigram Jaccard over
+    sorted content tokens); lowercased, stopwords incl. 'defined', 'below' removed. Calibration on the six shipped
+    descriptions: pairwise max 0.203 (harmful vs rule_change), next 0.172 (advice vs harmful).
+    DESCRIPTION_SIMILARITY_MAX = 0.50 = max + 0.297 margin, so all six pass. Re-calibrate when a row is added."""
+    scores = sorted(((round(sr.description_similarity(a.description, b.description), 3), a.code, b.code)
+                     for a, b in itertools.combinations(sr.CATEGORY_TABLE, 2)), reverse=True)
+    assert scores[0] == (0.203, "harmful", "rule_change") and sr.DESCRIPTION_SIMILARITY_MAX == 0.50
+    assert scores[0][0] + 0.25 <= sr.DESCRIPTION_SIMILARITY_MAX
+
+
+# review D1 paraphrase probes (R/work/ooe-review-1028/probe.py): word-form paraphrases of a shipped description
+CAUGHT = {
+    "advice": "requests seeking personalised medical, legal, or financial advising",
+    "programming_task": "requests to write or fixing coding",
+    "rule_change": "requests changing rules and revealing configurations",
+    "off_topic": "harmless questions that fall outside those fields",
+}
+KNOWN_LIMIT = {"harmful": "requesting operational assistance in causing harms"}  # synonym swap: scores 0.429
+
+
+@pytest.mark.parametrize("code", sorted(CAUGHT))
+def test_word_form_paraphrase_probe_rejected(code):
+    with pytest.raises(sr.ScopeConfigError, match=code):
+        sr.parse_categories(_with(_new_row(CAUGHT[code])))
+
+
+def test_synonym_paraphrase_probe_is_a_recorded_known_limit():
+    """Known limit (recorded in the config note): a synonym paraphrase ('assistance' for 'help') is not caught by a
+    lexical measure; owner curation of the table remains the control."""
+    s = sr.description_similarity(KNOWN_LIMIT["harmful"], next(c.description for c in sr.CATEGORY_TABLE
+                                                                   if c.code == "harmful"))
+    assert round(s, 3) == 0.429 < sr.DESCRIPTION_SIMILARITY_MAX
+    assert sr.parse_categories(_with(_new_row(KNOWN_LIMIT["harmful"])))[-1].code == "new_cat"
+
+
+def test_category_table_is_validated_at_service_start():
+    """Review D2: main.py imports the scope router at module level (process start), so an invalid table raises
+    ScopeConfigError before the app serves; request-path lazy imports remain a second line."""
+    import ast
+    tree = ast.parse((ROOT / "main.py").read_text())
+    top = [n for n in tree.body if isinstance(n, ast.Import)]
+    assert any(a.name == "vera.scope_router" for n in top for a in n.names)
+    import main
+    assert main._scope_router is sr and sr.CATEGORY_TABLE
 
 
 def _new_row(desc):
