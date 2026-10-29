@@ -50,6 +50,9 @@ def test_header_states_owner_gate_batch_and_unconfirmed_schema():
     head = _sql().split("\\set ON_ERROR_STOP")[0]
     assert "NOT EXECUTED" in head and "OWNER-APPROVED DDL" in head
     assert "BATCHED with 008 and 010" in head and "PG 18" in head and "UNCONFIRMED" in head
+    assert "PostgreSQL 16 or newer" in head and "PG 18.6 on 2026-10-21" in head and "UNCONFIRMED since" in head  # D1
+    assert "008 = schema_migrations bootstrap" in head and "009 = portal discovery" in head and "010 = dynamic state" in head
+    assert "011 = this topic registry" in head and "012 = classifier categories" in head  # D5
     assert "switch" not in head.lower()  # owner decision: no note that the default may be switched to active
 
 
@@ -85,7 +88,7 @@ def test_every_function_pins_search_path_and_no_membership_test():
     assert len(funcs) == 5
     for f in funcs:
         assert "SET search_path = pg_catalog, pg_temp" in f, f[:80]
-    assert "pg_has_role" not in code
+    assert code.count("pg_has_role") == 2 and "pg_has_role" not in code[code.index("FUNCTION vera_vjay.topic_registry_is_owner"):]
     assert "pg_get_userbyid(c.relowner) = current_user" in code  # default deny: only the table owner is privileged
 
 
@@ -94,7 +97,7 @@ def test_app_role_insert_is_draft_only_and_new_key_only():
     g = code[code.index("FUNCTION vera_vjay.topic_registry_guard"):code.index("FUNCTION vera_vjay.topic_registry_forbid_truncate")]
     assert "NOT is_owner AND TG_OP = 'DELETE'" in g
     assert "nxt <> 1" in g and "brand-new keys" in g
-    assert "NEW.state <> 'draft'" in g and "NEW.origin <> 'runtime'" in g  # an 'active' app insert raises
+    assert "NEW.state <> 'draft'" in g and "NEW.origin <> 'runtime'" in g and "no OpenAlex parent topic" in g  # an 'active' app insert raises
     assert "version % is wrong" in g and "NEW.version IS NULL" in g
 
 
@@ -119,9 +122,15 @@ def test_exact_grants_column_update_state_only_for_rw():
     code = _code(_sql())
     grants = re.findall(r"GRANT .*?;", code)
     assert grants == ["GRANT SELECT ON vera_vjay.topic_registry TO vera_vjay_ro;",
-                      "GRANT SELECT, INSERT ON vera_vjay.topic_registry TO vera_vjay_rw;",
-                      "GRANT UPDATE (state) ON vera_vjay.topic_registry TO vera_vjay_rw;"]
-    assert "REVOKE UPDATE, DELETE, TRUNCATE ON vera_vjay.topic_registry FROM vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
+                      "GRANT SELECT ON vera_vjay.topic_registry TO vera_vjay_rw;",
+                      "GRANT INSERT (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
+                      "ON vera_vjay.topic_registry TO vera_vjay_rw;",
+                      "GRANT UPDATE (state) ON vera_vjay.topic_registry TO vera_vjay_rw;"]  # D3: no table-wide INSERT
+    assert "REVOKE ALL ON vera_vjay.topic_registry FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in code
+    assert code.index("REVOKE ALL ON vera_vjay.topic_registry") < code.index("GRANT SELECT ON vera_vjay.topic_registry")
+    ins = grants[2]
+    for forbidden in ("topic_row_id", "version", "created_at", "modified_at", "parent_openalex_topic"):
+        assert forbidden not in ins
     assert "BEFORE TRUNCATE" in code
 
 
@@ -153,7 +162,7 @@ def test_toggles_default_off_and_proposals_draft():
 
 def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_set():
     import ast
-    allowed = {tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
+    allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
                tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER}
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
@@ -218,9 +227,12 @@ class _Conn:
         return _Res()
 
 
+GOOD_OWNER = {"owner": "vera_admin", "app_memberships": 0, "current_reaches_owner": False, "session_reaches_owner": False}
+
+
 class _Engine:
     def __init__(self, exists=True, rows=(), fail=None, owner=None):
-        self.log, self._a = [], (exists, list(rows), fail, owner or {"owner": "vera_admin", "app_memberships": 0})
+        self.log, self._a = [], (exists, list(rows), fail, owner or dict(GOOD_OWNER))
 
     def connect(self):
         return _Conn(self.log, *self._a)
@@ -228,7 +240,7 @@ class _Engine:
 
 def _row(key, ver=1, state="active", origin="seed", label=None, anchor="alpha beta gamma delta epsilon zeta eta theta"):
     return {"topic_key": key, "version": ver, "label": label or f"Label {key}", "field": "f1", "anchor_text": anchor,
-            "parent_openalex_topic": "none", "origin": origin, "state": state}
+            "parent_openalex_topic": "none", "parent_topic_key": None, "origin": origin, "state": state}
 
 
 @pytest.fixture(autouse=True)
@@ -342,9 +354,11 @@ class _RDB:
                     return _RR()
                 if q == tr.TOPIC_SQL_KEY_EXISTS:
                     return _RR([1] if any(r["topic_key"] == params["k"] for r in db.rows) else [])
+                if q == tr.TOPIC_SQL_PARENT_ACTIVE:
+                    return _RR([1] if any(r["topic_key"] == params["p"] and r["state"] == "active" for r in db.rows) else [])
                 if q == tr.TOPIC_SQL_INSERT:
                     db.rows.append({"topic_key": params["k"], "label": params["label"], "anchor_text": params["anchor"],
-                                    "state": "draft", "origin": "runtime", "version": 1})
+                                    "parent_topic_key": params["parent"], "state": "draft", "origin": "runtime", "version": 1})
                     return _RR()
                 if q == tr.TOPIC_SQL_MATCHABLE:
                     return _RR([r for r in db.rows if r["state"] in ("active", "retired")])
@@ -401,7 +415,7 @@ def test_similar_to_an_active_topic_is_suspended_and_kept(caplog):
         out = _reg(db, EXISTING + " mu")
     assert out["state"] == "suspended" and tr.TOPIC_SQL_SUSPEND in db.log and tr.TOPIC_SQL_ACTIVATE not in db.log
     assert _states(db) == [("old-topic", "active"), ("new-topic-one", "suspended")]
-    assert "similar to a active topic (matched key old-topic)" in caplog.text
+    assert "equivalent to a active topic (matched key old-topic)" in caplog.text
     assert "Greek" not in caplog.text and "New Topic" not in caplog.text and "alpha" not in caplog.text
 
 
@@ -410,7 +424,7 @@ def test_similar_only_to_a_retired_topic_is_suspended(caplog):
     with caplog.at_level("INFO", logger="vera"):
         out = _reg(db, EXISTING + " mu")
     assert out["state"] == "suspended" and _states(db)[1] == ("new-topic-one", "suspended")
-    assert "similar to a retired topic (matched key old-topic)" in caplog.text
+    assert "equivalent to a retired topic (matched key old-topic)" in caplog.text
 
 
 def test_similar_to_both_active_and_retired_logs_active(caplog):
@@ -418,7 +432,7 @@ def test_similar_to_both_active_and_retired_logs_active(caplog):
                {"topic_key": "act-topic", "label": "a", "anchor_text": EXISTING, "state": "active", "origin": "seed", "version": 1}])
     with caplog.at_level("INFO", logger="vera"):
         out = _reg(db, EXISTING + " mu")
-    assert out["state"] == "suspended" and "similar to a active topic (matched key act-topic)" in caplog.text
+    assert out["state"] == "suspended" and "equivalent to a active topic (matched key act-topic)" in caplog.text
 
 
 @pytest.mark.parametrize("state", ["draft", "suspended"])
@@ -507,9 +521,9 @@ def test_lexical_metric_is_labelled_provisional_and_lexical():
 
 
 def test_loader_fails_closed_when_table_owner_is_an_app_role():
-    for owner in ({"owner": "vera_vjay_rw", "app_memberships": 0}, {"owner": "vera_vjay_wo", "app_memberships": 0},
-                  {"owner": "someone", "app_memberships": 1}, None):
-        eng = _Engine(rows=[_row("a-one")], owner=owner or {"owner": "x", "app_memberships": 1})
+    for owner in ({**GOOD_OWNER, "owner": "vera_vjay_rw"}, {**GOOD_OWNER, "owner": "vera_vjay_wo"},
+                  {**GOOD_OWNER, "owner": "someone", "app_memberships": 1}):
+        eng = _Engine(rows=[_row("a-one")], owner=owner)
         with pytest.raises(tr.TopicRegistryError) as ei:
             tr.read_topic_rows(eng)
         assert "owned by an app role" in str(ei.value)
@@ -529,11 +543,33 @@ def test_loader_fails_closed_when_table_owner_is_an_app_role():
             _Conn.execute = orig
 
 
+def test_loader_fails_closed_when_session_can_reach_the_owner():  # D2
+    for k in ("current_reaches_owner", "session_reaches_owner"):
+        for bad in (True, None, 1):
+            eng = _Engine(rows=[_row("a-one")], owner={**GOOD_OWNER, k: bad})
+            with pytest.raises(tr.TopicRegistryError) as ei:
+                tr.read_topic_rows(eng)
+            assert "can reach the topic registry table owner" in str(ei.value) and "vera_admin" not in str(ei.value)
+    missing = {k: v for k, v in GOOD_OWNER.items() if k != "session_reaches_owner"}
+    with pytest.raises(tr.TopicRegistryError):
+        tr.read_topic_rows(_Engine(rows=[_row("a-one")], owner=missing))
+    q = tr.TOPIC_SQL_OWNER
+    assert "pg_has_role(current_user, c.relowner, 'MEMBER')" in q and "pg_has_role(session_user, c.relowner, 'MEMBER')" in q
+
+
+def test_membership_counts_only_usable_rows_pg16():  # D1
+    assert "(m.inherit_option OR m.set_option)" in tr.TOPIC_SQL_OWNER
+    pre = _code(_sql())
+    pre = pre[pre.index("DO $$ BEGIN", pre.index("requires roles")) + 1:pre.index("CREATE SCHEMA")]
+    assert "AND (m.inherit_option OR m.set_option)" in pre
+
+
 def test_migration_preflight_refuses_app_role_runner():
     code = _code(_sql())
     pre = code[code.index("DO $$ BEGIN", code.index("requires roles")) + 1:code.index("CREATE SCHEMA")]
     assert "current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')" in pre
-    assert "pg_catalog.pg_auth_members" in pre and "pg_has_role" not in pre and "RAISE EXCEPTION" in pre
+    assert "pg_catalog.pg_auth_members" in pre and "RAISE EXCEPTION" in pre
+    assert "pg_has_role(a.rolname, current_user, 'MEMBER')" in pre and "pg_has_role(a.rolname, session_user, 'MEMBER')" in pre  # D2
     assert _sql().index("must not run as") < _sql().index("CREATE SCHEMA")
     assert "vera_vjay_wo" in (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text(encoding="utf-8")  # names exist
 
@@ -565,3 +601,90 @@ def test_no_dynamic_or_orm_construction_of_the_registry_table_name_in_vera_or_sc
                     hits.append((p.name, "sql string outside topic_registry.py", node.value[:60]))
     assert hits == [], hits
     assert "sqlalchemy" not in "".join(tr.__doc__ or "")  # sanity: the module is the only SQL home
+
+
+# --- OD-1028(49): parent_topic_key (static SQL text; the triggers are never executed) and caller-supplied parent_key ---
+def test_parent_topic_key_column_check_trigger_and_immutability():
+    code = _code(_sql())
+    assert "parent_topic_key TEXT CONSTRAINT topic_registry_parent_key_chk CHECK (parent_topic_key IS NULL OR parent_topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$')" in code
+    assert "parent_topic_key TEXT NOT NULL" not in code  # null is allowed
+    g = code[code.index("FUNCTION vera_vjay.topic_registry_guard"):code.index("FUNCTION vera_vjay.topic_registry_forbid_truncate")]
+    assert "IF NEW.parent_topic_key IS NOT NULL THEN" in g
+    assert "p.topic_key = NEW.parent_topic_key AND p.state = 'active'" in g and "must reference an existing active topic key" in g
+    assert "cannot be its own parent" in g
+    assert g.index("IF NEW.parent_topic_key IS NOT NULL") < g.index("IF NEW.version IS NULL")  # insert branch
+    assert "NEW.parent_topic_key IS DISTINCT FROM OLD.parent_topic_key" in g.split("RETURN NEW;\n  END IF;")[1]  # immutable (UPDATE branch)
+    assert "parent_topic_key" in tr.TOPIC_SQL_ROWS and "parent_topic_key" in tr.TOPIC_SQL_INSERT
+
+
+def test_no_similarity_inference_of_parent_and_match_means_equivalence():
+    import inspect
+    src = inspect.getsource(tr.register_proposed_topic)
+    assert "parent_key" in src and "semantic equivalence" in tr.register_proposed_topic.__doc__
+    assert "NEVER inferred" in tr.register_proposed_topic.__doc__
+    assert "'DISTINCT" in _sql() or "DISTINCT micro-topic" in _sql()
+
+
+def test_register_with_valid_parent_stores_it_and_null_is_allowed():
+    db = _db()
+    out = _reg(db, OTHER, parent_key="old-topic")
+    assert out["state"] == "active" and db.rows[-1]["parent_topic_key"] == "old-topic"
+    assert tr.TOPIC_SQL_PARENT_ACTIVE in db.log and db.log.index(tr.TOPIC_SQL_PARENT_ACTIVE) < db.log.index(tr.TOPIC_SQL_INSERT)
+    db = _db()
+    _reg(db, OTHER)
+    assert db.rows[-1]["parent_topic_key"] is None and tr.TOPIC_SQL_PARENT_ACTIVE not in db.log
+
+
+def test_register_with_invalid_or_nonactive_parent_is_refused_and_rolled_back():
+    for state in ("draft", "suspended", "retired"):
+        db = _db(state)
+        with pytest.raises(tr.RegistrationRefused):
+            _reg(db, OTHER, parent_key="old-topic")
+        assert len(db.rows) == 1 and tr.TOPIC_SQL_INSERT not in db.log
+    for bad in ("missing-topic", "Bad_Key", "x", "new-topic-one", 5):  # unknown, malformed, self, non-string
+        db = _db()
+        with pytest.raises(tr.RegistrationRefused):
+            _reg(db, OTHER, parent_key=bad)
+        assert len(db.rows) == 1
+
+
+def test_narrower_or_broader_nonequivalent_topic_is_distinct_and_activated():
+    db = _db()
+    out = _reg(db, OTHER, parent_key="old-topic", similarity=lambda a, b: 0.3)  # related but not equivalent
+    assert out["state"] == "active" and db.rows[-1]["parent_topic_key"] == "old-topic"
+
+
+def test_loader_rows_validate_parent_topic_key():
+    ok = {**_row("a-one"), "parent_topic_key": None}
+    child = {**_row("b-two", label="Label b-two"), "parent_topic_key": "a-one"}
+    reg = mt.load_registry(ON, reader=lambda: (True, [ok, child]))
+    assert {e["id"]: e["parent_topic_key"] for e in reg.entries} == {"a-one": None, "b-two": "a-one"}
+    for bad in ("Bad_Key", 3, "b-two"):
+        mt.reset_for_tests()
+        with pytest.raises(tr.TopicRegistryError):
+            mt.load_registry(ON, reader=lambda b=bad: (True, [{**child, "parent_topic_key": b}]))
+
+
+# --- D4: cache ---
+def test_db_registry_and_absent_fallback_are_cached_with_ttl():
+    t = [0.0]
+    calls = []
+    mt._now = lambda: t[0]
+    try:
+        cfg = {"registry_table": {"read_from_db": True, "cache_ttl_seconds": 10}}
+        mt.load_registry(cfg, reader=lambda: calls.append(1) or (False, []))
+        mt.load_registry(cfg, reader=lambda: calls.append(1) or (False, []))
+        assert len(calls) == 1  # absent fallback cached: not re-queried
+        t[0] = 11.0
+        reg = mt.load_registry(cfg, reader=lambda: calls.append(1) or (True, [_row("z-new")]))
+        assert len(calls) == 2 and [e["id"] for e in reg.entries] == ["z-new"]  # runtime activation visible after TTL
+        t[0] = 12.0
+        assert mt.load_registry(cfg, reader=lambda: calls.append(1) or (True, [])) is reg and len(calls) == 2
+        mt.reset_for_tests()
+        cfg0 = {"registry_table": {"read_from_db": True, "cache_ttl_seconds": 0}}
+        mt.load_registry(cfg0, reader=lambda: calls.append(1) or (False, []))
+        mt.load_registry(cfg0, reader=lambda: calls.append(1) or (False, []))
+        assert len(calls) == 4
+    finally:
+        mt._now = __import__("time").monotonic
+    assert mt._db_ttl({}) == mt.DEFAULT_DB_TTL and mt._db_ttl({"registry_table": {"cache_ttl_seconds": -1}}) == mt.DEFAULT_DB_TTL

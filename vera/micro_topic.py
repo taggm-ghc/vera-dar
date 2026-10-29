@@ -1,16 +1,18 @@
-"""Read-time micro-topic key (ACQ S4-0 L2/L2b). Pure, offline: no network, no DB, no writes (PD-3).
+"""Read-time micro-topic key (ACQ S4-0 L2/L2b). No network and no writes (PD-3). Default: no DB (JSON seed).
 
 Key order: (1) stored provenance.acquisition.micro_topic (K1/K4, top entry); (2) K4 best anchor by BM25 over a
 frozen reference built from the anchor texts only (IDF snapshot from the anchors, never updated by arriving
 documents) when score >= count_min_score.anchor_bm25.scholarly; (3) None = "unassigned". K5 (question-derived)
 is disabled: no question-derived value is read, persisted or logged here.
-Optional DB-backed registry (default off): vera.topic_registry, read-only (TOPICREG-1028).
+Optional DB-backed registry (default off): vera.topic_registry.load_active_registry_data only, a SELECT in a READ ONLY
+transaction (TOPICREG-1028); the DB result and the absent-table fallback are cached with a TTL (registry_table.cache_ttl_seconds).
 """
 from __future__ import annotations
 
 import json
 import math
 import re
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -18,6 +20,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 _TOKEN = re.compile(r"[a-z0-9]+")
 _K1, _B = 1.2, 0.75
 _REG_CACHE: dict = {}
+_DB_CACHE: dict = {}  # key -> (expires_at, Registry | None); None = table absent (JSON seed fallback), cached too
+_now = time.monotonic
+DEFAULT_DB_TTL = 300.0
 DEFAULT_WINDOW = 2000
 STORED_REGISTRY_SCHEMES = ("registry", "anchor_registry")
 
@@ -62,18 +67,26 @@ class Registry:
         return max(sc, key=lambda p: (round(p[0], 12), -self.entries.index(p[1])))
 
 
+def _db_ttl(cfg) -> float:
+    v = ((cfg or {}).get("registry_table") or {}).get("cache_ttl_seconds", DEFAULT_DB_TTL)
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else DEFAULT_DB_TTL
+
+
 def load_registry(cfg: dict | None = None, path=None, reader=None) -> Registry:
     """JSON seed by default. With registry_table.read_from_db true (default off) the DB table's active rows are used via
-    vera.topic_registry (read-only); the seed only when the table is absent; any other problem raises (fail closed)."""
+    vera.topic_registry (read-only); the seed only when the table is absent; any other problem raises (fail closed).
+    The DB result, and the absent-table fallback, are cached for registry_table.cache_ttl_seconds (default 300; 0 = no cache),
+    so a runtime activation becomes visible without a restart and an absent table is not re-queried on every call."""
     if path is None and ((cfg or {}).get("registry_table") or {}).get("read_from_db") is True:
         key = "db:" + str(_ROOT)
-        if key not in _REG_CACHE:
+        hit = _DB_CACHE.get(key)
+        now = _now()
+        if hit is None or now >= hit[0]:
             from vera import topic_registry
             data = topic_registry.load_active_registry_data(cfg, reader)
-            if data is None:
-                return _load_json_registry(cfg, path)
-            _REG_CACHE[key] = Registry(data)
-        return _REG_CACHE[key]
+            hit = (now + _db_ttl(cfg), None if data is None else Registry(data))
+            _DB_CACHE[key] = hit
+        return hit[1] if hit[1] is not None else _load_json_registry(cfg, path)
     return _load_json_registry(cfg, path)
 
 
@@ -90,6 +103,7 @@ def _load_json_registry(cfg, path) -> Registry:
 
 def reset_for_tests() -> None:
     _REG_CACHE.clear()
+    _DB_CACHE.clear()
 
 
 def _threshold(cfg: dict) -> float:

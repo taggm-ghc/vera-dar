@@ -1,6 +1,9 @@
 """TOPICREG-1028: DB-backed topic registry (vera_vjay.topic_registry, db/migrations/pending/011-DRAFT, NOT applied).
-Read-only (SELECT in a READ ONLY transaction through the existing rw engine); app code never writes the registry here.
-vera.micro_topic.load_registry delegates here only when cfg["registry_table"]["read_from_db"] is boolean true (default off)."""
+READ path (read_topic_rows, load_active_registry_data): SELECT only, in a READ ONLY transaction through the existing rw engine.
+WRITE path (register_proposed_topic): off by default (registry_table.registration_enabled); inserts one runtime 'draft' row and
+moves it to active or suspended. vera.micro_topic.load_registry delegates to the read path only, and only when
+cfg["registry_table"]["read_from_db"] is boolean true (default off).
+"Match" (duplicate) means SEMANTIC EQUIVALENCE or PARAPHRASE only (OD-1028(49)); narrower or broader non-equivalent topics are distinct."""
 from __future__ import annotations
 
 import logging
@@ -17,17 +20,22 @@ class TopicRegistryError(RuntimeError):
 # the SEED and the FALLBACK. Settings live in cfg["registry_table"]; only explicit boolean true enables a toggle.
 TOPIC_STATES = ("draft", "active", "suspended", "retired")
 TOPIC_SQL_EXISTS = "SELECT to_regclass('vera_vjay.topic_registry')"
-TOPIC_SQL_ROWS = ("SELECT topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state "
+TOPIC_SQL_ROWS = ("SELECT topic_key, version, label, field, anchor_text, parent_openalex_topic, parent_topic_key, origin, state "
                   "FROM vera_vjay.topic_registry ORDER BY topic_row_id")
-# R1: the table owner is unrestricted by the guard trigger, so the owner must not be (or be a direct member of) an app role.
+# R1 (both directions): the table owner is unrestricted by the guard trigger. (a) the owner must not be, or hold a USABLE
+# (inherit_option OR set_option; PG16+ columns, ADMIN-only rows do not count) membership in, an app role; (b) the session
+# (current_user and session_user) must not be able to reach the owner (pg_has_role MEMBER follows inheritance).
 TOPIC_APP_ROLES = ("vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro")
 TOPIC_SQL_OWNER = ("SELECT pg_catalog.pg_get_userbyid(c.relowner) AS owner, "
                    "(SELECT count(*) FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid "
-                   "WHERE m.member = c.relowner AND r.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')) AS app_memberships "
+                   "WHERE m.member = c.relowner AND (m.inherit_option OR m.set_option) "
+                   "AND r.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')) AS app_memberships, "
+                   "pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER') AS current_reaches_owner, "
+                   "pg_catalog.pg_has_role(session_user, c.relowner, 'MEMBER') AS session_reaches_owner "
                    "FROM pg_catalog.pg_class c WHERE c.oid = to_regclass('vera_vjay.topic_registry')")
 _TOPIC_KEY = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
 _PRINTABLE = re.compile(r"[ -~]+")
-_ROW_KEYS = {"topic_key", "version", "label", "field", "anchor_text", "parent_openalex_topic", "origin", "state"}
+_ROW_KEYS = {"topic_key", "version", "label", "field", "anchor_text", "parent_openalex_topic", "parent_topic_key", "origin", "state"}
 _TOPIC_LIMITS = {"label": (3, 120), "field": (2, 60), "anchor_text": (20, 1200)}
 
 
@@ -69,6 +77,8 @@ def read_topic_rows(engine=None, *, env=None, engine_factory=None):
             owner = conn.execute(text(TOPIC_SQL_OWNER)).mappings().first()
             if not owner or owner["owner"] in TOPIC_APP_ROLES or owner["app_memberships"]:
                 raise TopicRegistryError("topic registry table is owned by an app role (or its owner is a member of one)")
+            if owner.get("current_reaches_owner") is not False or owner.get("session_reaches_owner") is not False:
+                raise TopicRegistryError("the app session can reach the topic registry table owner (or this could not be verified)")
             return True, [dict(r) for r in conn.execute(text(TOPIC_SQL_ROWS)).mappings().all()]
     except TopicRegistryError:
         raise
@@ -96,6 +106,9 @@ def registry_data_from_rows(rows) -> dict:
                 raise TopicRegistryError(f"topic registry row {i} has an invalid {k}")
         if not isinstance(r["parent_openalex_topic"], str) or not re.fullmatch(r"[A-Za-z0-9:_./-]{1,64}", r["parent_openalex_topic"]):
             raise TopicRegistryError(f"topic registry row {i} has an invalid parent topic")
+        pk = r["parent_topic_key"]
+        if pk is not None and (not isinstance(pk, str) or not _TOPIC_KEY.fullmatch(pk) or pk == r["topic_key"]):
+            raise TopicRegistryError(f"topic registry row {i} has an invalid parent topic key")
         if (r["topic_key"], r["version"]) in seen:
             raise TopicRegistryError(f"duplicate (key, version) for {r['topic_key']!r}")
         seen.add((r["topic_key"], r["version"]))
@@ -106,7 +119,7 @@ def registry_data_from_rows(rows) -> dict:
     if not active:
         raise TopicRegistryError("topic registry has no active row")
     entries = [{"id": k, "label": r["label"], "parent_openalex_topic": r["parent_openalex_topic"], "field": r["field"],
-                "status": r["origin"], "anchor_text": r["anchor_text"]} for k, r in active.items()]
+                "status": r["origin"], "anchor_text": r["anchor_text"], "parent_topic_key": r["parent_topic_key"]} for k, r in active.items()]
     return {"anchor_registry_version": "db:v%d" % max(r["version"] for r in rows), "entries": entries}
 
 
@@ -124,8 +137,9 @@ def load_active_registry_data(cfg, reader=None):
 TOPIC_SQL_KEY_EXISTS = "SELECT 1 FROM vera_vjay.topic_registry WHERE topic_key = :k"
 TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topic_registry "
                        "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
-TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topic_registry (topic_key, label, field, anchor_text, origin, state) "
-                    "VALUES (:k, :label, :field, :anchor, 'runtime', 'draft')")
+TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topic_registry WHERE topic_key = :p AND state = 'active'"
+TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topic_registry (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
+                    "VALUES (:k, :label, :field, :anchor, :parent, 'runtime', 'draft')")
 TOPIC_SQL_ACTIVATE = ("UPDATE vera_vjay.topic_registry SET state = 'active' "
                       "WHERE topic_key = :k AND version = 1 AND state = 'draft' AND origin = 'runtime'")
 TOPIC_SQL_SUSPEND = ("UPDATE vera_vjay.topic_registry SET state = 'suspended' "
@@ -140,7 +154,7 @@ class RegistrationRefused(RuntimeError):
 
 
 def lexical_similarity(a: str, b: str) -> float:
-    """PROVISIONAL dissimilarity metric: stemmed-token Jaccard plus character-trigram Jaccard (the existing
+    """PROVISIONAL equivalence metric: stemmed-token Jaccard plus character-trigram Jaccard (the existing
     scope_router.description_similarity). It is LEXICAL, NOT SEMANTIC: two texts about the same thing in different words
     score low. To be replaced by a semantic metric; the OD-1028(9)(b) threshold is uncalibrated."""
     from vera.scope_router import description_similarity
@@ -160,13 +174,19 @@ def similarity_max(settings: dict) -> float:
     return float(v)
 
 
-def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine=None, similarity=lexical_similarity) -> dict:
-    """Register a NEW topic (OD-1028(9); owner 2026-10-28). Written as 'draft', then in the SAME transaction under
-    pg_advisory_xact_lock its anchor text is scored (>= similarity_max = a match) against every ACTIVE and RETIRED topic
-    (other drafts and suspended topics are ignored):
-      similar to an active topic  -> draft -> 'suspended' (logged: match kind 'active' + the matched key)
-      similar only to a retired   -> draft -> 'suspended' (logged: match kind 'retired' + the matched key)
-      similar to neither          -> draft -> 'active'
+def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine=None, similarity=lexical_similarity,
+                            parent_key=None) -> dict:
+    """Register a NEW topic (OD-1028(9), OD-1028(49); owner 2026-10-28). Written as 'draft', then in the SAME transaction under
+    pg_advisory_xact_lock its anchor text is scored (>= similarity_max = a MATCH, meaning semantic equivalence or paraphrase
+    ONLY) against every ACTIVE and RETIRED topic (other drafts and suspended topics are ignored). A narrower topic inside an
+    active topic, or a broader non-equivalent topic, is NOT a match: it is a distinct micro-topic and is activated.
+      equivalent to an active topic  -> draft -> 'suspended' (logged: match kind 'active' + the matched key)
+      equivalent only to a retired   -> draft -> 'suspended' (logged: match kind 'retired' + the matched key)
+      equivalent to neither          -> draft -> 'active'
+    `parent_key` (optional) is supplied by the caller when the proposal context identifies a parent topic (e.g. it arose under
+    a known topic); it must be a well-formed key naming an ACTIVE topic (refused before any write otherwise; the DB trigger
+    enforces it too) and is stored immutably as parent_topic_key. It is NEVER inferred from similarity; None = no parent.
+    Acquisition caps and targets are unaffected.
       the check cannot run (the metric raises or returns a non-number) -> stays 'draft' (fail closed)
     A database error rolls the whole transaction back (nothing written). Rows are never deleted; logs carry no user text.
     `similarity(a, b)` is the pluggable metric (default: PROVISIONAL lexical). Returns {"key", "state"}."""
@@ -181,6 +201,8 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
         key = normalize_topic_key(label)
     except ValueError:
         raise RegistrationRefused("label does not normalize to a valid topic key") from None
+    if parent_key is not None and (not isinstance(parent_key, str) or not _TOPIC_KEY.fullmatch(parent_key) or parent_key == key):
+        raise RegistrationRefused("parent_key must be a well-formed topic key other than the new key")
     from sqlalchemy import text
     if engine is None:
         from vera import db
@@ -191,7 +213,9 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
             conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
             if conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
                 raise RegistrationRefused("topic key already exists")
-            conn.execute(text(TOPIC_SQL_INSERT), {"k": key, "label": label, "field": field, "anchor": anchor})
+            if parent_key is not None and conn.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent_key}).first() is None:
+                raise RegistrationRefused("parent_key does not name an active topic")
+            conn.execute(text(TOPIC_SQL_INSERT), {"k": key, "label": label, "field": field, "anchor": anchor, "parent": parent_key})
             matched = {}  # kind -> first matched key; 'active' wins over 'retired'
             for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all():
                 if r["topic_key"] == key:
@@ -210,7 +234,7 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
             if conn.execute(text(sql), {"k": key}).rowcount != 1:
                 raise TopicRegistryError("topic transition affected an unexpected number of rows")
             if kind:
-                log.info("topic proposal suspended: similar to a %s topic (matched key %s)", kind, matched[kind])
+                log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
             else:
                 log.info("topic proposal activated")
             return {"key": key, "state": state}
