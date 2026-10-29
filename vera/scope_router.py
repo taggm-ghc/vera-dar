@@ -511,6 +511,15 @@ def parse_verdict(content: str) -> tuple[bool | None, str]:
     return obj["in_scope"], str(obj.get("reason", ""))[:200]
 
 
+def _masked_quote(question: str, cfg: RouterConfig) -> bool:
+    """INJSEP-SECREVIEW-2: True when separation masked a quoted span (rest_for_matching differs from rest). Never raises."""
+    try:
+        sep = separate_instructions(question, cfg)
+        return sep is not None and sep[0] != sep[1]
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = None,
           chat: ChatFn | None = None) -> ScopeDecision:
     cfg = cfg or load_config()
@@ -521,6 +530,8 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     # and the marker check covers the original as well as the stripped text
     verdict, reason = layer1(original, cfg)
     marker = has_marker(original) or has_marker(question)
+    if verdict == ACCEPT and _masked_quote(original, cfg):
+        verdict, reason = UNSURE, "masked_quote"  # INJSEP-SECREVIEW-2: a masked quoted span always gets layer 2
     if verdict == DECLINE and reason in (UNSUPPORTED_L1_REASON, "deny:mode_claim") and marker:
         # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)
         return ScopeDecision(False, "layer1", "deny:injection_marker")
