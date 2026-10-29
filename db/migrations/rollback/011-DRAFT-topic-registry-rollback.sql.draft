@@ -1,0 +1,14 @@
+-- 011_vera_topic_registry ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the topic registry and every version row in it.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval.
+-- Requires a separate, same-turn owner approval and an admin (table-owner) account, on an isolated DB first. Export the table first.
+-- Never run via db/apply_migrations.py (its --dry-run executes on production; HZ-DAR-1).
+-- Non-destructive rollback is: set micro_topic.registry_table.read_from_db to false (the JSON seed is used again).
+-- The table's triggers are dropped with it; the functions are dropped afterwards.
+\set ON_ERROR_STOP on
+
+DROP TABLE IF EXISTS vera_vjay.topic_registry;
+DROP FUNCTION IF EXISTS vera_vjay.topic_registry_guard();
+DROP FUNCTION IF EXISTS vera_vjay.topic_registry_forbid_truncate();
+DROP FUNCTION IF EXISTS vera_vjay.topic_registry_label_unique();
+DROP FUNCTION IF EXISTS vera_vjay.topic_registry_activate();
+DROP FUNCTION IF EXISTS vera_vjay.topic_registry_is_owner();

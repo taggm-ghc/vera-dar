@@ -4,6 +4,7 @@ Key order: (1) stored provenance.acquisition.micro_topic (K1/K4, top entry); (2)
 frozen reference built from the anchor texts only (IDF snapshot from the anchors, never updated by arriving
 documents) when score >= count_min_score.anchor_bm25.scholarly; (3) None = "unassigned". K5 (question-derived)
 is disabled: no question-derived value is read, persisted or logged here.
+Optional DB-backed registry (default off): vera.topic_registry, read-only (TOPICREG-1028).
 """
 from __future__ import annotations
 
@@ -61,7 +62,22 @@ class Registry:
         return max(sc, key=lambda p: (round(p[0], 12), -self.entries.index(p[1])))
 
 
-def load_registry(cfg: dict | None = None, path=None) -> Registry:
+def load_registry(cfg: dict | None = None, path=None, reader=None) -> Registry:
+    """JSON seed by default. With registry_table.read_from_db true (default off) the DB table's active rows are used via
+    vera.topic_registry (read-only); the seed only when the table is absent; any other problem raises (fail closed)."""
+    if path is None and ((cfg or {}).get("registry_table") or {}).get("read_from_db") is True:
+        key = "db:" + str(_ROOT)
+        if key not in _REG_CACHE:
+            from vera import topic_registry
+            data = topic_registry.load_active_registry_data(cfg, reader)
+            if data is None:
+                return _load_json_registry(cfg, path)
+            _REG_CACHE[key] = Registry(data)
+        return _REG_CACHE[key]
+    return _load_json_registry(cfg, path)
+
+
+def _load_json_registry(cfg, path) -> Registry:
     rel = path or (cfg or {}).get("registry_path") or "config/micro_topic_anchors.json"
     p = Path(rel)
     p = p if p.is_absolute() else _ROOT / p

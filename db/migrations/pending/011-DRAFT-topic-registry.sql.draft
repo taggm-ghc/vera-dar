@@ -1,0 +1,215 @@
+-- 011_vera_topic_registry.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007/008-DRAFT); rename only at approval.
+-- TOPICREG-1028 pre-stage DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- NUMBER 011: 007 is the DAR domain registry (untouched; vera/dar_store.py uses it), 008 is the classifier-category draft (and is
+-- reserved by db/migration_guard.py for the schema_migrations bootstrap), 009 is claimed twice (dynamic state, portal discovery),
+-- 010 is the planned counters. Owner decision 2026-10-28: the topic registry is a separate new migration, not a revision of 007.
+-- Replaces the in-config registry config/micro_topic_anchors.json (kept as SEED and FALLBACK). Owner: "when i speak of a table, i
+-- mean in the database"; accepted Q6 (registry in the DB), Q7 (normalized unique keys; proposals need curator approval), Q8 (key
+-- at acquisition), Q9 (read-time keying; backfill deferred).
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md rule 4), admin-run only, never via db/apply_migrations.py --dry-run
+-- (HZ-DAR-1). It is BATCHED with 008 and 010 under ONE PG 18 rehearsal on an isolated DB (none exists yet). The schema name
+-- vera_vjay and roles vera_vjay_wo/_rw/_ro are copied from 006/007/008; the schema name is still UNCONFIRMED by the owner.
+-- VERSIONING (OD-1028(40)-(43)): each version of a topic is its own row, UNIQUE (topic_key, version); at most one ACTIVE row per
+--   key (partial unique index); activating a row retires the previously active row of that key in the same transaction (trigger);
+--   content is IMMUTABLE after insert, only state may change (modified_at follows); no DELETE (retire instead).
+-- APP-PROPOSED TOPICS: owner decisions 2026-10-28: the current list (the seed) is active; a topic the app creates is written as
+--   'draft'; the app then checks it against the ACTIVE and RETIRED topics and moves it draft -> 'suspended' (similar to an active
+--   or a retired topic) or draft -> 'active' (similar to neither); if the check cannot run it stays 'draft'. The DB enforces the
+--   limits: an app role may INSERT only a BRAND-NEW key, version 1, origin 'runtime', state 'draft'; its ONLY UPDATEs are state
+--   draft -> active and draft -> suspended on rows with origin 'runtime' (column-level GRANT UPDATE (state) to rw plus the guard
+--   trigger, no SECURITY DEFINER). Every other change (other columns, other transitions, any seed row, DELETE, TRUNCATE) is
+--   owner-only. The similarity check is app code (lexical, PROVISIONAL), not DB-enforced.
+-- PRIVILEGE (default deny): only the TABLE OWNER (current_user = the owner read from pg_catalog) is privileged; every other
+--   role gets the app limits. No role-membership test. Run this file as the account that will own the table.
+-- Trigger functions carry SET search_path = pg_catalog, pg_temp and schema-qualified references.
+-- UNTESTED against a real PostgreSQL: triggers, partial unique indexes and CHECKs have never been executed.
+-- Rollback (destructive, separate approval): db/migrations/rollback/011-DRAFT-topic-registry-rollback.sql.draft
+-- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file.
+\set ON_ERROR_STOP on
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE EXCEPTION '011 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+END $$;
+
+-- Preflight (R1): the table owner is unrestricted by the guard trigger, so this file must NOT run as an app role. Raises if
+-- current_user or session_user IS, or is DIRECTLY a member of, vera_vjay_wo / _rw / _ro (pg_auth_members by role name, not
+-- pg_has_role). Run it as the dedicated admin account that should own the table.
+DO $$ BEGIN
+  IF current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro') OR session_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                  JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+                  JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '011 must not run as, or as a direct member of, an app role (vera_vjay_wo/_rw/_ro): the table owner is unrestricted.';
+  END IF;
+END $$;
+
+CREATE SCHEMA IF NOT EXISTS vera_vjay;
+
+CREATE TABLE IF NOT EXISTS vera_vjay.topic_registry (
+    topic_row_id   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    -- topic_key: the NORMALIZED unique key (Q7): lowercase letters, digits, hyphen; app normalizes (NFKC, casefold, spaces to hyphen).
+    topic_key      TEXT NOT NULL CONSTRAINT topic_registry_key_chk CHECK (topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    -- version: NO DEFAULT. NULL on insert = next number (trigger); a supplied value must equal max+1.
+    version        INTEGER NOT NULL CONSTRAINT topic_registry_version_chk CHECK (version >= 1),
+    -- free text: printable ASCII only (no newline or control character), length-capped; never passed raw into prompts.
+    label          TEXT NOT NULL CONSTRAINT topic_registry_label_chk
+        CHECK (label ~ '^[ -~]+$' AND btrim(label) <> '' AND length(label) BETWEEN 3 AND 120),
+    field          TEXT NOT NULL CONSTRAINT topic_registry_field_chk
+        CHECK (field ~ '^[ -~]+$' AND btrim(field) <> '' AND length(field) BETWEEN 2 AND 60),
+    anchor_text    TEXT NOT NULL CONSTRAINT topic_registry_anchor_chk
+        CHECK (anchor_text ~ '^[ -~]+$' AND btrim(anchor_text) <> '' AND length(anchor_text) BETWEEN 20 AND 1200),
+    parent_openalex_topic TEXT NOT NULL DEFAULT 'none' CONSTRAINT topic_registry_parent_chk
+        CHECK (parent_openalex_topic ~ '^[A-Za-z0-9:_./-]{1,64}$'),
+    origin         TEXT NOT NULL DEFAULT 'runtime' CONSTRAINT topic_registry_origin_chk CHECK (origin IN ('seed','runtime')),
+    state          TEXT NOT NULL DEFAULT 'draft' CONSTRAINT topic_registry_state_chk
+        CHECK (state IN ('draft','active','suspended','retired')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT topic_registry_key_version_key UNIQUE (topic_key, version)
+);
+
+-- At most one active row per key; at most one active row per normalized label.
+CREATE UNIQUE INDEX IF NOT EXISTS topic_registry_one_active_key ON vera_vjay.topic_registry (topic_key) WHERE state = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS topic_registry_active_label_key
+    ON vera_vjay.topic_registry ((pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(label), '\s+', ' ', 'g')))) WHERE state = 'active';
+
+-- Privileged = the table owner only (default deny). Everyone else, including other admins, gets the app limits.
+CREATE OR REPLACE FUNCTION vera_vjay.topic_registry_is_owner() RETURNS boolean LANGUAGE sql STABLE
+  SET search_path = pg_catalog, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  WHERE c.oid = 'vera_vjay.topic_registry'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user)
+$f$;
+
+-- Fires first (trigger name order): non-owner limits, version numbering, content immutability.
+CREATE OR REPLACE FUNCTION vera_vjay.topic_registry_guard() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE
+  is_owner boolean := vera_vjay.topic_registry_is_owner();
+  nxt integer;
+BEGIN
+  IF NOT is_owner AND TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'topic_registry: DELETE not allowed for app roles';
+  END IF;
+  IF NOT is_owner AND TG_OP = 'UPDATE' AND (OLD.origin <> 'runtime' OR OLD.state <> 'draft' OR NEW.state NOT IN ('active','suspended')) THEN
+    RAISE EXCEPTION 'topic_registry: app roles may only move a runtime draft row to active or suspended';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;                                   -- owner only; retire instead (returning NULL would cancel the DELETE)
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    SELECT COALESCE(max(t.version), 0) + 1 INTO nxt FROM vera_vjay.topic_registry t WHERE t.topic_key = NEW.topic_key;
+    IF NOT is_owner THEN
+      IF nxt <> 1 THEN
+        RAISE EXCEPTION 'topic_registry: app roles may insert only brand-new keys';
+      END IF;
+      IF NEW.origin <> 'runtime' OR NEW.state <> 'draft' OR NEW.parent_openalex_topic <> 'none' THEN
+        RAISE EXCEPTION 'topic_registry: app roles may insert only origin=runtime, state=draft, no parent topic';
+      END IF;
+      NEW.created_at := now();                    -- accounting fields are not caller-controlled
+    END IF;
+    IF NEW.version IS NULL THEN
+      NEW.version := nxt;
+    ELSIF NEW.version <> nxt THEN
+      RAISE EXCEPTION 'topic_registry: version % is wrong for key %, expected %', NEW.version, NEW.topic_key, nxt;
+    END IF;
+    NEW.modified_at := NEW.created_at;
+    RETURN NEW;
+  END IF;
+  -- UPDATE (owner, or an app role's draft -> active above): content is immutable for everyone; only state may change.
+  IF NEW.topic_key IS DISTINCT FROM OLD.topic_key OR NEW.version IS DISTINCT FROM OLD.version
+     OR NEW.label IS DISTINCT FROM OLD.label OR NEW.field IS DISTINCT FROM OLD.field
+     OR NEW.anchor_text IS DISTINCT FROM OLD.anchor_text OR NEW.parent_openalex_topic IS DISTINCT FROM OLD.parent_openalex_topic
+     OR NEW.origin IS DISTINCT FROM OLD.origin OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.topic_row_id IS DISTINCT FROM OLD.topic_row_id THEN
+    RAISE EXCEPTION 'topic_registry: content is immutable; insert a new version instead (only state may change)';
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    NEW.modified_at := now();
+  ELSE
+    NEW.modified_at := OLD.modified_at;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE OR REPLACE FUNCTION vera_vjay.topic_registry_forbid_truncate() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NOT vera_vjay.topic_registry_is_owner() THEN
+    RAISE EXCEPTION 'topic_registry: TRUNCATE not allowed for app roles';
+  END IF;
+  RETURN NULL;
+END $f$;
+
+-- A normalized label may belong to only ONE key (any state): a duplicate topic under another key is rejected (Q7).
+CREATE OR REPLACE FUNCTION vera_vjay.topic_registry_label_unique() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF EXISTS (SELECT 1 FROM vera_vjay.topic_registry t
+              WHERE t.topic_key <> NEW.topic_key
+                AND pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(t.label), '\s+', ' ', 'g'))
+                  = pg_catalog.lower(pg_catalog.regexp_replace(pg_catalog.btrim(NEW.label), '\s+', ' ', 'g'))) THEN
+    RAISE EXCEPTION 'topic_registry: label already belongs to another topic key';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+-- Activation: when a row becomes active, the OTHER active row of the same key (if one exists) becomes retired, same transaction.
+-- BEFORE trigger so the old row is retired before the partial unique index sees the new active row. The UPDATE runs only if
+-- another active row exists (so an app-role insert of a brand-new active key performs no UPDATE).
+CREATE OR REPLACE FUNCTION vera_vjay.topic_registry_activate() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NEW.state = 'active' AND (TG_OP = 'INSERT' OR OLD.state IS DISTINCT FROM 'active') THEN
+    IF EXISTS (SELECT 1 FROM vera_vjay.topic_registry c
+                WHERE c.topic_key = NEW.topic_key AND c.state = 'active' AND c.topic_row_id IS DISTINCT FROM NEW.topic_row_id) THEN
+      UPDATE vera_vjay.topic_registry c SET state = 'retired', modified_at = now()
+       WHERE c.topic_key = NEW.topic_key AND c.state = 'active' AND c.topic_row_id IS DISTINCT FROM NEW.topic_row_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+DROP TRIGGER IF EXISTS topic_registry_a_guard ON vera_vjay.topic_registry;
+CREATE TRIGGER topic_registry_a_guard BEFORE INSERT OR UPDATE OR DELETE ON vera_vjay.topic_registry
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topic_registry_guard();
+DROP TRIGGER IF EXISTS topic_registry_b_labels ON vera_vjay.topic_registry;
+CREATE TRIGGER topic_registry_b_labels BEFORE INSERT ON vera_vjay.topic_registry
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topic_registry_label_unique();
+DROP TRIGGER IF EXISTS topic_registry_c_activate ON vera_vjay.topic_registry;
+CREATE TRIGGER topic_registry_c_activate BEFORE INSERT OR UPDATE ON vera_vjay.topic_registry
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.topic_registry_activate();
+DROP TRIGGER IF EXISTS topic_registry_no_truncate ON vera_vjay.topic_registry;
+CREATE TRIGGER topic_registry_no_truncate BEFORE TRUNCATE ON vera_vjay.topic_registry
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.topic_registry_forbid_truncate();
+
+-- Seed: the 10 entries of config/micro_topic_anchors.json (owner-run, origin 'seed', version 1, active). Idempotent: a key
+-- that already has any row is skipped (no ON CONFLICT: the version is trigger-assigned only when NULL).
+INSERT INTO vera_vjay.topic_registry (topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state)
+SELECT v.topic_key, v.version, v.label, v.field, v.anchor_text, v.parent_openalex_topic, v.origin, v.state
+  FROM (VALUES
+    ('epi-infectious-outbreak', 1, 'Infectious disease outbreak epidemiology', 'epidemiology', 'epidemiology infectious disease outbreak transmission incidence prevalence surveillance cohort case-control mortality morbidity reproduction number vaccination vaccine efficacy seroprevalence pandemic epidemic contact tracing risk factors population health public health intervention confidence interval odds ratio hazard ratio cases deaths hospitalization pathogen infection viral bacterial symptoms outbreak investigation modelling serological estimates', 'none', 'seed', 'active'),
+    ('epi-chronic-cohort', 1, 'Chronic disease cohort and risk epidemiology', 'epidemiology', 'cohort study chronic disease cardiovascular cancer diabetes obesity risk factors incidence relative risk longitudinal follow-up participants exposure smoking diet physical activity mortality hazard ratio adjusted confounding observational study population-based registry screening prevention randomized trial meta-analysis systematic review epidemiological association prospective cohort bias sample size questionnaire incidence rates health outcomes', 'none', 'seed', 'active'),
+    ('eco-biodiversity', 1, 'Biodiversity and species ecology', 'ecology', 'ecology biodiversity species richness abundance habitat conservation extinction population dynamics community ecosystem functional diversity trophic food web invasive species predator prey biomass forest wetland grassland survey conservation biology endangered ecological niche field sampling transect census taxa diversity index species distribution wildlife monitoring protected areas', 'none', 'seed', 'active'),
+    ('eco-ecosystem-function', 1, 'Ecosystem function and nutrient cycling', 'ecology', 'ecosystem productivity nutrient cycling nitrogen phosphorus carbon soil microbial decomposition primary production photosynthesis plant growth freshwater marine lake river watershed disturbance fire resilience succession land use restoration vegetation ecosystem services carbon storage greenhouse flux plant litter microbial community biogeochemical ecological processes field experiment', 'none', 'seed', 'active'),
+    ('clim-warming', 1, 'Climate change and global warming', 'climate science', 'climate change global warming temperature anomaly greenhouse gas emissions carbon dioxide radiative forcing climate sensitivity sea level rise ice sheet glacier ocean heat uptake IPCC scenario projection attribution extreme weather heatwave drought precipitation atmospheric warming mitigation adaptation climate observations global mean surface temperature trend carbon budget emissions pathways warming impacts', 'none', 'seed', 'active'),
+    ('clim-modelling', 1, 'Climate modelling and projections', 'climate science', 'climate model simulation general circulation model CMIP ensemble downscaling bias correction reanalysis atmosphere ocean coupled model parameterization uncertainty internal variability ENSO monsoon aerosol cloud feedback paleoclimate reconstruction observational record forecast skill regional climate model resolution validation observations uncertainty quantification climate projections scenarios', 'none', 'seed', 'active'),
+    ('repro-research', 1, 'Research reproducibility and open science', 'reproducibility and software practice', 'reproducibility replication crisis open science preregistration data sharing transparency statistical power p-hacking publication bias replicability research integrity FAIR principles metadata provenance reproducible workflow computational reproducibility version control containers peer review registered report research practices questionable results scientific rigor open data code availability reporting standards guidelines', 'none', 'seed', 'active'),
+    ('repro-software', 1, 'Research software engineering practice', 'reproducibility and software practice', 'research software engineering scientific software testing continuous integration code review documentation version control git open source package dependency management software sustainability technical debt best practices unit tests reproducible build notebooks scripts developers maintainability software citation software quality research code practices survey scientists programming skills training testing workflows', 'none', 'seed', 'active'),
+    ('aicode-assistants', 1, 'AI coding assistants and code generation', 'AI coding assistants', 'AI coding assistant large language model code generation Copilot ChatGPT programming developers productivity code completion program synthesis prompt benchmark HumanEval pass rate bugs vulnerabilities security code quality software engineering autocomplete pair programming empirical study students novices software developers experiment tool usage accuracy generated programs educational computing study', 'none', 'seed', 'active'),
+    ('aicode-agents-eval', 1, 'LLM coding agents and evaluation', 'AI coding assistants', 'LLM agent software engineering automated program repair issue resolution SWE-bench test generation code review hallucination evaluation trust developer experience controlled experiment agentic tool use repository-level code language models fine-tuning debugging refactoring maintainability adoption survey software maintenance benchmark tasks agents autonomy limitations evaluation metrics generated patches', 'none', 'seed', 'active')
+  ) AS v(topic_key, version, label, field, anchor_text, parent_openalex_topic, origin, state)
+ WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.topic_registry t WHERE t.topic_key = v.topic_key);
+
+REVOKE ALL ON vera_vjay.topic_registry FROM PUBLIC;
+REVOKE UPDATE, DELETE, TRUNCATE ON vera_vjay.topic_registry FROM vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+GRANT SELECT ON vera_vjay.topic_registry TO vera_vjay_ro;
+GRANT SELECT, INSERT ON vera_vjay.topic_registry TO vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.topic_registry TO vera_vjay_rw;   -- draft -> active/suspended of runtime rows only (guard trigger)
