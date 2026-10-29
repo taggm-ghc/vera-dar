@@ -465,9 +465,11 @@ def description_similarity(a: str, b: str) -> float:
     return max(stem, _jaccard(_trigrams(a), _trigrams(b)))
 
 
-def parse_categories(raw) -> tuple[Category, ...]:
-    """Validate the category table; any fault is a ScopeConfigError (fail closed). Returns an immutable tuple."""
-    where = "classifier_categories.json"
+def parse_categories(raw, where: str = "classifier_categories.json", runtime_codes: frozenset = frozenset(),
+                     rowcheck_only: bool = False) -> tuple[Category, ...]:
+    """Validate the category table; any fault is a ScopeConfigError (fail closed). Returns an immutable tuple.
+    `runtime_codes` (CATTAB-1028): codes of DB rows with origin=runtime; they are exempt from the one-row-per-disposition
+    rule for in_scope / off_topic (a runtime row can never be refusing, see parse_db_rows)."""
     rows = raw.get("categories") if isinstance(raw, dict) else None
     if not isinstance(rows, list) or not rows:
         raise ScopeConfigError(f"{where}: 'categories' must be a non-empty list")
@@ -493,6 +495,8 @@ def parse_categories(raw) -> tuple[Category, ...]:
         if not isinstance(aliases, list) or not all(isinstance(a, str) and _CODE_RE.fullmatch(a) for a in aliases):
             raise ScopeConfigError(f"{where}: {code}: aliases must be a list of label strings")
         out.append(Category(code, desc.strip(), disp, rank, tuple(aliases)))
+    if rowcheck_only:  # CATTAB-1028: field-level validation of a single (non-active) DB row version
+        return tuple(out)
     for c in out:  # aliases are checked after all codes are known: never a code, never twice
         for a in c.aliases:
             if a in labels:
@@ -502,7 +506,8 @@ def parse_categories(raw) -> tuple[Category, ...]:
     if len(ranks) != len(set(ranks)):
         raise ScopeConfigError(f"{where}: refusal_rank values must be unique")
     for k in ("in_scope", "off_topic", "unsupported_use"):  # the code paths keyed on these need exactly one row each
-        if sum(c.disposition == k for c in out) != 1:
+        if sum(c.disposition == k and c.code not in runtime_codes for c in out) != 1 or \
+                (k == "unsupported_use" and sum(c.disposition == k for c in out) != 1):
             raise ScopeConfigError(f"{where}: exactly one row must have disposition {k!r}")
     for i, a in enumerate(out):
         for b in out[i + 1:]:
@@ -517,7 +522,166 @@ def load_categories(path: str | Path = CATEGORIES_PATH) -> tuple[Category, ...]:
     return parse_categories(_read_owner_json(path, "classifier category table"))
 
 
-CATEGORY_TABLE: tuple[Category, ...] = load_categories()
+# CATTAB-1028 (owner: "when i speak of a table, i mean in the database"): the table lives in vera_vjay.classifier_categories
+# (db/migrations/pending/008-DRAFT, NOT applied). The JSON file stays the SEED and the FALLBACK. Settings (explicit boolean
+# true only; missing or any other value = off) live in scope_router.json under "classifier_category_table".
+CATEGORY_STATES = ("draft", "active", "suspended", "retired")
+CATEGORY_ORIGINS = ("seed", "runtime")
+DB_CATEGORY_SQL_EXISTS = "SELECT to_regclass('vera_vjay.classifier_categories')"
+DB_CATEGORY_SQL_ROWS = ("SELECT code, description, disposition, refusal_rank, aliases, origin, state, version "
+                        "FROM vera_vjay.classifier_categories ORDER BY category_id")
+DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.classifier_categories (code, version, description, disposition, aliases, origin, state) "
+                          "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
+_FALLBACK_LOGGED = False
+
+
+def category_table_settings(path=CONFIG_PATH) -> dict:
+    raw = _read_owner_json(path, "scope router config").get("classifier_category_table")
+    return raw if isinstance(raw, dict) else {}
+
+
+def read_category_rows(engine=None, *, env=None, engine_factory=None):
+    """All rows (every state) of the DB category table as dicts, or None when the table is absent or the DB is not
+    configured / reachable. Read through the existing DB access layer (vera.db.get_role_engine, rw account; SELECT only).
+    Never prints a URL or a driver message."""
+    try:
+        from sqlalchemy import text
+        if engine is None:
+            from vera import db
+            kw = {} if engine_factory is None else {"engine_factory": engine_factory}
+            engine = db.get_role_engine("rw", env=env, **kw)
+        with engine.connect() as conn:
+            if conn.execute(text(DB_CATEGORY_SQL_EXISTS)).scalar() is None:
+                return None
+            return [dict(r) for r in conn.execute(text(DB_CATEGORY_SQL_ROWS)).mappings().all()]
+    except Exception as exc:  # noqa: BLE001 - unavailable DB = no table; only the exception class is logged
+        import logging
+        logging.getLogger("vera").info("classifier category table unavailable (%s)", type(exc).__name__)
+        return None
+
+
+def parse_db_rows(rows, seed: tuple[Category, ...]) -> tuple[tuple[Category, ...], int]:
+    """Validate DB rows (fail closed: ScopeConfigError). Each row is ONE VERSION of a category: unique (code, version), at
+    most one active row per code. Returns (ACTIVE categories, max version). Non-active rows (draft, suspended, retired, and
+    superseded versions) never classify but are validated and count in the dissimilarity check against every row of every
+    OTHER code. Every seed category (harmful, rule_change, advice, programming_task, in_scope, off_topic) must have exactly
+    one active row whose disposition and rank equal the seed's, so a new version cannot silently turn a refusal off."""
+    where = "classifier_categories (db)"
+    if not isinstance(rows, list) or not rows:
+        raise ScopeConfigError(f"{where}: table exists but has no rows")
+    keys = {"code", "description", "disposition", "refusal_rank", "aliases", "origin", "state", "version"}
+    plain, runtime, active, seen = [], set(), [], set()
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict) or set(r) != keys:
+            raise ScopeConfigError(f"{where}: row {i} has unexpected columns")
+        if r["origin"] not in CATEGORY_ORIGINS or r["state"] not in CATEGORY_STATES:
+            raise ScopeConfigError(f"{where}: row {i} has an unknown origin or state")
+        if isinstance(r["version"], bool) or not isinstance(r["version"], int) or r["version"] < 1:
+            raise ScopeConfigError(f"{where}: row {i} has an invalid version")
+        if (r["code"], r["version"]) in seen:
+            raise ScopeConfigError(f"{where}: duplicate (code, version) for {r['code']!r}")
+        seen.add((r["code"], r["version"]))
+        if r["origin"] == "runtime":
+            if r["disposition"] not in ("in_scope", "off_topic") or r["refusal_rank"] is not None or r["aliases"]:
+                raise ScopeConfigError(f"{where}: runtime row {r['code']!r} must be non-refusing and alias-free")
+        pr = {k: (list(r[k]) if k == "aliases" else r[k]) for k in ("code", "description", "disposition", "refusal_rank", "aliases")}
+        plain.append(pr)
+        if r["state"] == "active":
+            if any(a["code"] == r["code"] for a in active):
+                raise ScopeConfigError(f"{where}: more than one active row for {r['code']!r}")
+            active.append(pr)
+            if r["origin"] == "runtime":
+                runtime.add(r["code"])
+        else:
+            parse_categories({"categories": [pr]}, where, rowcheck_only=True)
+    for i, a in enumerate(plain):  # every row of every OTHER code, whatever its state
+        for b in plain[i + 1:]:
+            if a["code"] != b["code"]:
+                score = description_similarity(a["description"], b["description"])
+                if score >= DESCRIPTION_SIMILARITY_MAX:
+                    raise ScopeConfigError(f"{where}: descriptions of {a['code']} and {b['code']} are too similar "
+                                           f"(score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
+    first = {}
+    for pr in plain:
+        first.setdefault(pr["code"], len(first))
+    active.sort(key=lambda pr: first[pr["code"]])  # prompt order = order a code first appeared, stable across versions
+    cats = parse_categories({"categories": active}, where + " active", frozenset(runtime))
+    by = {c.code: c for c in cats}
+    for sc in seed:
+        c = by.get(sc.code)
+        if c is None or c.disposition != sc.disposition or c.refusal_rank != sc.refusal_rank:
+            raise ScopeConfigError(f"{where}: core category {sc.code!r} needs exactly one active row with its seed disposition")
+    return cats, max(r["version"] for r in rows)
+
+
+def load_category_table(settings: dict | None = None, reader=None, path=CATEGORIES_PATH) -> tuple[Category, ...]:
+    """DB table when `read_from_db` is true and the table exists; else the JSON seed (logged once). A table that exists
+    but fails validation raises ScopeConfigError (service does not start)."""
+    global _FALLBACK_LOGGED
+    settings = category_table_settings() if settings is None else settings
+    seed = load_categories(path)
+    if settings.get("read_from_db") is not True:
+        return seed
+    rows = (reader or read_category_rows)()
+    if rows is None:
+        if not _FALLBACK_LOGGED:
+            _FALLBACK_LOGGED = True
+            import logging
+            logging.getLogger("vera").warning("classifier category table absent or DB unavailable: using the JSON seed")
+        return seed
+    cats, ver = parse_db_rows(rows, seed)
+    import logging
+    logging.getLogger("vera").info("classifier category table loaded from DB: %d active rows, max version %d", len(cats), ver)
+    return cats
+
+
+class RegistrationRefused(ScopeConfigError):
+    """enrol_nonrefusing_entry rejected the entry (toggle off, refusing disposition, similar description, bad code)."""
+
+
+def enrol_nonrefusing_entry(code, description, disposition="off_topic", *, settings: dict | None = None, rows=None, writer=None):
+    """OD-1028(9): register a NEW non-refusing category when no existing one covers it. Default OFF
+    (classifier_category_table.registration_enabled must be boolean true). The description must score
+    < DESCRIPTION_SIMILARITY_MAX (0.50, PROVISIONAL: reused from the owner-curated table calibration, not calibrated for
+    runtime candidates) against EVERY existing row of any state, so a retired description cannot be re-added. Inserts
+    origin=runtime, no aliases, state from `registration_state` (default 'active'); the DB trigger enforces the same.
+    Effective for classification only after a restart (the table is loaded once). Returns the inserted row dict."""
+    settings = category_table_settings() if settings is None else settings
+    if settings.get("registration_enabled") is not True:
+        raise RegistrationRefused("runtime category registration is disabled")
+    state = settings.get("registration_state", "active")
+    if state not in CATEGORY_STATES:
+        raise RegistrationRefused(f"registration_state {state!r} is not one of {CATEGORY_STATES}")
+    if disposition not in ("in_scope", "off_topic"):
+        raise RegistrationRefused("only non-refusing dispositions (in_scope, off_topic) may be registered at runtime")
+    if not isinstance(code, str) or not _CODE_RE.fullmatch(code):
+        raise RegistrationRefused(f"code must match {_CODE_RE.pattern}")
+    if not isinstance(description, str) or not description.strip() or not description.isascii() \
+            or any(ch in description for ch in '"{}'):
+        raise RegistrationRefused("description must be non-empty ASCII text without quotes or braces")
+    if rows is None:
+        rows = read_category_rows()
+    if rows is None:
+        raise RegistrationRefused("category table is absent or unavailable; nothing registered")
+    for r in rows:
+        if code == r["code"] or code in (r.get("aliases") or ()):
+            raise RegistrationRefused(f"code {code!r} already exists")
+        score = description_similarity(description, r["description"])
+        if score >= DESCRIPTION_SIMILARITY_MAX:
+            raise RegistrationRefused(f"description too similar to {r['code']} (score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
+    row = {"code": code, "description": description.strip(), "disposition": disposition, "state": state}
+    if writer is None:
+        from sqlalchemy import text
+        from vera import db
+        eng = db.get_role_engine("rw")
+        with eng.begin() as conn:
+            conn.execute(text(DB_CATEGORY_SQL_INSERT), row)
+    else:
+        writer(row)
+    return row
+
+
+CATEGORY_TABLE: tuple[Category, ...] = load_category_table()
 LAYER2_CATEGORIES = tuple(c.code for c in CATEGORY_TABLE)
 CATEGORY_ALIASES = MappingProxyType({a: c.code for c in CATEGORY_TABLE for a in c.aliases})  # output label -> code
 REFUSE_CATEGORIES = frozenset(c.code for c in CATEGORY_TABLE if c.disposition in REFUSING_DISPOSITIONS)  # SCOPE-1022: never answered, listed or acquired
