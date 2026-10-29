@@ -183,7 +183,7 @@ def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_se
     import ast
     allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
                tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED,
-                   tr.TOPIC_SQL_MATCHABLE_JUDGE, tr.TOPIC_SQL_DUPLICATE, tr.TOPIC_SQL_REFUSED_EXISTING}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
+                   tr.TOPIC_SQL_MATCHABLE_JUDGE, tr.TOPIC_SQL_DUPLICATE, tr.TOPIC_SQL_REFUSED_EXISTING, tr.TOPIC_SQL_EXISTING}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
     for p in (ROOT / "vera").rglob("*.py"):
@@ -374,6 +374,14 @@ class _RDB:
                     return _RR()
                 if q == tr.TOPIC_SQL_KEY_EXISTS:
                     return _RR([1] if any(r["topic_key"] == params["k"] for r in db.rows) else [])
+                if q == tr.TOPIC_SQL_EXISTING:
+                    hit = [r for r in db.rows if r["topic_key"] == params["k"]]
+                    return _RR([{"origin": "seed", "version": 1, "field": "f", **hit[-1]}] if hit else [])
+                if q == tr.TOPIC_SQL_DUPLICATE:
+                    norm = lambda t: re.sub(r"\s+", " ", t.strip()).lower()
+                    hit = [r for r in db.rows if (r["topic_key"] == params["k"] and not (r["state"] == "draft" and r.get("origin") == "runtime"))
+                           or (r["topic_key"] != params["k"] and r["state"] in ("active", "retired", "suspended", "draft") and norm(r["label"]) == params["nl"])]
+                    return _RR([(hit[0]["topic_key"],)] if hit else [])
                 if q == tr.TOPIC_SQL_PARENT_ACTIVE:
                     return _RR([1] if any(r["topic_key"] == params["p"] and r["state"] == "active" for r in db.rows) else [])
                 if q == tr.TOPIC_SQL_INSERT:
@@ -425,9 +433,9 @@ def test_dissimilar_proposal_is_written_draft_then_activated_under_lock():
     db = _db()
     out = _reg(db, OTHER)
     assert out == {"key": "new-topic-one", "state": "active"}
-    assert db.log[0] == tr.TOPIC_SQL_LOCK  # advisory lock before any read or write
+    assert db.log.index(tr.TOPIC_SQL_LOCK) < db.log.index(tr.TOPIC_SQL_INSERT)  # advisory lock before any write
     i = db.log.index(tr.TOPIC_SQL_INSERT)
-    assert i < db.log.index(tr.TOPIC_SQL_MATCHABLE) < db.log.index(tr.TOPIC_SQL_ACTIVATE)  # draft first, check, then activate
+    assert i < db.log.index(tr.TOPIC_SQL_MATCHABLE) < db.log.index(tr.TOPIC_SQL_ACTIVATE)  # draft first, log-only score, then activate
     assert [r["state"] for r in db.rows] == ["active", "active"]
 
 
@@ -435,30 +443,26 @@ def _states(db):
     return [(r["topic_key"], r["state"]) for r in db.rows]
 
 
-def test_similar_to_an_active_topic_is_suspended_and_kept(caplog):
-    db = _db()
+@pytest.mark.parametrize("kind", ["active", "retired"])
+def test_lexical_similarity_never_suspends_it_is_log_only(kind, caplog):  # HARDEN-FIX2 E2 (OD-1028(57)), judge OFF
+    db = _db(kind)
     with caplog.at_level("INFO", logger="vera"):
         out = _reg(db, EXISTING + " mu")
-    assert out["state"] == "suspended" and tr.TOPIC_SQL_SUSPEND in db.log and tr.TOPIC_SQL_ACTIVATE not in db.log
-    assert _states(db) == [("old-topic", "active"), ("new-topic-one", "suspended")]
-    assert "equivalent to a active topic (matched key old-topic)" in caplog.text
+    assert out == {"key": "new-topic-one", "state": "active"} and tr.TOPIC_SQL_SUSPEND not in db.log and tr.TOPIC_SQL_ACTIVATE in db.log
+    assert _states(db) == [("old-topic", kind), ("new-topic-one", "active")]
+    assert "lexical stand-in, log only, matched 1" in caplog.text
     assert "Greek" not in caplog.text and "New Topic" not in caplog.text and "alpha" not in caplog.text
 
 
-def test_similar_only_to_a_retired_topic_is_suspended(caplog):
-    db = _db("retired")
+def test_exact_duplicate_key_or_label_returns_distinct_duplicate_outcome_judge_off(caplog):
+    db = _db()
     with caplog.at_level("INFO", logger="vera"):
-        out = _reg(db, EXISTING + " mu")
-    assert out["state"] == "suspended" and _states(db)[1] == ("new-topic-one", "suspended")
-    assert "equivalent to a retired topic (matched key old-topic)" in caplog.text
-
-
-def test_similar_to_both_active_and_retired_logs_active(caplog):
-    db = _RDB([{"topic_key": "ret-topic", "label": "r", "anchor_text": EXISTING, "state": "retired", "origin": "seed", "version": 1},
-               {"topic_key": "act-topic", "label": "a", "anchor_text": EXISTING, "state": "active", "origin": "seed", "version": 1}])
-    with caplog.at_level("INFO", logger="vera"):
-        out = _reg(db, EXISTING + " mu")
-    assert out["state"] == "suspended" and "equivalent to a active topic (matched key act-topic)" in caplog.text
+        out = tr.register_proposed_topic("Old topic", "f1", OTHER, settings=REG_ON, engine=db)  # same key
+    assert out == {"key": "old-topic", "state": "duplicate"} and len(db.rows) == 1 and tr.TOPIC_SQL_INSERT not in db.log
+    assert "exact duplicate (proposed key old-topic, existing key old-topic)" in caplog.text
+    db = _RDB([{"topic_key": "other-key", "label": "Old   TOPIC two", "anchor_text": EXISTING, "state": "suspended", "origin": "seed", "version": 1}])
+    out = tr.register_proposed_topic("old topic two", "f1", OTHER, settings=REG_ON, engine=db)  # same normalized label, other key
+    assert out == {"key": "old-topic-two", "state": "duplicate"} and len(db.rows) == 1 and tr.TOPIC_SQL_INSERT not in db.log
 
 
 @pytest.mark.parametrize("state", ["draft", "suspended"])
@@ -471,32 +475,31 @@ def test_no_match_activates():
     assert _reg(_db(), OTHER)["state"] == "active"
 
 
-def test_check_that_cannot_run_keeps_the_draft(caplog):
+def test_lexical_check_that_cannot_run_does_not_block_activation(caplog):  # log-only metric: a broken one is n/a, never a stop
     def broken(a, b):
         raise RuntimeError("metric exploded")
     for metric in (broken, lambda a, b: None, lambda a, b: float("nan"), lambda a, b: True):
         db = _db()
-        with caplog.at_level("WARNING", logger="vera"):
+        with caplog.at_level("INFO", logger="vera"):
             out = _reg(db, OTHER, similarity=metric)
-        assert out["state"] == "draft" and _states(db)[1] == ("new-topic-one", "draft")
-        assert tr.TOPIC_SQL_ACTIVATE not in db.log and tr.TOPIC_SQL_SUSPEND not in db.log
-    assert "could not run" in caplog.text and "exploded" not in caplog.text
+        assert out["state"] == "active" and tr.TOPIC_SQL_SUSPEND not in db.log
+    assert "matched n/a" in caplog.text and "exploded" not in caplog.text
 
 
-def test_concurrent_similar_proposals_serialise_at_most_one_active():
+def test_same_label_twice_second_is_a_duplicate_and_one_row():
     db = _db(anchor=OTHER)
     first = _reg(db, EXISTING, label="Greek Letters One")
-    second = _reg(db, EXISTING + " mu", label="Greek Letters Two")
-    assert (first["state"], second["state"]) == ("active", "suspended")
-    assert sum(r["state"] == "active" and r["origin"] == "runtime" for r in db.rows) == 1
-    assert db.log.count(tr.TOPIC_SQL_LOCK) == 2  # each registration takes the lock first; real concurrency not exercised
+    second = _reg(db, EXISTING + " mu", label="Greek Letters One")
+    assert (first["state"], second["state"]) == ("active", "duplicate")
+    assert sum(r["topic_key"] == "greek-letters-one" for r in db.rows) == 1
+    assert db.log.count(tr.TOPIC_SQL_LOCK) == 1  # the duplicate is found before the lock
 
 
 def test_pluggable_metric_and_threshold_and_no_user_text_in_log(caplog):
     db = _db()
     with caplog.at_level("INFO", logger="vera"):
         out = _reg(db, OTHER, similarity=lambda a, b: 0.9, label="Secret Words Topic")
-    assert out["state"] == "suspended"
+    assert out["state"] == "active"  # the score is log-only
     assert "Secret" not in caplog.text and "Words" not in caplog.text and OTHER.split()[0] not in caplog.text
     for bad in (0, 1.5, "x", True):
         with pytest.raises(tr.RegistrationRefused):
@@ -511,9 +514,8 @@ def test_bad_input_and_existing_key_refused_before_any_write():
             tr.register_proposed_topic(label, field, anchor, settings=REG_ON, engine=db)
         assert db.log == []
     db = _db()
-    with pytest.raises(tr.RegistrationRefused):
-        tr.register_proposed_topic("Old topic", "f1", OTHER, settings=REG_ON, engine=db)
-    assert len(db.rows) == 1
+    out = tr.register_proposed_topic("Old topic", "f1", OTHER, settings=REG_ON, engine=db)  # not active mode: distinct outcome, nothing written
+    assert out["state"] == "duplicate" and len(db.rows) == 1
 
 
 def test_proposal_state_must_stay_draft():
@@ -654,8 +656,8 @@ def test_parent_topic_key_column_check_trigger_and_immutability():
 def test_no_similarity_inference_of_parent_and_match_means_equivalence():
     import inspect
     src = inspect.getsource(tr.register_proposed_topic)
-    assert "parent_key" in src and "semantic equivalence" in tr.register_proposed_topic.__doc__
-    assert "NEVER inferred" in tr.register_proposed_topic.__doc__
+    assert "parent_key" in src and "equivalen" in tr.register_proposed_topic.__doc__
+    assert "never\n    inferred" in tr.register_proposed_topic.__doc__ or "never inferred" in tr.register_proposed_topic.__doc__
     assert "'DISTINCT" in _sql() or "DISTINCT micro-topic" in _sql()
 
 
@@ -740,7 +742,7 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     idx = re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", code) + re.findall(r"CONSTRAINT (\w+) (?:PRIMARY KEY|UNIQUE)", code)
     trg = re.findall(r"CREATE TRIGGER (\w+)", code)
     chk = re.findall(r"CONSTRAINT (\w+)\s+CHECK", code)
-    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 17
+    assert tables == ["vera_vjay.topreg_topics", "vera_vjay.topreg_judgments"] and len(funcs) == 5 and len(idx) == 7 and len(trg) == 4 and len(chk) == 19
     for t in tables:
         assert "to_regclass('%s')" % t in pre, t
     for n in funcs + idx + trg:  # derived from the file, so the preflight list cannot drift
@@ -834,7 +836,7 @@ def test_placeholder_content_is_fixed_and_matches_the_db_check_text():
                   "anchor": "refused topic category rule_change: fixed placeholder, no question text"}
     code = _code(_sql())
     chk = code[code.index("CONSTRAINT topreg_refused_chk"):code.index(");", code.index("CONSTRAINT topreg_refused_chk"))]
-    for frag in ("state NOT IN ('banned','prohibited','secrets')", "field ~ '^[a-z][a-z_]{1,31}$'", "label = 'refused ' || field",
+    for frag in ("state NOT IN ('banned','prohibited','secrets')", "field IN ('harmful','advice','rule_change')", "label = 'refused ' || field",
                  "topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')",
                  "anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'",
                  "parent_topic_key IS NULL", "parent_openalex_topic = 'none'"):
@@ -889,10 +891,10 @@ def test_ensure_refused_category_takes_no_label_or_question_text():
 
 
 @pytest.mark.parametrize("kind", ["active", "retired"])
-def test_draft_similar_to_active_or_retired_goes_to_suspended(kind):
+def test_draft_similar_to_active_or_retired_is_activated_judge_off(kind):  # E2: the lexical score never suspends
     db = _db(kind)
     out = _reg(db, EXISTING + " mu")
-    assert out["state"] == "suspended" and tr.TOPIC_SQL_SUSPEND in db.log and tr.TOPIC_SQL_ACTIVATE not in db.log
+    assert out["state"] == "active" and tr.TOPIC_SQL_SUSPEND not in db.log and tr.TOPIC_SQL_ACTIVATE in db.log
 
 
 @pytest.mark.parametrize("kind", ["banned", "prohibited", "secrets"])
@@ -1010,3 +1012,38 @@ def test_cache_ttl_out_of_range_is_rejected_at_load(ttl):
     with pytest.raises(tr.TopicRegistryError):
         mt.load_registry(cfg, reader=lambda: (True, [_row("z-new")]))
     assert acq_config.load_config()["micro_topic"]["registry_table"]["cache_ttl_seconds"] == 300
+
+
+def test_refused_category_enumerated_list_and_content_check_cover_the_owner_too():  # HARDEN-FIX2 E4
+    code = _code(_sql())
+    i = code.index("CONSTRAINT topreg_refused_chk")
+    chk1 = code[i:code.index("CONSTRAINT topreg_refused_key_chk")]
+    assert "field IN ('harmful','advice','rule_change')" in chk1 and "^[a-z][a-z_]" not in chk1
+    j = code.index("CONSTRAINT topreg_refused_key_chk")
+    chk2 = code[j:code.index(");", j)]
+    for frag in ("topic_key NOT LIKE 'refused-%'", "state IN ('banned','prohibited','secrets')", "field IN ('harmful','advice','rule_change')",
+                 "label = 'refused ' || field", "topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')", "parent_topic_key IS NULL"):
+        assert frag in chk2, frag
+    # the enumerated list equals the configured refuse-disposition categories (extended only by migration)
+    cfg = acq_config.load_config()["micro_topic"]["registry_table"]["refused_state_map"]
+    assert sorted(cfg) == ["advice", "harmful", "rule_change"]
+    # CHECK constraints bind everyone (they are not in the owner-exempt trigger)
+    assert "is_owner" not in chk1 and "is_owner" not in chk2
+
+
+def _draft_row(state="draft", origin="runtime"):
+    return {"topic_key": "new-topic-one", "label": "New Topic One", "anchor_text": OTHER, "state": state, "origin": origin, "version": 1}
+
+
+@pytest.mark.parametrize("final", ["active"])
+def test_re_proposing_a_runtime_draft_rejudges_it_in_place_judge_off(final):  # HARDEN-FIX2 E3
+    db = _RDB([_draft_row()])
+    out = _reg(db, "different text now " * 3)
+    assert out == {"key": "new-topic-one", "state": final} and tr.TOPIC_SQL_INSERT not in db.log
+    assert [r["state"] for r in db.rows] == ["active"] and len(db.rows) == 1
+
+
+def test_a_non_draft_or_seed_row_of_the_key_is_not_rejudged():
+    for st, origin in (("suspended", "runtime"), ("active", "runtime"), ("draft", "seed")):
+        db = _RDB([_draft_row(st, origin)])
+        assert _reg(db, OTHER)["state"] == "duplicate" and tr.TOPIC_SQL_ACTIVATE not in db.log

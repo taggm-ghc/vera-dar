@@ -231,13 +231,23 @@ TOPIC_SQL_MATCHABLE = ("SELECT topic_key, anchor_text, state FROM vera_vjay.topr
                        "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
 TOPIC_SQL_MATCHABLE_JUDGE = ("SELECT topic_key, version, label, anchor_text, state, modified_at FROM vera_vjay.topreg_topics "
                              "WHERE state IN ('active', 'retired') ORDER BY topic_row_id")
-TOPIC_SQL_JUDGE_DAY_COUNT = "SELECT count(*) FROM vera_vjay.topreg_judgments WHERE created_at > now() - interval '1 day'"
+# HARDEN-FIX2 E5: the daily cap sums RESERVATION rows (verdict 'reserved'; latency_ms holds the number of judgments reserved), taken under a
+# short advisory lock BEFORE any model call, so concurrent registrations cannot overshoot it.
+TOPIC_SQL_JUDGE_DAY_COUNT = ("SELECT COALESCE(sum(latency_ms), 0)::bigint FROM vera_vjay.topreg_judgments "
+                             "WHERE verdict = 'reserved' AND created_at > now() - interval '1 day'")
+TOPIC_SQL_JUDGE_RESERVE = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
+                           "VALUES (:dk, :dk, 'none', 'reserved', :m, 'none', :n)")
 TOPIC_SQL_JUDGMENT_INSERT = ("INSERT INTO vera_vjay.topreg_judgments (draft_key, candidate_key, candidate_state, verdict, mode, model_id, latency_ms) "
                              "VALUES (:dk, :ck, :cs, :v, :m, :mid, :ms)")
-# OD-1028(57) SHADOW mode: EXACT duplicate = same normalized topic_key, or the same normalized label (lower, whitespace-collapsed, as the
-# unique label index/trigger) as an existing active, retired, suspended or draft topic.
-TOPIC_SQL_DUPLICATE = ("SELECT topic_key FROM vera_vjay.topreg_topics WHERE topic_key = :k OR (state IN ('active', 'retired', 'suspended', 'draft') "
+# OD-1028(57), when the judge is not in active mode (disabled or shadow): EXACT duplicate = an existing row with the same normalized topic_key
+# (other than a re-proposable runtime DRAFT of that key), or another key whose normalized label (lower, whitespace-collapsed, as the unique
+# label index/trigger) matches an active, retired, suspended or draft topic.
+TOPIC_SQL_DUPLICATE = ("SELECT topic_key FROM vera_vjay.topreg_topics WHERE (topic_key = :k AND NOT (state = 'draft' AND origin = 'runtime' AND version = 1)) "
+                       "OR (topic_key <> :k AND state IN ('active', 'retired', 'suspended', 'draft') "
                        "AND lower(regexp_replace(btrim(label), '\\s+', ' ', 'g')) = :nl) ORDER BY topic_row_id LIMIT 1")
+# HARDEN-FIX2 E3: the newest row of a key (a runtime DRAFT version 1 is re-judged in place, not a duplicate).
+TOPIC_SQL_EXISTING = ("SELECT state, origin, version, label, field, anchor_text FROM vera_vjay.topreg_topics WHERE topic_key = :k "
+                      "ORDER BY version DESC LIMIT 1")
 RESERVED_KEY_PREFIX = "refused-"  # OD-1028(57): reserved for the fixed refused-category placeholder rows; a proposal can never use it
 TOPIC_SQL_PARENT_ACTIVE = "SELECT 1 FROM vera_vjay.topreg_topics WHERE topic_key = :p AND state = 'active'"
 TOPIC_SQL_INSERT = ("INSERT INTO vera_vjay.topreg_topics (topic_key, label, field, anchor_text, parent_topic_key, origin, state) "
@@ -284,11 +294,29 @@ def _sig(r) -> tuple:
     return (r["topic_key"], r.get("version"), r["state"], r.get("modified_at"))
 
 
+def _reserve(engine, key, n, cfg, log) -> bool:
+    """HARDEN-FIX2 E5: reserve n judgments of today's cap under a SHORT advisory lock (own transaction, no network call inside). False
+    (and no model call) when the cap would be exceeded, the log is unreadable or the reservation row cannot be inserted."""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
+            today = conn.execute(text(TOPIC_SQL_JUDGE_DAY_COUNT)).scalar()
+            if isinstance(today, bool) or not isinstance(today, int) or today + n > cfg["max_judgments_per_day"]:
+                log.warning("topic judge skipped (daily budget exhausted or the judgment log is unavailable)")
+                return False
+            conn.execute(text(TOPIC_SQL_JUDGE_RESERVE), {"dk": key, "m": cfg["mode"], "n": n})
+        return True
+    except Exception as exc:  # noqa: BLE001 - class only
+        log.warning("topic judge skipped (the judgment could not be reserved: %s)", type(exc).__name__)
+        return False
+
+
 def _judge_phase(engine, settings, key, label, anchor):
-    """Runs BEFORE the advisory lock (no lock is held across a network call). Returns None when the judge is off, else
-    {"mode", "sigs", "verdicts"}: a read-only snapshot of the candidate topics, the judge verdicts for EVERY candidate (unknown on any
-    failure or an exhausted budget), and a best-effort log of the verdicts to topreg_judgments (own transaction; keys and states only, no
-    question text; a logging failure never changes the outcome)."""
+    """Runs BEFORE the advisory lock of the outcome transaction (no lock is held across a network call). Returns None when the judge
+    is off, else {"mode", "sigs", "verdicts"}: a read-only snapshot of the candidate topics and the judge verdicts for EVERY candidate
+    (unknown on any failure, an unreserved day budget, or candidates beyond the per-registration budget). The verdicts are NOT logged here:
+    they are written in the outcome's own transaction (E7). G2 cost grows with registry size: ceil(candidates / batch_size) calls."""
     from sqlalchemy import text
     from vera import topic_judge
     try:
@@ -300,31 +328,38 @@ def _judge_phase(engine, settings, key, label, anchor):
     log = logging.getLogger("vera")
     with engine.begin() as conn:
         rows = [dict(r) for r in conn.execute(text(TOPIC_SQL_MATCHABLE_JUDGE)).mappings().all() if r["topic_key"] != key]
-        try:
-            today = conn.execute(text(TOPIC_SQL_JUDGE_DAY_COUNT)).scalar()
-        except Exception:  # noqa: BLE001 - class only; the table may be absent: the judge cannot run
-            today = None
-    over_day = isinstance(today, bool) or not isinstance(today, int) or today + len(rows) > cfg["max_judgments_per_day"]
     cands = [{"topic_key": r["topic_key"], "label": r["label"], "anchor_text": r["anchor_text"], "state": r["state"]} for r in rows]
-    if over_day:
-        log.warning("topic judge skipped (daily budget exhausted or the judgment log is unavailable)")
+    cap = min(len(cands), cfg["batch_size"] * cfg["max_calls_per_registration"])
+    if cands and not _reserve(engine, key, cap, cfg, log):
         verdicts = [topic_judge.Verdict(c["topic_key"], c["state"], "unknown") for c in cands]
+        covered, calls, tokens, skipped = 0, 0, 0, True  # never judged: nothing to calibrate, no verdict rows
     else:
-        verdicts = topic_judge.judge_equivalence({"label": label, "anchor_text": anchor}, cands, settings=settings).verdicts
+        skipped = False
+        res = topic_judge.judge_equivalence({"label": label, "anchor_text": anchor}, cands, settings=settings)
+        verdicts, covered, calls, tokens = res.verdicts, res.covered, res.calls, res.tokens
+    log.info("topic judge coverage: %d of %d candidates judged (%d calls, %d tokens, mode %s)", covered, len(cands), calls, tokens, cfg["mode"])
+    return {"mode": cfg["mode"], "sigs": {_sig(r) for r in rows}, "verdicts": verdicts, "covered": covered, "total": len(cands),
+            "skipped": skipped}
+
+
+def _write_verdicts(conn, plan, key, log) -> None:
+    """E7: verdict rows are written in the outcome's transaction, after the outcome is known, under a SAVEPOINT: a logging failure never
+    changes the outcome, and a rolled-back registration leaves no rows. Keys, states and verdicts only; no user text."""
+    from sqlalchemy import text
+    if plan is None or plan["skipped"] or not plan["verdicts"]:
+        return
     try:
-        if not over_day:
-            with engine.begin() as conn:
-                for v in verdicts:
-                    conn.execute(text(TOPIC_SQL_JUDGMENT_INSERT), {"dk": key, "ck": v.candidate_key, "cs": v.candidate_state, "v": v.verdict,
-                                                                 "m": cfg["mode"], "mid": v.model_id, "ms": v.latency_ms})
+        with conn.begin_nested():
+            for v in plan["verdicts"]:
+                conn.execute(text(TOPIC_SQL_JUDGMENT_INSERT), {"dk": key, "ck": v.candidate_key, "cs": v.candidate_state, "v": v.verdict,
+                                                             "m": plan["mode"], "mid": v.model_id, "ms": v.latency_ms})
     except Exception as exc:  # noqa: BLE001
         log.warning("topic judgments could not be logged (%s)", type(exc).__name__)
-    return {"mode": cfg["mode"], "sigs": {_sig(r) for r in rows}, "verdicts": verdicts}
 
 
 def _judge_outcome(conn, plan, key, log):
     """ACTIVE mode, under the lock. (state, kind, matched_key) or None for 'stay draft'. Topics activated or changed since the judge
-    call are NOT re-judged under the lock (no network call while it is held): the draft is kept (fail closed) and can be retried."""
+    call are NOT re-judged under the lock (no network call while it is held): the draft is kept (fail closed) and can be re-proposed."""
     from sqlalchemy import text
     now = [dict(r) for r in conn.execute(text(TOPIC_SQL_MATCHABLE_JUDGE)).mappings().all() if r["topic_key"] != key]
     if {_sig(r) for r in now} != plan["sigs"]:
@@ -338,32 +373,39 @@ def _judge_outcome(conn, plan, key, log):
     if kind:
         return "suspended", kind, matched[kind]
     if any(v.verdict != "no" for v in plan["verdicts"]):
-        log.warning("topic proposal kept as draft (judge verdict unknown)")
+        log.warning("topic proposal kept as draft (judge verdict unknown; %d of %d candidates judged)", plan["covered"], plan["total"])
         return None
     return "active", None, None
 
 
+def _lexical_log_only(conn, key, anchor, limit, similarity):
+    """Number of active/retired topics whose anchor scores at or above the limit, or None when the metric cannot run. LOG ONLY."""
+    from sqlalchemy import text
+    try:
+        return len([r for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all()
+                    if r["topic_key"] != key and similarity(anchor, r["anchor_text"]) >= limit])
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine=None, similarity=lexical_similarity,
                             parent_key=None) -> dict:
-    """Register a NEW topic (OD-1028(9), OD-1028(49); owner 2026-10-28). Written as 'draft', then in the SAME transaction under
-    pg_advisory_xact_lock its anchor text is scored (>= similarity_max = a MATCH, meaning semantic equivalence or paraphrase
-    ONLY) against every ACTIVE, RETIRED, BANNED, PROHIBITED and SECRETS topic (other drafts and suspended topics are ignored). A narrower topic inside an
-    active topic, or a broader non-equivalent topic, is NOT a match: it is a distinct micro-topic and is activated.
-      equivalent to an active topic  -> draft -> 'suspended' (logged: match kind 'active' + the matched key)
-      equivalent only to a retired   -> draft -> 'suspended' (logged: match kind 'retired' + the matched key)
-      equivalent to neither          -> draft -> 'active'
-    `parent_key` (optional) is supplied by the caller when the proposal context identifies a parent topic (e.g. it arose under
-    a known topic); it must be a well-formed key naming an ACTIVE topic (refused before any write otherwise; the DB trigger
-    enforces it too) and is stored immutably as parent_topic_key. It is NEVER inferred from similarity; None = no parent.
-    Acquisition caps and targets are unaffected.
-    TOPICJUDGE-1028 (OD-1028(54)), only when registry_table.judge.enabled is true: a free Groq model judges equivalence against EVERY
-    candidate BEFORE the lock (vera.topic_judge). SHADOW (default once enabled; OD-1028(57)): verdicts are logged to topreg_judgments and
-    never decide; the draft goes to 'suspended' (nothing written) only if it is an EXACT duplicate (normalized key or label of an active,
-    retired, suspended or draft topic), else to 'active'; the lexical metric is log-only. A key with the reserved 'refused-' prefix is refused. ACTIVE: any 'yes' -> suspended, all 'no' -> active, any 'unknown' (or candidates changed since the judge
-    call) -> stays draft; the lexical metric is log-only. A verdict never causes a refusal.
-      the check cannot run (the metric raises or returns a non-number) -> stays 'draft' (fail closed)
-    A database error rolls the whole transaction back (nothing written). Rows are never deleted; logs carry no user text.
-    `similarity(a, b)` is the pluggable metric (default: PROVISIONAL lexical). Returns {"key", "state"}."""
+    """Register a NEW topic (OD-1028(9), OD-1028(49), OD-1028(57); owner 2026-10-28). Returns {"key", "state"}.
+    The row is written as 'draft' and moved to its outcome in the SAME transaction under pg_advisory_xact_lock. Two regimes:
+    NOT ACTIVE MODE (registration enabled and the judge DISABLED or in SHADOW mode; OD-1028(57), the S3 rule): an EXACT duplicate (same
+      normalized key, or the same normalized label as an active, retired, suspended or draft topic) writes nothing and returns state
+      'duplicate' (INFO log with both keys); anything else is activated. Judge verdicts (shadow) and the lexical score are LOG-ONLY and never
+      suspend or block. Existing acquisition caps and duplicate controls are untouched.
+    ACTIVE MODE (judge.enabled and judge.mode == 'active', TOPICJUDGE-1028 / OD-1028(54)): a free Groq model judges the draft against EVERY
+      active or retired candidate BEFORE the lock (vera.topic_judge; cost grows with registry size; candidates beyond the per-registration
+      call/token budget are 'unknown'). Any 'yes' -> suspended; all 'no' -> active; any 'unknown' (or candidates changed since the judge
+      call) -> stays draft. The lexical metric is log-only. An existing key raises RegistrationRefused.
+    RE-JUDGE (E3): re-proposing a key that exists as a runtime DRAFT (e.g. left by 'unknown') re-runs the regime above on that stored draft
+      (its stored text, immutable) and moves it draft -> active or suspended; it is neither an error nor a duplicate.
+    A narrower or broader non-equivalent topic is distinct. `parent_key` (optional, new rows only) must name an ACTIVE topic; it is never
+    inferred from similarity. A key with the reserved 'refused-' prefix is refused. Judge verdicts are logged to topreg_judgments in the
+    outcome's transaction (none for a rejected registration); a daily-cap reservation row is taken first (E5). A database error rolls the
+    whole transaction back. Rows are never deleted; logs carry no user text. `similarity(a, b)` is the log-only lexical metric."""
     if settings.get("registration_enabled") is not True:
         raise RegistrationRefused("runtime topic registration is disabled")
     proposal_state(settings)
@@ -381,78 +423,71 @@ def register_proposed_topic(label, field, anchor_text, *, settings: dict, engine
     if parent_key is not None and (not isinstance(parent_key, str) or not _TOPIC_KEY.fullmatch(parent_key) or parent_key == key):
         raise RegistrationRefused("parent_key must be a well-formed topic key other than the new key")
     from sqlalchemy import text
+    from vera import topic_judge
     if engine is None:
         from vera import db
         engine = db.get_role_engine("rw")
     log = logging.getLogger("vera")
     try:
-        plan = _judge_phase(engine, settings, key, label, anchor)  # TOPICJUDGE-1028: before the lock; None = judge off
-        with engine.begin() as conn:
-            conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
-            shadow = plan is not None and plan["mode"] == "shadow"
-            if shadow:
-                # OD-1028(57): only an EXACT duplicate is held back. The DB's unique key/label controls make a duplicate row unwritable, so
-                # nothing is written: the outcome is 'suspended' (not recorded). Judge verdicts were already logged and never decide.
-                nl = re.sub(r"\s+", " ", label.strip()).lower()
+        jcfg = topic_judge.validate_judge_settings(settings)
+    except topic_judge.JudgeConfigError as exc:
+        raise TopicRegistryError(str(exc)) from None
+    active_mode = jcfg is not None and jcfg["mode"] == "active"
+    nl = re.sub(r"\s+", " ", label.strip()).lower()
+
+    def _is_draft(r):
+        return r is not None and r["state"] == "draft" and r["origin"] == "runtime" and r["version"] == 1
+
+    try:
+        with engine.begin() as conn:  # read-only peek before any judge call
+            peek = conn.execute(text(TOPIC_SQL_EXISTING), {"k": key}).mappings().first()
+            if peek is not None and not _is_draft(peek):
+                if active_mode:
+                    raise RegistrationRefused("topic key already exists")
+            if not active_mode:
                 dup = conn.execute(text(TOPIC_SQL_DUPLICATE), {"k": key, "nl": nl}).first()
                 if dup is not None:
-                    log.info("topic proposal suspended (shadow mode): exact duplicate; nothing written")
-                    return {"key": key, "state": "suspended"}
-            elif conn.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": key}).first() is not None:
-                raise RegistrationRefused("topic key already exists")
-            if parent_key is not None and conn.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent_key}).first() is None:
-                raise RegistrationRefused("parent_key does not name an active topic")
-            conn.execute(text(TOPIC_SQL_INSERT), {"k": key, "label": label, "field": field, "anchor": anchor, "parent": parent_key})
-            if plan is not None and plan["mode"] == "active":
-                # ACTIVE judge mode: the verdicts decide; the lexical stand-in is LOG-ONLY (its outcome is logged, never used).
+                    log.info("topic proposal not registered: exact duplicate (proposed key %s, existing key %s)", key, dup[0] if dup[0] else key)
+                    return {"key": key, "state": "duplicate"}
+        if _is_draft(peek):  # E3: re-judge the stored draft
+            label, anchor = peek["label"], peek["anchor_text"]
+        plan = _judge_phase(engine, settings, key, label, anchor)  # before the lock; None = judge off
+        with engine.begin() as conn:
+            conn.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
+            row = conn.execute(text(TOPIC_SQL_EXISTING), {"k": key}).mappings().first()
+            if not _is_draft(row):
+                if row is not None and active_mode:
+                    raise RegistrationRefused("topic key already exists")
+                if not active_mode:
+                    dup = conn.execute(text(TOPIC_SQL_DUPLICATE), {"k": key, "nl": nl}).first()
+                    if dup is not None:  # lost a race after the judge call: nothing is written, no verdict rows
+                        log.info("topic proposal not registered: exact duplicate (proposed key %s, existing key %s)", key, dup[0] if dup[0] else key)
+                        return {"key": key, "state": "duplicate"}
+                if parent_key is not None and conn.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent_key}).first() is None:
+                    raise RegistrationRefused("parent_key does not name an active topic")
+                conn.execute(text(TOPIC_SQL_INSERT), {"k": key, "label": label, "field": field, "anchor": anchor, "parent": parent_key})
+            if active_mode:
+                # ACTIVE judge mode: the verdicts decide; the lexical stand-in is LOG-ONLY.
                 out = _judge_outcome(conn, plan, key, log)
                 if out is None:
+                    _write_verdicts(conn, plan, key, log)
                     return {"key": key, "state": "draft"}
                 state, kind, mkey = out
                 if conn.execute(text(TOPIC_SQL_SUSPEND if kind else TOPIC_SQL_ACTIVATE), {"k": key}).rowcount != 1:
                     raise TopicRegistryError("topic transition affected an unexpected number of rows")
-                try:
-                    lex = [r["topic_key"] for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all()
-                           if r["topic_key"] != key and similarity(anchor, r["anchor_text"]) >= limit]
-                except Exception:  # noqa: BLE001
-                    lex = None
+                lex = _lexical_log_only(conn, key, anchor, limit, similarity)
+                _write_verdicts(conn, plan, key, log)
                 log.info("topic proposal %s by judge (%s); lexical stand-in (log only) matched %s", state,
-                         "equivalent to a %s topic" % kind if kind else "no equivalent topic", "n/a" if lex is None else len(lex))
+                         "equivalent to a %s topic" % kind if kind else "no equivalent topic", "n/a" if lex is None else lex)
                 return {"key": key, "state": state}
-            if shadow:
-                # SHADOW (OD-1028(57)): not an exact duplicate -> active whatever the judge said; the lexical metric is LOG-ONLY.
-                try:
-                    lex = [r["topic_key"] for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all()
-                           if r["topic_key"] != key and similarity(anchor, r["anchor_text"]) >= limit]
-                except Exception:  # noqa: BLE001
-                    lex = None
-                if conn.execute(text(TOPIC_SQL_ACTIVATE), {"k": key}).rowcount != 1:
-                    raise TopicRegistryError("topic transition affected an unexpected number of rows")
-                log.info("topic proposal activated (shadow mode; lexical stand-in, log only, matched %s)", "n/a" if lex is None else len(lex))
-                return {"key": key, "state": "active"}
-            # judge off: the lexical stand-in decides, as before
-            matched = {}  # kind -> first matched key; 'active' wins over 'retired'
-            for r in conn.execute(text(TOPIC_SQL_MATCHABLE)).mappings().all():
-                if r["topic_key"] == key:
-                    continue
-                try:
-                    score = similarity(anchor, r["anchor_text"])
-                except Exception:  # noqa: BLE001 - the check cannot run: fail closed, keep the draft
-                    score = None
-                if isinstance(score, bool) or not isinstance(score, (int, float)) or score != score:
-                    log.warning("topic proposal kept as draft (similarity check could not run)")
-                    return {"key": key, "state": "draft"}
-                if score >= limit:
-                    matched.setdefault(r["state"], r["topic_key"])
-            kind = next((k for k in MATCH_ORDER if k in matched), None)
-            sql, state = (TOPIC_SQL_SUSPEND, "suspended") if kind else (TOPIC_SQL_ACTIVATE, "active")
-            if conn.execute(text(sql), {"k": key}).rowcount != 1:
+            # NOT active mode (judge disabled or shadow): S3 rule, not an exact duplicate -> active; verdicts and lexical score log-only.
+            lex = _lexical_log_only(conn, key, anchor, limit, similarity)
+            if conn.execute(text(TOPIC_SQL_ACTIVATE), {"k": key}).rowcount != 1:
                 raise TopicRegistryError("topic transition affected an unexpected number of rows")
-            if kind:
-                log.info("topic proposal suspended: equivalent to a %s topic (matched key %s)", kind, matched[kind])
-            else:
-                log.info("topic proposal activated")
-            return {"key": key, "state": state}
+            _write_verdicts(conn, plan, key, log)
+            log.info("topic proposal activated (%s; lexical stand-in, log only, matched %s)", "shadow mode" if plan is not None else "judge off",
+                     "n/a" if lex is None else lex)
+            return {"key": key, "state": "active"}
     except (RegistrationRefused, TopicRegistryError):
         raise
     except Exception as exc:  # noqa: BLE001 - class only, no driver text, no user text

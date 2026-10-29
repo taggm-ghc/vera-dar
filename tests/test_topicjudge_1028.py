@@ -172,10 +172,18 @@ def test_injected_reply_shape_from_the_model_is_still_schema_checked():
 
 
 # --- bounds ---
-def test_more_candidates_than_max_is_not_shortlisted_all_unknown():
+def test_no_candidate_count_cap_every_candidate_is_judged_in_batches_and_coverage_is_exposed():  # HARDEN-FIX2 E8 (G2 scaling)
+    many = [{"topic_key": f"t-{i}", "label": f"Topic {i}", "anchor_text": "z" * 30, "state": "active"} for i in range(50)]
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    res = _judge(c, many, judge={"batch_size": 5, "max_calls_per_registration": 10})
+    assert len(c.calls) == 10 and res.covered == 50 and res.total == 50 and not res.budget_exhausted
     c = FakeClient(answer=_answers(lambda _: "yes"))
-    res = _judge(c, CANDS, judge={"max_candidates": 4})
-    assert not c.calls and {v.verdict for v in res.verdicts} == {"unknown"} and len(res.verdicts) == 5 and res.budget_exhausted
+    res = _judge(c, many, judge={"batch_size": 5, "max_calls_per_registration": 4})  # budget covers 20 of 50: the rest are unknown
+    assert len(c.calls) == 4 and res.covered == 20 and res.total == 50 and res.budget_exhausted
+    assert [v.verdict for v in res.verdicts] == ["yes"] * 20 + ["unknown"] * 30
+    assert "max_candidates" not in tj.DEFAULTS
+    with pytest.raises(tj.JudgeConfigError):
+        tj.validate_judge_settings({"judge": {"enabled": True, "max_candidates": 4}})
 
 
 def test_batching_covers_every_candidate_and_call_budget_exhaustion_gives_unknown():
@@ -214,21 +222,35 @@ class _RR:
 
 class RDB:
     """In-memory registry: begin() = one transaction (rollback on error). hooks.on_lock runs when the advisory lock is taken."""
-    def __init__(self, rows, jcount=0, fail_log=False, on_lock=None):
+    def __init__(self, rows, jcount=0, fail_log=False, on_lock=None, fail_reserve=False):
+        self.fail_reserve = fail_reserve
         self.rows, self.jlog, self.jcount, self.fail_log, self.on_lock, self.stmts = [dict(r) for r in rows], [], jcount, fail_log, on_lock, []
+        self.jres = []  # reservation rows (n judgments each)
 
     def begin(self):
         db = self
 
         class Tx:
             def __enter__(s):
-                s.snap = ([dict(r) for r in db.rows], list(db.jlog))
+                s.snap = ([dict(r) for r in db.rows], list(db.jlog), list(db.jres))
                 return s
 
             def __exit__(s, et, ev, tb):
                 if et:
-                    db.rows[:], db.jlog[:] = s.snap
+                    db.rows[:], db.jlog[:], db.jres[:] = s.snap[0], s.snap[1], s.snap[2]
                 return False
+
+            def begin_nested(s):
+                class SP:
+                    def __enter__(sp):
+                        sp.snap = list(db.jlog)
+                        return sp
+
+                    def __exit__(sp, et, ev, tb):
+                        if et:
+                            db.jlog[:] = sp.snap
+                        return False  # the caller catches the error
+                return SP()
 
             def execute(s, stmt, p=None):
                 q = str(stmt)
@@ -245,14 +267,23 @@ class RDB:
                     db.rows.append({"topic_key": p["k"], "label": p["label"], "anchor_text": p["anchor"], "parent_topic_key": p["parent"],
                                     "state": "draft", "origin": "runtime", "version": 1, "modified_at": 1})
                     return _RR()
+                if q == tr.TOPIC_SQL_EXISTING:
+                    hit = [r for r in db.rows if r["topic_key"] == p["k"]]
+                    return _RR([{"field": "f", **hit[-1]}] if hit else [])
                 if q == tr.TOPIC_SQL_DUPLICATE:
                     norm = lambda t: re.sub(r"\s+", " ", t.strip()).lower()
-                    hit = [r for r in db.rows if r["topic_key"] == p["k"] or (r["state"] in ("active", "retired", "suspended", "draft") and norm(r["label"]) == p["nl"])]
-                    return _RR([1] if hit else [])
+                    hit = [r for r in db.rows if (r["topic_key"] == p["k"] and not (r["state"] == "draft" and r["origin"] == "runtime"))
+                           or (r["topic_key"] != p["k"] and r["state"] in ("active", "retired", "suspended", "draft") and norm(r["label"]) == p["nl"])]
+                    return _RR([(hit[0]["topic_key"],)] if hit else [])
+                if q == tr.TOPIC_SQL_JUDGE_RESERVE:
+                    if db.fail_reserve:
+                        raise RuntimeError("reserve down")
+                    db.jres.append(dict(p))
+                    return _RR()
                 if q in (tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_MATCHABLE_JUDGE):
                     return _RR([r for r in db.rows if r["state"] in ("active", "retired")])  # refused rows are never candidates (OD-1028(56))
                 if q == tr.TOPIC_SQL_JUDGE_DAY_COUNT:
-                    return _RR(scalar=db.jcount)
+                    return _RR(scalar=db.jcount + sum(r["n"] for r in db.jres))
                 if q == tr.TOPIC_SQL_JUDGMENT_INSERT:
                     if db.fail_log:
                         raise RuntimeError("log down")
@@ -332,15 +363,16 @@ def test_shadow_non_duplicate_activates_even_when_the_judge_says_yes_and_the_ver
 @pytest.mark.parametrize("label,state_of_existing", [("t active", "active"), ("t active", "retired"), ("t active", "suspended"), ("t active", "draft"),
                                                      ("Topic   ACTIVE", "active"), ("topic active", "retired"), ("topic active", "suspended"),
                                                      ("topic active", "draft")])
-def test_shadow_exact_duplicate_key_or_normalized_label_is_suspended_and_verdicts_still_logged(label, state_of_existing):
-    row = {**_rows("active")[0], "state": state_of_existing}
+def test_shadow_exact_duplicate_key_or_normalized_label_is_a_distinct_duplicate_outcome_nothing_logged(label, state_of_existing, caplog):
+    row = {**_rows("active")[0], "state": state_of_existing, "origin": "runtime" if state_of_existing == "draft" and label != "t active" else "seed"}
     db = RDB([row])
-    out = _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow", rows_label=label)
-    same_key = label == "t active"  # the existing topic itself is not a judge candidate for its own key
-    judged = state_of_existing in ("active", "retired") and not same_key
-    assert [j["m"] for j in db.jlog] == (["shadow"] if judged else [])  # the verdicts are logged whenever there is a candidate
-    assert out["state"] == "suspended" and len(db.rows) == 1  # nothing written: the DB unique key/label controls stay
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    with caplog.at_level("INFO", logger="vera"):
+        out = _reg(db, c, "shadow", rows_label=label)
+    assert out["state"] == "duplicate" and len(db.rows) == 1  # nothing written: the DB unique key/label controls stay
+    assert db.jlog == [] and db.jres == [] and not c.calls  # not logged to topreg_judgments; no judge call spent
     assert tr.TOPIC_SQL_INSERT not in db.stmts and tr.TOPIC_SQL_ACTIVATE not in db.stmts
+    assert "exact duplicate (proposed key" in caplog.text and "existing key t-active" in caplog.text
 
 
 def test_reserved_refused_prefix_is_rejected_before_any_write():  # OD-1028(57)
@@ -353,7 +385,7 @@ def test_reserved_refused_prefix_is_rejected_before_any_write():  # OD-1028(57)
 
 def test_shadow_logging_failure_never_changes_the_outcome():
     db = RDB(_rows("active"), fail_log=True)
-    assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow")["state"] == "active" and db.jlog == []
+    assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "shadow")["state"] == "active" and db.jlog == [] and _state(db) == ["active"]
 
 
 @pytest.mark.parametrize("yes_for,state", [("Topic active", "suspended"), ("Topic retired", "suspended"), (None, "active")])
@@ -400,16 +432,92 @@ def test_judge_calls_run_before_the_advisory_lock():
     db = RDB(_rows("active"), on_lock=lambda d: order.append("lock"))
     c = FakeClient(answer=lambda kw: (order.append("judge"), _answers(lambda _: "no")(kw))[1])
     _reg(db, c, "active")
-    assert order == ["judge", "lock"]
+    assert order == ["lock", "judge", "lock"]  # short reservation lock, then the call with NO lock held, then the outcome lock
 
 
 def test_budget_exhaustion_gives_unknown_and_the_draft_stays():
-    db = RDB(_rows("active"), jcount=400)  # per-day judgment cap reached (counted from the DB table)
+    db = RDB(_rows("active"), jcount=400)  # per-day judgment cap reached (summed from the reservation rows)
     c = FakeClient(answer=_answers(lambda _: "no"))
-    assert _reg(db, c, "active")["state"] == "draft" and not c.calls and db.jlog == []
+    assert _reg(db, c, "active")["state"] == "draft" and not c.calls and db.jlog == [] and db.jres == []
     db = RDB(_rows("active", "retired"))
     out = _reg(db, FakeClient(answer=_answers(lambda _: "no")), "active", judge={"batch_size": 1, "max_calls_per_registration": 1})
     assert out["state"] == "draft" and {j["v"] for j in db.jlog} == {"no", "unknown"}
+
+
+def test_reservation_is_taken_before_the_call_and_a_failed_reservation_skips_the_model_call():  # HARDEN-FIX2 E5
+    db = RDB(_rows("active", "retired"))
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    assert _reg(db, c, "active")["state"] == "active"
+    assert db.jres == [{"dk": "new-topic-one", "m": "active", "n": 2}] and len(c.calls) == 1
+    db = RDB(_rows("active", "retired"), fail_reserve=True)  # the reservation row cannot be inserted: NO Groq call
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    assert _reg(db, c, "active")["state"] == "draft" and not c.calls and db.jlog == [] and db.jres == []
+    out = _reg(RDB(_rows("active", "retired"), fail_reserve=True), c, "shadow")  # shadow: S3 rule, still no call
+    assert out["state"] == "active" and not c.calls
+
+
+def test_daily_cap_counts_reservations_so_two_registrations_cannot_overshoot():  # HARDEN-FIX2 E5
+    db = RDB(_rows("active", "retired"), jcount=397)  # cap 400; each registration reserves 2
+    c = FakeClient(answer=_answers(lambda _: "no"))
+    assert _reg(db, c, "active")["state"] == "active" and len(c.calls) == 1  # 397 + 2 = 399 <= 400
+    c2 = FakeClient(answer=_answers(lambda _: "no"))
+    assert _reg(db, c2, "active", rows_label="New Topic Two")["state"] == "draft" and not c2.calls  # 399 + 2 > 400: skipped
+
+
+def test_verdict_rows_are_written_with_the_outcome_and_a_rejected_registration_leaves_none():  # HARDEN-FIX2 E7
+    db = RDB(_rows("active"))
+    assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "active")["state"] == "active"
+    assert [j["dk"] for j in db.jlog] == ["new-topic-one"]
+    order = db.stmts
+    assert order.index(tr.TOPIC_SQL_ACTIVATE) < order.index(tr.TOPIC_SQL_JUDGMENT_INSERT)  # after the outcome is known
+    # a rejected registration (bad parent) rolls back: no orphan verdict rows
+    db = RDB(_rows("active"))
+    st = {"registration_enabled": True, "proposal_state": "draft", "similarity_max": 0.5, "judge": {**J_ON, "mode": "active"}}
+    import vera.topic_judge as m
+    orig, oc = m.free_groq_entries, ChainEntry.client
+    m.free_groq_entries = lambda entries=None: [_entry()]
+    ChainEntry.client = lambda self: FakeClient(answer=_answers(lambda _: "no"))
+    try:
+        with pytest.raises(tr.RegistrationRefused):
+            tr.register_proposed_topic("New Topic One", "f1", LEX_NO, settings=st, engine=db, parent_key="missing-topic")
+    finally:
+        m.free_groq_entries, ChainEntry.client = orig, oc
+    assert db.jlog == [] and len(db.rows) == 1
+
+
+def test_judge_disabled_follows_the_s3_rule_even_when_mode_says_active_and_lexical_never_suspends(caplog):  # HARDEN-FIX2 E2
+    db = RDB([{**_rows("active")[0], "anchor_text": LEX_NO}])
+    st = {"registration_enabled": True, "proposal_state": "draft", "similarity_max": 0.5, "judge": {"enabled": False, "mode": "active"}}
+    with caplog.at_level("INFO", logger="vera"):
+        out = tr.register_proposed_topic("New Topic One", "f1", LEX_NO, settings=st, engine=db)
+    assert out["state"] == "active" and tr.TOPIC_SQL_SUSPEND not in db.stmts and "log only, matched 1" in caplog.text
+    assert tr.register_proposed_topic("Topic active", "f1", LEX_NO, settings=st, engine=db)["state"] == "duplicate"
+
+
+def test_shadow_budget_exceeded_follows_s3_and_active_stays_draft_with_coverage_logged(caplog):  # HARDEN-FIX2 E8
+    many = [{"topic_key": f"t-{i}", "label": f"Topic {i}", "anchor_text": "z" * 30, "state": "active", "origin": "seed", "version": 1, "modified_at": 1}
+            for i in range(6)]
+    for mode, want in (("shadow", "active"), ("active", "draft")):
+        db = RDB(many)
+        with caplog.at_level("INFO", logger="vera"):
+            out = _reg(db, FakeClient(answer=_answers(lambda _: "no")), mode, judge={"batch_size": 2, "max_calls_per_registration": 2})
+        assert out["state"] == want
+    assert "topic judge coverage: 4 of 6 candidates judged" in caplog.text
+
+
+@pytest.mark.parametrize("mode,verdict,want", [("active", "no", "active"), ("active", "yes", "suspended"), ("shadow", "yes", "active")])
+def test_re_proposing_a_runtime_draft_rejudges_and_moves_it_in_place(mode, verdict, want):  # HARDEN-FIX2 E3
+    draft = {"topic_key": "new-topic-one", "label": "New Topic One", "anchor_text": LEX_NO, "state": "draft", "origin": "runtime", "version": 1, "modified_at": 1}
+    db = RDB(_rows("active") + [draft])
+    out = _reg(db, FakeClient(answer=_answers(lambda _: verdict)), mode)
+    assert out == {"key": "new-topic-one", "state": want} and tr.TOPIC_SQL_INSERT not in db.stmts and _state(db) == [want]
+    assert len(db.rows) == 2 and [j["dk"] for j in db.jlog] == ["new-topic-one"]
+
+
+def test_active_mode_unknown_leaves_a_draft_that_a_later_proposal_rejudges():  # HARDEN-FIX2 E3
+    db = RDB(_rows("active"))
+    assert _reg(db, FakeClient(script=["garbage", "garbage"]), "active")["state"] == "draft"
+    assert _reg(db, FakeClient(answer=_answers(lambda _: "no")), "active")["state"] == "active" and _state(db) == ["active"] and len(db.rows) == 2
 
 
 def test_judge_off_by_default_changes_nothing_and_touches_no_judgment_statement():

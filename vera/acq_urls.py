@@ -110,16 +110,15 @@ def _pin_path(path: str) -> bool:
 
 
 # Explicit, narrow exemption: values (state names) under exactly micro_topic.registry_table.refused_state_map.<category code>. Only a
-# refused state name or a category-code-shaped value passes there; any credential-like value under that path is still refused.
+# refused state name (banned, prohibited or secrets, and nothing else) passes there; any other value under that path is still refused.
 _REFUSED_MAP_PATH = re.compile(r"micro_topic\.registry_table\.refused_state_map\.[a-z][a-z_]{1,31}")
-_CATEGORY_CODE_VALUE = re.compile(r"[a-z][a-z_]{1,31}")
 
 
 _REFUSED_STATE_NAMES = ("banned", "prohibited", "secrets")  # equals the registry module's REFUSED_STATES (a test pins it; no import here)
 
 
 def _refused_map_value_ok(s: str, path: str) -> bool:
-    return bool(_REFUSED_MAP_PATH.fullmatch(path.lstrip("."))) and (s in _REFUSED_STATE_NAMES or bool(_CATEGORY_CODE_VALUE.fullmatch(s)))
+    return bool(_REFUSED_MAP_PATH.fullmatch(path.lstrip("."))) and s in _REFUSED_STATE_NAMES
 
 
 def key_like_value(v, path: str | None = None) -> bool:

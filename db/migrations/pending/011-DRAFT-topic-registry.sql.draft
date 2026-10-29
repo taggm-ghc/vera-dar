@@ -63,6 +63,10 @@
 -- LIVE-CALIBRATION LOG (TOPICJUDGE-1028, OD-1028(54), same feature, still unapplied): table topreg_judgments records each free-LLM
 --   equivalence verdict (shadow or active mode) by KEYS and STATES only: NO question text, NO topic text (labels are reachable by key).
 --   App rw may INSERT (column-level) and SELECT only: no UPDATE, DELETE or TRUNCATE grant; the daily judgment cap is counted from it.
+--   HARDEN-FIX2 E5/E7: one RESERVATION row (verdict 'reserved', candidate_state 'none', candidate_key = draft_key, latency_ms = the number of
+--   judgments reserved) is inserted under a short advisory lock BEFORE any model call; the daily cap sums the reservations, so concurrent
+--   registrations cannot overshoot it. Verdict rows are written only once the outcome is known, in the outcome's transaction (none for a
+--   rejected registration).
 \if :{?app_rw_login}
 \else
   \set app_rw_login vera_claude_code_rw
@@ -196,9 +200,20 @@ CREATE TABLE vera_vjay.topreg_topics (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT topreg_key_version_uq UNIQUE (topic_key, version),
-    -- OD-1028(56): a refused row (banned/prohibited/secrets) is ONLY the fixed placeholder of a category code (held in field).
+    -- OD-1028(56): a refused row (banned/prohibited/secrets) is ONLY the fixed placeholder of a category code (held in field). HARDEN-FIX2
+    -- E4: field must be one of the ENUMERATED refuse-disposition category codes (harmful, advice, rule_change); a new code is added ONLY by a
+    -- migration that replaces this constraint (never by config or by an app write).
     CONSTRAINT topreg_refused_chk CHECK (state NOT IN ('banned','prohibited','secrets') OR (
-        field ~ '^[a-z][a-z_]{1,31}$'
+        field IN ('harmful','advice','rule_change')
+        AND label = 'refused ' || field
+        AND topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')
+        AND anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'
+        AND parent_topic_key IS NULL AND parent_openalex_topic = 'none')),
+    -- HARDEN-FIX2 E4 (content check, binds the table OWNER too, unlike the guard trigger): the reserved key prefix 'refused-' may exist only
+    -- on a refused-state placeholder row of exactly that shape.
+    CONSTRAINT topreg_refused_key_chk CHECK (topic_key NOT LIKE 'refused-%' OR (
+        state IN ('banned','prohibited','secrets')
+        AND field IN ('harmful','advice','rule_change')
         AND label = 'refused ' || field
         AND topic_key = 'refused-' || pg_catalog.replace(field, '_', '-')
         AND anchor_text = 'refused topic category ' || field || ': fixed placeholder, no question text'
@@ -336,8 +351,9 @@ CREATE TABLE vera_vjay.topreg_judgments (
     id              BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.topreg_judgments_id_seq) CONSTRAINT topreg_judgments_pk PRIMARY KEY,
     draft_key       TEXT NOT NULL CONSTRAINT topreg_jdraft_key_chk CHECK (draft_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
     candidate_key   TEXT NOT NULL CONSTRAINT topreg_jcand_key_chk CHECK (candidate_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
-    candidate_state TEXT NOT NULL CONSTRAINT topreg_jcand_state_chk CHECK (candidate_state IN ('active','retired')),
-    verdict         TEXT NOT NULL CONSTRAINT topreg_jverdict_chk CHECK (verdict IN ('yes','no','unknown')),
+    candidate_state TEXT NOT NULL CONSTRAINT topreg_jcand_state_chk CHECK (candidate_state IN ('active','retired','none')),
+    verdict         TEXT NOT NULL CONSTRAINT topreg_jverdict_chk CHECK (verdict IN ('yes','no','unknown','reserved')),
+    CONSTRAINT topreg_jreserved_chk CHECK ((verdict = 'reserved') = (candidate_state = 'none')),
     mode            TEXT NOT NULL CONSTRAINT topreg_jmode_chk CHECK (mode IN ('shadow','active')),
     model_id        TEXT NOT NULL CONSTRAINT topreg_jmodel_chk CHECK (model_id ~ '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$'),
     latency_ms      INTEGER NOT NULL CONSTRAINT topreg_jlatency_chk CHECK (latency_ms >= 0),
