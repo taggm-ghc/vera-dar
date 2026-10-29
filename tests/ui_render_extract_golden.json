@@ -1,0 +1,924 @@
+{
+ "answer": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   ""
+  ],
+  [
+   "Markdown",
+   "body: \"### ✅ Answer\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Success",
+   "body: \"Batching reduces latency [1].\"\nformat: SUCCESS\n"
+  ],
+  [
+   "Caption",
+   "body: \"Evidence scope: 1 document inspected; 1 passage from 1 document selected as possible evidence.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"**Sources** (documents whose inspected passages the answer was grounded in)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Markdown",
+   "body: \"[1] [Render Fixture Title](https://example.org/render-fixture) (2024)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"doi:10/render · passages used: chars=10\\\\-90\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"Claim check: 1 cited claims checked by a model against the cited passages (full span text; excerpts shown may be abridged); 1 supported, 0 partly supported, 0 removed.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"**Cited passages** (short excerpts)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Markdown",
+   "body: \"[1] supported: “latency falls when requests are batched” (passage chars=20\\\\-60)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"[1] B\\\\. Render. [Render Fixture Title](https://example.org/render-fixture). [CC BY 4\\\\.0](https://creativecommons.org/licenses/by/4.0/). Changes: none\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"Automated checks, not human review, compared each claim with the passages shown, and can be wrong. Quotes are short excerpts, not whole documents. Open the sources and read them before relying on a claim.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### 💰 Metrics\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Block",
+   "horizontal {\n  gap: \"small\"\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Tokens Used\"\nbody: \"1,234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Cost\"\nbody: \"$0.001234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Counts the answer-writing and scope-check model calls for this request, plus the answer checker\\'s cost when it is priced. It excludes the checker\\'s tokens and any background indexing. Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Info",
+   "body: \"💡 Ask a follow-up question to explore further.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "partial_answer": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   ""
+  ],
+  [
+   "Markdown",
+   "body: \"### ⚠️ Partial answer\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Warning",
+   "body: \"Only part of the question is answered [1].\"\nformat: WARNING\n"
+  ],
+  [
+   "Caption",
+   "body: \"Evidence scope: 1 document inspected; 1 passage from 1 document selected as possible evidence.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"**Sources** (documents whose inspected passages the answer was grounded in)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Markdown",
+   "body: \"[1] [Render Fixture Title](https://example.org/render-fixture) (2024)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"doi:10/render · passages used: chars=10\\\\-90\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"Claim check: 1 cited claims checked by a model against the cited passages (full span text; excerpts shown may be abridged); 1 supported, 0 partly supported, 0 removed. parts answered: 1 of 2.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"**Cited passages** (short excerpts)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Markdown",
+   "body: \"[1] supported: “latency falls when requests are batched” (passage chars=20\\\\-60)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"[1] B\\\\. Render. [Render Fixture Title](https://example.org/render-fixture). [CC BY 4\\\\.0](https://creativecommons.org/licenses/by/4.0/). Changes: none\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"Automated checks, not human review, compared each claim with the passages shown, and can be wrong. Quotes are short excerpts, not whole documents. Open the sources and read them before relying on a claim.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### 💰 Metrics\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Block",
+   "horizontal {\n  gap: \"small\"\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Tokens Used\"\nbody: \"1,234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Cost\"\nbody: \"$0.001234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Counts the answer-writing and scope-check model calls for this request, plus the answer checker\\'s cost when it is priced. It excludes the checker\\'s tokens and any background indexing. Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Info",
+   "body: \"💡 Ask a follow-up question to explore further.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "legacy_abstract_answer": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   ""
+  ],
+  [
+   "Markdown",
+   "body: \"### ✅ Answer\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Success",
+   "body: \"Batching reduces latency [1].\"\nformat: SUCCESS\n"
+  ],
+  [
+   "Caption",
+   "body: \"Evidence scope: 1 document inspected; 1 passage from 1 document selected as possible evidence.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"**Sources** (published records whose abstracts, up to 1,500 characters each, the answer was grounded in)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Markdown",
+   "body: \"[1] [Render Fixture Title](https://example.org/render-fixture) (2024)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"doi:10/render · chars=10\\\\-90\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"Claim check: 1 cited claims checked by a model against the cited abstract text (first 1,500 characters); 1 supported, 0 partly supported, 0 removed.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### 💰 Metrics\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Block",
+   "horizontal {\n  gap: \"small\"\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Tokens Used\"\nbody: \"1,234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Cost\"\nbody: \"$0.001234\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Counts the answer-writing and scope-check model calls for this request, plus the answer checker\\'s cost when it is priced. It excludes the checker\\'s tokens and any background indexing. Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Info",
+   "body: \"💡 Ask a follow-up question to explore further.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "reading_list_with_contract": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   ""
+  ],
+  [
+   "Info",
+   "body: \"VERA-DAR searched 1 full document(s) but found no passage that answers this question well enough, so it has not written an answer or answered from memory.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"Evidence scope: 1 document inspected; no passages selected as possible evidence.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### Reading list\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Warning",
+   "body: \"VERA-DAR has not acquired or read the documents in this list. This is a discovery result, not an evidence-grounded answer.\"\nformat: WARNING\n"
+  ],
+  [
+   "Markdown",
+   "body: \"1. [Candidate Title](https://example.org/cand)\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Caption",
+   "body: \"not in VERA-DAR\\'s collection (index record or abstract; full document not acquired)\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**New search for this question:** A new search was considered (outcome: other).\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Research outcome:** A new search found nothing usable\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Search steps:** 4 found; search ran; retrieval not attempted; 0 passed the initial relevance check; answer abstained.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Sources found:** 1 found but not shortlisted; 2 not reached (time, limit or cap)\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### 💰 Metrics\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Block",
+   "horizontal {\n  gap: \"small\"\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Tokens Used\"\nbody: \"77\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Cost\"\nbody: \"$0.000000\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Counts the answer-writing and scope-check model calls for this request, plus the answer checker\\'s cost when it is priced. It excludes the checker\\'s tokens and any background indexing. Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Info",
+   "body: \"💡 Ask a follow-up question to explore further.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "decline": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   ""
+  ],
+  [
+   "Info",
+   "format: INFO\n"
+  ],
+  [
+   "Markdown",
+   "body: \"### 💰 Metrics\"\nelement_type: NATIVE\n"
+  ],
+  [
+   "Block",
+   "horizontal {\n  gap: \"small\"\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Tokens Used\"\nbody: \"0\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Column",
+   "weight: 0.5\ngap: \"small\"\n"
+  ],
+  [
+   "Metric",
+   "label: \"Cost\"\nbody: \"$0.000000\"\ndirection: NONE\ncolor: GRAY\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Counts the answer-writing and scope-check model calls for this request, plus the answer checker\\'s cost when it is priced. It excludes the checker\\'s tokens and any background indexing. Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Info",
+   "body: \"💡 Ask a follow-up question to explore further.\"\nformat: INFO\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "answer_dev_mode": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "Warning",
+   "body: \"No API key set. Type one in the sidebar.\"\nformat: WARNING\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Header",
+   "tag: \"h2\"\nbody: \"Settings (local/dev mode)\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"API Base URL\"\ndefault: \"http://127.0.0.1:8001\"\nhelp: \"Local/dev only. The key typed below is sent to this URL.\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"API Key (X-API-Key)\"\ndefault: \"\"\ntype: PASSWORD\nhelp: \"Blank by default. Type the key for the API above; it is never pre-filled.\"\nautocomplete: \"new-password\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Warning",
+   "body: \"Something is listening at the API address but it is not VERA-DAR; not starting a second API and not sending your key.\"\nformat: WARNING\n"
+  ],
+  [
+   "Expander",
+   "label: \"Operator: memory review (dev mode)\"\nexpanded: false\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-vera_owner_key_input\"\nlabel: \"Owner key (X-Owner-Key)\"\ndefault: \"\"\ntype: PASSWORD\nhelp: \"Sent only to the API base URL above. Never prefilled.\"\nautocomplete: \"new-password\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ],
+ "reading_list_dev_mode": [
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "Title",
+   "tag: \"h1\"\nbody: \"VERA-DAR - Question Answering Service\"\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR is an AI system. For each in-scope question it first searches a small collection of full documents that its operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence against its passage; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents that may be relevant, with links. It has not read those listed documents and does not use their abstracts or snippets as evidence. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. Licences for documents in its own collection were checked against the licence recorded in each document and VERA-DAR\\'s licence rules, not with the publisher. For listed records, only the indexing services\\' metadata licence was checked; the articles\\' own licences were not verified with the publisher. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Ask a Question\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Button",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+  ],
+  [
+   "Warning",
+   "body: \"No API key set. Type one in the sidebar.\"\nformat: WARNING\n"
+  ],
+  [
+   "Caption",
+   "body: \"VERA-DAR build: abcdef1\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "SpecialBlock",
+   ""
+  ],
+  [
+   "UnknownElement",
+   "page: \"streamlit_app\"\nlabel: \"Ask VERA-DAR\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"vera_demo\"\nlabel: \"Report\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"trace_eval\"\nlabel: \"Trace Eval\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "Header",
+   "tag: \"h2\"\nbody: \"Settings (local/dev mode)\"\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"API Base URL\"\ndefault: \"http://127.0.0.1:8001\"\nhelp: \"Local/dev only. The key typed below is sent to this URL.\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-None\"\nlabel: \"API Key (X-API-Key)\"\ndefault: \"\"\ntype: PASSWORD\nhelp: \"Blank by default. Type the key for the API above; it is never pre-filled.\"\nautocomplete: \"new-password\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Warning",
+   "body: \"Something is listening at the API address but it is not VERA-DAR; not starting a second API and not sending your key.\"\nformat: WARNING\n"
+  ],
+  [
+   "Expander",
+   "label: \"Operator: memory review (dev mode)\"\nexpanded: false\n"
+  ],
+  [
+   "TextInput",
+   "id: \"$$ID-<H>-vera_owner_key_input\"\nlabel: \"Owner key (X-Owner-Key)\"\ndefault: \"\"\ntype: PASSWORD\nhelp: \"Sent only to the API base URL above. Never prefilled.\"\nautocomplete: \"new-password\"\nlabel_visibility {\n}\n"
+  ],
+  [
+   "Caption",
+   "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Expander",
+   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
+  ],
+  [
+   "Caption",
+   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Scope:** Published evidence \\\\(2023\\\\-2026\\\\) on AI coding assistants, AI\\\\-assisted software development and developer productivity; and published research in epidemiology, climate science, research reproducibility and software practice, and ecology\\\\.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full documents that the operator selected and licence-checked in advance. If passages in them address the question, it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the web and lists documents it has not read. Open the sources and read them yourself before relying on any claim. If the collection VERA-DAR holds cannot answer a question faithfully, it searches for open-access full text on the question in the same request. If documents found this way pass its licence, content and relevance checks, VERA-DAR answers only from those documents, in the same way: brief quoted citations, each cited sentence checked by an AI model, unsupported sentences removed. Otherwise it gives a reading list of documents it has not read. Such answers may be wrong. Some requests are refused for safety reasons. A third-party hosted language model may be used to decide whether a question is in scope.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Caption",
+   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+  ],
+  [
+   "Subheader",
+   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
+  ],
+  [
+   "Checkbox",
+   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
+  ]
+ ]
+}

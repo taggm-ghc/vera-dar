@@ -27,6 +27,7 @@ from vera.public_mode import enforce_caps, record_request_cost
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 from vera.env_files import load_vera_env
 from vera import trace_viz
+from vera import progress
 
 logging.basicConfig(level=logging.INFO)  # before load_vera_env so its names-only audit line is emitted
 load_vera_env()  # PLAN-ENV: R/config/env/.env-vera (explicit, preflighted); the file wins over inherited values
@@ -622,6 +623,31 @@ def _fulldoc_sources(result) -> list[dict]:
 
 @app.post("/ask", response_model=AskResponse, dependencies=[Depends(verify_api_key), Depends(enforce_caps)])  # W2 caps (public mode)
 def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
+    """PROG-1027 wrapper: today's handler is `_ask_impl`. Progress records are opt-in (flag + both headers); a
+    request without them runs exactly as before. The single `done` event is emitted only here (INTERFACE-CONTRACT s2)."""
+    rec = token = None
+    try:
+        rec = progress.open_record(request)  # inside the try; never raises
+        if rec is not None:
+            token = progress.SINK.set(rec)
+            progress.emit(progress.Stage.RECEIVED, progress.State.DONE)
+        resp = _ask_impl(req, request, background_tasks)
+        if rec is not None:
+            st = progress.outcome(resp)
+            progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, rec))
+        return resp
+    except BaseException:
+        if rec is not None:
+            progress.emit(progress.Stage.DONE, progress.State.ERROR)
+        raise
+    finally:
+        if rec is not None:
+            rec.close()
+        if token is not None:
+            progress.SINK.reset(token)
+
+
+def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
     from vera.ask_service import REQUEST_BUDGET, request_budget
     budget = request_budget()  # CMF-1022: the request-level deadline starts ONCE, here, at handler entry
     if req.mode is DemoMode.force_bad:
@@ -795,3 +821,25 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         discovery_note_submitted=1 if discovery else 0,
         **_research_fields(result),
     )
+
+
+def _parse_after(raw) -> int | None:
+    """None unless absent (-> 0) or a plain decimal integer >= 0."""
+    if raw is None:
+        return 0
+    if isinstance(raw, str) and raw.isascii() and raw.isdecimal() and len(raw) <= 9:
+        return int(raw)
+    return None
+
+
+@app.get("/ask/progress/{rid}", dependencies=[Depends(verify_api_key)])
+async def ask_progress(request: Request, rid: str):
+    """PROG-1027: events of one Ask for the browser session that sent it. No Path/Query/Header constraints (they would
+    answer 422); every refusal is the identical 404 of an unmatched route."""
+    after = _parse_after(request.query_params.get("after"))
+    if not progress.enabled() or after is None:
+        raise HTTPException(status_code=404)
+    rec = progress.STORE.get_authorized(rid, request.headers.get("x-vera-session"))
+    if rec is None:
+        raise HTTPException(status_code=404)
+    return {"events": rec.events_after(after, limit=progress.CFG.max_events_per_poll), "closed": rec.closed}

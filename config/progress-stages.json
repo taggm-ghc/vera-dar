@@ -1,0 +1,33 @@
+{
+  "_comment": "PROG-1027 user-facing progress labels (only place for stage and terminal text). Placeholders: {rid} request id (shown by design), {minutes} (terminals only; derived from ASK_TIMEOUT_S, rounded up, includes the unit word), counts {inspected} {admitted} {found} {checked} {usable} {budget} {stored} {target} {attempt}. Labels name no gate, layer, provider, category, verdict code, basis or source. Counts are shown only when the event carries them.",
+  "sending": "Sending your question (request {rid})",
+  "finishing": "Finishing",
+  "progress_unavailable": "Live progress is not available right now; still waiting for the answer",
+  "reload_caption": "Keep this tab open; reloading starts over",
+  "already_running": "A question is already being answered; ask again when it finishes",
+  "background_line": "VERA-DAR will keep looking for sources on this topic after this answer",
+  "stages": {
+    "received": {"done": "Question received (request {rid})"},
+    "scope": {"start": "Checking what the question asks", "update": "Checking what the question asks", "done": "Checked what the question asks", "skipped": "Skipped the question check"},
+    "corpus": {"start": "Searching VERA-DAR's collection", "update": "{inspected} documents inspected, {admitted} passages usable", "done": "{inspected} documents inspected, {admitted} passages usable", "skipped": "Collection search not available this time"},
+    "corpus_verdict": {"sufficient": "The collection has enough evidence", "insufficient": "The collection does not have enough evidence yet", "stale": "Some of the collection's evidence may not be current; checking for newer sources"},
+    "search": {"start": "Looking for new open-access sources", "update": "Looking for new open-access sources", "done": "{found} candidates found", "skipped": "No new search this time"},
+    "acquire": {"start": "Reading full-text documents (this request can add up to {budget})", "update": "{checked} checked, {usable} usable so far", "done": "{usable} usable", "skipped": "No new documents read this time"},
+    "write": {"start": "Writing the answer from the usable passages", "update": "Writing the answer from the usable passages", "done": "Answer written; checking it next", "skipped": "Skipped writing"},
+    "check": {"start": "Checking each claim against its sources", "update": "Checking each claim against its sources", "done": "Claims checked", "skipped": "Skipped the claim check"},
+    "retry": {"start": "Trying again with another model"},
+    "done": {"answered": "Finishing", "partial": "Finishing", "no_answer": "Finishing", "declined": "Finishing", "error": "Finishing"}
+  },
+  "terminals": {
+    "answered": "Finished",
+    "partial": "Partial answer: some parts lacked usable evidence",
+    "no_answer": "No answer: not enough usable evidence yet",
+    "declined": "Finished",
+    "error": "Something went wrong; please try again",
+    "provider_error": "The answer could not be generated right now; please try again shortly",
+    "busy": "VERA-DAR is busy right now; please try again shortly",
+    "expired": "The service restarted while answering; please ask again",
+    "poll_timeout_received": "Still working after {minutes}. The server may still finish; ask again later (request {rid})",
+    "poll_timeout_unreceived": "No reply after {minutes}; please ask again later (request {rid})"
+  }
+}

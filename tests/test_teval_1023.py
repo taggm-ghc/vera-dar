@@ -64,7 +64,7 @@ def test_answer_basis_conservative():
 def test_caption_text_uses_admitted_not_used_as_evidence():
     import pathlib
     src = pathlib.Path("streamlit_app.py").read_text()
-    assert "admitted; answer" in src and "retrieval" in src and "used as evidence" not in src
+    assert "passed the initial relevance check; answer" in src and "retrieval" in src and "used as evidence" not in src
 
 
 def _steps(status, cands, portals=()):

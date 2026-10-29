@@ -13,6 +13,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
+from vera import progress as _progress
 from vera.pricing.config import PricingRecord
 
 
@@ -316,7 +317,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                 inl = _inline(question, model, pricing, decision, chained, grounding, acq,
                               tried=_doc_keys(used_in.get("acq")), in_scope=True, info=info)
                 if isinstance(inl, AskResult):
-                    return _research_on_insufficient(inl, ev, acq, info.get("outcome"), answered=True)
+                    return _research_on_insufficient(inl, ev, acq, info.get("outcome"), answered=True,
+                                                     held_ev=used_in.get("ev_acq"))
                 inline_note = inl
                 ia = info.get("outcome") or {}
     _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
@@ -832,7 +834,9 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
     from vera.grounded_ask import count_valid_citations, fix_citations, messages_for, public_candidates
 
     kind = "answer"
+    _progress.emit("write", "start")  # PROG-1027 W2a (legacy path; test-only today)
     result = complete(messages_for(question, sources), model, pricing, **chained)
+    _progress.emit("write", "done")
     text, _ = fix_citations(result.answer or "", len(sources), cfg["removed_citation_note"])
     tokens = result.tokens_used + decision.tokens_used
     cost = round(result.cost_usd + decision.cost_usd, 6)
@@ -845,10 +849,12 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
 
         records: list = []
         token = RECORDS.set(records)
+        _progress.emit("check", "start")  # PROG-1027 W2a
         try:
             checked, summary = check_answer(text, sources, cc)
         finally:
             RECORDS.reset(token)
+        _progress.emit("check", "done")
         if checked is None:
             token = "checker_unavailable" if summary["outcome"] == "checker_unavailable" else "claim_check_insufficient"
             return contract.reading_list_result(public_candidates(sources), tokens, cost, sources=sources,
@@ -923,6 +929,43 @@ def _merge_bf(a, b):
                         "updated": int(pa.get("updated") or 0) + int(pb.get("updated") or 0),
                         "not_persistable": int(pa.get("not_persistable") or 0) + int(pb.get("not_persistable") or 0),
                         "reason": "; ".join(x for x in (pa.get("reason"), pb.get("reason")) if x)}}
+
+
+def _doc_key(a: dict) -> str:
+    """Document identity used for the merge de-duplication (_merge_evidence): canonical source id, else document id."""
+    return str(a.get("canonical_source_id") or a.get("document_id"))
+
+
+def _held_doc_ids(*evs) -> set:
+    """Keys of documents already held before this request: admitted passages of the given evidence bundles (by
+    canonical_source_id or document_id, plus the raw document_id)."""
+    out = set()
+    for ev in evs:
+        for a in (getattr(ev, "admitted", ()) or ()):
+            if isinstance(a, dict):
+                out.add(_doc_key(a))
+                out.add(str(a.get("document_id")))
+    return out
+
+
+def _acq_held_ids() -> set:
+    """Keys of every document in the stored acquired corpus (cached snapshot; empty when unavailable)."""
+    try:
+        from vera import fulldoc_corpus
+        c = fulldoc_corpus.get_acquired_corpus(fulldoc_corpus.load_config())
+        return {k for a in (getattr(c, "acquired", ()) or ()) if isinstance(a, dict)
+                for k in (_doc_key(a), str(a.get("document_id")))}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _new_doc_ids(admitted, *held_evs, held_keys=()) -> set:
+    """Documents among the final admitted passages that were not held before this request. A new passage of an
+    already-held document, a de-duplicated passage, a held document re-acquired under a new id and a reused stored
+    acquired document are not new. Returns document ids."""
+    held = _held_doc_ids(*held_evs) | {str(k) for k in held_keys}
+    return {str(a.get("document_id")) for a in (admitted or ())
+            if _doc_key(a) not in held and str(a.get("document_id")) not in held}
 
 
 def _fresh_line(texts: dict, fr2: dict, n_new: int) -> str:
@@ -1019,16 +1062,15 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     if o is not None and getattr(o, "corpus", None) is not None:
         new_res, failed = _combined_answer(question, model, pricing, chained, grounding, acq, fd, o)
     if new_res is not None:
-        base_keys = {(a.get("document_id"), a.get("text_sha256")) for a in fd.evidence.admitted}
-        new_ids = {str(a.get("document_id")) for a in new_res.evidence.admitted
-                   if (a.get("document_id"), a.get("text_sha256")) not in base_keys}
+        new_ids = _new_doc_ids(new_res.evidence.admitted, fd.evidence, held_keys=_acq_held_ids())
         fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
-        rec = rr.summarize(triggers=trig, inline=pub, used_new=True, older_available=True, fr_before=fr, fr_after=fr2,
+        found = bool(new_ids)  # newly found = a cited passage from a document not held before this request
+        rec = rr.summarize(triggers=trig, inline=pub, used_new=found, older_available=True, fr_before=fr, fr_after=fr2,
                            citations=_source_freshness(new_res.sources, fr2), backfill=bf,
-                           answer_basis="generated_new_evidence")
-        suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), _mixed_line(texts, fr2), rec["user_text"])
-                          if t)
+                           answer_basis="generated_new_evidence" if found else "generated_existing_only")
+        suffix = " ".join(t for t in ((_fresh_line(texts, fr2, len(new_ids)) if found else ""),
+                                      _mixed_line(texts, fr2), rec["user_text"]) if t)
         return _with_research(_annotate(new_res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
                        citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
@@ -1152,7 +1194,7 @@ def _relevant_docs(*evs) -> list:
     return out
 
 
-def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev=None):
+def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev=None, held_ev=None):
     """FRESH-1023 on the NON-answer path (the existing in-scope inline retry is the insufficiency trigger): attach the
     research record and the concise outcome. No freshness block = unchanged result."""
     # acquisition off, or no inline attempt possible (status off): non-answers stay exactly as before
@@ -1168,13 +1210,15 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
     bf = _backfill(fcfg, at, acq, fr)
     if answered:
         adm = res.evidence.admitted if res.evidence is not None else ()
-        new_ids = {str(a.get("document_id")) for a in adm}
+        new_ids = _new_doc_ids(adm, ev, extra_ev, held_ev, held_keys=_acq_held_ids())
         fr2 = rr.assess(adm, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
-        rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=True, older_available=False, fr_before=fr,
-                           fr_after=fr2, citations=_source_freshness(res.sources, fr2), backfill=bf,
-                           answer_basis="generated_new_evidence")
-        suffix = " ".join(t for t in (_fresh_line(texts, fr2, len(new_ids)), rec["user_text"]) if t)
+        found = bool(new_ids)  # newly found = a cited passage from a document not held before this request
+        rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=found, older_available=bool(adm and not found),
+                           fr_before=fr, fr_after=fr2, citations=_source_freshness(res.sources, fr2), backfill=bf,
+                           answer_basis="generated_new_evidence" if found else "generated_existing_only")
+        suffix = " ".join(t for t in ((_fresh_line(texts, fr2, len(new_ids)) if found else ""),
+                                      rec["user_text"]) if t)
         return _with_research(_annotate(res, fr2), rec, suffix or None)
     rec = rr.summarize(triggers=trig, inline=inline_pub, used_new=False, older_available=False, fr_before=fr,
                        backfill=bf, answer_basis="abstained")

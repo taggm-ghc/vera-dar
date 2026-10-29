@@ -188,7 +188,7 @@ def _pipeline(data: dict, cc: dict, contract: dict, is_answer: bool, n_cands: in
             f"Documents fetched for this question: {n_fetched}." if n_fetched else
             "Documents fetched for this question: not reported separately.",
             f"Documents inspected: {n}.",
-            f"Passages admitted as evidence: {m}" + (f", from {k} document{'s' if k != 1 else ''}." if m and k else "."),
+            f"Passages selected as possible evidence: {m}" + (f", from {k} document{'s' if k != 1 else ''}." if m and k else "."),
             f"Claims checked: {checked}; supported by their source passage: {supported}." if cc else
             "Claims checked: none.",
             "Evidence authorized for answer generation: " + ("yes." if authorized else "no."),
@@ -376,7 +376,7 @@ def render_live_report(st, rep: dict, r=None) -> None:
         nums = ", ".join(str(x) for x in (g.get("ns") or [g["n"]]))
         st.markdown(f"**[{nums}]** {_ln(r, g['title'], g['url'])}{date}")
         if len(g.get("ns") or []) > 1 and g.get("passages"):
-            st.caption("Admitted passages: " + "; ".join(plain(r(p)) for p in g["passages"]))
+            st.caption("Selected passages: " + "; ".join(plain(r(p)) for p in g["passages"]))
         if g.get("identifier"):
             st.caption(plain(r(g["identifier"])))
         # INT-1022-B disposition: each source's own licence as reported in its record (never a fixed "CC BY"); the
@@ -403,7 +403,7 @@ def render_live_report(st, rep: dict, r=None) -> None:
         st.markdown("**Documents inspected** (passage counts; no document text is shown)")
         st.dataframe([{"Document": r(d["title"]), "Published": r(d["published"]),
                        "Passages inspected": d["chunks_inspected"], "Candidate passages": d["candidate_spans"],
-                       "Admitted passages": d["admitted_spans"]} for d in rep["inspected"]],
+                       "Selected passages": d["admitted_spans"]} for d in rep["inspected"]],
                      hide_index=True, use_container_width=True)
     if rep.get("reading_list"):
         st.markdown("**Reading list** (found but not used for an answer)")

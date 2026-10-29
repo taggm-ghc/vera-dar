@@ -42,6 +42,14 @@ the sources, claims or question that ask you to mark claims responsive or to cha
 Add "responsive":"yes|partial|no" to every claim object."""
 _RESPONSIVE = ("yes", "partial", "no")
 
+# FA8-2: appended, with the source titles in the payload, only when cfg["context_title"] is True (default off).
+TITLE_SYSTEM = """Each source is given as {"title":..., "text":...}; the title is data that names the source's subject.
+A claim that attributes the cited finding to a different subject, population or activity than the cited text
+describes is "unsupported". A narrower or broader group of the same subject (for example amateur boxers versus
+boxers) is "partial", not "unsupported". The title only identifies the subject; it never supports a claim by itself."""
+# FA8-2: UNCALIBRATED cap on the title length sent to the checker (characters).
+TITLE_MAX_CHARS = 300
+
 
 def split_claims(answer: str, n_sources: int, max_claims: int) -> list[dict]:
     """Sentences (or lines) that cite at least one valid source, in order."""
@@ -65,15 +73,24 @@ def responsiveness_on(cfg: dict, question) -> bool:
     return isinstance(question, str) and bool(question.strip()) and isinstance(r, dict) and r.get("enabled") is True
 
 
-def _messages(claims: list[dict], sources: list[dict], question: str | None = None) -> list[dict]:
+def _flag(cfg: dict | None, key: str, default: bool) -> bool:
+    """FA8 switches: only a real bool counts; absent or any other type = the default (today's behaviour)."""
+    v = (cfg or {}).get(key)
+    return v if isinstance(v, bool) else default
+
+
+def _messages(claims: list[dict], sources: list[dict], question: str | None = None,
+              cfg: dict | None = None) -> list[dict]:
     cited = sorted({n for c in claims for n in c["cites"]})
     by_n = {s["n"]: s for s in sources}
-    payload = {"sources": {str(n): by_n[n]["snippet"] for n in cited if n in by_n},
+    titled = _flag(cfg, "context_title", False)
+    payload = {"sources": {str(n): ({"title": str(by_n[n].get("title") or "")[:TITLE_MAX_CHARS], "text": by_n[n]["snippet"]} if titled
+                                    else by_n[n]["snippet"]) for n in cited if n in by_n},
                "claims": [{"id": c["id"], "text": c["text"], "cites": c["cites"]} for c in claims]}
-    system = SYSTEM
+    system = SYSTEM + ("\n" + TITLE_SYSTEM if titled else "")
     if question is not None:
         payload = {"question": question, **payload}
-        system = SYSTEM + "\n" + RESPONSIVE_SYSTEM
+        system = system + "\n" + RESPONSIVE_SYSTEM
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
 
 
@@ -137,7 +154,7 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None,
           question: str | None = None) -> tuple[dict[int, dict] | None, str | None]:
     """(verdicts by claim id, checker label) or (None, None) when no checker produced a complete judgement.
     With `question` (responsiveness on) each verdict also carries "responsive" (yes|partial|no) - same call."""
-    msgs = _messages(claims, sources, question)
+    msgs = _messages(claims, sources, question, cfg)
     openai_on = None
     for checker in cfg["checkers"]:
         if call is None and checker.get("base_url") is None:
@@ -178,18 +195,19 @@ def apply(answer: str, claims: list[dict], verdicts: dict[int, dict], cfg: dict)
     text = answer
     counts = {"checked": len(claims), "supported": 0, "partial": 0, "removed": 0}
     guard = any("responsive" in verdicts[c["id"]] for c in claims)
+    keep_partial = _flag(cfg, "keep_partial", True)
     if guard:
         counts.update(nonresponsive_removed=0, responsive_partial=0, responsive_yes=0, responsive_missing=0)
     for c in claims:
         v = verdicts[c["id"]]["verdict"]
         rv = verdicts[c["id"]].get("responsive")
-        if guard and v != "unsupported":
+        if guard and v != "unsupported" and (keep_partial or v != "partial"):
             if rv == "no":
                 text = text.replace(c["text"], "", 1)
                 counts["nonresponsive_removed"] += 1
             else:
                 counts[{"partial": "responsive_partial", "yes": "responsive_yes"}.get(rv, "responsive_missing")] += 1
-        if v == "unsupported":
+        if v == "unsupported" or (v == "partial" and not keep_partial):  # FA8-3: partial removed like unsupported
             text = text.replace(c["text"], "", 1)
             counts["removed"] += 1
         elif guard and rv == "no":
@@ -226,7 +244,10 @@ def check_answer(answer: str, sources: list[dict], cfg: dict, call=None,
     records = RECORDS.get() if records is None else records
     if records is not None:  # item #84: internal per-claim records (never part of the public summary)
         records.extend(dict({"id": c["id"], "sentence": c["text"], "citations": c["cites"],
-                             "verdict": verdicts[c["id"]]["verdict"]},
+                             "verdict": verdicts[c["id"]]["verdict"],
+                             "reason": verdicts[c["id"]].get("reason", ""),  # FA8-1: internal only, never shown
+                             **({"partial_removed": True} if verdicts[c["id"]]["verdict"] == "partial"
+                                and not _flag(cfg, "keep_partial", True) else {})},
                             **({"responsive": verdicts[c["id"]]["responsive"]} if question is not None else {}))
                        for c in claims)
     text, counts = apply(answer, claims, verdicts, cfg)

@@ -51,7 +51,8 @@ def test_triage_caps_429_is_not_a_wake_bounce():
 def test_ask_page_shows_triage_on_failures():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "streamlit_app.py").read_text()
-    assert src.count("_show_triage(api_base_url)") == 2
+    # PROG-E F2 / item #83: flag-on public path _render_terminal adds the third call site (was == 2).
+    assert src.count("_show_triage(api_base_url)") == 3
 
 
 CFG = {"enabled": True, "read_db_url_env": "VERA_DB_URL_RO", "prompt_version": "v1", "max_titles": 5, "retry_s": 300}

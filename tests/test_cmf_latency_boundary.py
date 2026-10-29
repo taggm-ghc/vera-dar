@@ -146,7 +146,7 @@ def test_180s_is_a_client_side_constant_with_no_server_side_enforcement_pin():
     assert "ASK_TIMEOUT_S" not in main_src
     assert not re.search(r"wait_for|asyncio\.timeout|add_middleware|BaseHTTPMiddleware|timeout-keep-alive", main_src)
     users = {p.name for p in (ROOT / "vera").glob("*.py") if "ASK_TIMEOUT_S" in p.read_text()}
-    assert users == {"public_mode.py", "ask_service.py"}
+    assert users == {"public_mode.py", "ask_service.py", "progress_ui.py"}  # PROG-1027: the UI poller imports the constant (client side, plan s3c)
 
 
 def test_started_inline_run_is_bounded_by_its_own_45s_deadline_scope(monkeypatch):

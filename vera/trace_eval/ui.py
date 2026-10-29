@@ -320,6 +320,126 @@ METHOD_TEXT = ("**Method.** Each question is sent to VERA-DAR's answer route; ev
                "Per-case detail is private.")
 
 
+# TRACE-1028: what has changed in VERA-DAR since the evaluation evidence was last revised, and how categories and topics
+# are used. Descriptions are fixed public text (no per-source, per-question or back-end detail). Each STATUS is computed at
+# render time from the shipped config files (read-only file loads, no database); a missing or unreadable value shows
+# UNKNOWN, never LIVE. A feature that ships off is never described as live. The evaluation runs on this page pre-date most
+# of these changes, so they do not measure them.
+REVISIONS_SECTION = "What changed since the evaluation checks were written"
+REVISIONS_INTRO = ("Status is read from the configuration this build ships with. LIVE = on. SHADOW = runs and logs only, "
+                   "never changes an answer. OFF = built but switched off. UNKNOWN = the setting could not be read. "
+                   "NOT MEASURED: the run results on this page pre-date these changes, so they do not show how any of "
+                   "them performs.")
+REVISIONS_NOTE = ("Rows marked OFF or SHADOW are described for transparency; they are not part of what a visitor "
+                  "experiences today. Run-time wiring was not examined beyond the configuration switches.")
+
+
+def _read_cfgs() -> dict:
+    """Shipped config files as dicts ({} when absent or unreadable). Plain file reads: no DB, no env, no network."""
+    from vera import acq_config
+    config_dir = acq_config.CONFIG_PATH.parent  # the shipped config directory, as the other vera modules locate it
+    out = {}
+    try:
+        out["acq"] = acq_config.load_config() or {}
+    except Exception:  # noqa: BLE001
+        out["acq"] = {}
+    for key, name in (("scope", "scope_router"), ("ingest", "fulltext_ingest"), ("sem", "semantic_similarity")):
+        try:
+            d = json.loads((config_dir / f"{name}.json").read_text(encoding="utf-8"))
+            out[key] = d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            out[key] = {}
+    return out
+
+
+def _g(d, *path):
+    for k in path:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
+def _onoff(v, on="LIVE") -> str:
+    return on if v is True else ("OFF" if v is False else "UNKNOWN")
+
+
+def revision_items(cfgs: dict | None = None) -> list:
+    """(feature, status, description) rows; statuses derive from the config dicts."""
+    c = _read_cfgs() if cfgs is None else cfgs
+    acq, scope, ingest, sem = (c.get(k) or {} for k in ("acq", "scope", "ingest", "sem"))
+    reg = _g(acq, "micro_topic", "registry_table") or {}
+    judge_on = _g(reg, "judge", "enabled") is True and reg.get("registration_enabled") is True
+    step = _g(scope, "unknown_category_step", "enabled")
+    sim_mode = _g(scope, "unknown_category_step", "similarity", "mode")
+    step_status = "UNKNOWN" if step is None else ("OFF" if step is False else
+                  ("LIVE; proximity check SHADOW" if sim_mode in (None, "shadow") else "LIVE; proximity check " + str(sim_mode).upper()))
+    if sem.get("enabled") is True:
+        sem_status = "SHADOW" if sem.get("shadow") is True else "LIVE"
+    else:
+        sem_status = _onoff(sem.get("enabled")) if "enabled" in sem else "UNKNOWN"
+    acquire = _g(acq, "enabled") is True and _g(acq, "inline", "enabled") is True
+    ing, ovl = ingest.get("licence_observations_enabled"), _g(acq, "ingest_overlay", "licence_observations_enabled")
+    if ing is None or ovl is None:
+        lic = "UNKNOWN"
+    else:
+        lic = f"batch loader {_onoff(ing)}; automatic acquisition {_onoff(ovl)}"
+    return [
+        ("Scope handling", "LIVE",
+         "VERA-DAR no longer restricts questions to a fixed topic list. A question outside the existing corpus goes to "
+         "research instead of a scope refusal. Refusals are reserved for harmful intent or restricted use, and a code "
+         "request is treated as an unsupported use, not a refused topic."),
+        ("Question categories", "LIVE (fixed list)" if step is not None else "UNKNOWN",
+         "A classifier labels each question with one category from an owner-curated list. Each category decides whether "
+         "the question is answered, researched, refused or declined as an unsupported use. An unknown label is treated as "
+         "invalid output and retried once; then " + (
+             "the unknown-category step handles it (researched, not refused)." if step is True else
+             "it is answered with a safe decline." if step is False else "the handling could not be read.")),
+        ("Category table in the database",
+         "UNKNOWN" if _g(scope, "classifier_category_table", "read_from_db") is None else
+         ("LIVE" if _g(scope, "classifier_category_table", "read_from_db") is True else "OFF (fixed list read; no new categories registered)"
+          if _g(scope, "classifier_category_table", "registration_enabled") is not True else "OFF (fixed list read; registration on)"),
+         "A versioned database table for categories is built. When it is switched off, the release reads the fixed list "
+         "and adds no categories at run time."),
+        ("Unknown-category step", step_status,
+         "When a label is not recognised, a proximity check compares it with refused categories. It only logs a signal; "
+         "similarity alone never refuses."),
+        ("Research topics", "LIVE (fixed seed)",
+         "Documents are grouped into narrow topics. Topics decide how documents are keyed, counted and served in balance, "
+         "with at least six documents per topic as a floor, not a ceiling. Topic descriptions are never shown here."),
+        ("Topic registry in the database",
+         "UNKNOWN" if reg.get("read_from_db") is None else
+         ("LIVE" if reg.get("read_from_db") is True else "OFF (fixed seed read)") +
+         ("; registration on" if reg.get("registration_enabled") is True else "; registration off"),
+         "A versioned topic table and a proposal flow (draft, checked against existing topics, then active or suspended) "
+         "are built."),
+        ("Topic equivalence judge", ("SHADOW" if _g(reg, "judge", "mode") == "shadow" else "LIVE") if judge_on else
+         ("UNKNOWN" if not reg else "OFF"),
+         "A free-tier language model can judge whether a proposed topic means the same as an existing one. It needs the "
+         "topic registry's registration switched on as well; in shadow mode it never blocks."),
+        ("Semantic similarity", sem_status,
+         "A shared meaning-similarity interface exists for categories and topics. Its thresholds are not yet calibrated."),
+        ("Acquisition and relevance", "LIVE" if acquire else ("UNKNOWN" if not acq else "OFF"),
+         "Questions the corpus cannot answer trigger automatic source acquisition. Sources are selected as possible "
+         "evidence by stricter relevance and coverage thresholds, an irrelevant-record filter and truthful in-progress "
+         "notices."),
+        ("Safety patterns", "LIVE",
+         "Fewer false positives in the prompt-injection and personal-advice checks; an injected sentence is separated from "
+         "the legitimate question; claims of a changed mode are ignored; self-description comes from fixed public text."),
+        ("Licence observations", lic,
+         "An append-only record of licence observations is written for each stored document where the switch is on."),
+        ("Progressive answer updates", "PLANNED",
+         "Showing partial progress while an answer is produced is a stated goal, not shipped."),
+    ]
+
+
+def _render_revisions(cfgs: dict | None = None) -> None:
+    from vera.version_info import deployed_commit, short_commit
+    st.subheader(REVISIONS_SECTION)
+    st.caption(REVISIONS_INTRO + f" Build {short_commit(deployed_commit())}.")
+    st.table(pd.DataFrame([{"feature": f, "status": stt, "what it does": txt} for f, stt, txt in revision_items(cfgs)]).set_index("feature"))
+    st.caption(REVISIONS_NOTE)
+
 def historical_label(run: dict) -> str:
     m = run.get("run_meta") or {}
     models = ", ".join(m.get("models") or []) or "model unknown"
@@ -406,6 +526,7 @@ def _render_public(view: dict) -> None:
     st.subheader("Method and limitations")
     st.markdown(METHOD_TEXT)
     st.markdown("\n".join(f"- {t}" for t in _limitations(run or {})))
+    _render_revisions()
     off = view.get("offline_suite")
     if off:
         st.subheader("Offline suite")

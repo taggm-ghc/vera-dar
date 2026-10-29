@@ -16,6 +16,7 @@ from pathlib import Path
 from openai import OpenAI, OpenAIError
 
 from vera.ask_service import AskResult, answer_in_scope
+from vera import progress as _progress
 from vera.pricing.config import PricingRecord
 
 logger = logging.getLogger("vera")
@@ -106,4 +107,5 @@ def answer_via_chain(question: str, entries: list[ChainEntry], grounding=None) -
                 raise
             logger.warning("/ask provider %s failed (%s, status %s, code %s); trying next", e.label,
                            type(exc).__name__, getattr(exc, "status_code", "-"), getattr(exc, "code", "-"))
+            _progress.emit("retry", "start", attempt=i + 2)  # PROG-1027 W2a: the next provider re-runs every stage
     raise AssertionError("unreachable")

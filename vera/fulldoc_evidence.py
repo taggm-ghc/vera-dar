@@ -22,6 +22,9 @@ class EvidenceBundle:
     status: str = "insufficient"  # admitted | insufficient | corpus_unusable
     trace: dict = field(default_factory=dict)  # counts only
     corpus_source: str | None = None  # "db" | "bundle" | None (unlabelled = never db); set only when the corpus loaded ok
+    # IMPL-1028-E1FA7 (WP-FA7, admission.part_allocation): labels of question parts (concepts / facets) with 0 admitted
+    # passages, for the writer. Internal like admitted text; () when allocation is off. Not yet in the answer prompt.
+    parts_unsupported: tuple = ()
 
     @property
     def grounded(self) -> bool:

@@ -129,3 +129,34 @@ def test_codes_cover_source_files():
 def test_known_code_is_already_in_corpus_not_a_rejection():  # FRESH-1023 integration tweak (verifier note 1)
     assert reason_from_code("R-ACQ-KNOWN") == "already_in_corpus"
     assert "already_in_corpus" in ro.TERMINAL_REASONS
+
+
+# FIX-1028-STATUS: "newly found sources" is passage-level (new_evidence_admitted), not candidate-level.
+def test_abstain_with_candidate_admitted_never_claims_new_sources():
+    o = run([P("a", n=1)], [C("1", "admitted")], new=False)
+    assert "newly found sources" not in o.user_text and o.kind != "answered_with_new"
+
+
+def test_partial_answer_with_new_evidence_keeps_new_sources_sentence():
+    o = run([P("a", n=2)], [C("1", "admitted"), C("2", "admitted")], new=True)
+    assert o.kind == "answered_with_new" and o.user_text.startswith("This answer uses newly found sources")
+
+
+def test_candidate_count_labels_do_not_read_as_evidence_admission():
+    for lab in ro.DIAG_LABELS.values():
+        assert lab not in ("used",) and "evidence" not in lab
+    assert "relevance check" in ro.DIAG_LABELS["admitted"]
+
+
+def test_relevance_passed_but_unused_candidates_get_accurate_sentence():
+    o = run([P("a", n=1)], [C("1", "admitted")], new=False)
+    assert "A document passed the initial relevance check, but none of its passages answered" in o.user_text
+    o3 = run([P("a", n=2)], [C("1", "admitted"), C("2", "admitted")], new=False)
+    assert "Some documents passed the initial relevance check, but none of their passages answered" in o3.user_text
+    assert "admission criteria" not in o.user_text
+    o2 = run([P("a", n=1)], [C("1", "relevance_rejected")], new=False)
+    assert "admission criteria" in o2.user_text
+
+
+def test_candidate_labels_use_shortlisted_not_selected():
+    assert all("selected" not in v for v in ro.DIAG_LABELS.values())

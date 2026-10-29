@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from vera import progress as _progress
 from vera.ask_service import AskResult
 
 _CITE = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
@@ -328,7 +329,7 @@ def enforce_verbatim(records, sources, checker, cfg):
     by_n = {s["n"]: s for s in sources}
     kept, profs, dropped = [], {}, 0
     for r in records:
-        if r.get("verdict") not in ("supported", "partial"):
+        if r.get("verdict") not in ("supported", "partial") or r.get("partial_removed"):
             continue
         if _copies_passage(r["sentence"], sources, cap):  # short-quote rule on the admitted passages
             dropped += 1
@@ -360,7 +361,7 @@ def checked_only(draft: str, records, sources, cc_cfg: dict, cfg: dict, summary:
     cap = int(cfg["answer"]["quote_max_chars"])
     kept, copied = [], 0
     for r in records:
-        if r.get("verdict") not in ("supported", "partial"):
+        if r.get("verdict") not in ("supported", "partial") or r.get("partial_removed"):  # FA8-3
             continue
         if keep_ids is not None:
             if r["id"] not in keep_ids:
@@ -463,11 +464,13 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     records: list = []
     usage: list = []
     tok, utok = RECORDS.set(records), USAGE.set(usage)
+    _progress.emit("check", "start")  # PROG-1027 W2a
     try:
         checked, summary = check_answer(draft, sources, cc_cfg, call=check_call, question=question)
     finally:
         USAGE.reset(utok)
         RECORDS.reset(tok)
+    _progress.emit("check", "done")  # only reached when check_answer returned
     add_cost(usage)
     if checked is None:
         return fall(fb["checker_unavailable"] if summary.get("outcome") == "checker_unavailable"
@@ -633,7 +636,9 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     if complete_fn is None:
         from vera.ask_service import complete as complete_fn
     sources = sources_from(ev)
+    _progress.emit("write", "start")  # PROG-1027 W2a: immediately before the answer writer; no DONE if it raises
     res = complete_fn(messages_for(question, sources, cfg), model, pricing, **(chained or {}))
+    _progress.emit("write", "done")
     tokens += res.tokens_used
     cost += res.cost_usd
 
@@ -657,11 +662,13 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     records: list = []
     usage: list = []
     tok, utok = RECORDS.set(records), USAGE.set(usage)
+    _progress.emit("check", "start")  # PROG-1027 W2a
     try:
         checked, summary = check_answer(text, sources, cc_cfg, call=check_call, question=question)
     finally:
         USAGE.reset(utok)
         RECORDS.reset(tok)
+    _progress.emit("check", "done")  # only reached when check_answer returned
     add_cost(usage)
     if checked is None:
         return fall(fb["checker_unavailable"] if summary.get("outcome") == "checker_unavailable"

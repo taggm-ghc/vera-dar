@@ -843,7 +843,51 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
     return len(ev.admitted or ())
 
 
-def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count, drops: dict | None = None) -> list:
+def _topic_fit_active(cfg: dict, route) -> dict | None:
+    """O1 (IMPL-1028-T1O1): the topic_fit_order block when BOTH switches are on and the route is general or mixed;
+    else None (today's behaviour exactly)."""
+    tf = (cfg or {}).get("topic_fit_order")
+    if route not in ("general", "mixed") or not isinstance(tf, dict) or tf.get("enabled") is not True:
+        return None
+    st = (cfg or {}).get("source_type_router")
+    if not isinstance(st, dict) or st.get("enabled") is not True:
+        return None
+    return tf
+
+
+def _tf_int(tf: dict, key: str, route) -> int:
+    try:
+        v = int((tf.get(key) or {}).get(route, 0))
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return max(0, v)
+
+
+def _is_ddg(c) -> bool:
+    return isinstance(c, dict) and c.get("acq_source") == "ddg"
+
+
+def reserve_reads(ranked: list, fresh_budget: int, cfg: dict, route) -> list:
+    """O1: on route general, move the best DDG-origin candidate(s) into the first `fresh_budget` fresh-read positions
+    (web_min_reads[route]; 0 on mixed). Only reorders; never changes the count; the DDG candidate takes the position
+    of the last read slot so earlier (best-ranked) reads are kept. Off/other routes: the same list."""
+    tf = _topic_fit_active(cfg, route)
+    n = min(_tf_int(tf, "web_min_reads", route), fresh_budget) if tf else 0
+    if n <= 0 or fresh_budget <= 0:
+        return ranked
+    out = list(ranked)
+    have = sum(1 for r in out[:fresh_budget] if _is_ddg(r[2]))
+    for _ in range(n - have):
+        src = next((i for i in range(fresh_budget, len(out)) if _is_ddg(out[i][2])), None)
+        if src is None:
+            break
+        out.insert(fresh_budget - 1, out.pop(src))
+    return out
+
+
+def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count, drops: dict | None = None,
+                    route: str | None = None, protected=None) -> list:
+    # protected: set of doc_key_set keys of candidates already stored (reuse); None = lookup unavailable (no O1 swap)
     """Stage (shared by the background job and DAR-INLINE-1021): DOI or PMCID required (PLAN-NONDOI-1022), not already
     served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
     from vera import search_providers
@@ -900,9 +944,53 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     # those only fill the max_candidates_resolved slots that remain; tier, pre-rank and position order within each.
     # DDFIX-1023/REL D4: relevance tier first (relevant, then weak: search_query.relevance_tiers), so a weak lexical match
     # with full text never takes a slot ahead of a relevant candidate; the P0DTA order applies within each tier.
-    ranked.sort(key=lambda x: (x[5], not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0],
-                               x[4]))
+    tf = _topic_fit_active(cfg, route)  # O1: None = today's order exactly
+    if tf is not None and protected is None:
+        tf = None  # O1 FAIL SAFE: stored-document lookup unavailable -> today's order entirely (no fit key, no swap)
+    base_key = lambda x: (x[5], not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0],  # noqa: E731
+                          x[4])
+    keyf = base_key
+    if tf is not None:  # O1: topic-fit AHEAD of routable_fulltext (relevance tier stays first)
+        from vera import source_type
+        keyf = lambda x: (x[5], source_type.fit(route, x[2], cfg), not routable_fulltext(x[2], cfg),  # noqa: E731
+                          search_providers.acq_rank_tier(x[2]), -x[0], x[4])
     n_cut = int(acq_config.bound(cfg, "max_candidates_resolved"))
+    if tf is None:
+        ranked.sort(key=base_key)
+    else:
+        prot = set(protected)
+        is_prot = lambda r: bool(doc_key_set(r[1], r[2].get("url"), (r[3] or {}).get("isbn")) & prot)  # noqa: E731
+        today = sorted(ranked, key=base_key)
+        # protected (reuse) entries inside today's cut MUST stay in the cut, whatever the fit key does
+        required = {id(r[2]) for r in today[:max(0, n_cut)] if is_prot(r)}
+        ranked.sort(key=keyf)
+        if n_cut > 0:
+            cut_l, rest = ranked[:n_cut], ranked[n_cut:]
+            fixed = lambda r: id(r[2]) in required or is_prot(r)  # noqa: E731
+            changed = False
+            # (1) restore required entries the fit key pushed out
+            for i in [i for i, r in enumerate(rest) if id(r[2]) in required]:
+                ev = next((j for j in range(len(cut_l) - 1, -1, -1) if not fixed(cut_l[j]) and not _is_ddg(cut_l[j][2])),
+                          None)
+                if ev is None:
+                    ev = next((j for j in range(len(cut_l) - 1, -1, -1) if not fixed(cut_l[j])), None)
+                if ev is None:
+                    break
+                cut_l[ev], rest[i] = rest[i], cut_l[ev]
+                changed = True
+            # (2) reserve web_min_slots[route] cut slots for DDG-origin candidates; never evict a protected entry
+            short = min(_tf_int(tf, "web_min_slots", route), n_cut) - sum(1 for r in cut_l if _is_ddg(r[2]))
+            while short > 0:
+                src = next((i for i, r in enumerate(rest) if _is_ddg(r[2])), None)
+                ev = next((j for j in range(len(cut_l) - 1, -1, -1)
+                           if not _is_ddg(cut_l[j][2]) and not fixed(cut_l[j])), None)
+                if src is None or ev is None:
+                    break
+                cut_l[ev], rest[src] = rest[src], cut_l[ev]
+                short -= 1
+                changed = True
+            if changed:
+                ranked = sorted(cut_l, key=keyf) + sorted(rest, key=keyf)
     if drops is not None:  # FRESH-1023 C3: candidates beyond the cut are deferred (not counted)
         for r in ranked[n_cut:]:
             drops[id(r[2])] = acq_config.reason(cfg, "defer_cap")

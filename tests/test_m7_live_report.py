@@ -154,7 +154,7 @@ def test_live_report_renders_all_sections_and_leaks_nothing(monkeypatch, public_
     heads = [h.value for h in at.header]
     assert heads == ["1. Answer", "2. Claim check", "3. Sources and short excerpts, by document", "4. Evidence scope",
                      "5. Search and acquisition", "6. Cost and latency"]
-    assert "Evidence scope: 1 document inspected, 2 passages admitted as evidence (from 1 document)." in text
+    assert "Evidence scope: 1 document inspected; 2 passages from 1 document selected as possible evidence." in text
     assert "scholarly index: 2" in text and "licence unclear (held): 1" in text
     assert "Q" * ui_evidence._quote_cap() in text
     assert "](https://example.org/one)" in text
@@ -269,7 +269,7 @@ def test_b2_scope_policy_and_stage_lines():
     assert rep["scope_policy"] == lr.SCOPE_OVERRIDE_NOTE
     assert "Evidence authorized for answer generation: yes." in rep["pipeline"]
     assert "Answer generated: yes." in rep["pipeline"]
-    assert "Passages admitted as evidence: 4, from 2 documents." in rep["pipeline"]
+    assert "Passages selected as possible evidence: 4, from 2 documents." in rep["pipeline"]
     assert "Claims checked: 1; supported by their source passage: 1." in rep["pipeline"]
     rl = lr.build_live_report(_body("reading_list", contract={"layers": ["L0"], "fallback": TOKEN, "offtopic": True}),
                               "q", 1.0)

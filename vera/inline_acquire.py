@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 
 from vera import acq_config, acq_rounds, rate_limit
 from vera import auto_acquire as aa
-from vera import research_outcome, search_providers
+from vera import research_outcome, search_providers, source_type
 
 logger = logging.getLogger("vera.autoacq")
 
@@ -80,6 +80,9 @@ class Outcome:
     # CONT-1023 (additive; None = nothing was eligible): the background hand-off of this request's unfinished
     # candidates {"status": code, "queued": n, "already_queued": n, "refused": n}
     background: dict | None = None
+    # T1 (IMPL-1028-T1O1; None = router off): {"route", "basis": [rule ids], "scores": {"s","g"}}; per request, never
+    # stored with identity, never the question text
+    source_route: dict | None = None
 
     @property
     def n_answer_eligible(self) -> int:
@@ -102,7 +105,8 @@ class Outcome:
                 **({"candidates": [dict(d) for d in self.candidates]} if self.candidates is not None else {}),  # PMCID-PUBLIC-1023
                 **({"diag_status_counts": research_outcome.diag_counts(self.candidates)}
                    if self.candidates is not None else {}),  # P0DTA-DIAG: aggregate per status
-                **({"background": dict(self.background)} if self.background is not None else {})}
+                **({"background": dict(self.background)} if self.background is not None else {}),
+                **({"source_route": dict(self.source_route)} if self.source_route is not None else {})}
 
     @property
     def queued(self) -> int:
@@ -391,6 +395,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             for d in o.discovered:
                 research_outcome.annotate_diag(d)
         ms["total"] = int((clock() - t0) * 1000)
+        o.source_route = st.get("route")
         o.codes, o.ms = dict(sorted(codes.items())), ms
         aa._log("inline", status=o.status, admitted=o.admitted, stored=o.stored, persist_failed=o.persist_failed,
                 n_answer_eligible=o.n_answer_eligible, n_persisted=o.n_persisted,
@@ -460,7 +465,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 st["recs"].append(rec_by[id(c)])
                 st["cands"].append(c)
         drops: dict = {}
-        ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count, drops=drops)
+        route_rec = None
+        if source_type.enabled(acq):  # T1: per-request, question-derived, off by default
+            route_rec = source_type.classify(question, acq)
+            st["route"] = route_rec
+        route = route_rec["route"] if route_rec else None
+        protected = _protected_keys(cands, acq, deps) if aa._topic_fit_active(acq, route) else set()
+        ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count, drops=drops, route=route,
+                                    protected=protected)
         for cid, why in drops.items():
             if cid in rec_by:
                 rec_by[cid]["outcome"], rec_by[cid]["reason"] = "dropped", why
@@ -482,7 +494,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 e = entries.get(id(r[2]))
                 if e is not None and id(r[2]) not in left:
                     e["outcome"] = "already_stored"
-        ranked = ranked_left
+        ranked = aa.reserve_reads(ranked_left, max(0, min(budget, acq_config.inline_fresh_docs(acq))), acq, route)
         ms["reuse"] = int((clock() - t) * 1000)
         # ACQ S4-0 L4b-0 (B3): the fresh budget is separate from reuse; documents answered from stored rows no longer
         # reduce it. Same cap value as before (bounds.inline_fresh_docs, default max_docs_per_job), still bounded by the
@@ -606,6 +618,47 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 deps.close()
         except Exception as e:  # noqa: BLE001
             logger.warning("autoacq close failed (%s)", type(e).__name__)
+
+
+# UNCALIBRATED planner prior: max candidates in the one protect-lookup batch (the discovered/search pool is bounded
+# by discovered_max 6 + provider result caps). Calibrate from the live candidate-pool sizes in dev-mode candidates[];
+# over the cap the lookup is refused (fail safe), never truncated. NOTE: deps.stored_rows is the existing reader and
+# returns full source rows and spans (no identifier-only variant exists); a narrower SELECT would need a new reader.
+PROTECT_LOOKUP_MAX = 60
+
+
+def _protected_keys(cands, acq, deps):
+    """O1 (IMPL-1028-T1O1): doc_key_set keys of the candidates ALREADY stored as acquired documents (reuse candidates),
+    from ONE read-only batch through the same store reader _stored_for uses (deps.stored_rows, SELECT only). They are
+    never evicted by the reserved-slot swap. Returns None when the lookup is unavailable or fails: the caller then
+    skips the swap (fail safe)."""
+    fn = getattr(deps, "stored_rows", None)
+    if fn is None:
+        return None
+    try:
+        from vera.corpus_admission import canonical_url
+        from vera.dar_corpus import doc_key_set
+        from vera.url_key import legacy_keys
+        items = []
+        for c in list(cands or ())[:PROTECT_LOOKUP_MAX]:
+            if not isinstance(c, dict):
+                continue
+            s = {"doi": aa._doi(c), "url": c.get("url") or ""}
+            isbn = aa.candidate_isbn(c)
+            items.append((c, [canonical_url(s), *legacy_keys(s)],
+                          doc_key_set(s["doi"], c.get("url"), (isbn or {}).get("isbn"))))
+        if len(list(cands or ())) > PROTECT_LOOKUP_MAX:
+            return None  # over the batch cap: protection cannot be established -> no O1 reordering (fail safe)
+        srcs, _spans = fn(sorted({k for _c, ks, _d in items for k in ks}))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("autoacq inline protect lookup failed (%s)", type(e).__name__)
+        return None
+    have = {r.get("canonical_url") for r in srcs or ()}
+    out: set = set()
+    for _c, ks, dk in items:
+        if have & set(ks):
+            out |= dk
+    return out
 
 
 def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, clock=None, deadline=None,

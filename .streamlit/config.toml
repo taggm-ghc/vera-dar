@@ -1,3 +1,5 @@
 [client]
 # K3.I: the default page list shows file-derived labels ("streamlit app"); render_nav draws plain ones.
 showSidebarNavigation = false
+# PROG-1027 R4-PROG-S-1 (partial mitigation, Streamlit 1.40.1 still shows type and traceback): no error details to clients.
+showErrorDetails = false

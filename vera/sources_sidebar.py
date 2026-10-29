@@ -278,7 +278,7 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
             s = g["row"]
             if fulldoc and not g["cited"] and not announced:
                 announced = True
-                st.markdown("**Also admitted, not cited** (documents whose passages were admitted but not used in a cited claim)")
+                st.markdown("**Also selected, not cited** (documents whose passages were selected but not used in a cited claim)")
             nums = ", ".join(str(n) for n, _ in (g["cited"] or g["other"]))
             date = f" ({plain(s['published'])})" if s.get("published") else ""
             st.markdown(f"[{nums}] {_link(s.get('title') or s.get('url') or 'source', s.get('url'))}{date}")
@@ -288,12 +288,14 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
             else:
                 meta = " · ".join(x for x in (plain_url(str(s["identifier"])) if s.get("identifier") else "",
                                               f"passages used: {_ranges(g['cited'])}" if g["cited"] and _ranges(g["cited"]) else "",
-                                              f"also admitted, not cited: {_ranges(g['other'])}" if g["other"] and _ranges(g["other"]) else "") if x)
+                                              f"also selected, not cited: {_ranges(g['other'])}" if g["other"] and _ranges(g["other"]) else "") if x)
             if meta:
                 st.caption(meta)
         if any(s.get("licence_decision") for s in sources):
             st.caption(LICENCE_UNDER_ANSWER)
     ui_evidence.render_claim_check(st, claim_check, cap, fulldoc)
     if traced:
-        st.caption("Also found and matched to a published record, but no abstract was available for it, so not used: "
+        st.caption(("Also found as a published record, but its full text was not acquired for this answer, so not used: "
+                    if fulldoc else
+                    "Also found and matched to a published record, but no abstract was available for it, so not used: ")
                    + "; ".join(_link(t.get("title") or t.get("url") or "source", t.get("url")) for t in traced))

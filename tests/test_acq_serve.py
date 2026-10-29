@@ -118,7 +118,7 @@ def test_enqueue_happens_only_in_main_after_the_provider_chain():
     src = inspect.getsource(ask_service)
     assert "import auto_acquire" not in src and "enqueue(" not in src  # re-entered per provider: never enqueues
     import main
-    body = inspect.getsource(main.ask)
+    body = inspect.getsource(main._ask_impl)
     assert body.index("answer_via_chain(") < body.index("_acquire(") < body.index("return AskResponse(")
 
 

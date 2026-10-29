@@ -179,7 +179,15 @@ def _default_terms_cfg() -> Mapping | None:
         return None
 
 
-def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=()) -> tuple[tuple, dict]:
+def _groups(groups):
+    """E1 term groups: the given ones, else the shipped default (() unless admission.term_groups.enabled is true)."""
+    if groups is not None:
+        return tuple(groups)
+    from vera import term_expansion
+    return term_expansion.default_groups()
+
+
+def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), groups=None) -> tuple[tuple, dict]:
     """(key concepts, weights). Concepts: core phrases + distinctive extra terms (stop, meta, filler words and
     `extra_generic`, e.g. the acquisition profile's generic_terms, removed; idioms never reach them). Weight of a
     concept: 1 + the number of other concepts that contain it as a hyphen component ("agent" in "multi-agent": 2).
@@ -190,13 +198,34 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=()) ->
     qt = build_query_terms(question, cfg)
     gen = {str(g).lower() for g in extra_generic or ()} | filler_words(cfg)
     out = tuple(t for t in (*qt.core, *qt.extra) if t not in gen)
-    w = {c: 1 + sum(1 for d in out if d != c and c in re.split(r"[\s\-]+", d)) for c in out}
+    gs = _groups(groups)
+    if gs:
+        # IMPL-1028-E1FA7 (E1): a term group the question triggers is ONE concept "phrase1|phrase2|..." matched by any
+        # member (_concept_regex); the question words of its phrases are folded into it. Ambiguous aliases follow
+        # vera.term_expansion.triggered (never alone without a second group phrase or a cue).
+        from vera import term_expansion
+        for g in term_expansion.triggered(question, gs):
+            words = {w for t, _a in g.phrases if term_expansion._has(question, t) for w in t.split()}
+            first = next((i for i, c in enumerate(out) if c in words), len(out))
+            rest = [c for c in out if c not in words]
+            out = tuple(rest[:first] + ["|".join(t for t, _a in g.phrases)] + rest[first:])
+    w = {c: 1 + sum(1 for d in out if d != c and "|" not in d and c in re.split(r"[\s\-]+", d)) for c in out}
     return out, w
+
+
+def query_variants(question: str, groups=None) -> list:
+    """E1 discovery variants (bounded): the other phrases of each term group the question triggers, e.g. "mixed martial
+    arts" for "boxing vs MMA"; [] when term groups are off. Not yet sent by vera.search_providers (IMPL-1028-E1FA7
+    note: the acquisition-query wiring is a separate leaf)."""
+    from vera import term_expansion
+    return term_expansion.query_variants(question, _groups(groups))
 
 
 def _concept_regex(term: str) -> re.Pattern:
     """Whole-word match; a hyphenated compound also matches "multi agent" / "multiagent"; the last word may inflect
     (a word over five letters is matched on all but its last three letters, min five: orchestrat-ion/-ing)."""
+    if "|" in term:  # E1 group concept: any member
+        return re.compile("|".join(_concept_regex(m).pattern for m in term.split("|") if m.strip()), re.I)
     words = term.lower().replace("-", " ").split()
     *head, last = words
     stem = last if len(last) <= 5 else last[:max(5, len(last) - 3)]
@@ -210,7 +239,8 @@ def matched_concepts(kc: tuple, text: str) -> set:
     t = str(text or "")
     got = {c for c in concepts if _concept_regex(c).search(t)}
     for c in list(got):
-        got |= {d for d in concepts if d != c and d in re.split(r"[\s\-]+", c)}
+        if "|" not in c:
+            got |= {d for d in concepts if d != c and d in re.split(r"[\s\-]+", c)}
     return got
 
 

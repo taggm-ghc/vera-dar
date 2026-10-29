@@ -93,10 +93,11 @@ def stage_outcome(c: Mapping, sources, claims, fresh_docs: Mapping, accepted: bo
     succeeded = oc in ("admitted", "not_used") or (oc == "rejected" and tr in _ADMISSION_REJECTIONS)
     ns = set(_match_sources(c, sources))
     chunks = c.get("n_chunks") if oc == "admitted" else None  # reused: the stored passage count is not on the record
-    verdicts = [r.get("verdict") for r in claims or () if isinstance(r, Mapping)
-                and ns & set(r.get("citations") or ())]
+    mine = [r for r in claims or () if isinstance(r, Mapping) and ns & set(r.get("citations") or ())]
+    verdicts = [r.get("verdict") for r in mine]
+    shown = [r.get("verdict") for r in mine if not r.get("partial_removed")]  # FA8-3: a removed partial is not shown
     checked = bool(claims)
-    cited = (any(v in ("supported", "partial") for v in verdicts)) if checked else None
+    cited = (any(v in ("supported", "partial") for v in shown)) if checked else None
     contradictory = (any(v == "unsupported" for v in verdicts)) if checked else None
     docs = [fresh_docs.get(str(s.get("document_id"))) for s in sources or ()
             if isinstance(s, Mapping) and s.get("n") in ns]

@@ -178,6 +178,93 @@ def post_ask(base_url: str, question: str, mode: str, api_key: str, timeout: int
     )
 
 
+def post_ask_tracked(base_url: str, question: str, mode: str, api_key: str, rid: str, session_token: str,
+                     timeout: int = ASK_TIMEOUT_S):
+    """PROG-1027 W4a: post_ask plus the two progress headers (request id, per-browser-session token)."""
+    return requests.post(
+        f"{base_url.rstrip('/')}/ask",
+        json={"question": question, "mode": mode},
+        headers={"Content-Type": "application/json", "X-API-Key": api_key,
+                 "X-VERA-Request-Id": rid, "X-VERA-Session": session_token},
+        timeout=timeout,
+    )
+
+
+class _Gone:
+    """Sentinel type: the progress GET returned 404 (no record visible)."""
+    _inst = None
+
+    def __new__(cls):
+        if cls._inst is None:
+            cls._inst = super().__new__(cls)
+        return cls._inst
+
+    def __repr__(self) -> str:
+        return "GONE"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+GONE = _Gone()
+_EVENT_KEYS = frozenset({"v", "seq", "ts", "stage", "state", "counts"})
+
+
+def _valid_event(ev, max_count: int) -> bool:
+    from vera import progress  # local import: keeps public_mode import-light
+
+    if not isinstance(ev, dict) or set(ev) != _EVENT_KEYS:
+        return False
+    if ev["v"] != progress.CONTRACT_VERSION:
+        return False
+    seq = ev["seq"]
+    if type(seq) is not int or seq < 1 or not isinstance(ev["ts"], str):
+        return False
+    try:
+        stage, state = progress.Stage(ev["stage"]), progress.State(ev["state"])
+    except (ValueError, TypeError):
+        return False
+    if state not in progress.VALID.get(stage, frozenset()):
+        return False
+    counts = ev["counts"]
+    if not isinstance(counts, dict):
+        return False
+    for k, v in counts.items():
+        if k not in progress.COUNT_KEYS or type(v) is not int or not 0 <= v <= max_count:
+            return False
+    return True
+
+
+def get_progress(base_url: str, api_key: str, rid: str, session_token: str, after: int, timeout: float | None = None):
+    """PROG-1027 W4a: list of validated events | GONE (404) | None (anything else). Whole body guarded; never raises and
+    never carries exception text (the URL contains the host)."""
+    try:
+        from urllib.parse import quote
+
+        from vera import progress
+
+        cfg = progress.CFG
+        t = timeout if timeout is not None else (cfg.get_timeout_s if cfg is not None else 2)
+        max_count = cfg.max_count if cfg is not None else 10000
+        r = requests.get(
+            f"{base_url.rstrip('/')}/ask/progress/{quote(str(rid), safe='')}",
+            params={"after": int(after)},
+            headers={"X-API-Key": api_key, "X-VERA-Session": session_token},
+            timeout=t,
+        )
+        if r.status_code == 404:
+            return GONE
+        if r.status_code != 200:
+            return None
+        body = r.json()
+        evs = body.get("events") if isinstance(body, dict) else None
+        if not isinstance(evs, list) or not all(_valid_event(e, max_count) for e in evs):
+            return None
+        return evs
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def get_corpus_summary(base_url: str, api_key: str, timeout: int = 30) -> dict | None:
     """Item #83: server-side GET of the API's corpus description (key attached here, never in a widget)."""
     if not (base_url and api_key):

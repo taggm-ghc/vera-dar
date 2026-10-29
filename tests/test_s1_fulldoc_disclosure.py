@@ -22,7 +22,7 @@ HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask pag
                "cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the "
                "web and lists documents it has not read. Open the sources and read them yourself before relying on any claim.")
 NOT_READ_NEW = "VERA-DAR has not acquired or read the documents in this list. This is a discovery result, not an evidence-grounded answer."
-INSUFFICIENT_NEW = ("VERA-DAR searched {n_inspected} full document(s) it holds but found no passage that answers this "
+INSUFFICIENT_NEW = ("VERA-DAR searched {n_inspected} full document(s) but found no passage that answers this "
                     "question well enough, so it has not written an answer or answered from memory.")
 BAD = "has not read the full documents"
 
@@ -128,3 +128,10 @@ def test_p17_state2_with_auto_acquire_ends_with_the_acquisition_sentence(tmp_pat
     assert on.startswith(STATE23_DISCLOSURE_START) and PASSAGES_SENTENCE in on
     assert on.endswith(disclosure._NO_SAVE.strip() + disclosure._AUTO_ACQUIRE_MAY_STORE)
     assert "During this demonstration" not in on
+
+
+def test_insufficient_text_is_accurate_for_held_and_fetched_documents():
+    cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())
+    t = cfg["answer"]["insufficient_text"]
+    assert " it holds" not in t and " held" not in t and "{n_inspected}" in t
+    assert "NOT in this build" not in json.dumps(cfg)

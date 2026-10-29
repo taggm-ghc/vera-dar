@@ -90,6 +90,10 @@
     "claim_check": {
       "note": "Item #79 (R1 criterion: each cited claim is checked against the cited record's text). One call per answer judges every cited sentence against the abstracts it cites. Checkers are tried in order; a different model family from the answering model is preferred. If every checker fails, the answer fails closed to unavailable_text.",
       "enabled": true,
+      "context_title": false,
+      "context_title_note": "FA8-2 (IMPL-1028-FA8). UNCALIBRATED. true: each cited passage is sent to the checker as {title, text} and the rubric gains 'a claim attributed to a different subject, population or activity than the passage describes is unsupported'. Titles are capped at 300 characters (TITLE_MAX_CHARS, UNCALIBRATED). Default false = prompt unchanged. This block also feeds the abstract path (ask_service.py:842-849), so both switches change abstract answers too, not only full-document/D8. Calibrate before enabling: run the checker before/after on at least 60 hand-labelled live (claim, passage) pairs (F-4 close set in gates-1029 plus the 4 live-check answers), two skeptic agents on distinct models label the pairs, record the verdict-transition matrix and false-pass / false-drop counts (plan-1028-firstask section 6). Owner flips.",
+      "keep_partial": true,
+      "keep_partial_note": "FA8-3 (IMPL-1028-FA8). UNCALIBRATED. true (default) = today's behaviour: partial claims are kept and marked. false = partial claims are removed like unsupported ones (counted in 'removed', record verdict stays 'partial' with partial_removed=true) and the per-part D8 coverage recomputes from the supported claims left. Calibrate with the same at-least-60-pair before/after run as context_title (false-drop count of genuinely adequate partial claims vs false-pass count removed). Owner decision OD-FA-8.",
       "checkers": [
         {
           "provider": "groq",

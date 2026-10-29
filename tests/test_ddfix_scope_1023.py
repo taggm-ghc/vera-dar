@@ -124,7 +124,7 @@ def test_notice_says_not_checked_when_every_candidate_was_deferred():
     acq = A.cfg()
     none_text = acq["scope_expansion"]["inline_notice_none"]
     t = ask_service._inline_notice(acq, _o(["discovered_not_selected"] * 5))
-    assert none_text not in t and "None of the 5 documents" in t and "5 found but not selected" in t
+    assert none_text not in t and "None of the 5 documents" in t and "5 found but not shortlisted" in t
 
 
 def test_notice_keeps_configured_text_and_adds_unchecked_count_when_mixed():

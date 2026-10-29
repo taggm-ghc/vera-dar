@@ -1,0 +1,23 @@
+{
+  "_status": "SEED / FALLBACK ONLY (owner rule 2026-10-28: a curated table is a DB table; config is seed or fallback). Target: a DB table term_concept_groups (id, phrases, ambiguous flags, cues, created, modified, version, state draft|active|suspended|retired). Its DDL is a later owner-gated step; until then vera/term_expansion.py reads this file, read-only at runtime. Owner-curated, closed list.",
+  "_calibration_note": "UNCALIBRATED (IMPL-1028-E1FA7, planner seed). Membership, ambiguous flags and cues are not measured on real data. Method (PLAN-1028-FIRSTASK s.6, rows E1): grep the held corpus and the scope_set questions for each alias with context; record collision counts (corpus spans and questions) per alias; mark any alias with a collision > 0 ambiguous; offline replay of admit() with term_groups on vs off over the scope_set questions (rejected_by_reason deltas) plus the live boxing trace.",
+  "groups": [
+    {
+      "id": "mixedmartialarts",
+      "phrases": [
+        {"text": "mixed martial arts"},
+        {"text": "mma", "ambiguous": true, "_ambiguous_note": "MMA also = methylmalonic acid (clinical chemistry), methyl methacrylate / PMMA (polymers). Triggers the group only with a second group phrase or a listed cue in the question."}
+      ],
+      "cues": ["ufc", "octagon", "grappling", "jiu-jitsu", "jiujitsu", "mixed martial", "martial arts", "kickboxing", "muay thai", "boxing", "boxer", "boxers", "fighter", "fighters"],
+      "_cues_note": "REVIEW-1028-E1FA7 F1: STRONG domain cues only. Generic cues (cage, combat, sport(s), bout(s), fight(s), fighting) were removed: they triggered the group for 'MMA ... PMMA cages', 'combat veterans' and 'What sport raises MMA?'. UNCALIBRATED; method: vera.term_expansion.collision_counts over the held corpus and the scope_set questions (plan s.6)."
+    },
+    {
+      "id": "ultimatefightingchampionship",
+      "phrases": [
+        {"text": "ultimate fighting championship"},
+        {"text": "ufc"}
+      ],
+      "cues": []
+    }
+  ]
+}

@@ -27,7 +27,7 @@ _TOKEN_TEXT = {
     "model_insufficient": "insufficient_text",
 }
 _TOKEN_DEFAULT = {
-    "insufficient_full_document_evidence": "VERA-DAR found no passage in the documents it holds that answers this question well enough, so it has not written an answer.",
+    "insufficient_full_document_evidence": "VERA-DAR found no passage in the documents it searched that answers this question well enough, so it has not written an answer.",
     "full_document_corpus_unusable": "VERA-DAR's full-document collection could not be verified right now, so it has not written an answer.",
     "no_valid_citations": "The draft answer did not cite the inspected passages, so it was not shown.",
     "checker_unavailable": "The automated claim check was unavailable, so no answer is shown.",
@@ -108,16 +108,18 @@ def _distinct_docs(items) -> int:
 
 
 def evidence_scope_line(data: dict | None) -> str | None:
-    """'N documents inspected, M passages admitted (from K documents)' from the response, or None without evidence fields.
+    """'N documents inspected, M passages from K documents selected as possible evidence' from the response, or None without evidence fields.
     N and K count distinct documents, so inspected vs used are never conflated."""
     data = data if isinstance(data, dict) else {}
     if data.get("evidence_status") is None and "examined_full_documents" not in data and "admitted_evidence" not in data:
         return None
     n, m = _distinct_docs(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
     k = _distinct_docs(data.get("admitted_evidence")) if isinstance(data.get("admitted_evidence"), list) else 0
-    used = f" (from {k} document{'s' if k != 1 else ''})" if m and k else ""
-    return (f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected, "
-            f"{m} passage{'s' if m != 1 else ''} admitted as evidence{used}.")
+    head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
+    if not m:
+        return head + "no passages selected as possible evidence."
+    frm = f" from {k} document{'s' if k != 1 else ''}" if k else ""
+    return head + f"{m} passage{'s' if m != 1 else ''}{frm} selected as possible evidence."
 
 
 _SOURCE_LABEL = {"db": "stored database", "bundle": "local files"}
@@ -135,7 +137,7 @@ def evidence_source_line(data: dict | None) -> str | None:
         held = _count(ia.get("reused")) + _count(ia.get("n_persisted"))
         admitted = _count(data.get("admitted_evidence")) > 0  # SEC U3: "used for this answer" needs admitted evidence
         if only and not admitted:
-            return "Evidence source: documents fetched for this request (not saved); none were admitted as evidence."
+            return "Evidence source: documents fetched for this request (not saved); none were selected as possible evidence."
         if only and held:
             return "Evidence source: stored database and documents used for this answer only."
         if only:

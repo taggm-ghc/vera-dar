@@ -56,7 +56,7 @@ def test_answer_shows_quote_span_attribution_scope_and_no_abstract_wording(monke
     at = _render(monkeypatch, _body())
     t = _main_text(at)
     assert QUOTE in t and "chars" in t and "20" in t
-    assert "2 documents inspected, 1 passage admitted" in t
+    assert "2 documents inspected; 1 passage from 1 document selected as possible evidence" in t
     assert "A\\. Author" in t and "CC BY 4\\.0" in t
     assert "parts answered: 1 of 2" in t and "2 left out" in t
     scoped = " ".join([m.value for m in at.markdown if m.value.startswith("**Sources**")]
@@ -81,7 +81,7 @@ def test_insufficient_fallback_reason_no_raw_token_no_full_doc_claim(monkeypatch
     t = _main_text(at)
     assert ue.fallback_text("insufficient_full_document_evidence", n_inspected=1) in [i.value for i in at.info]
     assert "insufficient_full_document_evidence" not in _tree_text(at)
-    assert "1 document inspected, 0 passages admitted" in t
+    assert "1 document inspected; no passages selected as possible evidence" in t
     assert "full document acquired" not in t.lower()
 
 
@@ -167,7 +167,7 @@ def test_db_source_answer_renders_answer_sources_and_evidence(monkeypatch):
     at = _render(monkeypatch, _body(source="db", corpus_source={"kind": "db"}))
     t = _main_text(at)
     assert "Partial answer" in t and TITLE in t  # answer heading (completeness is partial in _body) and the Sources block
-    assert QUOTE in t and "2 documents inspected, 1 passage admitted" in t
+    assert QUOTE in t and "2 documents inspected; 1 passage from 1 document selected as possible evidence" in t
     assert any(c.value == "Evidence source: stored database." for c in at.caption)
     assert "A\\. Author" in t and "CC BY 4\\.0" in t
     assert not any("abstract" in c.value.lower() for c in at.caption if c.value.startswith("Claim check"))
@@ -208,12 +208,12 @@ def test_sources_grouped_one_entry_per_document_cited_first(monkeypatch):
     rows = [m.value for m in at.markdown if TITLE in m.value]
     assert len(rows) == 1 and rows[0].startswith("[1] ")
     caps = " ".join(c.value for c in at.caption)
-    assert "passages used: chars=10\\-19" in caps and "also admitted, not cited: chars=20\\-29" in caps
+    assert "passages used: chars=10\\-19" in caps and "also selected, not cited: chars=20\\-29" in caps
 
 
 def test_scope_counts_distinct_documents_inspected_and_used(monkeypatch):
     t = _main_text(_render(monkeypatch, _multi()))
-    assert "1 document inspected, 6 passages admitted as evidence (from 1 document)" in t
+    assert "1 document inspected; 6 passages from 1 document selected as possible evidence" in t
 
 
 @pytest.mark.parametrize("ia,expect", [
@@ -233,7 +233,7 @@ def test_uncited_document_listed_under_also_admitted_heading(monkeypatch):
                          "span": "chars=1-9", "acquisition": "full_document_acquired"})
     at = _render(monkeypatch, b)
     md = [m.value for m in at.markdown]
-    i = next(k for k, v in enumerate(md) if v.startswith("**Also admitted, not cited**"))
+    i = next(k for k, v in enumerate(md) if v.startswith("**Also selected, not cited**"))
     assert any("Herpes paper" in v for v in md[i + 1:]) and not any("Herpes paper" in v for v in md[:i])
 
 
@@ -247,10 +247,10 @@ def test_u1_cited_set_comes_from_answer_markers_not_citation_rows(monkeypatch):
     b["answer"] = "Batching reduces latency [1]. Another claim [7]."  # [7] has no citation row (no attribution)
     b["citations"] = [c for c in b["citations"] if c["n"] == 1]
     md = [m.value for m in _render(monkeypatch, b).markdown]
-    assert not any(v.startswith("**Also admitted, not cited**") for v in md)
+    assert not any(v.startswith("**Also selected, not cited**") for v in md)
     b["answer"] = "Batching reduces latency [1]."
     md = [m.value for m in _render(monkeypatch, b).markdown]
-    assert any(v.startswith("**Also admitted, not cited**") for v in md)
+    assert any(v.startswith("**Also selected, not cited**") for v in md)
 
 
 @pytest.mark.parametrize("title,url,must_not", [
@@ -290,8 +290,8 @@ def test_u4_render_sources_with_hostile_and_sentinel_host_titles(monkeypatch):
 
 
 @pytest.mark.parametrize("ia,adm,expect", [
-    ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0}, [], "none were admitted as evidence"),
-    ({"documents": [{"reason": "below_persist_min"}], "reused": 1, "n_persisted": 0}, [], "none were admitted as evidence"),
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0}, [], "none were selected as possible evidence"),
+    ({"documents": [{"reason": "below_persist_min"}], "reused": 1, "n_persisted": 0}, [], "none were selected as possible evidence"),
     ({"documents": [{"reason": "below_persist_min"}], "reused": 0, "n_persisted": 0},
      [{"span_id": "s1", "document_id": "d1", "span": "chars=1-9"}], "documents used for this answer only (not saved)"),
 ])

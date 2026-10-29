@@ -107,9 +107,9 @@ def reason_from_code(code: str) -> str:
 DIAG_STATUSES = ("discovered_not_selected", "selected_not_fetched", "fetched_rejected", "acquired_not_admitted",
                  "skipped", "admitted")
 DIAG_LABELS = {  # plain-language aggregate labels for the UI (no individual sources, no gate names)
-    "discovered_not_selected": "found but not selected", "selected_not_fetched": "selected but not retrieved",
-    "fetched_rejected": "retrieved but not usable", "acquired_not_admitted": "read but not used",
-    "skipped": "not reached (time, limit or cap)", "admitted": "used"}
+    "discovered_not_selected": "found but not shortlisted", "selected_not_fetched": "shortlisted but not retrieved",
+    "fetched_rejected": "retrieved but not usable", "acquired_not_admitted": "read but did not pass the initial relevance check",
+    "skipped": "not reached (time, limit or cap)", "admitted": "passed the initial relevance check"}
 _DEFER, _KNOWN, _NODOI = "R-ACQ-DEFER_CAP", "R-ACQ-KNOWN", "R-ACQ-NODOI"
 _PREFILTER = {"R-ACQ-NOTOA": "ineligible_not_open_access", "R-ACQ-NOLIC": "ineligible_licence_prefilter",
               _NODOI: "ineligible_no_identifier", "R-ACQ-DUPLICATE": "duplicate", _KNOWN: "duplicate_or_in_corpus",
@@ -294,7 +294,8 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
     causes += [x for x in extra if x not in causes]
     if not applicable and not budget_exhausted and not extra:
         causes = ["none_searched"]
-    admitted = new_evidence_admitted or any(c.terminal_reason == "admitted" for c in candidates)
+    # Passage-level only: a candidate that passed the initial relevance check is not evidence used in the answer.
+    admitted = bool(new_evidence_admitted)
     why = (" Coverage was incomplete because " + _cause_phrase([c for c in causes if c in _CAUSE_TEXT]) + "."
            if causes and not complete and any(c in _CAUSE_TEXT for c in causes) else "")
 
@@ -327,7 +328,13 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                     f"({acq} of {len(candidates)}), so there is not enough usable evidence to answer.")
         else:
             kind = "no_valuable_source"
-            if candidates:
+            n_pass = sum(1 for c in candidates if c.terminal_reason == "admitted")
+            if n_pass:
+                text = (NO_VALUABLE_SENTENCE + (" A document passed" if n_pass == 1 else " Some documents passed")
+                        + " the initial relevance check, but none of "
+                        + ("its passages answered" if n_pass == 1 else "their passages answered")
+                        + " the question well enough.")
+            elif candidates:
                 text = (NO_VALUABLE_SENTENCE + " Candidates were found but did not meet "
                         "the admission criteria.")
             else:

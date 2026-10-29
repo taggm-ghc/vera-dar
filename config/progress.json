@@ -1,0 +1,15 @@
+{
+  "_comment": "PROG-1027 progress side-channel limits. Single flag source: enabled (ships false). Env VERA_PROGRESS_DISABLED=1 forces off (kill switch, read by API and UI).",
+  "_calibration": "PROVISIONAL / UNCALIBRATED (plan s3c, DV-PROG-1). No live data yet; review by 2026-11-10. max_records 64: occupancy = Ask arrivals x ttl_s; under public caps at most 40/day per shared client, so 64 leaves margin; oldest closed record is evicted first. max_events_per_record 64: about 10 stages x 2 providers + ACQUIRE updates (inline budget 2) is about 30, doubled; the terminal event is always kept. ttl_s 600 >= UI backstop (ASK_TIMEOUT_S + poll_margin_s) plus render margin. poll_interval_s 1.0: spike showed 1 s keeps reruns responsive. poll_margin_s 5: UI backstop = ASK_TIMEOUT_S + margin. first_event_grace_s 10: 404 within this grace keeps the Sending label. get_timeout_s 2 <= 2 x poll_interval_s. max_count 10000: far above any real count. Data that would change them: store-full count > 0, max events seen in smoke, observed POST-to-RECEIVED and GET latency, owner smoke feel.",
+  "_note": "OWNER DECISION PENDING (PROGE-1028 review): PROG-E keeps progress state in-process (STORE/DROPS), which conflicts with the owner 10-28 rule that all runtime/dynamic state lives in the DB. Keep enabled=false until the owner either accepts a recorded divergence or approves a DB table (DDL owner-gated). It also relies on a single uvicorn worker.",
+  "enabled": false,
+  "max_records": 64,
+  "max_events_per_record": 64,
+  "max_events_per_poll": 64,
+  "ttl_s": 600,
+  "poll_interval_s": 1.0,
+  "poll_margin_s": 5,
+  "first_event_grace_s": 10,
+  "get_timeout_s": 2,
+  "max_count": 10000
+}
