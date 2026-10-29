@@ -14,6 +14,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 import requests
+from vera import strict_json
 
 from vera.selective_fetch import fetch_html
 from vera.search_providers import OPENALEX_METADATA_LICENCE, USER_AGENT, licence_record, reconstruct_abstract
@@ -73,7 +74,7 @@ def _s2(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict:
     try:
         r = http_get(S2_PAPER.format(doi=doi), params={"fields": "title,abstract,publicationDate"},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
-        return r.json() if r.status_code == 200 else {}
+        return strict_json.response_json(r) if r.status_code == 200 else {}
     except (requests.RequestException, ValueError):
         return {}
 
@@ -102,7 +103,7 @@ def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None
     try:
         r = http_get(OPENALEX_WORK.format(doi=doi), params={"select": OPENALEX_FIELDS},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
-        w = r.json() if r.status_code == 200 else None
+        w = strict_json.response_json(r, keys="exact") if r.status_code == 200 else None
     except (requests.RequestException, ValueError):
         w = None
     if w:
@@ -130,7 +131,7 @@ def lookup_title(title: str, timeout_s: float, min_match: float, http_get=_LIMIT
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
         if r.status_code != 200:
             return None
-        items = r.json().get("results") or []
+        items = strict_json.response_json(r, keys="exact").get("results") or []
     except (requests.RequestException, ValueError):
         return None
     for w in items:

@@ -70,10 +70,10 @@ def test_dar_domain_chunks_max_version_ignores_kind():
 
 def test_snapshot_documents_exclude_kind_when_contract_kinds_passed():
     eng = _Eng()
-    kinds = answer_contract.load_config()["acquisition"]["non_document_text_kinds"]
+    kinds = answer_contract.full_document_kinds()  # GAP-DBKIND-1028: fail-closed allow-list (fulldoc_chunks absent)
     DarReader(eng).load_snapshot(kinds, span_text="x")
     doc = [(s, p) for s, p in eng.calls if "DISTINCT ON" in s][0]
-    assert KIND in doc[1]["kinds"] and "NOT (s.provenance->>'stored_text_kind' = ANY(:kinds))" in doc[0]
+    assert KIND not in doc[1]["kinds"] and "s.provenance->>'stored_text_kind' = ANY(:kinds)" in doc[0] and "NOT (s.provenance" not in doc[0]
 
 
 def test_corpus_description_title_sample_excludes_kind():

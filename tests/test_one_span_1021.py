@@ -18,7 +18,7 @@ from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, inline_a
 
 @pytest.fixture(autouse=True)
 def _legacy_decline_path(monkeypatch):
-    """DDFIX-1023/SCOPE: an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
     monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)

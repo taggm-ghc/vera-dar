@@ -280,7 +280,7 @@ def test_b2_scope_policy_and_stage_lines():
 
 def test_b2_render_shows_grouped_entry_and_policy(monkeypatch, public_env):
     text = _tree_text(_run(monkeypatch, _ok(_b2_body(), [])))
-    assert "[1, 2, 3]" in text and "Scope policy: this question is outside" in text
+    assert "[1, 2, 3]" in text and "Coverage policy: VERA-DAR's collection could not answer" in text  # OD-1028(6) wording
     assert "Evidence authorized for answer generation: yes." in text
 
 

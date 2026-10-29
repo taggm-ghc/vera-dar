@@ -40,7 +40,7 @@ from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from vera import acq_config, rate_limit
+from vera import acq_config, acq_rounds, rate_limit
 from vera import auto_acquire as aa
 from vera import research_outcome, search_providers
 
@@ -177,7 +177,7 @@ def _cache_key(question: str, served, disc=None) -> tuple:
 
 
 def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, deps_factory=None,
-            served=None, discovered=None, prefer_recent: bool = False) -> Outcome:
+            served=None, discovered=None, prefer_recent: bool = False, topic_key: str = "") -> Outcome:
     """Never raises. See the module docstring for statuses. served (R2): doc keys the caller's stored-corpus attempt
     already tried (skipped here); None = the currently served acquired corpus (deps.corpus_keys). discovered (P0-5):
     the request's discovery results (list of source dicts), used only when inline.use_discovered is true."""
@@ -224,7 +224,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     try:
         out = _run(question, acq, env, clock, deps_factory, served,
                    **({"disc": disc} if disc is not None else {}),  # P0-5: flag off = the unchanged call
-                   **({"prefer_recent": True} if prefer_recent else {}))
+                   **({"prefer_recent": True} if prefer_recent else {}),
+                   **({"topic_key": topic_key} if topic_key else {}))
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
     finally:
@@ -240,13 +241,15 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     return out
 
 
-def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False) -> Outcome:
+def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
+         topic_key="") -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     with rate_limit.deadline_scope(time.monotonic() + float(_b(acq, "deadline_s", 45))):
         return _run_body(question, acq, env, clock, deps_factory, served,
                          **({"disc": disc} if disc is not None else {}),
-                         **({"prefer_recent": True} if prefer_recent else {}))
+                         **({"prefer_recent": True} if prefer_recent else {}),
+                         **({"topic_key": topic_key} if topic_key else {}))
 
 
 QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the background acquisition queue
@@ -343,7 +346,8 @@ def _arxiv_id_str(v):
     return v or None
 
 
-def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False) -> Outcome:
+def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
+              topic_key="") -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
     deadline = t0 + _b(acq, "deadline_s", 45)
@@ -408,6 +412,13 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     reserved, used = 0, 0
     try:
         budget = reserved = aa.docs_budget(acq, deps, clock=clock, reserve=True)  # VER L5: reserved under the lock
+
+        def track(n_stored):  # ROUNDS-1028 (observational): the job's stored count and route exhaustion -> topic round
+            if budget <= 0:
+                return  # a spent daily budget is a cap effect, not a result of the topic's routes
+            acq_rounds.observe(question, acq, n_stored, acq_rounds.routes_exhausted(
+                len(ranked), len(plans), fresh_budget, acq_config.reason(acq, "deadline") in codes), "inline",
+                hint=topic_key)
         # R2 defect 1: a spent docs_per_day no longer stops before the search: reusing already-stored documents
         # acquires nothing, so it is not capped. With budget 0 nothing new is resolved, fetched or stored.
         s = acq.get("search") or {}
@@ -473,8 +484,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     e["outcome"] = "already_stored"
         ranked = ranked_left
         ms["reuse"] = int((clock() - t) * 1000)
-        job_max = int(acq_config.bound(acq, "max_docs_per_job"))
-        fresh_budget = max(0, min(budget, job_max - len(reused[0])))
+        # ACQ S4-0 L4b-0 (B3): the fresh budget is separate from reuse; documents answered from stored rows no longer
+        # reduce it. Same cap value as before (bounds.inline_fresh_docs, default max_docs_per_job), still bounded by the
+        # remaining daily budget.
+        fresh_budget = max(0, min(budget, acq_config.inline_fresh_docs(acq)))
         t = clock()
         per: dict = {}  # FRESH-1023 C3: always collected (per-candidate records); entries stay disc-only
         sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
@@ -538,6 +551,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 count(acq_config.reason(acq, "daily_cap"))
                 return done(Outcome("daily_cap"))
             late = clock() >= deadline or acq_config.reason(acq, "deadline") in codes
+            track(0)
             return done(Outcome("deadline" if late else "none"))
         out = Outcome("ok", admitted=len(plans))
         out.reused = len(reused[0])
@@ -580,6 +594,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         ms["write"] = int((clock() - t) * 1000)
         t = clock()
         out.corpus = ephemeral_corpus(plans, acq, fdcfg, icfg, stored=reused)
+        track(out.stored)
         ms["corpus"] = int((clock() - t) * 1000)
         if out.corpus is None:
             out.status = "unanswered"  # VER L3: documents passed the checks but no usable corpus; never "none"

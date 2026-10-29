@@ -11,17 +11,16 @@ import statistics
 import time
 from typing import Callable
 
-from vera.pricing.config import latest_pricing_for, load_model_pricing
+from vera.generator_client import cost_usd as _gen_cost, default_generator_model, lazy_module_attr, make_client
 
-DEFAULT_MODEL = "gpt-4.1-nano"  # cheapest acceptable; same model as M5 (R1 rule)
+# DEFAULT_MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
 N_RUNS = 3
 MAX_OUTPUT_TOKENS = 2500  # per-run step cap
 
 
 def _openai_call(question: str, model: str) -> dict:
-    from vera.ask_service import _get_client
     t0 = time.monotonic()
-    c = _get_client().chat.completions.create(
+    c = make_client().chat.completions.create(
         model=model, messages=[{"role": "user", "content": question}],
         max_tokens=MAX_OUTPUT_TOKENS)
     return {"text": c.choices[0].message.content or "",
@@ -31,14 +30,10 @@ def _openai_call(question: str, model: str) -> dict:
 
 
 def _cost(model: str, ptok: int, ctok: int) -> float:
-    rec = latest_pricing_for(model, load_model_pricing())
-    if rec is None:
-        raise RuntimeError(f"No pricing record for {model!r} in config/model-pricing.json; "
-                           "refusing to report an unpriced cost as $0.")
-    return round(ptok / 1e6 * rec.input + ctok / 1e6 * rec.output, 6)
+    return _gen_cost(model, ptok, ctok)  # unpriced model raises UnpricedModelError (a RuntimeError)
 
 
-def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
+def collect_baseline(question: str, model: str | None = None, *,
                      llm_call: Callable[[str, str], dict] | None = None,
                      n_runs: int = N_RUNS) -> dict:
     """Return the median baseline run plus per-run logs.
@@ -46,6 +41,7 @@ def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
     `llm_call(question, model) -> {text, prompt_tokens, completion_tokens, latency_s}`
     is injectable so tests never touch the network.
     """
+    model = model or lazy_module_attr(globals(), "DEFAULT_MODEL")  # default: generator.model, read at first use
     call = llm_call or _openai_call
     runs = []
     for i in range(n_runs):  # bounded: exactly n_runs steps, no retry loop
@@ -74,3 +70,9 @@ def collect_baseline(question: str, model: str = DEFAULT_MODEL, *,
                  for r in runs],
         "question": question,
     }
+
+
+def __getattr__(name):  # PEP 562: DEFAULT_MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "DEFAULT_MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from vera import strict_json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -148,7 +149,7 @@ def load_text(item: dict, base_dir: Path, cfg: dict) -> tuple[str, dict]:
     if len(raw) > int(cfg["max_text_bytes"]):
         _refuse(cfg, "too_large", f"text is {len(raw)} bytes, above max_text_bytes {cfg['max_text_bytes']}")
     try:
-        meta = json.loads(mp.read_text(encoding="utf-8"))
+        meta = strict_json.loads(mp.read_text(encoding="utf-8"))
         text = raw.decode("utf-8")
     except (ValueError, UnicodeDecodeError) as e:
         _refuse(cfg, "text_missing", f"text or conversion record unreadable: {e!r}")
@@ -182,6 +183,13 @@ def _cc_family(url_or_id, cfg: dict) -> str | None:
     return "cc-" + re.sub(r"\s+", "-", m.group(1).strip()) + "-" + m.group(2)
 
 
+def licence_version(url_or_id) -> str | None:
+    """PROVFIX-1028 (e): the CC version stated in a licence URL or id ("4.0", "3.0"), else None. Label only."""
+    m = re.search(r"(?:/licen[sc]es/[a-z\-]+/|\bcc[\s\-]+by(?:[\s\-]+(?:nc|sa|nd))*[\s\-]+)(\d\.\d)\b",
+                  str(url_or_id or "").lower())
+    return m.group(1) if m else None
+
+
 def _public_domain_zero(rec: dict) -> bool:
     s = f"{rec.get('id') or ''} {rec.get('url') or ''}".lower()
     return "publicdomain/zero" in s or bool(re.search(r"\bcc0\b", s))
@@ -192,7 +200,13 @@ def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | N
     arxiv_evidence (ARX-SECREV-1023 R1): the version-bound licence evidence built ONLY by vera.arxiv_fulltext (route
     write path; read path: arxiv_fulltext.stored_evidence). It is passed through unchanged and is never read from or
     synthesised out of the item, the conversion record, a manifest or a discovery record."""
-    lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"), "source": "manifest declared"}}
+    # PROVFIX-1028 (c): the label names where the declared licence really came from. The curated manifest path sets
+    # no item["licence_source"] and keeps "manifest declared"; automatic acquisition names its real sources.
+    lic = {"content": {"id": item.get("licence"), "url": item.get("licence_url"),
+                       "source": item.get("licence_source") or "manifest declared"}}
+    ver = licence_version(item.get("licence_url")) or licence_version(item.get("licence"))
+    if ver:  # PROVFIX-1028 (e): additive label field; never read by any decision
+        lic["content"]["version"] = ver
     if arxiv_evidence is not None:
         lic["arxiv_evidence"] = dict(arxiv_evidence)
     cand = {"url": item["fulltext_url"], "licence": lic, "stored_text_kind": cfg["stored_text_kind"],
@@ -224,7 +238,36 @@ def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | N
             _refuse(cfg, "licence_hold", f"licence embedded in the document is not a recognised licence: held")
         lic["embedded"] = {"id": emb.get("id"), "url": emb.get("url"), "statement": emb.get("statement"),
                            "source": "document"}
+    elif isinstance(meta.get("jats_licences"), list) and meta["jats_licences"]:
+        # PROVFIX-1028 (d): the converter's single-element read found no id/url, but the per-element JATS summary
+        # (already decided by licence_elements_decision) holds a licence element: record it (label only, no decision).
+        e0 = meta["jats_licences"][0] or {}
+        lic["embedded"] = {"id": e0.get("type"), "url": e0.get("href") or e0.get("ref"), "statement": e0.get("text"),
+                           "source": "document"}
     return {"licence": lic, "licence_decision": d, "licence_rationale": cand["gate_a_rationale"].strip()}
+
+
+def legacy_label_view(provenance: dict, meta: dict) -> dict:
+    """FIXR-7DA-1028: the re-derived provenance as the pre-PROVFIX-1028 code (7da574a) would have written it.
+
+    PROVFIX-1028 added label-only fields that no decision reads: licence.content.version, the licence.embedded entry
+    taken from the per-element JATS summary when the converter's single-element read found no id/url, and
+    discovered_via. Rows stored before that change lack them, so the read path (vera.fulldoc_db) accepts a stored row
+    that equals EITHER the full re-derived record OR this view. Only those three label additions are removed; licence
+    id, url, source, decision, the converter-derived embedded licence, hashes and every other field are kept, so any
+    change to them still fails the equality check."""
+    out = dict(provenance)
+    out.pop("discovered_via", None)
+    lic = out.get("licence")
+    if isinstance(lic, dict):
+        lic = dict(lic)
+        if isinstance(lic.get("content"), dict):
+            lic["content"] = {k: v for k, v in lic["content"].items() if k != "version"}
+        conv = (meta.get("meta") or {}).get("licence") or {} if isinstance(meta, dict) else {}
+        if not (isinstance(conv, dict) and (conv.get("id") or conv.get("url"))):
+            lic.pop("embedded", None)  # only the PROVFIX (d) jats_licences branch can have produced it
+        out["licence"] = lic
+    return out
 
 
 def check_item_declared(item: dict, cfg: dict) -> None:
@@ -270,6 +313,8 @@ def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | 
         "admitted_by": cfg["admitted_by"], "retrieved_at": now, "document_id": item["document_id"],
         "sections": meta.get("sections") or [], "citations": meta.get("citations") or [],
         "references": meta.get("references") or []}
+    if item.get("discovered_via"):  # PROVFIX-1028 (f): the discovery route (automatic acquisition); curated items omit it
+        provenance["discovered_via"] = str(item["discovered_via"])
     return {"document_id": item["document_id"], "canonical_url": cu, "url": item["landing_url"],
             "title": item["title"], "text": text, "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "provenance": provenance, "published": str(item["published_year"]),
@@ -288,7 +333,7 @@ def licence_observations_for(rec: dict, cfg: dict, run_id, candidate_id=None, no
     content = lic.get("content") or {}
     via = f"{content.get('source')}: {content.get('url')}"
     emb = lic.get("embedded")
-    if emb:
+    if emb and (emb.get("url") or emb.get("id")):
         via += f"; document: {emb.get('url') or emb.get('id')}"
     cand = {"url": p["url"], "doi": p["doi"], "licence_decision": p["licence_decision"],
             "stored_text_kind": cfg["stored_text_kind"], "gate_a_decision": None,
@@ -479,10 +524,10 @@ def check_persist(res: dict, label: str) -> dict:
     return res
 
 
-def prime_from_store(dar, lookup: RoLookup, reader, non_doc_kinds) -> tuple[dict, list[dict]]:
+def prime_from_store(dar, lookup: RoLookup, reader, full_doc_kinds) -> tuple[dict, list[dict]]:
     """Restore the stored corpus into `dar` and seed one persist ctx. Returns (ctx, pending) where pending are stored
     documents with no evidence spans (to be re-ingested and persisted)."""
-    snap = reader.load_snapshot(non_doc_kinds)
+    snap = reader.load_snapshot(full_doc_kinds)
     docs = snap.get("documents") or []
     counts = lookup.span_counts([d["db_source_id"] for d in docs])
     pending = [d for d in docs if counts.get(int(d["db_source_id"]), 0) == 0]

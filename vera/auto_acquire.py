@@ -710,6 +710,8 @@ def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url
             "landing_url": landing_url or cfg["resolve"]["landing_url_template"].format(pmcid=res["pmcid"]),
             "fulltext_url": final_url, "fulltext_format": (cfg.get("fetch") or {}).get("fulltext_format", "jats-xml"),
             "text_file": f"acquired/{did}.xml", "licence": res["licence"], "licence_url": res["licence_url"],
+            "licence_source": LICENCE_SOURCE_EPMC if res.get("pmcid") else LICENCE_SOURCE_JATS,  # PROVFIX-1028 (c)
+            "discovered_via": "europepmc" if res.get("pmcid") else "doi-landing",  # PROVFIX-1028 (f): the route
             "authors": authors, "published_year": year, "fetched_at": now_iso,
             "attribution": None, "verifier_status": icfg["verified_status"], "read_status": "VERBATIM"}
     if not doi:  # PLAN-NONDOI-1022: PMCID identity (doi stays None; the loader waives the DOI only for this kind)
@@ -794,6 +796,11 @@ def licence_elements_decision(elements: list, declared: str, icfg: dict) -> None
     fd = _family(declared)
     if len(fams) > 1 or fd is None or fams != {fd}:
         raise fl.Refused(codes["licence_mismatch"], "licence elements disagree with each other or the declared licence: held")
+
+
+# PROVFIX-1028 (c): provenance labels for where the declared licence of an automatically acquired document came from.
+LICENCE_SOURCE_EPMC = "Europe PMC licence field + JATS licence elements"
+LICENCE_SOURCE_JATS = "JATS licence elements"
 
 
 def build_plan(rec: dict, item: dict, meta: dict, cfg: dict, job: Job, score: float, value: dict, isbn: dict | None,
@@ -1063,6 +1070,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
     codes: dict = {}
     dur: dict = {}
     stored = 0
+    searched, left_over, budget = False, False, 0  # ROUNDS-1028: left_over = a ranked candidate was not evaluated (budget/deadline)
     tel = {"answer_eligible": 0}  # ONE-SPAN-1021: documents meeting answer_min_admitted_spans (none answer here)
 
     def count(code):
@@ -1116,11 +1124,14 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         served = set(deps.corpus_keys() or ())
         from vera.dar_corpus import doc_key_set
         ranked = rank_candidates(job.question, cands, cfg, served, fdcfg, count)
+        searched = True  # ROUNDS-1028: the search ran, so this job counts toward its topic's round
         for score, doi, cand, isbn in ranked:
             if stored >= budget:
+                left_over = True
                 break
             if clock() >= deadline:
                 count(acq_config.reason(cfg, "deadline"))
+                left_over = True
                 break
             try:
                 plan, isbn = evaluate_candidate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur)
@@ -1151,6 +1162,9 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 logger.warning("autoacq refresh failed (%s)", type(e).__name__)
     except Exception as e:  # noqa: BLE001
         count(f"R-ACQ-ERR-{type(e).__name__}"[:40])
+    if searched:  # ROUNDS-1028 (observational; never raises): job result -> per-topic round
+        from vera import acq_rounds
+        acq_rounds.observe(job.question, cfg, stored, not left_over and stored < budget, "background")  # a filled job budget is not exhaustion
     return done()
 
 

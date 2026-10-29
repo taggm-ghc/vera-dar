@@ -169,7 +169,8 @@ def gauntlet(question: str, sources: list[dict], llm_call, cfg: dict) -> list[di
     scored = score_candidates(question, cands, llm_call, cfg=GateAConfig(
         fetch_threshold=float(g.get("fetch_threshold", GateAConfig.fetch_threshold)),
         reject_threshold=float(g.get("reject_threshold", GateAConfig.reject_threshold)),
-        max_fetch=int(g.get("max_fetch", GateAConfig.max_fetch))))
+        max_fetch=int(g.get("max_fetch", GateAConfig.max_fetch))),
+        safe_cost=True)  # FIXR-7DA-1028: production admission fails closed safely (defer), never raises on cost
     return apply_licence_gate(scored)
 
 

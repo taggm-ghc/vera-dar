@@ -13,11 +13,20 @@ Scores are 0-1, higher is better, for three factors:
 composite = 0.4*query_fit + 0.4*evidentiary_value + 0.2*cost_risk
 """
 import json
+import logging
+from vera import strict_json
 from dataclasses import dataclass
 
 from vera.cost_ledger import CostLedger
+from vera.generator_client import cost_usd as _gen_cost, default_generator_model, lazy_module_attr, make_client
 
-MODEL = "gpt-4.1-nano"  # cheapest acceptable model; see config/model-selection.json
+logger = logging.getLogger("vera")
+
+# MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
+
+
+def _model() -> str:
+    return lazy_module_attr(globals(), "MODEL")
 WEIGHTS = {"query_fit": 0.4, "evidentiary_value": 0.4, "cost_risk": 0.2}
 FETCH_THRESHOLD = 0.6   # composite >= this -> fetch (subject to max_fetch)
 REJECT_THRESHOLD = 0.25  # composite < this AND scorer confident -> reject; else defer
@@ -72,21 +81,16 @@ def decide(score: float | None, uncertainty: str, cfg: GateAConfig) -> tuple[str
 
 
 def _openai_llm_call(messages: list[dict]) -> tuple[str, int, int]:
-    from vera.ask_service import _get_client
-    c = _get_client().chat.completions.create(
-        model=MODEL, messages=messages, response_format={"type": "json_object"}, temperature=0)
+    c = make_client().chat.completions.create(
+        model=_model(), messages=messages, response_format={"type": "json_object"}, temperature=0)
     return c.choices[0].message.content, c.usage.prompt_tokens, c.usage.completion_tokens
 
 
 def _llm_cost(prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
-    from vera.pricing.config import latest_pricing_for, load_model_pricing
-    rec = latest_pricing_for(MODEL, load_model_pricing())
-    if rec is None:
-        return 0.0, False
-    return round(prompt_tokens / 1e6 * rec.input + completion_tokens / 1e6 * rec.output, 6), True
+    return _gen_cost(_model(), prompt_tokens, completion_tokens), True  # unpriced model raises (fail closed)
 
 
-def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int, dict]:
+def _score_batch(question: str, batch: list[dict], llm_call, ledger, safe_cost: bool = False) -> dict[int, dict]:
     listing = [{"id": i, "title": c.get("title", ""), "url": c["url"],
                 "snippet": (c.get("snippet") or "")[:MAX_SNIPPET_CHARS]} for i, c in enumerate(batch)]
     messages = [
@@ -97,15 +101,31 @@ def _score_batch(question: str, batch: list[dict], llm_call, ledger) -> dict[int
         text, pt, ct = llm_call(messages)
     except Exception as exc:  # provider failure: fail verbosely per batch, candidates get deferred
         if ledger:
-            ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=0.0, ok=False,
+            ledger.record(kind="llm_gate_a", provider=f"openai:{_model()}", cost_usd=0.0, ok=False,
                           detail=f"{type(exc).__name__}: {exc}", units={"batch": len(batch)})
         return {}
-    cost, known = _llm_cost(pt, ct)
+    try:
+        cost, known = _llm_cost(pt, ct)
+    except Exception as exc:  # noqa: BLE001  unpriced model (fail closed)
+        if not safe_cost:  # eval / offline paths: an unpriced cost is an error (FREEGEN-1028)
+            raise
+        # FIXR-7DA-1028 (VER-REL7DA-1-1028 #2): the production /ask admission path never raises here. The batch is
+        # discarded unscored, so every candidate gets a "defer" decision; the class name (never the text) is logged.
+        logger.warning("gate A cost unpriced (%s): batch of %d deferred unscored", type(exc).__name__, len(batch))
+        if ledger:
+            try:
+                provider = f"openai:{_model()}"
+            except Exception:  # noqa: BLE001  generator config unreadable: still never raise on this path
+                provider = "openai:unknown"
+            ledger.record(kind="llm_gate_a", provider=provider, cost_usd=0.0, cost_known=False, ok=False,
+                          detail=type(exc).__name__, units={"prompt_tokens": pt, "completion_tokens": ct,
+                                                            "batch": len(batch)})
+        return {}
     if ledger:
-        ledger.record(kind="llm_gate_a", provider=f"openai:{MODEL}", cost_usd=cost, cost_known=known,
+        ledger.record(kind="llm_gate_a", provider=f"openai:{_model()}", cost_usd=cost, cost_known=known,
                       units={"prompt_tokens": pt, "completion_tokens": ct, "batch": len(batch)})
     try:
-        rows = json.loads(text)["scores"]
+        rows = strict_json.loads(text)["scores"]
     except (ValueError, KeyError, TypeError):
         return {}
     out = {}
@@ -129,18 +149,21 @@ def score_candidates(
     *,
     cfg: GateAConfig | None = None,
     ledger: CostLedger | None = None,
+    safe_cost: bool = False,
 ) -> list[dict]:
     """Return copies of `candidates` plus gate_a_score, gate_a_decision, gate_a_rationale,
     gate_a_factors, ordered by score descending (unscored last). Input order is not trusted.
 
     gate_a_rationale is a human-readable string: per-factor reasons plus the threshold reason.
     max_fetch caps `fetch` decisions; overflow is demoted to `defer` with that stated.
+    safe_cost=True (production /ask admission only): an unpriced cost defers the batch with a logged class-name
+    reason instead of raising; the default (eval paths) raises.
     """
     cfg = cfg or GateAConfig()
     scored: list[dict] = []
     for start in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[start:start + BATCH_SIZE]
-        results = _score_batch(question, batch, llm_call, ledger)
+        results = _score_batch(question, batch, llm_call, ledger, safe_cost)
         for i, cand in enumerate(batch):
             row = dict(cand)
             res = results.get(i)
@@ -165,3 +188,9 @@ def score_candidates(
                 row["gate_a_decision"] = "defer"
                 row["gate_a_rationale"] += f" Demoted to defer: fetch budget max_fetch={cfg.max_fetch} reached."
     return scored
+
+
+def __getattr__(name):  # PEP 562: MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

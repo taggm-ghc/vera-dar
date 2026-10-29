@@ -136,7 +136,7 @@ class FakeDB:
             out = []
             for s in sorted(self.sources, key=lambda s: (s["canonical_source_id"], -s["version"])):
                 kind = s["prov"].get("stored_text_kind")
-                if kind is None or kind in p["kinds"] or s["source_id"] <= p.get("since_source_id", 0):
+                if kind is None or kind not in p["kinds"] or s["source_id"] <= p.get("since_source_id", 0):
                     continue
                 if any(o[2] == s["canonical_source_id"] for o in out):
                     continue
@@ -309,13 +309,13 @@ def test_load_delta_sql_uses_bound_since_params_and_first_load_has_none():
     db = FakeDB()
     a = Ingestor(db)
     a.add(DOCS[0])
-    snap = DarReader(db).load_snapshot([], span_text=a.span_text)
+    snap = DarReader(db).load_snapshot(["full_text"], span_text=a.span_text)
     cur = snap["cursor"]
     assert cur["source_id"] == 1 and cur["domain_id"] == len(db.domains) and cur["span_id"] >= 1
     assert isinstance(cur["assoc_ts"], str)
     assert not any("since_" in k for _, p in db.sql_log for k in p)  # first (snapshot) load carries no 'since'
     db.sql_log.clear()
-    out = DarReader(db).load_delta(cur, [], span_text=a.span_text)
+    out = DarReader(db).load_delta(cur, ["full_text"], span_text=a.span_text)
     assert out["documents"] == [] and out["corpus_assoc"] == [] and out["chunk_assoc"] == [] and out["domains"] == []
     assert out["cursor"] == cur  # nothing new: cursor unchanged
     sqls = {s: p for s, p in db.sql_log}
@@ -328,7 +328,7 @@ def test_load_delta_sql_uses_bound_since_params_and_first_load_has_none():
             assert "created_at > CAST(:since_assoc_ts AS timestamptz)" in s and p["since_assoc_ts"] == cur["assoc_ts"]
         assert s.lstrip().upper().startswith("SELECT")
     a.add(DOCS[1])
-    out2 = DarReader(db).load_delta(cur, [], span_text=a.span_text)
+    out2 = DarReader(db).load_delta(cur, ["full_text"], span_text=a.span_text)
     assert [d["source_key"] for d in out2["documents"]] == [DOCS[1]["url"]]
     assert out2["cursor"]["source_id"] == 2 and out2["cursor"]["assoc_ts"] > cur["assoc_ts"]
 
@@ -336,7 +336,7 @@ def test_load_delta_sql_uses_bound_since_params_and_first_load_has_none():
 def test_load_delta_empty_since_and_none_ts_has_no_ts_clause():
     db = FakeDB()
     Ingestor(db).add(DOCS[0])
-    out = DarReader(db).load_delta({}, [])
+    out = DarReader(db).load_delta({}, ["full_text"])
     assert len(out["documents"]) == 1 and out["cursor"]["source_id"] == 1
     assert not any("since_assoc_ts" in p for _, p in db.sql_log)
 

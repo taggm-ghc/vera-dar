@@ -1,0 +1,86 @@
+{
+ "_note": "ACQ S4-0 L2 registry v1 DRAFT. These are planner-draft keyword anchors, NOT the owner-approved SF list. parent_openalex_topic is 'none' for every entry because parent OpenAlex topics are unresolved offline (no network in S4-0). Anchor texts are plain ASCII keywords, 40-120 words. IDF snapshot is built from these texts only.",
+ "anchor_registry_version": "v1-draft-s4-0",
+ "entries": [
+  {
+   "id": "epi-infectious-outbreak",
+   "label": "Infectious disease outbreak epidemiology",
+   "parent_openalex_topic": "none",
+   "field": "epidemiology",
+   "status": "planner_draft",
+   "anchor_text": "epidemiology infectious disease outbreak transmission incidence prevalence surveillance cohort case-control mortality morbidity reproduction number vaccination vaccine efficacy seroprevalence pandemic epidemic contact tracing risk factors population health public health intervention confidence interval odds ratio hazard ratio cases deaths hospitalization pathogen infection viral bacterial symptoms outbreak investigation modelling serological estimates"
+  },
+  {
+   "id": "epi-chronic-cohort",
+   "label": "Chronic disease cohort and risk epidemiology",
+   "parent_openalex_topic": "none",
+   "field": "epidemiology",
+   "status": "planner_draft",
+   "anchor_text": "cohort study chronic disease cardiovascular cancer diabetes obesity risk factors incidence relative risk longitudinal follow-up participants exposure smoking diet physical activity mortality hazard ratio adjusted confounding observational study population-based registry screening prevention randomized trial meta-analysis systematic review epidemiological association prospective cohort bias sample size questionnaire incidence rates health outcomes"
+  },
+  {
+   "id": "eco-biodiversity",
+   "label": "Biodiversity and species ecology",
+   "parent_openalex_topic": "none",
+   "field": "ecology",
+   "status": "planner_draft",
+   "anchor_text": "ecology biodiversity species richness abundance habitat conservation extinction population dynamics community ecosystem functional diversity trophic food web invasive species predator prey biomass forest wetland grassland survey conservation biology endangered ecological niche field sampling transect census taxa diversity index species distribution wildlife monitoring protected areas"
+  },
+  {
+   "id": "eco-ecosystem-function",
+   "label": "Ecosystem function and nutrient cycling",
+   "parent_openalex_topic": "none",
+   "field": "ecology",
+   "status": "planner_draft",
+   "anchor_text": "ecosystem productivity nutrient cycling nitrogen phosphorus carbon soil microbial decomposition primary production photosynthesis plant growth freshwater marine lake river watershed disturbance fire resilience succession land use restoration vegetation ecosystem services carbon storage greenhouse flux plant litter microbial community biogeochemical ecological processes field experiment"
+  },
+  {
+   "id": "clim-warming",
+   "label": "Climate change and global warming",
+   "parent_openalex_topic": "none",
+   "field": "climate science",
+   "status": "planner_draft",
+   "anchor_text": "climate change global warming temperature anomaly greenhouse gas emissions carbon dioxide radiative forcing climate sensitivity sea level rise ice sheet glacier ocean heat uptake IPCC scenario projection attribution extreme weather heatwave drought precipitation atmospheric warming mitigation adaptation climate observations global mean surface temperature trend carbon budget emissions pathways warming impacts"
+  },
+  {
+   "id": "clim-modelling",
+   "label": "Climate modelling and projections",
+   "parent_openalex_topic": "none",
+   "field": "climate science",
+   "status": "planner_draft",
+   "anchor_text": "climate model simulation general circulation model CMIP ensemble downscaling bias correction reanalysis atmosphere ocean coupled model parameterization uncertainty internal variability ENSO monsoon aerosol cloud feedback paleoclimate reconstruction observational record forecast skill regional climate model resolution validation observations uncertainty quantification climate projections scenarios"
+  },
+  {
+   "id": "repro-research",
+   "label": "Research reproducibility and open science",
+   "parent_openalex_topic": "none",
+   "field": "reproducibility and software practice",
+   "status": "planner_draft",
+   "anchor_text": "reproducibility replication crisis open science preregistration data sharing transparency statistical power p-hacking publication bias replicability research integrity FAIR principles metadata provenance reproducible workflow computational reproducibility version control containers peer review registered report research practices questionable results scientific rigor open data code availability reporting standards guidelines"
+  },
+  {
+   "id": "repro-software",
+   "label": "Research software engineering practice",
+   "parent_openalex_topic": "none",
+   "field": "reproducibility and software practice",
+   "status": "planner_draft",
+   "anchor_text": "research software engineering scientific software testing continuous integration code review documentation version control git open source package dependency management software sustainability technical debt best practices unit tests reproducible build notebooks scripts developers maintainability software citation software quality research code practices survey scientists programming skills training testing workflows"
+  },
+  {
+   "id": "aicode-assistants",
+   "label": "AI coding assistants and code generation",
+   "parent_openalex_topic": "none",
+   "field": "AI coding assistants",
+   "status": "planner_draft",
+   "anchor_text": "AI coding assistant large language model code generation Copilot ChatGPT programming developers productivity code completion program synthesis prompt benchmark HumanEval pass rate bugs vulnerabilities security code quality software engineering autocomplete pair programming empirical study students novices software developers experiment tool usage accuracy generated programs educational computing study"
+  },
+  {
+   "id": "aicode-agents-eval",
+   "label": "LLM coding agents and evaluation",
+   "parent_openalex_topic": "none",
+   "field": "AI coding assistants",
+   "status": "planner_draft",
+   "anchor_text": "LLM agent software engineering automated program repair issue resolution SWE-bench test generation code review hallucination evaluation trust developer experience controlled experiment agentic tool use repository-level code language models fine-tuning debugging refactoring maintainability adoption survey software maintenance benchmark tasks agents autonomy limitations evaluation metrics generated patches"
+  }
+ ]
+}

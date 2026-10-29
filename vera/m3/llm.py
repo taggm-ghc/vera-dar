@@ -9,16 +9,18 @@ rubric-guided appraisal, so none is used.
 from __future__ import annotations
 
 import json
+from vera import strict_json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
+from vera.generator_client import default_generator_model, lazy_module_attr, make_client, pricing_for
 from vera.pricing.config import latest_pricing_for, load_model_pricing, load_model_selection
 
 logger = logging.getLogger("vera.m3")
 
-DEFAULT_MODEL = "gpt-4.1-nano"
+# DEFAULT_MODEL: config/vera_eval_run.json generator.model (FREEGEN-1028), resolved lazily via __getattr__ below
 
 
 class LLMError(RuntimeError):
@@ -80,7 +82,7 @@ class OpenAIJSONClient:
 
     def __init__(self, model: str | None = None, log: CallLog | None = None, timeout_s: float = 60.0):
         sel = load_model_selection()
-        self.model = model or (sel.selected_model if sel else DEFAULT_MODEL)
+        self.model = model or (sel.selected_model if sel else lazy_module_attr(globals(), "DEFAULT_MODEL"))
         self.log = log if log is not None else CallLog()
         self.timeout_s = timeout_s
         self._client = None
@@ -88,17 +90,17 @@ class OpenAIJSONClient:
 
     def _get(self):
         if self._client is None:
-            from openai import OpenAI
-
-            self._client = OpenAI(timeout=self.timeout_s, max_retries=1)
+            self._client = make_client(timeout=self.timeout_s, max_retries=1)
         return self._client
 
     def _cost(self, pt: int, ct: int) -> float:
         if self._pricing is None:
-            return 0.0  # unknown price is logged as 0 but flagged in the record error
+            pricing_for(self.model)  # raises UnpricedModelError (fail closed; no silent $0)
         return round(pt / 1e6 * self._pricing.input + ct / 1e6 * self._pricing.output, 6)
 
     def complete_json(self, system: str, user: str, purpose: str) -> dict:
+        if self._pricing is None:
+            pricing_for(self.model)  # fail closed before any paid call
         t0 = time.monotonic()
         try:
             resp = self._get().chat.completions.create(
@@ -113,10 +115,16 @@ class OpenAIJSONClient:
                                     self._cost(u.prompt_tokens, u.completion_tokens),
                                     round(time.monotonic() - t0, 3),
                                     error="" if self._pricing else "no pricing record; cost unknown"))
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
+            return strict_json.loads(raw)
+        except (json.JSONDecodeError, strict_json.StrictJSONError) as exc:
             raise LLMError(f"{purpose}: model returned non-JSON output: {exc}") from exc
         except Exception as exc:  # provider failure: log and re-raise verbosely
             self.log.add(CallRecord(purpose, self.model, 0, 0, 0.0, round(time.monotonic() - t0, 3),
                                     ok=False, error=repr(exc)))
             raise LLMError(f"{purpose}: LLM call failed: {exc!r}") from exc
+
+
+def __getattr__(name):  # PEP 562: DEFAULT_MODEL is resolved at first use, not at import (FIXR-7DA-1028)
+    if name == "DEFAULT_MODEL":
+        return default_generator_model()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

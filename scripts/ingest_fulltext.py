@@ -88,9 +88,9 @@ def _dar(cfg):
     return DarCorpus(fl.ingest_routing_config(cfg=cfg))
 
 
-def _non_doc_kinds() -> list[str]:
+def _full_doc_kinds() -> list[str]:
     from vera import answer_contract
-    return list((answer_contract.load_config().get("acquisition") or {}).get("non_document_text_kinds") or [])
+    return answer_contract.full_document_kinds()
 
 
 def cmd_ingest(args, cfg, env=os.environ, engine_factory=None) -> int:
@@ -153,7 +153,7 @@ def cmd_ingest(args, cfg, env=os.environ, engine_factory=None) -> int:
     if not args.sources_only:
         reader = DarReader(eng_ro)
         dar = _dar(cfg)
-        ctx, pending = fl.prime_from_store(dar, lookup, reader, _non_doc_kinds())
+        ctx, pending = fl.prime_from_store(dar, lookup, reader, _full_doc_kinds())
         try:
             done = fl.resume_pending(dar, eng_wo, reader, pending, ctx, persist)
         except fl.IngestError as e:

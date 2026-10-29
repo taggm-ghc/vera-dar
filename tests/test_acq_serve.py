@@ -14,7 +14,7 @@ from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, fulldoc_
 
 @pytest.fixture(autouse=True)
 def _legacy_decline_path(monkeypatch):
-    """DDFIX-1023/SCOPE: an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
+    """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
     monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
@@ -131,7 +131,9 @@ def _decide(monkeypatch, accepted, layer, reason, category=""):
 @pytest.mark.parametrize("layer,reason,question,category,expect", [
     ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "off_topic", "decline"),
     # DAR-1021 category gate: only the closed-enum off_topic category acquires; everything else fails closed
-    ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "", None),
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # is now categorised and routed like a clean off_topic verdict (was: None, D-P10b). Only this expectation changed.
+    ("layer2_llm", "llm_out:not about research", "What is the best sourdough recipe?", "", "decline"),
     ("layer2_llm", "llm_out:harm", "What is the best sourdough recipe?", "harmful", None),
     ("layer2_llm", "llm_out:advice", "What is the best sourdough recipe?", "advice", None),
     ("layer2_llm", "llm_out:code", "What is the best sourdough recipe?", "programming_task", None),
@@ -158,7 +160,7 @@ def test_decline_triggers(h, monkeypatch, layer, reason, question, category, exp
 def test_decline_without_the_feature_is_byte_identical(h, monkeypatch):
     h.bundle()
     h.install()
-    _decide(monkeypatch, False, "layer2_llm", "llm_out:x")
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "harmful")  # NEXTREL-1028: "" now takes CATSTEP-1028's coverage path
     monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
     r = ask_service.answer_in_scope("What is the best sourdough recipe?", "m", e2e.PRICING)
     assert r == ask_service.AskResult(answer=scope_router.decline_text(), tokens_used=0, cost_usd=0.0,
@@ -183,11 +185,16 @@ def test_scope_override_ships_off_and_works_only_when_switched_on(h, monkeypatch
     assert r.result_kind == "answer" and all(c["document_id"].startswith("acq-") for c in
                                              (r.evidence.admitted if r.evidence else ()))
     for layer, reason, cat in (("layer1", "deny:medical", "off_topic"), ("layer2_llm", "classifier_malformed", "off_topic"),
-                               ("layer2_llm", "llm_out:x", "harmful"), ("layer2_llm", "llm_out:x", "advice"),
-                               ("layer2_llm", "llm_out:x", "")):
+                               ("layer2_llm", "llm_out:x", "harmful"), ("layer2_llm", "llm_out:x", "advice")):
         _decide(monkeypatch, False, layer, reason, cat)
         r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING)
         assert r.result_kind == "decline" and r.acquire_trigger is None  # DAR-1021: neither acquires nor answers
+    # CATSTEP-1028 (owner 2026-10-28, plan s27; requirement change): a well-formed in_scope:false reply with a missing category
+    # (was in the loop above, D-P10b) now takes the same research path as a clean off_topic verdict.
+    _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "")
+    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(lambda: [], e2e.GROUNDING))
+    assert r.result_kind == "answer" and all(c["document_id"].startswith("acq-") for c in
+                                             (r.evidence.admitted if r.evidence else ()))
 
 
 # ------------------------------------------------------------------------------------------------ refresh (RO SELECTs)
@@ -204,7 +211,8 @@ def test_acquired_corpus_refresh_uses_only_the_readonly_selects(h, monkeypatch):
     fulldoc_corpus.refresh_acquired(cfg, sync=True)
     c = fulldoc_corpus.get_acquired_corpus(cfg, now=lambda: 0.0)
     assert c is not None and c.status == "ok" and len(c.acquired) == 1
-    assert set(log) == {fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_SPANS}
+    assert set(log) == {fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_SOURCES_BY_ID,
+                        fulldoc_db.SQL_SPANS}  # L9: per-topic path (served_per_topic_max set)
     n = len(log)
     fulldoc_corpus.get_acquired_corpus(cfg, now=lambda: 1.0)  # inside refresh_ttl_s: no probe
     assert len(log) == n

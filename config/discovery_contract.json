@@ -18,6 +18,8 @@
   },
   "acquisition": {
     "non_document_text_kinds": ["abstract_metadata", "abstract", "snippet", "metadata", "index_record", "fulldoc_chunks"],
+    "full_document_text_kinds": ["full_text"],
+    "_note_full_document_text_kinds": "Fail-closed ALLOW-list (GAP-DBKIND-1028): the ONLY stored_text_kind values the DAR document reader (DarReader) and DarCorpus gate treat as a loadable full document. Rationale: records/memory/feedback_vera_full_documents_only.md (VERA grounds only in full sources, never abstracts/snippets/metadata); the deny-list above failed open for any new or unknown kind (e.g. full_content, link_metadata, abstract_v2). Calibration: the only kind written by the full-text ingest path is 'full_text' (vera/fulltext_loader.py cfg stored_text_kind); fulldoc_chunks is deliberately absent (rows have empty sources.content and are served by the chunk path). Missing, empty or invalid list = no DAR documents (fail closed, logged). Add a kind here only with evidence that its sources.content is a verified full document.",
     "_note_fulldoc_chunks": "fulldoc_chunks is NOT a non-document text: it is a full document stored as evidence_spans chunks (sources.content empty). It is listed here only so the content-based acquisition paths (DarReader, answer_contract) do not treat the empty sources row as an acquired document."
   },
   "acquisition_log": {

@@ -170,24 +170,56 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     harness's baseline shape)."""
     from vera.scope_router import decline_text, route
 
-    from vera.scope_router import default_chat
+    from vera.scope_router import default_chat, nullify_mode_claims
+
+    original = question  # REL-FIX3-1028 D1: injection and markers are judged on the un-stripped text (route, below)
+    from vera.scope_router import strip_instructions
+    question, _removed = strip_instructions(question)  # INJ-SEP-1028 (owner 2026-10-28, OD-1028(21) c3): a reliably
+    if _removed:  # separated injection sentence is discarded; the rest goes through every gate. Category-only log
+        from vera.scope_router import INSTRUCTION_REMOVED_TOKEN
+        logging.getLogger("vera").info("scope %s", INSTRUCTION_REMOVED_TOKEN)
+    question, _claims = nullify_mode_claims(question)  # SEC-V3-1028 / owner 2026-10-28: a mode-switch claim is
+    if _claims:  # stripped (never obeyed) and the rest is routed, answered and searched as usual; token-only log
+        from vera.scope_router import MODE_CLAIM_TOKEN
+        logging.getLogger("vera").info("scope %s", MODE_CLAIM_TOKEN)
 
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
 
     _INLINE_OUT.set(None)
     _QUESTION.set(question)  # PORT-P2: the discovery recorder hashes it (text never stored)
+    from vera import scope_router as _sr_self
+    if _sr_self.self_reflective(question) and not _sr_self.injection_unstripped(original):  # SELFREF-1028: fixed public text; no LLM, search, storage or memory
+        _txt = _sr_self.self_reflective_text()
+        if _txt:
+            logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective")
+            return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
-    decision = route(question, model, pricing, chat=chat if (client or extra_body) else None)
+    decision = route(original, model, pricing, chat=chat if (client or extra_body) else None)  # D1: route nullifies
+    decision = _catstep(decision, question, model, pricing, chat if (client or extra_body) else None)  # CATSTEP-1028
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
+    _log_basis(decision)  # PATHA-1028 CT-4: the topic label is a log tag only (class tokens, never reason text)
     if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
         decision = replace(decision, accepted=True)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
+    offline_spent: dict = {}  # PATHA-1028 CT-2: spend of a corpus attempt that produced no checked answer
+    offline_text = ""  # REFUSE-FIX-1028 V4: that attempt's fixed insufficient-evidence text (config text, never model text)
+    if acq is None and _offline_coverage_eligible(decision, question):  # PATHA-1028 CT-2 (plan s26.2(6), P10)
+        # acquisition off: a clean layer-2 verdict that is only about the topic is answered from the existing corpus
+        # through the unchanged admission, writer and claim check. No inline search, no background job; when the
+        # corpus does not cover the question the neutral reading list below is returned (sources=(), persists nothing).
+        fd = _fulldoc(question, model, pricing, replace(decision, accepted=True), chained, grounding)
+        if isinstance(fd, AskResult):
+            return fd
+        if isinstance(fd, tuple) and len(fd) == 5:
+            offline_spent = {"tokens_used": int(fd[2] or 0), "cost_usd": round(float(fd[3] or 0.0), 6)}
+            offline_text = fd[4] if isinstance(fd[4], str) else ""
     if not decision.accepted:
         trig = None
         inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
         ia: dict = {"status": "off"} if acq is None else {}  # P0-B1b: inline outcome for a declined non-answer (Report)
-        if acq is not None:
+        from vera import scope_router as _sru
+        if acq is not None and not _sru.unsupported_use(decision):  # REFUSE-FIX-1028 V1: unsupported use never acquires
             from vera import acq_config
             if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
                     and acq_config.layer2_category_ok(acq, decision)):  # DAR-1021 category gate (fails closed)
@@ -218,6 +250,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
         if off is not None:
             if not trig:
+                if acq is None:  # PATHA-1028 CT-2: say plainly that automatic search is off (neutral, no topic text)
+                    from vera import scope_router as _sr
+                    note = _sr.acquisition_off_note()
+                    off = replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, **offline_spent)
                 return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
             from vera import acq_config
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
@@ -225,6 +261,17 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                            contract={**(off.contract or {}), **_inline_trace(inline_note), **iac} if (_inline_trace(inline_note) or iac) else off.contract,
                            acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
                            **_spent(inline_note))
+        if acq is None and _offline_coverage_eligible(decision, question):
+            # REFUSE-FIX-1028 V4 (OD-1028(21)): a harmless off_topic/coverage question whose reading list is unavailable
+            # (no grounding seam or a search failure) is not a refusal: return the existing insufficient-evidence text
+            # and/or acquisition_off_note, never decline_template. Refusal reasons never reach this (eligibility gate).
+            from vera import answer_contract as _ac
+            from vera import scope_router as _sr
+            text = " ".join(t for t in (offline_text.strip(), _sr.acquisition_off_note()) if t)
+            res = _ac.reading_list_result((), decision.tokens_used, decision.cost_usd, accepted=False,
+                                          empty_text=text or None)
+            return replace(res, sources=(), contract={**(res.contract or {}), "offtopic": True, **iac},
+                           **offline_spent)
         return replace(AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
                                  result_kind="decline", acquire_trigger=trig if inline_note is None else None,
                                  **({"contract": iac} if iac and acq is not None else {})),  # feature off: the bare refusal stays byte-identical
@@ -339,6 +386,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     kw = {}  # P0-5 (inline.use_discovered, default off): the request's own cached discovery results; off = unchanged call
     if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):  # E5: no discovery search when acquire() is off; the off-topic path lists the restricted search, in-scope the full one
         kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=not in_scope)
+    if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
+        kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
@@ -374,7 +423,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
 
 def _research_eligible(decision, question: str, acq) -> bool:
     """DDFIX-1023/SCOPE (owner directive 2026-10-23): curated corpus coverage is not research eligibility. A WELL-FORMED
-    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless) takes
+    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless; PATHA-1028
+    CT-4: either topic label in _COVERAGE_LABELS, the label has no routing effect) takes
     the normal research path: corpus attempt, unrestricted discovery, inline full-text acquisition and the unchanged
     admission, answer writer and claim check (no answer without admitted evidence). Refusal categories (advice, harmful,
     programming_task, rule_change), layer-1 deny/injection hits, data markers, malformed or contradictory verdicts, a
@@ -385,7 +435,7 @@ def _research_eligible(decision, question: str, acq) -> bool:
     try:
         from vera import acq_config
         return (acq is not None and decision.accepted is False and decision.layer == "layer2_llm"
-                and str(decision.reason).startswith("llm_out:") and decision.category == "off_topic"
+                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
                 and decision.category not in _NO_LIST_CATEGORIES
                 and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
                 and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
@@ -482,6 +532,72 @@ def _inline_notice(acq, o):
     if n["unknown"]:
         parts.append(f"{n['unknown']} with no recorded outcome")
     return f"{lead}. It found {_docs(total)} and used none: {'; '.join(parts)}."
+def _catstep(decision, question: str, model: str, pricing, chat):
+    """CATSTEP-1028 (plan s27; owner 2026-10-28): a well-formed in_scope:false verdict with a missing or unrecognised
+    category (D-P10b, after the single retry) is categorised instead of declined. An existing topic or no topic both
+    become a clean coverage verdict (category off_topic, fixed reason llm_out:catstep, topic_key set), which then takes
+    the unchanged Path A gates (CT-1 / CT-2) exactly as a clean off_topic verdict. Only a model-named refusal category
+    refuses (deny:catstep:*; proximity alone never does); a retrieval-only outcome keeps category "" so the record-only
+    reading list follows (no answer, no acquisition); invalid optional-LLM output falls back to the previous safe
+    decline (classifier_malformed:catstep:*). Any other verdict is returned unchanged. A fault returns the decision unchanged
+    (the previous decline path)."""
+    try:
+        from vera import catstep
+        if not catstep.applies(decision, question):
+            return decision
+        out = catstep.categorise(question, chat=chat, model=model, pricing=pricing)
+        spend = {"tokens_used": decision.tokens_used + out.tokens, "cost_usd": round(decision.cost_usd + out.cost, 8),
+                 "llm_calls": decision.llm_calls + out.calls}
+        if out.status == "refuse":
+            return replace(decision, reason=catstep.decision_reason(out), category=out.refuse_category, **spend)
+        if out.status == "retrieval_only":  # scrutiny re-check unavailable/malformed or a fault: list only, no answer
+            return replace(decision, reason=catstep.RETRIEVAL_ONLY_REASON, category="", **spend)
+        return replace(decision, category="off_topic", reason=catstep.REASON_OK, topic_key=out.key, **spend)
+    except Exception:  # noqa: BLE001
+        return decision
+
+
+# PATHA-1028 CT-4 (plan s26.2(1), s26.4 CT-4): the classifier's topic labels. A clean layer-2 verdict carrying either
+# label is routed identically (coverage decides, never the label); the label survives only as a log tag.
+_COVERAGE_LABELS = ("in_scope", "off_topic")
+
+
+_REFUSAL_VERDICTS = ("classifier_malformed:refusal_token", "classifier_malformed:category_conflict")
+
+
+def _log_basis(decision) -> None:
+    """PATHA-1028 CT-4: log the routing basis as class tokens only (feeds B-SCOPE-2 counts). Never raises."""
+    try:
+        cat = getattr(decision, "category", "")
+        basis = cat if getattr(decision, "layer", "") == "layer2_llm" and cat in _COVERAGE_LABELS else "none"
+        reason = str(getattr(decision, "reason", ""))
+        cls = reason.split(":", 1)[0] if reason.startswith(("llm_in:", "llm_out:")) else reason[:48]
+        # REFUSE-FIX-1028 V5 (OD-1028(22)): a layer-2 refusal (a clean refusal-category verdict, or a refusal_token /
+        # category_conflict verdict) adds refusal=<category>, taken from the closed REFUSE_CATEGORIES enum (the
+        # constant itself, never raw or model text). A nullified verdict (no usable category) never carries it.
+        ref = _REFUSAL_LOG_TOKENS.get(cat) if getattr(decision, "layer", "") == "layer2_llm" and isinstance(cat, str) \
+            else None
+        if ref and not (reason.startswith("llm_out:") or reason in _REFUSAL_VERDICTS):
+            ref = None
+        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s%s", basis, getattr(decision, "layer", ""), cls,
+                                       f" refusal={ref}" if ref else "")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _offline_coverage_eligible(decision, question: str) -> bool:
+    """PATHA-1028 CT-2 (plan s26.2(6), s26.4 CT-2, owner Q4): with automatic acquisition effectively off, a CLEAN
+    layer-2 verdict (strictly decoded, reason llm_out:, a topic label in _COVERAGE_LABELS (CT-4), no refusal category,
+    layer 1 clean) is
+    answered from the existing corpus instead of the topic reading list. Refusal categories, layer-1 deny/injection
+    and marker hits, every classifier_malformed* verdict, a missing category and layer2_mode none keep the decline
+    path. Fails closed."""
+    try:
+        return (decision.accepted is False and decision.layer == "layer2_llm"
+                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
+                and decision.category not in _NO_LIST_CATEGORIES and _layer1_clean(question))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _base_warming() -> bool:
@@ -523,6 +639,7 @@ try:  # SCOPE-1022: one closed set of refusal categories (scope_router.REFUSE_CA
     from vera.scope_router import REFUSE_CATEGORIES as _NO_LIST_CATEGORIES
 except Exception:  # noqa: BLE001
     _NO_LIST_CATEGORIES = frozenset({"advice", "harmful", "programming_task", "rule_change"})
+_REFUSAL_LOG_TOKENS = {c: c for c in sorted(_NO_LIST_CATEGORIES)}  # REFUSE-FIX-1028 V5: closed enum -> log token
 
 
 def _offtopic_reading_list(decision, grounding):
@@ -535,7 +652,8 @@ def _offtopic_reading_list(decision, grounding):
 
     if grounding is None or not sr.offtopic_applies(decision):
         return None
-    if getattr(decision, "category", "") in _NO_LIST_CATEGORIES:  # DAR-1021 SEC M2: classifier said advice/harm/...
+    unsupported = sr.unsupported_use(decision)  # REFUSE-FIX-1028 V1: code request -> fixed sentence + this list
+    if getattr(decision, "category", "") in _NO_LIST_CATEGORIES and not unsupported:  # DAR-1021 SEC M2: advice/harm/...
         return None
     sources_fn, _cfg = grounding
     cands = ()
@@ -560,6 +678,8 @@ def _offtopic_reading_list(decision, grounding):
         if tok is not None:
             search_providers.OPENALEX_PROFILE.reset(tok)
     notice = sr.offtopic_notice()
+    if unsupported:  # fixed config text, never model text; the list's own not-read notice follows
+        notice = f"{sr.unsupported_use_text()} {notice}"
     res = contract.reading_list_result(cands, decision.tokens_used, decision.cost_usd, accepted=False)
     return replace(res, answer=notice if cands else f"{notice} {res.answer}", sources=(),
                    contract={**(res.contract or {}), "offtopic": True})

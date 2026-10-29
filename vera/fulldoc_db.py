@@ -253,7 +253,10 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                 if not isinstance(dp, dict) or any(got[k] is None or got[k] != dp.get(k) for k in got):
                     raise _DocPinFail(f"document {did!r} differs from its configured pin")
             base = {k: v for k, v in prov.items() if k not in ek}
-            if base != {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}:
+            derived = {k: v for k, v in rec["provenance"].items() if k != "stored_text_kind"}
+            # FIXR-7DA-1028: rows written before PROVFIX-1028 lack its label-only fields; accept the exact record or
+            # the pre-PROVFIX view of it (all-or-nothing; licence id/url/decision and hashes are compared either way)
+            if base != derived and base != fulltext_loader.legacy_label_view(derived, meta):
                 raise fulltext_loader.Refused(R_DBROW, "stored provenance differs from the re-derived record")
             key = rec["canonical_url"]
             if key in seen_keys:
@@ -530,6 +533,93 @@ SQL_ACQ_MAX = f"SELECT max(s.source_id), count(*) {SQL_ACQ_FILTER}"
 # DAR-INLINE-1021-R2: the same acquired-row filter, restricted to given canonical URLs (inline reuse of stored documents)
 SQL_ACQ_SOURCES_FOR = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance, s.created_at "
                        f"{SQL_ACQ_FILTER} AND cs.canonical_url = ANY(%(cus)s) ORDER BY s.source_id DESC LIMIT %(lim)s")
+# ACQ S4-0 L9: light index (no content) to choose what to serve per micro-topic, and a by-id fetch of the chosen rows.
+SQL_ACQ_INDEX = (f"SELECT s.source_id, d.run_id, s.provenance {SQL_ACQ_FILTER} "
+                 f"ORDER BY s.source_id DESC LIMIT %(scan)s")
+SQL_ACQ_SOURCES_BY_ID = (f"SELECT d.run_id, s.source_id, cs.canonical_url, s.content, s.content_hash, s.provenance "
+                         f"{SQL_ACQ_FILTER} AND s.source_id = ANY(%(sids)s) ORDER BY s.source_id DESC")
+# D1: acquired rows store content '' (text lives in evidence_spans), so the read-time key needs the first span's text.
+SQL_ACQ_FIRST_SPANS = (f"SELECT DISTINCT ON (e.source_id) e.source_id, left(e.text, %(win)s) FROM {SCHEMA}.evidence_spans e "
+                       f"WHERE e.source_id = ANY(%(ids)s) ORDER BY e.source_id, e.start_index")
+
+
+def _first_span_texts(spans) -> dict:
+    """source_id -> text of the document's first span (lowest start_index)."""
+    first: dict = {}
+    for sp in spans or ():
+        sid = sp.get("source_id")
+        if sid not in first or int(sp.get("start_index") or 0) < first[sid][0]:
+            first[sid] = (int(sp.get("start_index") or 0), sp.get("text"))
+    return {k: v[1] for k, v in first.items()}
+
+
+def select_served(index_rows, per_topic_max, total_max: int, cfg: dict | None = None) -> list:
+    """Pure. index_rows: dicts with source_id and provenance (newest-first not required). Returns source_ids:
+    round-robin across micro-topic keys, topics ordered by newest member first, newest first within a topic, each
+    topic at most per_topic_max, a row with no key is its own topic, at most total_max. Provenance only.
+    per_topic_max None (FLOOR6-1028, owner 2026-10-28: 6 is a floor, not a ceiling): no per-topic ceiling; the
+    round-robin is only an ORDER (every topic gets depth d before any gets d+1) and only total_max binds."""
+    from vera import micro_topic
+
+    total = int(total_max)
+    per = None if per_topic_max is None else int(per_topic_max)
+    if total <= 0 or (per is not None and per <= 0):
+        return []
+    topics: dict = {}
+    for r in sorted(index_rows, key=lambda r: -int(r.get("source_id") or 0)):
+        sid = r.get("source_id")
+        k = micro_topic.key_id(micro_topic.key_for_provenance(micro_topic._row_prov(r), r.get("content") or None, cfg or {}))
+        topics.setdefault(k if k else f"\0unkeyed:{sid}", []).append(sid)  # dict order = newest member first
+    queues = [v if per is None else v[:per] for v in topics.values()]
+    out: list = []
+    depth = 0
+    while len(out) < total and any(depth < len(q) for q in queues):
+        for q in queues:
+            if depth < len(q) and len(out) < total:
+                out.append(q[depth])
+        depth += 1
+    return out
+
+
+def _pos_int(v) -> int | None:
+    return int(v) if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def _per_topic(acq_cfg) -> int | None:
+    return _pos_int(((acq_cfg or {}).get("bounds") or {}).get("served_per_topic_max"))
+
+
+def _topic_balanced(acq_cfg) -> bool:
+    """FLOOR6-1028: served_topic_balanced true = topic-balanced ORDER with no per-topic ceiling (when
+    served_per_topic_max is null). false/absent with a null ceiling = the legacy newest-N order."""
+    return ((acq_cfg or {}).get("bounds") or {}).get("served_topic_balanced") is True
+
+
+def _per_topic_mode(acq_cfg):
+    """(use per-topic selection?, ceiling or None)."""
+    ptm = _per_topic(acq_cfg)
+    return (ptm is not None or _topic_balanced(acq_cfg)), ptm
+
+
+def acquired_ids_per_topic(conn, cur, base_run_id, marker, per_topic_max, scan_max, total_max, cfg) -> list:
+    rows = _select(cur, SQL_ACQ_INDEX, {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker),
+                                                      "base": int(base_run_id), "scan": int(scan_max)})
+    idx = [{"source_id": r[0], "run_id": r[1], "provenance": r[2]} for r in rows]
+    if idx:  # D1: first-span text per document (read-only, parameterized SELECT) so keys come from title + text
+        from vera import micro_topic
+        win = int((cfg or {}).get("text_window_chars") or micro_topic.DEFAULT_WINDOW)
+        try:
+            ft = {r[0]: r[1] for r in _select(cur, SQL_ACQ_FIRST_SPANS,
+                                                      {"ids": [int(i["source_id"]) for i in idx], "win": win})}
+        except Exception:  # noqa: BLE001  fail soft to title-only keys
+            ft = {}
+            try:  # a failed SELECT aborts a non-autocommit transaction; clear it so later SQL works
+                conn.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        for i in idx:
+            i["content"] = ft.get(i["source_id"]) or ""
+    return select_served(idx, per_topic_max, total_max, cfg)
 
 
 def acquired_signature(connect, base_run_id, marker: str) -> tuple:
@@ -553,8 +643,11 @@ def acquired_signature(connect, base_run_id, marker: str) -> tuple:
     return (row[0], int(row[1] or 0))
 
 
-def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical_urls=None) -> tuple:
-    """Read-only. canonical_urls (DAR-INLINE-1021-R2): only the acquired rows of those canonical URLs (inline reuse)."""
+def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical_urls=None, per_topic_max=None,
+                        scan_max=None, micro_cfg=None, topic_balanced=False) -> tuple:
+    """Read-only. canonical_urls (DAR-INLINE-1021-R2): only the acquired rows of those canonical URLs (inline reuse).
+    per_topic_max (L9): per-micro-topic serving of the newest scan_max rows; None = newest `limit` (legacy).
+    topic_balanced (FLOOR6-1028): per-topic ORDER with no ceiling when per_topic_max is None."""
     if canonical_urls is not None and not canonical_urls:
         return [], []
     conn = connect()
@@ -564,7 +657,15 @@ def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical
             params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(base_run_id), "lim": int(limit)}
             if canonical_urls is not None:
                 params["cus"] = [str(u) for u in canonical_urls]
-            srows = _select_compat(conn, cur, SQL_ACQ_SOURCES if canonical_urls is None else SQL_ACQ_SOURCES_FOR, params)
+            if canonical_urls is None and (per_topic_max or topic_balanced):
+                sids = acquired_ids_per_topic(conn, cur, base_run_id, marker, per_topic_max, scan_max or 2000,
+                                              limit, micro_cfg or {})
+                params.pop("lim", None)
+                params["sids"] = [int(x) for x in sids]
+                srows = _select_compat(conn, cur, SQL_ACQ_SOURCES_BY_ID, params) if sids else []
+            else:
+                srows = _select_compat(conn, cur, SQL_ACQ_SOURCES if canonical_urls is None else SQL_ACQ_SOURCES_FOR,
+                                       params)
             sources = [{"run_id": r[0], "source_id": r[1], "canonical_url": r[2], "content": r[3], "content_hash": r[4],
                         "provenance": r[5], **_at(r, 6)} for r in srows]
             ids = [x["source_id"] for x in sources]
@@ -607,7 +708,16 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
     for sp in spans:
         by_src.setdefault(sp.get("source_id"), []).append(sp)
     runs: dict = {}
-    for row in sorted(sources, key=lambda r: -int(r.get("source_id") or 0)):
+    ordered = sorted(sources, key=lambda r: -int(r.get("source_id") or 0))
+    use_pt, ptm = _per_topic_mode(acq_cfg)
+    if use_pt:  # L9 / FLOOR6: per-micro-topic order; rows beyond the per-topic/total caps are not loaded
+        first = _first_span_texts(spans)  # D1: real rows have content '' (text is in the spans)
+        pick = select_served([{"source_id": r.get("source_id"), "provenance": r.get("provenance"),
+                               "content": r.get("content") or first.get(r.get("source_id"))} for r in ordered], ptm, max_docs,
+                             acq_cfg.get("micro_topic") or {})
+        rank = {sid: i for i, sid in enumerate(pick)}
+        ordered = sorted((r for r in ordered if r.get("source_id") in rank), key=lambda r: rank[r.get("source_id")])
+    for row in ordered:
         runs.setdefault(row.get("run_id"), []).append(row)
     acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
     seen_keys, seen_hashes, total = set(), set(), 0
@@ -702,7 +812,15 @@ def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocC
         return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
     try:
         lim = int((acq_cfg.get("bounds") or {}).get("served_acquired_max", 0))
-        sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim)
+        use_pt, ptm = _per_topic_mode(acq_cfg)
+        if use_pt:
+            b = acq_cfg.get("bounds") or {}
+            extra = {} if ptm else {"topic_balanced": True}  # FLOOR6-1028: no ceiling, balanced order
+            sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim, per_topic_max=ptm,
+                                                 scan_max=int(b.get("served_scan_max") or 2000),
+                                                 micro_cfg=acq_cfg.get("micro_topic") or {}, **extra)
+        else:
+            sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim)
     except Exception as e:  # noqa: BLE001
         return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
     return load_acquired_rows(sources, spans, cfg, acq_cfg)

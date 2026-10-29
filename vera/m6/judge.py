@@ -39,6 +39,7 @@ from typing import Protocol
 from datetime import datetime, timezone
 
 from vera.cost_ledger import CostLedger
+from vera import strict_json
 from vera.eval_config import EvalConfig, family_for, load_eval_config
 
 # Why: the judge's max_tokens is a fixed call setting (not a threshold); named once, imported by
@@ -57,7 +58,12 @@ class JudgeConfigError(RuntimeError):
 def generation_family(config: EvalConfig | None = None) -> str:
     """Family of the generator model, derived from the run config (not a constant): the judge must differ."""
     cfg = config or load_eval_config()
-    return family_for(cfg.generator_model, cfg).family
+    fam = family_for(cfg.generator_model, cfg).family
+    if not fam:
+        raise JudgeConfigError(
+            f"generator model {cfg.generator_model!r} resolved to no family (None); the self-grading guard "
+            "cannot be checked. Add it to model_families in config/vera_eval_run.json with a source URL.")
+    return fam
 
 
 @dataclass
@@ -94,12 +100,14 @@ def parse_json_loose(text: str) -> dict:
     t = text.strip()
     t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.S)
     try:
-        return json.loads(t)
-    except json.JSONDecodeError:
+        return strict_json.loads(t)
+    except strict_json.StrictJSONError as e:
+        if e.code != "bad_json":  # duplicate keys, NaN etc. are nullified, never re-parsed from a fragment
+            raise
         m = re.search(r"\{.*\}", t, flags=re.S)
         if not m:
             raise
-        return json.loads(m.group(0))
+        return strict_json.loads(m.group(0))
 
 
 class BaseJudge:
@@ -165,7 +173,7 @@ class BaseJudge:
                            "latency_s": round(dt, 3)})
             try:
                 return parse_json_loose(text)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, strict_json.StrictJSONError) as e:
                 last_err = e
         raise RuntimeError(
             f"Judge returned unparseable JSON for {purpose!r} after "
@@ -265,7 +273,7 @@ class OpenAICompatJudge(BaseJudge):
         if not r.ok:  # verbose, no retry (bounded-loops rule)
             raise RuntimeError(f"Judge call to {self.provider} model {self.model!r} failed: "
                                f"HTTP {r.status_code}: {r.text[:300]}")
-        d = r.json()
+        d = strict_json.response_json(r)
         u = d.get("usage", {})
         return (d["choices"][0]["message"]["content"],
                 u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
@@ -293,7 +301,7 @@ def preflight_judge(judge, *, http_get=None, timeout_s: float = PREFLIGHT_TIMEOU
     if not r.ok:
         raise JudgeConfigError(f"Preflight: {judge.provider} /models HTTP {r.status_code}: {str(r.text)[:300]}")
     try:
-        rows = r.json().get("data", [])
+        rows = strict_json.response_json(r).get("data", [])
     except Exception as e:  # noqa: BLE001
         raise JudgeConfigError(f"Preflight: {judge.provider} /models returned unreadable JSON "
                                f"({type(e).__name__}); nothing spent.") from None

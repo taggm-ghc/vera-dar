@@ -153,7 +153,7 @@ class FakeDB:
             out = []
             for s in sorted(self.sources, key=lambda s: (s["canonical_source_id"], -s["version"])):
                 kind = s["prov"].get("stored_text_kind")
-                if kind is None or kind in p["kinds"] or any(o[2] == s["canonical_source_id"] for o in out):
+                if kind is None or kind not in p["kinds"] or any(o[2] == s["canonical_source_id"] for o in out):
                     continue
                 pr = s["prov"]
                 out.append((self.canonical[s["canonical_source_id"]], s["source_id"], s["canonical_source_id"],

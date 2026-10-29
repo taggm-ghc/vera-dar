@@ -73,8 +73,15 @@ def test_offtopic_profile_removed_restores_or_query(monkeypatch):
     assert calls[0]["search"] == "(key OR differences OR boxing OR mma)"
 
 
+def _route_no_catstep(monkeypatch):
+    # NEXTREL-1028: these tests exercise the D-P10b off-topic list; CATSTEP-1028 (step on) routes a missing category elsewhere.
+    raw = json.loads(json.dumps(RAW))
+    raw["unknown_category_step"]["enabled"] = False
+    _route(monkeypatch, raw, OUT)
+
+
 def test_profile_is_reset_after_the_offtopic_list_even_on_error(monkeypatch):
-    _route(monkeypatch, RAW, OUT)
+    _route_no_catstep(monkeypatch)
     seen = []
 
     def boom(restricted=False):
@@ -140,7 +147,7 @@ def test_no_fallback_when_profile_absent(monkeypatch):
 
 
 def test_fallback_error_resets_profile(monkeypatch):
-    _route(monkeypatch, RAW, OUT)
+    _route_no_catstep(monkeypatch)
     n = []
 
     def fn(restricted=False):

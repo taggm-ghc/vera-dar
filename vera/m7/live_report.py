@@ -84,11 +84,11 @@ DOC_OUTCOME = {"persisted": "added to VERA-DAR's collection", "below_persist_min
 STAGE_LABEL = {"search": "search", "reuse": "reuse of stored documents", "evaluate": "document checks",
                "write": "storing documents", "corpus": "collection rebuild", "total": "acquisition total"}
 OTHER = "other"
-SCOPE_OVERRIDE_NOTE = ("Scope policy: this question is outside VERA-DAR's curated scope. An answer was allowed only from "
-                       "documents VERA-DAR acquired after licence, content and relevance checks. A supported claim means "
-                       "its source says so; it does not show the answer is complete or on point.")
-SCOPE_DECLINED_NOTE = ("Scope policy: this question is outside VERA-DAR's curated scope and no answer was authorized. "
-                       "Any search or listing that followed was a reading list only, not evidence for an answer.")
+SCOPE_OVERRIDE_NOTE = ("Coverage policy: VERA-DAR's collection could not answer this question faithfully. An answer was "
+                       "allowed only from documents VERA-DAR acquired after licence, content and relevance checks. A "
+                       "supported claim means its source says so; it does not show the answer is complete or on point.")
+SCOPE_DECLINED_NOTE = ("Coverage policy: VERA-DAR's collection could not answer this question faithfully and no answer was "
+                       "authorized. Any search or listing that followed was a reading list only, not evidence for an answer.")
 
 
 # --- server-side resolution (never rendered) -------------------------------------------------------------------

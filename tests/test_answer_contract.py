@@ -147,6 +147,7 @@ def test_config_has_no_forbidden_public_terms():  # texts shown to visitors name
     ("reading_list", None, 2, "reading_list"),
     ("reading_list", None, 0, "no_sources"),
     ("decline", None, 0, "decline"),
+    ("self_description", None, 0, "self_description"),
     ("unspecified", None, 0, "insufficient_evidence"),
 ])
 def test_outcome_for(kind, fb, n, want):

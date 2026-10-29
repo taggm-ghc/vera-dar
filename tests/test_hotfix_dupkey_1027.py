@@ -8,10 +8,19 @@ import pytest
 
 from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from tests.test_dar_inline_acquire import rig  # noqa: F401  (fixture)
-from tests.test_ddfix_scope_1023 import LIVE_Q, _real_router
 from tests.test_item72_scope import cfg, fake_chat
 from vera import ask_service
 from vera import scope_router as sr
+
+LIVE_Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
+REAL_ROUTE = sr.route
+
+
+def _real_router(rig, verdict: dict):
+    """The real scope router (real config, real layer 1); only the layer-2 classifier LLM is faked."""
+    rig.mp.setattr(sr, "route", REAL_ROUTE)
+    rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (json.dumps(verdict), 10, 2))
+
 
 Q = "Who won the World Cup in 2014?"  # layer 1 unsure: goes to the classifier
 
@@ -41,19 +50,26 @@ def test_ambiguous_or_lookalike_reply_is_malformed(reply):
     assert sr.parse_category(reply) == ""
 
 
+def _decline_gate(d, question, cfg):
+    """7da574a decline-override gates, exactly as ask_service.py applies them before researching a declined question."""
+    from vera import acq_config
+    return (acq_config.trigger_for_decline(cfg, d.layer, d.reason) and ask_service._layer1_clean(question)
+            and acq_config.layer2_category_ok(cfg, d))
+
+
 def test_duplicate_key_reply_is_not_research_eligible(rig):  # T1 end to end
     reply = '{"in_scope":false,"category":"harmful","category":"off_topic"}'
     _real_router(rig, {})
     rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (reply, 10, 2))
     d = sr.route(LIVE_Q, "m")
-    assert d.reason == "classifier_malformed" and not ask_service._research_eligible(d, LIVE_Q, rig.cfg)
+    assert d.reason == "classifier_malformed" and not _decline_gate(d, LIVE_Q, rig.cfg)
 
 
 def test_off_topic_control_stays_research_eligible(rig):  # T11 end to end: proves the T1 test is not vacuous
     _real_router(rig, {"in_scope": False, "category": "off_topic", "reason": "cooking, not harmful advice"})
     d = sr.route(LIVE_Q, "m")
     assert d.reason == "llm_out:cooking, not harmful advice" and d.category == "off_topic"
-    assert ask_service._research_eligible(d, LIVE_Q, rig.cfg)
+    assert _decline_gate(d, LIVE_Q, rig.cfg)
 
 
 # ------------------------------------------------------------------------------------------------ refusal token anywhere
@@ -128,7 +144,9 @@ def test_in_scope_reply_mentioning_harmful_is_not_over_refused(reason):  # T11a
 ])
 def test_well_formed_replies_unchanged(verdict, reason, accepted, cat):
     d = _route(json.dumps(verdict))
-    assert (d.accepted, d.reason, d.category, d.llm_calls) == (accepted, reason, cat, 1)
+    # Q2 / Path A: in_scope=false with a missing category is a nullified verdict -> one retry (2 calls), then decline
+    calls = 2 if (not accepted and cat == "") else 1
+    assert (d.accepted, d.reason, d.category, d.llm_calls) == (accepted, reason, cat, calls)
 
 
 # ------------------------------------------------------------------------------------------------ totality (T14)

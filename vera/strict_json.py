@@ -46,6 +46,13 @@ def _pairs_hook(pairs):  # json applies it at every nesting level
     return dict(pairs)
 
 
+def _pairs_hook_exact(pairs):  # free-text keys (e.g. OpenAlex abstract_inverted_index words): exact duplicates only
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise StrictJSONError("duplicate_key")
+    return dict(pairs)
+
+
 def _no_constant(_name):  # NaN / Infinity / -Infinity literals
     raise StrictJSONError("non_finite")
 
@@ -57,15 +64,19 @@ def _finite_float(s: str) -> float:  # 1e999 / -1e999 overflow to inf
     return v
 
 
-def loads(text, *, allow_constants: bool = False, max_chars: int | None = None):
-    """Decoded JSON, or StrictJSONError. allow_constants=True keeps json's own number handling (NaN, 1e999 accepted)."""
+def loads(text, *, allow_constants: bool = False, max_chars: int | None = None, keys: str = "normalised"):
+    """Decoded JSON, or StrictJSONError. keys="exact" (A1c-2) is for objects whose keys are free text: it rejects only
+    EXACT duplicate keys (no normalisation, no ASCII rule); non-finite numbers are still rejected. Default "normalised"
+    is unchanged. allow_constants=True keeps json's own number handling (NaN, 1e999 accepted)."""
+    if keys not in ("normalised", "exact"):
+        raise StrictJSONError("bad_type")
     if not isinstance(text, str):
         raise StrictJSONError("not_str")
     if max_chars is not None and len(text) > max_chars:  # checked before parsing
         raise StrictJSONError("oversize")
     kw = {} if allow_constants else {"parse_constant": _no_constant, "parse_float": _finite_float}
     try:
-        return json.loads(text, object_pairs_hook=_pairs_hook, **kw)
+        return json.loads(text, object_pairs_hook=_pairs_hook_exact if keys == "exact" else _pairs_hook, **kw)
     except StrictJSONError:
         raise
     except RecursionError:
@@ -82,3 +93,12 @@ def loads_or_none(text, **kw):
         return loads(text, **kw)
     except StrictJSONError:
         return None
+
+
+def response_json(resp, **kw):
+    """Strict equivalent of requests' resp.json(): decodes resp.text with loads(**kw). A response with no text body
+    (e.g. a test double that only has .json()) falls back to resp.json(); a real empty body fails there as before."""
+    text = getattr(resp, "text", None)
+    if isinstance(text, str) and text.strip():
+        return loads(text, **kw)
+    return resp.json()

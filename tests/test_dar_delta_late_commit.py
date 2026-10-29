@@ -75,15 +75,15 @@ def test_bound_hit_returns_partial_never_truncated():
     db = FakeDB()
     a = Ingestor(db)
     a.add(DOCS[0])
-    cur = DarReader(db).load_snapshot([])["cursor"]
+    cur = DarReader(db).load_snapshot(["full_text"])["cursor"]
     a.add(DOCS[1]); a.add(DOCS[2])
     rd = DarReader(db)
-    ok = rd.load_delta(cur, [], max_documents=2)
+    ok = rd.load_delta(cur, ["full_text"], max_documents=2)
     assert "partial" not in ok and len(ok["documents"]) == 2
-    p = rd.load_delta(cur, [], max_documents=1)
+    p = rd.load_delta(cur, ["full_text"], max_documents=1)
     assert p["partial"] is True and p["reason"] == "delta_max_documents"
     assert p["documents"] == [] and p["corpus_assoc"] == [] and p["chunk_assoc"] == [] and p["cursor"] == cur
-    p2 = rd.load_delta(cur, [], max_assocs=1)
+    p2 = rd.load_delta(cur, ["full_text"], max_assocs=1)
     assert p2["partial"] is True and p2["reason"] == "delta_max_assocs" and p2["documents"] == []
     sql = [c for c in db.sql_log if "LIMIT CAST(:lim_assoc" in c[0]]
     assert sql and all(c[1]["lim_assoc"] == 2 for c in sql)
@@ -93,9 +93,9 @@ def test_lookback_rows_do_not_count_toward_bound():
     db = FakeDB()
     a = Ingestor(db)
     a.add(DOCS[0]); a.add(DOCS[1])
-    cur = DarReader(db).load_snapshot([])["cursor"]
+    cur = DarReader(db).load_snapshot(["full_text"])["cursor"]
     a.add(DOCS[2])
-    d = DarReader(db).load_delta(cur, [], max_documents=1, lookback_ids=5, lookback_s=60)
+    d = DarReader(db).load_delta(cur, ["full_text"], max_documents=1, lookback_ids=5, lookback_s=60)
     assert "partial" not in d and [x["source_id"] for x in d["documents"]] == [1, 2, 3]  # 2 re-read + 1 new
 
 
@@ -103,9 +103,9 @@ def test_delta_sql_params_lowered_and_cursor_monotone():
     db = FakeDB()
     a = Ingestor(db)
     a.add(DOCS[0]); a.add(DOCS[1])
-    cur = DarReader(db).load_snapshot([])["cursor"]
+    cur = DarReader(db).load_snapshot(["full_text"])["cursor"]
     db.sql_log.clear()
-    d = DarReader(db).load_delta(cur, [], lookback_ids=1, lookback_s=30)
+    d = DarReader(db).load_delta(cur, ["full_text"], lookback_ids=1, lookback_s=30)
     prm = [p for _, p in db.sql_log]
     assert any(p.get("since_source_id") == cur["source_id"] - 1 for p in prm)
     assert any(p.get("since_assoc_ts") == _lower_ts(cur["assoc_ts"], 30) for p in prm)
@@ -114,7 +114,7 @@ def test_delta_sql_params_lowered_and_cursor_monotone():
 
 def test_naive_cursor_timestamp_is_partial_not_silently_unwindowed():
     cur = {"source_id": 5, "span_id": 0, "domain_id": 1, "assoc_ts": "2026-10-19 00:00:05"}
-    r = DarReader(FakeDB()).load_delta(cur, [], lookback_s=10)
+    r = DarReader(FakeDB()).load_delta(cur, ["full_text"], lookback_s=10)
     assert r["partial"] is True and r["reason"] == "cursor_ts_unparsable"
 
 
@@ -242,12 +242,12 @@ def test_snapshot_bound_marks_partial_and_surfaces_it(monkeypatch):
     db, clk = FakeDB(), Clock()
     a = Ingestor(db)
     a.add(DOCS[0]); a.add(DOCS[1]); a.add(DOCS[2])
-    snap = DarReader(db).load_snapshot([], max_documents=2)
+    snap = DarReader(db).load_snapshot(["full_text"], max_documents=2)
     assert snap["partial"] is True and snap["reason"] == "snapshot_max_documents" and snap["cursor"] is None
     assert len(snap["documents"]) == 2
     keys = {d["source_key"] for d in snap["documents"]}
     assert all(x["source_key"] in keys for x in snap["corpus_assoc"] + snap["chunk_assoc"])
-    full = DarReader(db).load_snapshot([], max_documents=3)
+    full = DarReader(db).load_snapshot(["full_text"], max_documents=3)
     assert "partial" not in full and len(full["documents"]) == 3 and full["cursor"] is not None
     cfg = _cfg(snapshot_max_documents=2)
     monkeypatch.setattr(domain_registry, "load_config", lambda *x, **k: cfg)
@@ -309,17 +309,17 @@ class _PgLike:
 
 def test_reads_share_one_repeatable_read_transaction_on_postgres():
     e = _PgLike("postgresql")
-    DarReader(e).load_delta({"source_id": 1, "span_id": 0, "domain_id": 1, "assoc_ts": EARLY}, [], lookback_ids=1)
+    DarReader(e).load_delta({"source_id": 1, "span_id": 0, "domain_id": 1, "assoc_ts": EARLY}, ["full_text"], lookback_ids=1)
     assert e.connects == 1 and e.stmts >= 4
     assert e.opts == [{"isolation_level": "REPEATABLE READ", "postgresql_readonly": True}]
     e2 = _PgLike("postgresql")
-    DarReader(e2).load_snapshot([])
+    DarReader(e2).load_snapshot(["full_text"])
     assert e2.connects == 1 and e2.stmts >= 4
 
 
 def test_sqlite_degrades_to_plain_single_connection():
     e = _PgLike("sqlite")
-    DarReader(e).load_delta({"source_id": 1, "span_id": 0, "domain_id": 1, "assoc_ts": EARLY}, [])
+    DarReader(e).load_delta({"source_id": 1, "span_id": 0, "domain_id": 1, "assoc_ts": EARLY}, ["full_text"])
     assert e.connects == 1 and e.opts == []
 
 
@@ -371,7 +371,7 @@ def test_refused_rebuild_is_stale_not_ok_and_health_surfaces_it(monkeypatch):
 def test_snapshot_chunk_query_is_restricted_to_latest_version():
     db = FakeDB()
     Ingestor(db).add(DOCS[0])
-    DarReader(db).load_snapshot([])
-    DarReader(db).load_delta({"source_id": 0, "span_id": 0, "domain_id": 0, "assoc_ts": None}, [])
+    DarReader(db).load_snapshot(["full_text"])
+    DarReader(db).load_delta({"source_id": 0, "span_id": 0, "domain_id": 0, "assoc_ts": None}, ["full_text"])
     q = [s for s, _ in db.sql_log if "FROM domain_chunks" in s or "FROM vera_vjay.domain_chunks" in s or "domain_chunks dk" in s]
     assert q and all("max(v.version)" in s for s in q)
