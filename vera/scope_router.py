@@ -532,6 +532,13 @@ DB_CATEGORY_SQL_ROWS = ("SELECT code, description, disposition, refusal_rank, al
                         "FROM vera_vjay.classifier_categories ORDER BY category_id")
 DB_CATEGORY_SQL_INSERT = ("INSERT INTO vera_vjay.classifier_categories (code, version, description, disposition, aliases, origin, state) "
                           "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)")
+DB_CATEGORY_SQL_READONLY = "SET TRANSACTION READ ONLY"  # D8: first statement of the loader's transaction (until an ro engine is wired)
+DB_CATEGORY_SQL_LOCK = "SELECT pg_advisory_xact_lock(:k)"  # names no table; transaction-scoped, released at commit/rollback
+# Fixed, documented advisory-lock key for runtime enrolment (D6): serialises concurrent enrol_nonrefusing_entry calls so the
+# read-check-insert (similarity check against every existing row) cannot race. 1028 = CATTAB-1028; 1 = enrolment lock.
+ENROL_ADVISORY_LOCK_KEY = 10281
+ENROL_DESCRIPTION_MAX = 120  # D7
+_ENROL_DESCRIPTION_RE = re.compile(r"[ -~]+")  # same character set as the DB CHECK (printable ASCII, no newline or control chars)
 _FALLBACK_LOGGED = False
 
 
@@ -540,10 +547,19 @@ def category_table_settings(path=CONFIG_PATH) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
+def _select_rows(conn):
+    """Table-exists probe then SELECT, on an open connection. None when the table is absent."""
+    from sqlalchemy import text
+    if conn.execute(text(DB_CATEGORY_SQL_EXISTS)).scalar() is None:
+        return None
+    return [dict(r) for r in conn.execute(text(DB_CATEGORY_SQL_ROWS)).mappings().all()]
+
+
 def read_category_rows(engine=None, *, env=None, engine_factory=None):
-    """All rows (every state) of the DB category table as dicts, or None when the table is absent or the DB is not
-    configured / reachable. Read through the existing DB access layer (vera.db.get_role_engine, rw account; SELECT only).
-    Never prints a URL or a driver message."""
+    """All rows (every state) of the DB category table as dicts, or None ONLY when the table is absent (to_regclass is NULL).
+    An unconfigured or unreachable DB, or a failing SELECT, raises ScopeConfigError (fail closed, D5): the caller must not
+    treat 'cannot read' as 'no table'. Read through vera.db.get_role_engine (rw account) in a READ ONLY transaction (D8).
+    Never prints a URL or a driver message; only the exception class name is in the error."""
     try:
         from sqlalchemy import text
         if engine is None:
@@ -551,13 +567,46 @@ def read_category_rows(engine=None, *, env=None, engine_factory=None):
             kw = {} if engine_factory is None else {"engine_factory": engine_factory}
             engine = db.get_role_engine("rw", env=env, **kw)
         with engine.connect() as conn:
-            if conn.execute(text(DB_CATEGORY_SQL_EXISTS)).scalar() is None:
-                return None
-            return [dict(r) for r in conn.execute(text(DB_CATEGORY_SQL_ROWS)).mappings().all()]
-    except Exception as exc:  # noqa: BLE001 - unavailable DB = no table; only the exception class is logged
-        import logging
-        logging.getLogger("vera").info("classifier category table unavailable (%s)", type(exc).__name__)
-        return None
+            conn.execute(text(DB_CATEGORY_SQL_READONLY))
+            return _select_rows(conn)
+    except Exception as exc:  # noqa: BLE001 - only the exception class is reported
+        raise ScopeConfigError(f"classifier category table unreadable ({type(exc).__name__}); failing closed") from None
+
+
+def _runtime_row_ok(r) -> bool:
+    return (isinstance(r["code"], str) and bool(_CODE_RE.fullmatch(r["code"]))
+            and r["state"] in CATEGORY_STATES
+            and isinstance(r["version"], int) and not isinstance(r["version"], bool) and r["version"] >= 1
+            and r["disposition"] in ("in_scope", "off_topic") and r["refusal_rank"] is None
+            and isinstance(r["aliases"], (list, tuple)) and not r["aliases"]
+            and isinstance(r["description"], str) and bool(r["description"].strip()) and r["description"].isascii()
+            and not any(ch in r["description"] for ch in '"{}'))
+
+
+def _drop_invalid_runtime_rows(rows, keys, where):
+    """Drop origin='runtime' rows that are malformed or whose description is too similar to a row already kept for another
+    code (so a direct SQL insert cannot stop the service). Non-runtime rows are kept and validated by the caller."""
+    if not isinstance(rows, list):
+        return rows
+    import logging
+    kept, dropped = [], 0
+    for r in rows:  # non-runtime rows first fix the baseline
+        if not (isinstance(r, dict) and set(r) == keys and r["origin"] == "runtime"):
+            kept.append(r)
+    out = []
+    for r in rows:
+        if isinstance(r, dict) and set(r) == keys and r["origin"] == "runtime":
+            ok = _runtime_row_ok(r) and not any(
+                isinstance(k, dict) and k.get("code") != r["code"] and isinstance(k.get("description"), str)
+                and description_similarity(r["description"], k["description"]) >= DESCRIPTION_SIMILARITY_MAX for k in kept)
+            if not ok:
+                dropped += 1
+                continue
+            kept.append(r)
+        out.append(r)
+    if dropped:
+        logging.getLogger("vera").warning("%s: %d invalid runtime row(s) skipped (runtime rows cannot refuse)", where, dropped)
+    return out
 
 
 def parse_db_rows(rows, seed: tuple[Category, ...]) -> tuple[tuple[Category, ...], int]:
@@ -570,6 +619,9 @@ def parse_db_rows(rows, seed: tuple[Category, ...]) -> tuple[tuple[Category, ...
     if not isinstance(rows, list) or not rows:
         raise ScopeConfigError(f"{where}: table exists but has no rows")
     keys = {"code", "description", "disposition", "refusal_rank", "aliases", "origin", "state", "version"}
+    # D6: an invalid origin='runtime' row can never refuse (DB constraint), so it is skipped and logged (index only, no row
+    # content) rather than stopping the service. Invalid seed/admin rows and any structural fault still fail closed.
+    rows = _drop_invalid_runtime_rows(rows, keys, where)
     plain, runtime, active, seen = [], set(), [], set()
     for i, r in enumerate(rows):
         if not isinstance(r, dict) or set(r) != keys:
@@ -615,19 +667,20 @@ def parse_db_rows(rows, seed: tuple[Category, ...]) -> tuple[tuple[Category, ...
 
 
 def load_category_table(settings: dict | None = None, reader=None, path=CATEGORIES_PATH) -> tuple[Category, ...]:
-    """DB table when `read_from_db` is true and the table exists; else the JSON seed (logged once). A table that exists
-    but fails validation raises ScopeConfigError (service does not start)."""
+    """With `read_from_db` not true: the JSON seed. With it true: the DB table; the JSON seed ONLY when the table is absent
+    (to_regclass NULL; logged once). An unconfigured or unreachable DB, a failing SELECT, or a table that exists but fails
+    validation raises ScopeConfigError (service does not start; D5 fail closed)."""
     global _FALLBACK_LOGGED
     settings = category_table_settings() if settings is None else settings
     seed = load_categories(path)
     if settings.get("read_from_db") is not True:
         return seed
-    rows = (reader or read_category_rows)()
-    if rows is None:
+    rows = (reader or read_category_rows)()  # D5: raises ScopeConfigError when the DB is unconfigured/unreachable/SELECT fails
+    if rows is None:  # only the 'table absent' case reaches here
         if not _FALLBACK_LOGGED:
             _FALLBACK_LOGGED = True
             import logging
-            logging.getLogger("vera").warning("classifier category table absent or DB unavailable: using the JSON seed")
+            logging.getLogger("vera").warning("classifier category table absent: using the JSON seed")
         return seed
     cats, ver = parse_db_rows(rows, seed)
     import logging
@@ -639,12 +692,46 @@ class RegistrationRefused(ScopeConfigError):
     """enrol_nonrefusing_entry rejected the entry (toggle off, refusing disposition, similar description, bad code)."""
 
 
-def enrol_nonrefusing_entry(code, description, disposition="off_topic", *, settings: dict | None = None, rows=None, writer=None):
-    """OD-1028(9): register a NEW non-refusing category when no existing one covers it. Default OFF
-    (classifier_category_table.registration_enabled must be boolean true). The description must score
-    < DESCRIPTION_SIMILARITY_MAX (0.50, PROVISIONAL: reused from the owner-curated table calibration, not calibrated for
-    runtime candidates) against EVERY existing row of any state, so a retired description cannot be re-added. Inserts
-    origin=runtime, no aliases, state from `registration_state` (default 'active'); the DB trigger enforces the same.
+def _check_enrolment(code, description, disposition, rows) -> str:
+    """Validate a candidate against every existing row (any state); returns the stripped description."""
+    if disposition not in ("in_scope", "off_topic"):
+        raise RegistrationRefused("only non-refusing dispositions (in_scope, off_topic) may be registered at runtime")
+    if not isinstance(code, str) or not _CODE_RE.fullmatch(code):
+        raise RegistrationRefused(f"code must match {_CODE_RE.pattern}")
+    if not isinstance(description, str) or not description.strip():
+        raise RegistrationRefused("description must be non-empty printable ASCII text")
+    description = description.strip()
+    if len(description) > ENROL_DESCRIPTION_MAX:
+        raise RegistrationRefused(f"description is longer than {ENROL_DESCRIPTION_MAX} characters")
+    if not _ENROL_DESCRIPTION_RE.fullmatch(description) or any(ch in description for ch in '"{}'):
+        raise RegistrationRefused("description must be printable ASCII (no newline or control characters) without quotes or braces")
+    if rows is None:
+        raise RegistrationRefused("category table is absent; nothing registered")
+    for r in rows:
+        if code == r["code"] or code in (r.get("aliases") or ()):
+            raise RegistrationRefused(f"code {code!r} already exists")
+        score = description_similarity(description, r["description"])
+        if score >= DESCRIPTION_SIMILARITY_MAX:
+            raise RegistrationRefused(f"description too similar to {r['code']} (score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
+    return description
+
+
+def enrol_nonrefusing_entry(code, description, disposition="off_topic", *, settings: dict | None = None, rows=None,
+                            writer=None, engine=None):
+    """OD-1028(9)/(39)/(42): register a NEW non-refusing category when no existing one covers it. Runtime writes are
+    limited to brand-new, non-refusing codes: INSERT only, version 1, origin=runtime, no aliases, no refusal rank; never an
+    update of, or new version for, an existing code (the DB trigger enforces the same for non-owner roles).
+    Default OFF (classifier_category_table.registration_enabled must be boolean true).
+
+    NEVER call this with raw user text: `code` and `description` must come from an owner-reviewed source. The only checks are
+    syntactic (<= 120 printable ASCII chars, no quotes/braces/newlines) and a LEXICAL dissimilarity score
+    (< DESCRIPTION_SIMILARITY_MAX 0.50, PROVISIONAL, not calibrated for runtime candidates) against EVERY existing row of any
+    state, so a retired description cannot be re-added.
+    TODO (required before registration_enabled may be turned on): a semantic overlap check of the candidate against the
+    REFUSING descriptions (harmful, rule_change, advice, programming_task); a lexical score cannot catch a synonym paraphrase
+    (known limit), and a non-refusing row that overlaps a refusing one could steer the classifier away from a refusal.
+    Without `rows`/`writer`, the read-check-insert runs in ONE transaction under pg_advisory_xact_lock(ENROL_ADVISORY_LOCK_KEY)
+    so concurrent enrolments are serialised (D6). State comes from `registration_state` (default 'active').
     Effective for classification only after a restart (the table is loaded once). Returns the inserted row dict."""
     settings = category_table_settings() if settings is None else settings
     if settings.get("registration_enabled") is not True:
@@ -652,32 +739,31 @@ def enrol_nonrefusing_entry(code, description, disposition="off_topic", *, setti
     state = settings.get("registration_state", "active")
     if state not in CATEGORY_STATES:
         raise RegistrationRefused(f"registration_state {state!r} is not one of {CATEGORY_STATES}")
-    if disposition not in ("in_scope", "off_topic"):
-        raise RegistrationRefused("only non-refusing dispositions (in_scope, off_topic) may be registered at runtime")
-    if not isinstance(code, str) or not _CODE_RE.fullmatch(code):
-        raise RegistrationRefused(f"code must match {_CODE_RE.pattern}")
-    if not isinstance(description, str) or not description.strip() or not description.isascii() \
-            or any(ch in description for ch in '"{}'):
-        raise RegistrationRefused("description must be non-empty ASCII text without quotes or braces")
-    if rows is None:
-        rows = read_category_rows()
-    if rows is None:
-        raise RegistrationRefused("category table is absent or unavailable; nothing registered")
-    for r in rows:
-        if code == r["code"] or code in (r.get("aliases") or ()):
-            raise RegistrationRefused(f"code {code!r} already exists")
-        score = description_similarity(description, r["description"])
-        if score >= DESCRIPTION_SIMILARITY_MAX:
-            raise RegistrationRefused(f"description too similar to {r['code']} (score {score:.3f} >= {DESCRIPTION_SIMILARITY_MAX})")
-    row = {"code": code, "description": description.strip(), "disposition": disposition, "state": state}
-    if writer is None:
-        from sqlalchemy import text
-        from vera import db
-        eng = db.get_role_engine("rw")
-        with eng.begin() as conn:
-            conn.execute(text(DB_CATEGORY_SQL_INSERT), row)
-    else:
+    if rows is not None or writer is not None:
+        if rows is None:
+            rows = read_category_rows(engine)
+        description = _check_enrolment(code, description, disposition, rows)
+        row = {"code": code, "description": description, "disposition": disposition, "state": state}
+        if writer is None:
+            raise RegistrationRefused("rows supplied without a writer; nothing registered")
         writer(row)
+        return row
+    _check_enrolment(code, description, disposition, [])  # cheap syntactic pre-check before any connection
+    try:
+        from sqlalchemy import text
+        if engine is None:
+            from vera import db
+            engine = db.get_role_engine("rw")
+        with engine.begin() as conn:
+            conn.execute(text(DB_CATEGORY_SQL_LOCK), {"k": ENROL_ADVISORY_LOCK_KEY})
+            current = _select_rows(conn)  # re-read under the lock
+            description = _check_enrolment(code, description, disposition, current)
+            row = {"code": code, "description": description, "disposition": disposition, "state": state}
+            conn.execute(text(DB_CATEGORY_SQL_INSERT), row)
+    except RegistrationRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise RegistrationRefused(f"enrolment failed ({type(exc).__name__}); nothing registered") from None
     return row
 
 

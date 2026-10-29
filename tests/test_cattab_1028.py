@@ -57,6 +57,29 @@ def test_db_path_loads_active_rows_in_order():
     assert "reading_group" not in sr.REFUSE_CATEGORIES
 
 
+def test_unreachable_or_unconfigured_db_fails_closed_not_seed():
+    """Review D5: with read_from_db true, only 'table absent' may fall back to the seed."""
+    def boom():
+        raise sr.ScopeConfigError("classifier category table unreadable (OperationalError); failing closed")
+    with pytest.raises(sr.ScopeConfigError):
+        sr.load_category_table(ON, reader=boom)
+    with pytest.raises(sr.ScopeConfigError):  # no DB URL configured
+        sr.read_category_rows(env={})
+    class Bad(_FakeEngine):
+        def connect(self):
+            raise OSError("host unreachable secret-host")
+    with pytest.raises(sr.ScopeConfigError) as exc:
+        sr.read_category_rows(Bad())
+    assert "secret-host" not in str(exc.value) and "OSError" in str(exc.value)
+    class SelectFails(_FakeEngine):
+        def connect(self):
+            c = _FakeConn(True, [], self.log)
+            c.all = lambda: 1 / 0
+            return c
+    with pytest.raises(sr.ScopeConfigError):
+        sr.read_category_rows(SelectFails())
+
+
 def test_absent_table_falls_back_to_seed_and_logs_once(caplog):
     sr._FALLBACK_LOGGED = False
     with caplog.at_level(logging.INFO, logger="vera"):
@@ -91,15 +114,37 @@ def test_non_active_runtime_rows_ignored_but_validated():
     for st in ("draft", "suspended", "retired"):
         cats = sr.load_category_table(ON, reader=lambda s=st: _rows() + [_runtime(state=s)])
         assert cats == SEED
-    # a runtime row may not be refusing, even if retired
-    bad = _runtime(state="retired")
-    bad.update(disposition="refuse", refusal_rank=7)
+
+
+def test_invalid_runtime_rows_are_skipped_and_logged_without_content(caplog):
+    """Review D6: a runtime row can never refuse (DB constraint), so an invalid one is skipped, not fatal."""
+    refusing = _runtime(state="retired")
+    refusing.update(disposition="refuse", refusal_rank=7)
+    aliased = _runtime(code="aliased_one")
+    aliased["aliases"] = ["some_label"]
+    quoted = _runtime(code="quoted_one", desc='has "quotes" in it')
+    badcode = _runtime(code="Bad Code")
+    copycat = _runtime(code="copycat", desc="a request to write or fix code", state="retired")
+    with caplog.at_level(logging.WARNING, logger="vera"):
+        cats = sr.load_category_table(ON, reader=lambda: _rows() + [refusing, aliased, quoted, badcode, copycat, _runtime()])
+    assert [c.code for c in cats] == [c.code for c in SEED] + ["reading_group"]
+    msg = " ".join(r.getMessage() for r in caplog.records)
+    assert "5 invalid runtime row(s) skipped" in msg and "aliased_one" not in msg and "some_label" not in msg
+
+
+def test_invalid_seed_or_admin_rows_still_fail_closed():
+    bad = _rows()
+    bad[2]["origin"] = "seed"
+    bad[2]["disposition"] = "bogus"
     with pytest.raises(sr.ScopeConfigError):
-        sr.load_category_table(ON, reader=lambda: _rows() + [bad])
-    bad = _runtime()
-    bad["aliases"] = ["some_label"]
+        sr.load_category_table(ON, reader=lambda: bad)
+    seed_alias = _rows(advice={"aliases": ["dangerous"]})
+    seed_alias.append(dict(_rows()[3], code="harmful2", description="an unrelated gardening topic", refusal_rank=9,
+                           aliases=["dangerous"]))
     with pytest.raises(sr.ScopeConfigError):
-        sr.load_category_table(ON, reader=lambda: _rows() + [bad])
+        sr.load_category_table(ON, reader=lambda: seed_alias)
+    with pytest.raises(sr.ScopeConfigError):  # structural fault in a runtime-labelled row still fails closed
+        sr.load_category_table(ON, reader=lambda: _rows() + [{"origin": "runtime", "code": "x"}])
 
 
 def test_version_logged_no_secrets(caplog):
@@ -156,8 +201,8 @@ def test_new_version_cannot_turn_a_refusal_off_or_change_rank():
 def test_dissimilarity_spans_other_codes_any_state_but_not_own_older_versions():
     own = _rows(harmful={"state": "retired"}) + [_new_version("harmful", 2, "active")]  # same text as own v1: allowed
     assert [c.code for c in sr.load_category_table(ON, reader=lambda: own)] == [c.code for c in SEED]
-    other = _rows() + [_runtime(code="copycat", desc="a request to write or fix code", state="retired")]
-    with pytest.raises(sr.ScopeConfigError):
+    other = _rows() + [dict(_runtime(code="copycat", desc="a request to write or fix code", state="retired"), origin="seed")]
+    with pytest.raises(sr.ScopeConfigError):  # a non-runtime row too similar to another code still fails closed
         sr.load_category_table(ON, reader=lambda: other)
 
 
@@ -198,12 +243,15 @@ class _FakeEngine:
 def test_reader_uses_select_only_through_engine():
     eng = _FakeEngine(True, _rows())
     out = sr.read_category_rows(eng)
-    assert len(out) == 6 and all(q.lstrip().upper().startswith("SELECT") for q in eng.log)
-    assert sr.read_category_rows(_FakeEngine(False)) is None
+    assert len(out) == 6
+    assert eng.log[0] == "SET TRANSACTION READ ONLY"  # D8: read-only transaction first
+    assert all(q.lstrip().upper().startswith("SELECT") for q in eng.log[1:])
+    assert sr.read_category_rows(_FakeEngine(False)) is None  # table absent -> None (seed fallback)
 
 
-def test_reader_without_db_config_returns_none():
-    assert sr.read_category_rows(env={}) is None  # RuntimeError (env unset) -> unavailable, no URL printed
+def test_reader_without_db_config_fails_closed():
+    with pytest.raises(sr.ScopeConfigError):
+        sr.read_category_rows(env={})  # RuntimeError (env unset) -> unreadable, no URL printed
 
 
 def test_registration_ok_and_state_from_config():
@@ -239,9 +287,70 @@ def test_registration_rejects_similar_description_including_retired_rows():
         sr.enrol_nonrefusing_entry("Bad-Code", "notes about a local seminar timetable", settings=on, rows=_rows(), writer=lambda r: 1 / 0)
     with pytest.raises(sr.RegistrationRefused):
         sr.enrol_nonrefusing_entry("ok_code", 'has "quotes"', settings=on, rows=_rows(), writer=lambda r: 1 / 0)
-    with pytest.raises(sr.RegistrationRefused):  # table absent (reader returns None): nothing written
+    with pytest.raises(sr.RegistrationRefused):  # table absent (rows None): nothing written
         sr.enrol_nonrefusing_entry("ok_code", "notes about a local seminar timetable", settings=on, rows=None,
-                                   writer=lambda r: 1 / 0) if sr.read_category_rows(env={}) is None else None
+                                   writer=lambda r: 1 / 0, engine=_FakeEngine(False))
+
+
+def test_registration_description_syntax_limits():
+    """Review D7: cap 120 chars, printable ASCII only (DB CHECK character set), no newline or control chars."""
+    on = {"registration_enabled": True}
+    ok = "x" * 3 + " notes about a local seminar timetable"
+    sr.enrol_nonrefusing_entry("ok_code", ok, settings=on, rows=_rows(), writer=lambda r: None)
+    for bad in ("a" * 121, "line one\nline two seminar", "tab\tseparated seminar notes", "bell\x07 seminar notes",
+                "caf\u00e9 seminar notes", "del\x7f seminar notes", "brace { seminar notes", "\n"):
+        with pytest.raises(sr.RegistrationRefused):
+            sr.enrol_nonrefusing_entry("ok_code", bad, settings=on, rows=_rows(), writer=lambda r: 1 / 0)
+    sr.enrol_nonrefusing_entry("ok_code", "q" * 120, settings=on, rows=_rows(), writer=lambda r: None)
+    assert "NEVER call this with raw user text" in sr.enrol_nonrefusing_entry.__doc__
+
+
+@pytest.mark.xfail(reason="TODO D7: semantic overlap check against refusing descriptions not built; REQUIRED before "
+                          "classifier_category_table.registration_enabled may be enabled", strict=True)
+def test_registration_rejects_synonym_paraphrase_of_a_refusing_description():
+    harmful_syn = "requesting operational assistance in causing harms"  # scores 0.429 lexically: passes today
+    with pytest.raises(sr.RegistrationRefused):
+        sr.enrol_nonrefusing_entry("helper_cat", harmful_syn, settings={"registration_enabled": True}, rows=_rows(),
+                                   writer=lambda r: None)
+
+
+class _TxnConn(_FakeConn):
+    def execute(self, stmt, params=None):
+        self.log.append((str(stmt), params))
+        self.last = str(stmt)
+        return self
+
+
+class _TxnEngine:
+    def __init__(self, exists=True, rows=None):
+        self.log, self.exists, self.rows, self.committed = [], exists, rows or [], False
+
+    def begin(self):
+        eng = self
+
+        class Ctx(_TxnConn):
+            def __exit__(self, et, ev, tb):
+                eng.committed = et is None
+                return False
+        return Ctx(self.exists, self.rows, self.log)
+
+
+def test_enrolment_runs_lock_read_insert_in_one_transaction():
+    """Review D6: advisory lock first, then re-read, then INSERT, all on one transaction-scoped connection."""
+    eng = _TxnEngine(True, _rows())
+    row = sr.enrol_nonrefusing_entry("reading_group", "notes about a local seminar timetable",
+                                     settings={"registration_enabled": True}, engine=eng)
+    sqls = [q for q, _ in eng.log]
+    assert sqls[0] == sr.DB_CATEGORY_SQL_LOCK and "pg_advisory_xact_lock" in sqls[0]
+    assert eng.log[0][1] == {"k": sr.ENROL_ADVISORY_LOCK_KEY} == {"k": 10281}
+    assert sqls[1] == sr.DB_CATEGORY_SQL_EXISTS and sqls[2] == sr.DB_CATEGORY_SQL_ROWS
+    assert sqls[-1] == sr.DB_CATEGORY_SQL_INSERT and eng.committed and row["code"] == "reading_group"
+    # a refused candidate under the lock writes nothing and rolls back
+    eng2 = _TxnEngine(True, _rows())
+    with pytest.raises(sr.RegistrationRefused):
+        sr.enrol_nonrefusing_entry("other_code", "a request to write or fix code",
+                                   settings={"registration_enabled": True}, engine=eng2)
+    assert sr.DB_CATEGORY_SQL_INSERT not in [q for q, _ in eng2.log] and not eng2.committed
 
 
 # ---- migration draft: text-level checks only (the SQL is NOT run; triggers untested against a real PostgreSQL) ----
@@ -249,13 +358,14 @@ SQL = MIG.read_text()
 
 
 def test_migration_seed_matches_json_seed_with_version_and_active():
-    m = re.search(r"INSERT INTO vera_vjay\.classifier_categories.*?VALUES\s*(.*?)ON CONFLICT", SQL, re.S)
-    rows = re.findall(r"\('([a-z_]+)', 1, '([^']*)', '([a-z_]+)', (NULL|\d+), '\{\}', 'seed', 'active'\)", m.group(1))
+    m = re.search(r"INSERT INTO vera_vjay\.classifier_categories.*?\(VALUES\s*(.*?)\)\s+AS v\(", SQL, re.S)
+    rows = re.findall(r"\('([a-z_]+)', 1, '([^']*)', '([a-z_]+)', (NULL::integer|\d+), '\{\}'::text\[\], 'seed', 'active'\)", m.group(1))
     assert len(rows) == 6
-    got = {r[0]: (r[1], r[2], None if r[3] == "NULL" else int(r[3])) for r in rows}
+    got = {r[0]: (r[1], r[2], None if r[3].startswith("NULL") else int(r[3])) for r in rows}
     assert got == {c.code: (c.description, c.disposition, c.refusal_rank) for c in SEED}
-    assert "version        INTEGER NOT NULL DEFAULT 1" in SQL and "state          TEXT NOT NULL DEFAULT 'active'" in SQL
-    assert "ON CONFLICT (code, version) DO NOTHING" in SQL
+    assert "state          TEXT NOT NULL DEFAULT 'active'" in SQL
+    assert "WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.classifier_categories t WHERE t.code = v.code)" in SQL
+    assert "ON CONFLICT" not in SQL and "Idempotent per code" in SQL
 
 
 def test_migration_text_privileges_and_checks():
@@ -284,3 +394,32 @@ def test_migration_text_versions_as_rows():
 
 def test_no_secret_in_draft():
     assert "postgres://" not in SQL and "postgresql://" not in SQL
+
+
+def test_migration_review_fixes_d1_to_d4_d8_d9_text():
+    # D1: retire-UPDATE only when another active row of the code exists
+    act = SQL[SQL.index("FUNCTION vera_vjay.classifier_categories_activate"):SQL.index("DROP TRIGGER IF EXISTS classifier_categories_a_guard")]
+    assert re.search(r"AND EXISTS \(SELECT 1 FROM vera_vjay\.classifier_categories c\s+WHERE c\.code = NEW\.code AND c\.state = 'active'", act)
+    assert act.index("AND EXISTS") < act.index("UPDATE vera_vjay.classifier_categories")
+    # D2: default-deny, owner-only, no pg_has_role/MEMBER and no is_app_role
+    assert "pg_has_role" not in SQL and "MEMBER" not in SQL and "is_app_role" not in SQL
+    assert "pg_catalog.pg_get_userbyid(c.relowner) = current_user" in SQL and "MUST BE RUN AS THE OWNER ROLE" in SQL
+    assert "DEFAULT-DENY" in SQL and "vera_vjay_admin" not in SQL
+    # D3: no default on version; NULL auto-assigns; supplied must be max+1
+    assert not re.search(r"version\s+INTEGER NOT NULL DEFAULT", SQL)
+    assert "IF NEW.version IS NULL THEN" in SQL and "NEW.version <> nxt" in SQL
+    # D4: every function pins search_path
+    funcs = re.findall(r"CREATE OR REPLACE FUNCTION [^\n]*\n?[^$]*?\$f\$", SQL)
+    assert len(funcs) == 5 and all("SET search_path = pg_catalog, pg_temp" in f for f in funcs)
+    # D8 / D9 documentation
+    assert "wo: NO grant at all" in SQL and "006 and 007 grant wo INSERT" in SQL
+    assert "compares DISPOSITION and REFUSAL RANK" in SQL and "It does NOT compare description or aliases" in SQL
+
+
+def test_rollback_draft_drops_in_dependency_order_and_is_owner_gated():
+    rb = (ROOT / "db" / "migrations" / "rollback" / "008-DRAFT-classifier-categories-rollback.sql.draft").read_text()
+    assert "NOT EXECUTED" in rb and "DESTRUCTIVE" in rb and "owner" in rb.lower()
+    order = [rb.index(x) for x in ("DROP TRIGGER IF EXISTS classifier_categories_a_guard", "DROP TABLE IF EXISTS vera_vjay.classifier_categories",
+                                   "DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_guard", "classifier_categories_is_owner()")]
+    assert order == sorted(order)
+    assert "DROP SCHEMA" not in rb and "postgres://" not in rb

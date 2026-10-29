@@ -52,14 +52,108 @@ def test_table_is_read_only_at_runtime():
     assert isinstance(row.aliases, tuple)
     with pytest.raises(TypeError):
         sr.CATEGORY_ALIASES["x"] = "in_scope"
-    # no writer exists: the table file is named only by the loader's read path, and no module opens it for writing
+    # no code path writes the JSON seed file
     for f in (ROOT / "vera").rglob("*.py"):
         src = f.read_text(errors="ignore")
         if "classifier_categories" in src:
             assert f.name == "scope_router.py", f
             assert "CATEGORIES_PATH = " in src and "write_text" not in src and "json.dump" not in src
             assert not re.search(r"open\([^)]*['\"][wa]", src)
-    assert not [n for n in dir(sr) if re.match(r"(save|write|add|set|update|register)_?categor", n, re.I)]
+
+
+# OD-1028(38) ("the table is read-only at runtime; no writer exists", the earlier regex guard) is SUPERSEDED IN PART by
+# OD-1028(39)/(42): the DB table may receive runtime INSERTs of brand-new, non-refusing codes through ONE gated function.
+# The regex guard was defeated by naming the function enrol_nonrefusing_entry, so it is replaced by explicit assertions.
+import ast  # noqa: E402
+
+_SQL_VERBS = re.compile(r"\b(UPDATE|DELETE|TRUNCATE|ALTER|COPY|ON\s+CONFLICT)\b", re.I)
+_TABLE_SQL = re.compile(r"\b(FROM|INTO|UPDATE|TABLE|JOIN|COPY|ON)\s+(vera_vjay\.)?classifier_categories\b|vera_vjay\.classifier_categories", re.I)
+_SOURCES = sorted((ROOT / "vera").rglob("*.py")) + [ROOT / "main.py"]
+
+
+def _docstring_nodes(tree):
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.body \
+                and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant):
+            out.add(id(n.body[0].value))
+    return out
+
+
+def _string_constants():
+    for f in _SOURCES:
+        tree = ast.parse(f.read_text(errors="ignore"))
+        skip = _docstring_nodes(tree)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip:
+                yield f, n.value
+
+
+def test_guard_a_only_three_sql_texts_name_the_table_and_none_mutate_it():
+    assert not hasattr(sr, "DB_CATEGORY_SQL_UPDATE") and not hasattr(sr, "DB_CATEGORY_SQL_DELETE")
+    allowed = {sr.DB_CATEGORY_SQL_EXISTS, sr.DB_CATEGORY_SQL_ROWS, sr.DB_CATEGORY_SQL_INSERT}
+    named = {v for f, v in _string_constants() if _TABLE_SQL.search(v)}
+    assert named == allowed, named ^ allowed
+    # every other SQL-like text near the table in any vera/ source: no mutating verb. Per file that names the table,
+    # no string constant (other than the three) holds a mutating SQL verb or ON CONFLICT.
+    for f, v in _string_constants():
+        if v in allowed or "classifier_categories" not in f.read_text(errors="ignore"):
+            continue
+        assert not _SQL_VERBS.search(v) or not re.search(r"\b(SELECT|INSERT|SET|FROM|INTO|WHERE)\b", v), (f.name, v[:60])
+    for v in allowed - {sr.DB_CATEGORY_SQL_INSERT}:
+        assert not _SQL_VERBS.search(v)
+    ins = sr.DB_CATEGORY_SQL_INSERT
+    assert ins.startswith("INSERT INTO vera_vjay.classifier_categories") and "ON CONFLICT" not in ins.upper()
+    assert not _SQL_VERBS.search(ins.replace("INSERT", ""))
+    # the lock statement names no table and no mutation
+    assert "classifier_categories" not in sr.DB_CATEGORY_SQL_LOCK
+
+
+def test_guard_b_insert_is_brand_new_non_refusing_only():
+    ins = " ".join(sr.DB_CATEGORY_SQL_INSERT.split())
+    assert "(code, version, description, disposition, aliases, origin, state)" in ins
+    assert "VALUES (:code, 1, :description, :disposition, '{}', 'runtime', :state)" in ins
+    assert "refusal_rank" not in ins and ":version" not in ins and ":origin" not in ins and ":aliases" not in ins
+    assert re.findall(r":(\w+)", ins) == ["code", "description", "disposition", "state"]  # no app-supplied version/origin/rank
+
+
+def test_guard_c_only_enrol_nonrefusing_entry_references_the_insert():
+    refs = []
+    for f in _SOURCES:
+        tree = ast.parse(f.read_text(errors="ignore"))
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                body = ast.dump(fn)
+                if "DB_CATEGORY_SQL_INSERT" in body and not any(
+                        isinstance(o, (ast.FunctionDef, ast.AsyncFunctionDef)) and o is not fn and "DB_CATEGORY_SQL_INSERT" in ast.dump(o)
+                        for o in ast.walk(fn)):
+                    refs.append((f.name, fn.name))
+        # module-level (non-function) uses other than the definition itself
+        for n in tree.body:
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and "DB_CATEGORY_SQL_INSERT" in ast.dump(n):
+                assert isinstance(n, ast.Assign) and n.targets[0].id == "DB_CATEGORY_SQL_INSERT", (f.name, ast.unparse(n)[:80])
+    assert refs == [("scope_router.py", "enrol_nonrefusing_entry")], refs
+    on = {"registration_enabled": True}
+    for disp in ("refuse", "unsupported_use"):
+        with pytest.raises(sr.RegistrationRefused):
+            sr.enrol_nonrefusing_entry("ok_code", "notes about a local seminar timetable", disp, settings=on, rows=[],
+                                       writer=lambda r: 1 / 0)
+    for flag in (None, False, "true", 1, "yes"):
+        with pytest.raises(sr.RegistrationRefused):
+            sr.enrol_nonrefusing_entry("ok_code", "notes about a local seminar timetable", settings={"registration_enabled": flag},
+                                       rows=[], writer=lambda r: 1 / 0)
+
+
+def test_guard_d_shipped_config_registration_disabled():
+    cfg = json.loads((ROOT / "config" / "scope_router.json").read_text())["classifier_category_table"]
+    assert cfg["registration_enabled"] is False and cfg["read_from_db"] is False
+    assert sr.category_table_settings()["registration_enabled"] is False
+
+
+def test_guard_e_docstring_states_the_write_limit():
+    doc = " ".join(sr.enrol_nonrefusing_entry.__doc__.split())
+    assert "Runtime writes are limited to brand-new, non-refusing codes" in doc
+    assert "OD-1028(9)/(39)/(42)" in doc
 
 
 def _with(mutate):

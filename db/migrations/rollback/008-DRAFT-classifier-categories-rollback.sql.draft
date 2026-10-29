@@ -1,0 +1,25 @@
+-- 008_vera_classifier_categories ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the classifier category table and every row
+-- (seed rows, runtime rows, every version). Owner-gated like the forward draft (db/migrations/pending/008-DRAFT-...).
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval.
+-- Needs the owner's separate, same-turn approval, the TABLE OWNER role (the triggers are owner-only by design), an isolated DB, and
+-- an export of the table first. Never run via db/apply_migrations.py (its --dry-run executes on production; HZ-DAR-1).
+-- Non-destructive rollback is: set classifier_category_table.read_from_db and registration_enabled to false in
+-- config/scope_router.json (the service then reads the JSON seed), then REVOKE INSERT from vera_vjay_rw.
+-- Dependency order: triggers (reference the functions and the table), then the table (drops its indexes and constraints), then
+-- the functions (the guard uses is_owner). The schema vera_vjay is shared with other objects and is NOT dropped.
+\set ON_ERROR_STOP on
+
+DROP TRIGGER IF EXISTS classifier_categories_no_truncate ON vera_vjay.classifier_categories;
+DROP TRIGGER IF EXISTS classifier_categories_c_activate ON vera_vjay.classifier_categories;
+DROP TRIGGER IF EXISTS classifier_categories_b_labels ON vera_vjay.classifier_categories;
+DROP TRIGGER IF EXISTS classifier_categories_a_guard ON vera_vjay.classifier_categories;
+
+DROP INDEX IF EXISTS vera_vjay.classifier_categories_rank_key;
+DROP INDEX IF EXISTS vera_vjay.classifier_categories_one_active_key;
+DROP TABLE IF EXISTS vera_vjay.classifier_categories;
+
+DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_forbid_truncate();
+DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_activate();
+DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_label_unique();
+DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_guard();
+DROP FUNCTION IF EXISTS vera_vjay.classifier_categories_is_owner();
