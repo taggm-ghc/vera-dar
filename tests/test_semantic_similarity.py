@@ -87,11 +87,15 @@ def test_shipped_config_uncalibrated_and_shadow():
 
 def test_shadow_mode_flags_non_actionable():  # D5
     r = ss.similarity_decision_with_mode("topic", "a b", "a b", FAKE, dict(CFG, shadow=True))
-    assert r == ("similar", "shadow", False)
+    assert r == ("unknown", "shadow", False, "similar")  # decision unusable; computed value only in shadow_decision (log-only)
+    assert r.decision == "unknown" and r.shadow_decision == "similar"
+    assert ss.SimilarityResult._fields == ("decision", "mode", "actionable", "shadow_decision")
     assert ss.similarity_decision("topic", "a b", "a b", FAKE, dict(CFG, shadow=True)) == "unknown"
     assert ss.similarity_decision_with_mode("topic", "a b", "a b", FAKE, {k: v for k, v in CFG.items() if k != "shadow"}).mode == "shadow"
     r = ss.similarity_decision_with_mode("topic", "a b", "a b", FAKE, CFG)
-    assert r == ("similar", "active", True)
+    assert r == ("similar", "active", True, None)
+    off = ss.similarity_decision_with_mode("topic", "a b", "a b", FAKE, dict(CFG, enabled=False))
+    assert off == ("unknown", "off", False, None)
 
 
 def test_fail_closed():
@@ -126,23 +130,35 @@ def test_input_capped_and_treated_as_data():
     assert all(len(t) <= 100 for t in seen)
 
 
-# ---- D6/D7: pinned, hash-verified, offline, cached loading (fakes only; real fastembed path UNVERIFIED) ----
+# ---- D6/D7: pinned, manifest-hash-verified, offline, cached, warm-only loading (fakes only; real fastembed UNVERIFIED) ----
+REV = "abc123"
+
+
 @pytest.fixture
 def model_dir(tmp_path):
-    (tmp_path / "model.onnx").write_bytes(b"fake-model-bytes")
-    return tmp_path, hashlib.sha256(b"fake-model-bytes").hexdigest()
+    d = tmp_path / "m"
+    (d / "sub").mkdir(parents=True)
+    (d / "model.onnx").write_bytes(b"fake-model-bytes")
+    (d / "tokenizer.json").write_bytes(b"tok")
+    (d / "sub" / "config.json").write_bytes(b"cfg")
+    return d, ss.manifest_sha256(d, REV)
 
 
-def _cfg(sha, **kw):
-    return dict(CFG, model_name="bge-small", model_revision="abc123", model_sha256=sha, model_file="model.onnx",
-                model_cache_env="E", **kw)
+def _cfg(sha, rev=REV, **kw):
+    return dict(CFG, model_name="bge-small", model_revision=rev, model_sha256=sha, model_cache_env="E", **kw)
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     ss._ADAPTERS.clear()
+    ss._OFFLINE_WARNED = False
     yield
     ss._ADAPTERS.clear()
+
+
+class _M:
+    def embed(self, texts):
+        return FAKE.embed(texts)
 
 
 @pytest.mark.parametrize("rev,sha", [("PLACEHOLDER_X", "a" * 64), ("", "a" * 64), (None, "a" * 64),
@@ -154,37 +170,107 @@ def test_placeholder_or_bad_pins_refused(rev, sha, model_dir):
     assert ss.similarity_decision("topic", "a b", "a b", None, cfg) == "unknown"
 
 
-def test_hash_verified_before_load_and_offline_env_scoped(model_dir, monkeypatch):
+def test_manifest_hash_covers_every_file_and_binds_revision(model_dir):
     d, sha = model_dir
-    calls, envs = [], []
+    assert ss.manifest_sha256(d, REV) == sha and ss.manifest_sha256(d, "other") != sha
+    text = ss.manifest_text(d, REV)
+    assert text.startswith("#revision\tabc123\n") and "sub/config.json\t" in text and "tokenizer.json\t" in text
+    lines = text.splitlines()[1:]
+    assert lines == sorted(lines)
+    (d / "tokenizer.json").write_bytes(b"tampered")  # a non-model file changes the hash
+    assert ss.manifest_sha256(d, REV) != sha
 
-    class M:
-        def embed(self, texts):
-            return FAKE.embed(texts)
+
+def test_manifest_rejects_symlink_extra_empty_and_nonregular(model_dir, tmp_path):
+    d, sha = model_dir
+    (d / "extra.bin").write_bytes(b"x")  # unexpected file: hash no longer matches
+    assert ss.manifest_sha256(d, REV) != sha
+    (d / "extra.bin").unlink()
+    (d / "link").symlink_to(d / "model.onnx")
+    with pytest.raises(RuntimeError):
+        ss.manifest_text(d, REV)
+    (d / "link").unlink()
+    (d / "dlink").symlink_to(d / "sub")
+    with pytest.raises(RuntimeError):
+        ss.manifest_text(d, REV)
+    (d / "dlink").unlink()
+    top = tmp_path / "top"
+    top.symlink_to(d)
+    with pytest.raises(RuntimeError):
+        ss.manifest_text(top, REV)
+    empty = tmp_path / "e"
+    empty.mkdir()
+    with pytest.raises(RuntimeError):
+        ss.manifest_text(empty, REV)
+
+
+def test_verified_inside_warm_before_load_and_request_path_never_loads(model_dir, monkeypatch):
+    d, sha = model_dir
+    calls = []
 
     def loader(name, path):
         calls.append((name, path))
-        import os
-        envs.append(os.environ.get("HF_HUB_OFFLINE"))
-        return M()
-    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
-    ad = ss._adapter(_cfg(sha), {"E": str(d)}, loader)
-    assert ad.embed(["a b"]) and calls == [("bge-small", str(d))] and envs == ["1"]
-    import os
-    assert "HF_HUB_OFFLINE" not in os.environ  # restored after the load call
-    ad.embed(["c"])
-    assert len(calls) == 1  # loaded once
-    bad = ss._adapter(_cfg("0" * 64), {"E": str(d)}, loader)
+        return _M()
+    env = {"E": str(d), "HF_HUB_OFFLINE": "1"}
+    before = dict(__import__("os").environ)
+    ad = ss._adapter(_cfg(sha), env, loader)
+    # request path: not warmed -> unknown, no load, loader never called
+    assert ss.similarity_decision_with_mode("topic", "a b", "a b", None, _cfg(sha), env) == ("unknown", "active", False, None)
     with pytest.raises(RuntimeError):
-        bad.embed(["x"])
-    assert len(calls) == 1  # mismatched hash: loader never called
+        ad.embed(["x"])  # embed() never lazy-loads
+    assert calls == [] and not ad.loaded
+    assert ss.warm(_cfg(sha), env) is True and calls == [("bge-small", str(d))]  # same directory that was hashed
+    assert ss.warm(_cfg(sha), env) is True and len(calls) == 1  # loaded once
+    r = ss.similarity_decision_with_mode("topic", "a b", "a b", None, _cfg(sha), env)
+    assert r == ("similar", "active", True, None)
+    assert dict(__import__("os").environ) == before  # nothing mutates os.environ
 
 
-def test_missing_or_traversing_model_file_refused(model_dir):
+def test_hash_mismatch_never_calls_loader(model_dir):
     d, sha = model_dir
-    for f in ("nope.onnx", "../model.onnx", "", "sub/model.onnx"):
+    calls = []
+    ad = ss._adapter(_cfg("0" * 64), {"E": str(d)}, lambda *a: calls.append(a) or _M())
+    with pytest.raises(RuntimeError):
+        ad.load()
+    wrong_rev = ss._adapter(_cfg(sha, rev="zzz"), {"E": str(d)}, lambda *a: calls.append(a) or _M())
+    with pytest.raises(RuntimeError):
+        wrong_rev.load()  # revision bound into the manifest: mismatch refused
+    assert calls == []
+
+
+def test_tamper_between_warm_attempts_refused(model_dir):
+    d, sha = model_dir
+    calls = []
+    ad = ss._adapter(_cfg(sha), {"E": str(d)}, lambda *a: calls.append(a) or _M())
+    (d / "tokenizer.json").write_bytes(b"tampered")
+    with pytest.raises(RuntimeError):
+        ad.load()
+    assert calls == []
+
+
+def test_offline_env_warning_once_and_no_mutation(model_dir, caplog, monkeypatch):
+    import logging
+    d, sha = model_dir
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    caplog.set_level(logging.WARNING)
+    cfg = _cfg(sha)
+    ss.warm(cfg, {"E": str(d)})
+    ss.warm(cfg, {"E": str(d)})
+    assert sum("HF_HUB_OFFLINE" in r.getMessage() for r in caplog.records) == 1
+    assert "HF_HUB_OFFLINE" not in __import__("os").environ
+    caplog.clear()
+    ss._OFFLINE_WARNED = False
+    ss.warm(cfg, {"E": str(d), "HF_HUB_OFFLINE": "1"})
+    assert not [r for r in caplog.records if "HF_HUB_OFFLINE" in r.getMessage()]
+
+
+def test_missing_model_dir_refused(model_dir, tmp_path):
+    d, sha = model_dir
+    for bad in (None, "", str(tmp_path / "nope")):
         with pytest.raises(RuntimeError):
-            ss.FastEmbedAdapter("m", str(d), sha, f, loader=lambda *a: None).load()
+            ss.FastEmbedAdapter("m", bad, sha, REV, loader=lambda *a: None).load()
+    with pytest.raises(RuntimeError):
+        ss.FastEmbedAdapter("m", str(d), sha, "", loader=lambda *a: None).load()
 
 
 def test_adapter_cached_per_dir_sha_and_warm(model_dir):

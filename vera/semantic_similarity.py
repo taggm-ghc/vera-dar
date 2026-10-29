@@ -8,11 +8,14 @@ OD-1028(26)/(48): similarity must never by itself establish prohibited intent or
 similarity_decision / similarity_decision_with_mode and the Embedder/adapter types are public; scoring helpers are
 private. Structural and behavioural guards live in tests/test_semantic_similarity.py.
 
-Shadow mode: when cfg["shadow"] is not False the decision is computed but flagged non-actionable; callers
-must NOT act on it (log only). similarity_decision() then returns "unknown".
+Shadow mode: when cfg["shadow"] is not False, `decision` is always "unknown" and actionable is False; the computed
+value is only in `shadow_decision`, which is LOG-ONLY (never branch on it). similarity_decision() returns "unknown".
 
-Operational: the first model load is slow and must NOT happen inside an advisory-lock DB transaction; call
-warm() at startup or outside the lock. The adapter is cached per (model_dir, sha256) behind a lock.
+Operational: the model is loaded ONLY by warm() (slow; call at startup, never inside an advisory-lock DB
+transaction). The request path never loads: an unwarmed adapter yields "unknown". The deployment environment MUST set
+HF_HUB_OFFLINE=1 (warm() logs a warning once if unset; nothing mutates os.environ). model_sha256 is a manifest hash
+(see manifest_text) over every file in the model dir, bound to model_revision; symlinks are rejected, so deploy a
+dereferenced copy. The adapter is cached per (model_dir, sha256) behind a lock.
 
 Fail closed: model unavailable, threshold null/uncalibrated, bad input or any error -> "unknown".
 Text is data only. Nothing is downloaded at import or request time; fastembed is imported lazily and
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -42,9 +46,36 @@ class Embedder(Protocol):
 
 
 class SimilarityResult(NamedTuple):
-    decision: str
+    decision: str  # "similar" | "dissimilar" only when mode == "active"; otherwise always "unknown"
     mode: str  # "active" | "shadow" | "off"
-    actionable: bool  # False in shadow/off: callers must not act on the decision (log only)
+    actionable: bool  # False in shadow/off: callers must not act on `decision` (it is "unknown" there)
+    shadow_decision: str | None = None  # LOG-ONLY computed value in shadow mode; never act on it, never branch on it
+
+
+def manifest_text(model_dir: str | Path, revision: str) -> str:
+    """Deterministic manifest: '#revision\t<rev>' then sorted 'relpath\tsha256' lines over EVERY file under
+    model_dir. Raises RuntimeError on a symlink, a non-regular entry or no files (fail closed)."""
+    root = Path(model_dir)
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError("model directory missing or a symlink")
+    rows = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in list(dirnames) + list(filenames):
+            q = Path(dirpath) / name
+            if q.is_symlink():
+                raise RuntimeError("symlink in model directory")
+        for name in filenames:
+            q = Path(dirpath) / name
+            if not q.is_file():
+                raise RuntimeError("non-regular file in model directory")
+            rows.append((q.relative_to(root).as_posix(), _file_sha256(q)))
+    if not rows:
+        raise RuntimeError("model directory is empty")
+    return f"#revision\t{revision}\n" + "".join(f"{r}\t{h}\n" for r, h in sorted(rows))
+
+
+def manifest_sha256(model_dir: str | Path, revision: str) -> str:
+    return hashlib.sha256(manifest_text(model_dir, revision).encode("utf-8")).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:
@@ -60,41 +91,47 @@ def _real_loader(model_name: str, model_dir: str):  # UNVERIFIED against fastemb
     return TextEmbedding(model_name=model_name, specific_model_path=model_dir)
 
 
+_OFFLINE_WARNED = False
+
+
+def _check_offline_env(environ=os.environ) -> None:
+    """The deployment MUST set HF_HUB_OFFLINE=1 in its environment (huggingface_hub reads it at import time, so it
+    cannot be set safely in-process). Log a warning once if it is unset."""
+    global _OFFLINE_WARNED
+    if environ.get("HF_HUB_OFFLINE") != "1" and not _OFFLINE_WARNED:
+        _OFFLINE_WARNED = True
+        logging.getLogger(__name__).warning("HF_HUB_OFFLINE is not set to 1; the deployment environment must set it")
+
+
 class FastEmbedAdapter:
-    """Lazy fastembed wrapper. Constructing it imports nothing; the first embed()/load() does the slow load.
+    """fastembed wrapper. Constructing imports nothing. The model is loaded ONLY by load() (via warm()); embed()
+    never loads. Immediately before loading, the manifest hash of every file in `model_dir` (bound to
+    `model_revision`) must equal `model_sha256`, and the model is loaded from that same directory
+    (specific_model_path). The deployment must set HF_HUB_OFFLINE=1 in its environment (not mutated here)."""
 
-    Before loading: the sha256 of `model_file` inside `model_dir` must equal `model_sha256`. The model is loaded
-    from `model_dir` itself (specific_model_path) with HF_HUB_OFFLINE=1 set only for the duration of the load."""
-
-    def __init__(self, model_name: str, model_dir: str | None, model_sha256: str = "", model_file: str = "",
+    def __init__(self, model_name: str, model_dir: str | None, model_sha256: str = "", model_revision: str = "",
                  loader=None):
         self.model_name, self.model_dir = model_name, model_dir
-        self.model_sha256, self.model_file = model_sha256, model_file
+        self.model_sha256, self.model_revision = model_sha256, model_revision
         self._loader, self._model, self._lock = loader or _real_loader, None, threading.Lock()
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
 
     def load(self) -> None:
         with self._lock:
             if self._model is not None:
                 return
-            if not self.model_dir or not _SHA_RE.match(self.model_sha256 or "") or not self.model_file \
-                    or os.sep in self.model_file or self.model_file in (".", "..") or "/" in self.model_file:
-                raise RuntimeError("model directory/hash/file not configured")
-            fp = Path(self.model_dir) / self.model_file
-            if not fp.is_file() or _file_sha256(fp) != self.model_sha256:
-                raise RuntimeError("model file hash mismatch")
-            prev = os.environ.get("HF_HUB_OFFLINE")
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            try:
-                self._model = self._loader(self.model_name, self.model_dir)
-            finally:
-                if prev is None:
-                    os.environ.pop("HF_HUB_OFFLINE", None)
-                else:
-                    os.environ["HF_HUB_OFFLINE"] = prev
+            if not self.model_dir or not _SHA_RE.match(self.model_sha256 or "") or not self.model_revision:
+                raise RuntimeError("model directory/hash/revision not configured")
+            if manifest_sha256(self.model_dir, self.model_revision) != self.model_sha256:
+                raise RuntimeError("model manifest hash mismatch")
+            self._model = self._loader(self.model_name, self.model_dir)
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if self._model is None:
-            self.load()
+            raise RuntimeError("model not loaded; call warm() first")
         return [[float(x) for x in v] for v in self._model.embed(list(texts))]
 
 
@@ -103,6 +140,7 @@ class FakeEmbedder:
 
     def __init__(self, dim: int = 64):
         self.dim = dim
+    loaded = True  # test double: always ready
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         import zlib
@@ -181,7 +219,7 @@ def _adapter(cfg: dict, environ=os.environ, loader=None) -> FastEmbedAdapter | N
         ad = _ADAPTERS.get(key)
         if ad is None:
             ad = _ADAPTERS[key] = FastEmbedAdapter(cfg["model_name"], model_dir, cfg["model_sha256"],
-                                                   str(cfg.get("model_file") or ""), loader)
+                                                   cfg["model_revision"], loader)
         return ad
 
 
@@ -192,6 +230,7 @@ def warm(cfg: dict | None = None, environ=os.environ) -> bool:
         ad = _adapter(cfg, environ)
         if ad is None:
             return False
+        _check_offline_env(environ)
         ad.load()
         return True
     except Exception:
@@ -207,7 +246,10 @@ def similarity_decision_with_mode(use: str, text_a: str, text_b: str, embedder: 
         if not isinstance(cfg, dict) or cfg.get("enabled") is not True:
             return SimilarityResult(UNKNOWN, "off", False)
         mode = "active" if cfg.get("shadow") is False else "shadow"
-        res = lambda d: SimilarityResult(d, mode, mode == "active" and d != UNKNOWN)  # noqa: E731
+        def res(d):
+            if mode == "active":
+                return SimilarityResult(d, mode, d != UNKNOWN)
+            return SimilarityResult(UNKNOWN, mode, False, d)  # shadow: computed value is log-only, never in `decision`
         if use not in USES:
             return res(UNKNOWN)
         thr = cfg.get(_THRESHOLD_KEY[use])
@@ -217,8 +259,8 @@ def similarity_decision_with_mode(use: str, text_a: str, text_b: str, embedder: 
         if cap is None:
             return res(UNKNOWN)
         emb = embedder if embedder is not None else _adapter(cfg, environ)
-        if emb is None:
-            return res(UNKNOWN)
+        if emb is None or (embedder is None and not emb.loaded):
+            return res(UNKNOWN)  # request path never loads the model; only warm() does
         s = _similarity_score(text_a, text_b, emb, cap)
         if s is None:
             return res(UNKNOWN)
@@ -231,4 +273,4 @@ def similarity_decision(use: str, text_a: str, text_b: str, embedder: Embedder |
                         cfg: dict | None = None) -> str:
     """'similar' | 'dissimilar' | 'unknown'. Returns a non-unknown value only in active (non-shadow) mode."""
     r = similarity_decision_with_mode(use, text_a, text_b, embedder, cfg)
-    return r.decision if r.mode == "active" else UNKNOWN
+    return r.decision if r.mode == "active" and r.actionable else UNKNOWN
