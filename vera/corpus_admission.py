@@ -120,10 +120,11 @@ class WoCorpusStore:
                 return "duplicate_in_run"
             if cand.get("gate_a_decision") != "fetch":
                 return f"recorded_{cand.get('gate_a_decision') or 'unscored'}"
-            if self.key_lookup is not None:  # D1: a row under any legacy spelling means the source is known; no duplicate
-                from vera.url_key import lookup_keys
-                if self.key_lookup.any_known(lookup_keys({"doi": cand.get("doi"), "url": cand["url"]})):
-                    return "known"
+            if self.key_lookup is None:  # OD-1028(8): the DB must never accept duplicates -> fail closed without a RO lookup
+                return "skipped_no_ro_lookup"
+            from vera.url_key import lookup_keys  # D1: a row under any legacy spelling means the source is known
+            if self.key_lookup.any_known(lookup_keys({"doi": cand.get("doi"), "url": cand["url"]})):  # a RO lookup error propagates like other DB errors in admit (L2)
+                return "known"
             csid = self._insert_new(c, "INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) "
                                        "RETURNING canonical_source_id",
                              {"u": cand["canonical_url"]})
@@ -240,9 +241,9 @@ _STORE: dict = {}
 
 
 def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
-    """Legacy-spelling check (D1) uses the read-only URL in the env var named cfg['db_url_ro_env'] (default VERA_DB_URL_RO);
-    when it is unset the store works as before (no lookup)."""
-    """The process-wide store, or None when corpus admission is disabled or its DB URL is unset."""
+    """The process-wide store, or None when corpus admission is disabled or its DB URL is unset.
+    The legacy-spelling check (D1) uses the read-only URL in the env var named cfg['db_url_ro_env'] (default VERA_DB_URL_RO);
+    when it is unset the store fails closed (OD-1028(8)): no canonical_sources INSERT, outcome 'skipped_no_ro_lookup'."""
     if not cfg or not cfg.get("enabled"):
         return None
     url = (env.get(cfg["db_url_env"]) or "").strip()
@@ -253,7 +254,9 @@ def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
             from sqlalchemy import create_engine as engine_factory
         ro_url = (env.get(cfg.get("db_url_ro_env") or "VERA_DB_URL_RO") or "").strip()
         lookup = None
-        if ro_url:
+        if not ro_url:
+            logger.warning("corpus admission: no read-only lookup URL configured; new canonical sources will NOT be stored")
+        else:
             from vera.canonical_lookup import RoKeyLookup
             lookup = RoKeyLookup(engine_factory(ro_url, pool_pre_ping=True, hide_parameters=True))
         _STORE["store"] = WoCorpusStore(engine_factory(url, pool_pre_ping=True, hide_parameters=True), cfg["question_text"],

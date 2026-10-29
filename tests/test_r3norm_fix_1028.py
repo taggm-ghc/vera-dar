@@ -84,20 +84,27 @@ def test_admit_inserts_when_nothing_matches():
     assert st.key_lookup.asked and st.key_lookup.asked[0][0] == "https://example.com/a"  # new key first
 
 
-def test_admit_without_lookup_is_unchanged():
+def test_admit_without_lookup_fails_closed_no_canonical_insert():
+    """OD-1028(8): no RO lookup -> no canonical_sources INSERT, distinct outcome."""
     st = ca.WoCorpusStore(_Eng(), "Q")
-    st._run_id, st._insert_new, st._one = 1, (lambda c, s, p: 5), (lambda c, s, p: 1)
-    assert st.key_lookup is None and st.admit(_cand("https://example.com/a")) == "admitted"
+    sqls = []
+    st._run_id, st._one = 1, (lambda c, s, p: 1)
+    st._insert_new = lambda c, s, p: sqls.append(s) or 5
+    assert st.key_lookup is None and st.admit(_cand("https://example.com/a")) == "skipped_no_ro_lookup"
+    assert not any("canonical_sources" in s or "sources (" in s for s in sqls)
 
 
-def test_store_from_env_wires_ro_lookup(monkeypatch):
+def test_store_from_env_wires_ro_lookup(monkeypatch, caplog):
     monkeypatch.setattr(ca, "_STORE", {})
     urls = []
     cfg = {"enabled": True, "db_url_env": "W", "question_text": "q"}
     st = ca.store_from_env(cfg, env={"W": "wo", "VERA_DB_URL_RO": "ro"}, engine_factory=lambda u, **kw: urls.append(u) or u)
     assert isinstance(st.key_lookup, RoKeyLookup) and urls == ["ro", "wo"]
     monkeypatch.setattr(ca, "_STORE", {})
-    assert ca.store_from_env(cfg, env={"W": "wo"}, engine_factory=lambda u, **kw: u).key_lookup is None
+    with caplog.at_level("WARNING", logger=ca.logger.name):
+        assert ca.store_from_env(cfg, env={"W": "wo"}, engine_factory=lambda u, **kw: u).key_lookup is None
+    warns = [r for r in caplog.records if "read-only lookup" in r.getMessage()]
+    assert len(warns) == 1 and "wo" not in warns[0].getMessage().split()
 
 
 def test_ro_key_lookup_sql_is_select_any():
