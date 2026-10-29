@@ -71,8 +71,9 @@ def licence_observation_rows(cand: dict, run_id=None, now=None) -> list[dict]:
 class WoCorpusStore:
     """Write-only persistence: no SELECT on content columns, no UPDATE of immutable rows."""
 
-    def __init__(self, engine, question_text: str):
-        self.engine, self.question_text = engine, question_text
+    def __init__(self, engine, question_text: str, key_lookup=None):
+        # key_lookup (R3NORM-FIX-1028 D1): read-only object with any_known(keys) -> bool (vera.canonical_lookup.RoKeyLookup)
+        self.engine, self.question_text, self.key_lookup = engine, question_text, key_lookup
         self._run_id, self._lock = None, threading.Lock()
 
     def _one(self, conn, sql: str, params: dict):
@@ -119,6 +120,11 @@ class WoCorpusStore:
                 return "duplicate_in_run"
             if cand.get("gate_a_decision") != "fetch":
                 return f"recorded_{cand.get('gate_a_decision') or 'unscored'}"
+            if self.key_lookup is None:  # OD-1028(8): the DB must never accept duplicates -> fail closed without a RO lookup
+                return "skipped_no_ro_lookup"
+            from vera.url_key import lookup_keys  # D1: a row under any legacy spelling means the source is known
+            if self.key_lookup.any_known(lookup_keys({"doi": cand.get("doi"), "url": cand["url"]})):  # a RO lookup error propagates like other DB errors in admit (L2)
+                return "known"
             csid = self._insert_new(c, "INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) "
                                        "RETURNING canonical_source_id",
                              {"u": cand["canonical_url"]})
@@ -146,8 +152,10 @@ class WoCorpusStore:
 
 
 def canonical_url(src: dict) -> str:
-    doi = str(src.get("doi") or "").strip().lower()
-    return f"https://doi.org/{doi}" if doi else str(src["url"]).strip().rstrip("/")
+    """R3 key for a NEW canonical source (R3NORM-1028: the single normaliser, vera.url_key.canonical_key).
+    Lookups must use vera.url_key.lookup_keys so rows stored under the old spelling are still found."""
+    from vera.url_key import canonical_key
+    return canonical_key({"doi": src.get("doi"), "url": src["url"]})
 
 
 def is_stored_document_source(src: dict) -> bool:
@@ -233,7 +241,9 @@ _STORE: dict = {}
 
 
 def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
-    """The process-wide store, or None when corpus admission is disabled or its DB URL is unset."""
+    """The process-wide store, or None when corpus admission is disabled or its DB URL is unset.
+    The legacy-spelling check (D1) uses the read-only URL in the env var named cfg['db_url_ro_env'] (default VERA_DB_URL_RO);
+    when it is unset the store fails closed (OD-1028(8)): no canonical_sources INSERT, outcome 'skipped_no_ro_lookup'."""
     if not cfg or not cfg.get("enabled"):
         return None
     url = (env.get(cfg["db_url_env"]) or "").strip()
@@ -242,7 +252,15 @@ def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
     if "store" not in _STORE:
         if engine_factory is None:
             from sqlalchemy import create_engine as engine_factory
-        _STORE["store"] = WoCorpusStore(engine_factory(url, pool_pre_ping=True, hide_parameters=True), cfg["question_text"])
+        ro_url = (env.get(cfg.get("db_url_ro_env") or "VERA_DB_URL_RO") or "").strip()
+        lookup = None
+        if not ro_url:
+            logger.warning("corpus admission: no read-only lookup URL configured; new canonical sources will NOT be stored")
+        else:
+            from vera.canonical_lookup import RoKeyLookup
+            lookup = RoKeyLookup(engine_factory(ro_url, pool_pre_ping=True, hide_parameters=True))
+        _STORE["store"] = WoCorpusStore(engine_factory(url, pool_pre_ping=True, hide_parameters=True), cfg["question_text"],
+                                        lookup)
     return _STORE["store"]
 
 

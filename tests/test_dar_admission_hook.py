@@ -117,7 +117,10 @@ def test_wo_store_publishes_db_ids_on_the_candidate_and_return_value_is_unchange
 
     cand = {"url": "https://x.example/a", "canonical_url": "https://x.example/a", "title": "t", "snippet": "abs",
             "gate_a_decision": "fetch", "provenance": {"stored_text_kind": "abstract_metadata"}}
-    assert S(Eng(), "q").admit(cand) == "admitted"
+    class NoMatch:  # OD-1028(8): admission needs a RO lookup; this one knows nothing
+        def any_known(self, keys):
+            return False
+    assert S(Eng(), "q", NoMatch()).admit(cand) == "admitted"
     assert cand["canonical_source_id"] == 22 and cand["source_id"] == 33
     from vera.dar_corpus import doc_from_admitted
     d = doc_from_admitted(cand, "admitted")

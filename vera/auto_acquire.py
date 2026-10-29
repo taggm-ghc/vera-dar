@@ -1198,13 +1198,13 @@ class RoLookup:
             return list(c.execute(text(_sql(sql)), params).fetchall())
 
     def known(self, doi, url, isbn) -> bool:
-        from vera.corpus_admission import canonical_url
-        cu = canonical_url({"doi": doi, "url": url or ""})
-        r = self._rows("SELECT s.source_id FROM {S}.sources s JOIN {S}.canonical_sources cs "
-                       "ON cs.canonical_source_id = s.canonical_source_id WHERE cs.canonical_url = :u "
-                       "AND s.provenance->>'stored_text_kind' = 'fulldoc_chunks' LIMIT 1", {"u": cu})
-        if r:
-            return True
+        from vera.url_key import lookup_keys  # R3NORM-1028: current key, then legacy spellings
+        for cu in lookup_keys({"doi": doi, "url": url or ""}):
+            r = self._rows("SELECT s.source_id FROM {S}.sources s JOIN {S}.canonical_sources cs "
+                           "ON cs.canonical_source_id = s.canonical_source_id WHERE cs.canonical_url = :u "
+                           "AND s.provenance->>'stored_text_kind' = 'fulldoc_chunks' LIMIT 1", {"u": cu})
+            if r:
+                return True
         if isbn:
             r = self._rows("SELECT s.source_id FROM {S}.sources s WHERE s.provenance->>'isbn' = :i "
                            "AND s.provenance->>'stored_text_kind' = 'fulldoc_chunks' LIMIT 1", {"i": str(isbn)})
@@ -1260,7 +1260,14 @@ class WoStore:
 
     def write(self, plan: dict) -> dict:
         prov = plan["source"]["provenance"]
-        csid, ver, has_fd, same = self.lookup.canonical_state(plan["canonical_url"], prov["text_sha256"])
+        from vera.url_key import legacy_keys
+        cu = plan["canonical_url"]
+        csid, ver, has_fd, same = self.lookup.canonical_state(cu, prov["text_sha256"])
+        if csid is None:  # R3NORM-1028 read-time compatibility: a row stored under an old spelling is reused
+            for old in legacy_keys({"doi": prov.get("doi"), "url": prov.get("url") or cu}):
+                csid, ver, has_fd, same = self.lookup.canonical_state(old, prov["text_sha256"])
+                if csid is not None:
+                    break
         if has_fd or same:
             return {"status": "known"}
         qtext = str(self.cfg["question_text"])

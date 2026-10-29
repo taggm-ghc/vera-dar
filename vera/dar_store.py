@@ -117,10 +117,14 @@ class DarReader:
                           "AND end_index = :b", {"s": source_id, "a": start, "b": end})
         return rows[0][0] if rows else None
 
-    def canonical_id_for(self, canonical_url: str):
-        rows = self._rows("SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url = :u",
-                          {"u": canonical_url})
-        return rows[0][0] if rows else None
+    def canonical_id_for(self, canonical_url: str, src: dict | None = None):
+        """R3NORM-FIX-1028 D3: the given key first, then lookup_keys (current + legacy spellings) of src / of the key."""
+        from vera.url_key import lookup_keys
+        for u in dict.fromkeys([canonical_url, *lookup_keys(src or {"url": canonical_url})]):
+            rows = self._rows("SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url = :u", {"u": u})
+            if rows:
+                return rows[0][0]
+        return None
 
     def source_id_for(self, canonical_source_id: int):
         """Latest source_id (highest version) of a canonical source."""

@@ -390,9 +390,15 @@ class RoLookup:
                 missing.append(n)
         return missing
 
-    def canonical(self, url: str):
-        r = self.rows("SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url = :u", {"u": url})
-        return r[0][0] if r else None
+    def canonical(self, url: str, src: dict | None = None):
+        """csid for a canonical URL. R3NORM-1028 read-time compatibility: the given (current) key first, then the
+        legacy spellings of the same source, so a row stored under the old normalisation is reused, not duplicated."""
+        from vera.url_key import legacy_keys
+        for u in dict.fromkeys([url] + legacy_keys(src or {"url": url})):
+            r = self.rows("SELECT canonical_source_id FROM {S}.canonical_sources WHERE canonical_url = :u", {"u": u})
+            if r:
+                return r[0][0]
+        return None
 
     def max_version(self, csid: int) -> int:
         r = self.rows("SELECT coalesce(max(version), 0) FROM {S}.sources WHERE canonical_source_id = :c", {"c": csid})
@@ -456,7 +462,7 @@ class FulltextStore(WoCorpusStore):
         in_tx(conn, ids), when given, runs INSIDE the same transaction after the sources row (the DAR persist step):
         if it raises, the run (on --new-run), candidate, canonical, source, spans and domain rows all roll back.
         Its return value is put in ids["in_tx"]."""
-        csid = self.lookup.canonical(rec["canonical_url"])
+        csid = self.lookup.canonical(rec["canonical_url"], {"doi": (rec.get("provenance") or {}).get("doi"), "url": rec.get("url") or rec["canonical_url"]})
         version = 1
         if csid is not None:
             hit = self.lookup.same_hash(csid, rec["content_hash"])

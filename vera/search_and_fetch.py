@@ -64,10 +64,10 @@ class _ProviderFailed(Exception):
 
 
 def normalize_url(url: str) -> str:
-    """Canonical form for de-duplication: lowercase host, no fragment, no trailing slash."""
-    p = urlsplit(url.strip())
-    path = p.path.rstrip("/") or "/"
-    return urlunsplit((p.scheme.lower(), p.netloc.lower(), path, p.query, ""))
+    """Canonical form for de-duplication and the m2 R3 key. R3NORM-1028: delegates to the single normaliser
+    vera.url_key.normalize_url (legacy spelling: vera.url_key.legacy_keys)."""
+    from vera.url_key import normalize_url as _n
+    return _n(url)
 
 
 def _attempts(provider, question, n, **kw):

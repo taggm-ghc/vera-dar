@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from vera import answer_contract
 from vera.corpus_admission import SCHEMA, WoCorpusStore, canonical_url
+from vera.url_key import legacy_keys
 from vera.memory_gate import (ECHOES_QUESTION, GateResult, SourceRef, _overlap, check_memory_write,
                               normalise_claim)
 
@@ -448,8 +449,18 @@ class MemoryService:
             return res.reasons[0]
         text = normalise_claim(rec["sentence"], self.gate_cfg)
         spans = []  # one whole-abstract evidence span per distinct cited source
-        for canon in dict.fromkeys(canonical_url(s) for s in cited):
+        seen = set()
+        for s in cited:
+            canon = canonical_url(s)
+            if canon in seen:
+                continue
+            seen.add(canon)
             found = self.reader.source(canon)
+            if found is None:  # R3NORM-1028: read-time compatibility, rows stored under an old spelling of the key
+                for legacy in legacy_keys(s):
+                    found = self.reader.source(legacy)
+                    if found is not None:
+                        break
             if found is None or not found[1]:
                 return SKIP_NOT_IN_CORPUS
             source_id, length = found

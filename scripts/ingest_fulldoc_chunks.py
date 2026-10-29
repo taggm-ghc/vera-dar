@@ -125,7 +125,9 @@ def _dup_refusal(first, r: dict):
     h = src["provenance"]["text_sha256"]
     if h == fulldoc_db.EMPTY_SHA256:
         return f"{r['document_id']}: text sha256 is the empty-string hash (refused)"
-    if first(SQL_DUP_URL, {"u": src["canonical_url"]}) is not None:
+    from vera.url_key import lookup_keys  # R3NORM-1028: the stored key, the current key and legacy spellings
+    keys = dict.fromkeys([src["canonical_url"]] + lookup_keys({"url": src["canonical_url"]}))
+    if any(first(SQL_DUP_URL, {"u": k}) is not None for k in keys):
         return f"{r['document_id']}: canonical URL already exists (stop and escalate: version shadowing)"
     if first(SQL_DUP_HASH, {"h": h}) is not None:
         return f"{r['document_id']}: same text already stored (stop and escalate)"
