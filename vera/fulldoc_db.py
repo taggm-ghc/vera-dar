@@ -206,7 +206,9 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
             # R3: the ingest filters, re-applied to the rebuilt text as the configured full-document kind
             rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"))
             rec["document_id"] = did
-            if rec["canonical_url"] != row.get("canonical_url"):
+            # R3NORM-FIX-1028 D2: a row stored under a legacy spelling of the same source is accepted (no rewrite)
+            from vera.url_key import legacy_keys
+            if row.get("canonical_url") not in [rec["canonical_url"], *legacy_keys({"doi": item.get("doi"), "url": item.get("landing_url")})]:
                 raise fulltext_loader.Refused(R_DBROW, "canonical URL differs from the recorded item")
             if rec["provenance"].get("licence_decision") != "allow":
                 raise fulltext_loader.Refused(R_ERR, "licence_decision is not allow")

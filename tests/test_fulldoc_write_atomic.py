@@ -361,3 +361,20 @@ def test_advisory_lock_only_on_postgresql(world, dialect, expect_lock):
     assert bool(locks) is expect_lock
     if expect_lock:
         assert "hashtext" in log[0] and len(locks) == 1  # before the duplicate check, once per document reached
+
+
+def test_fragment_only_variant_refused_as_same_canonical_url(world):
+    """R3NORM-FIX-1028: a fragment-only spelling normalises to the stored key, so it is refused as the same canonical URL."""
+    import copy
+    s, _, _, rows, report, spec, _ = world
+    assert _run(world, Factory()) == 0
+    before = _counts(spec)
+    r2 = copy.deepcopy(rows)
+    for r in r2:
+        r["source"]["canonical_url"] += "#other"
+        r["source"]["provenance"]["text_sha256"] = "0" * 63 + "1"  # only the URL can match
+    with pytest.raises(fulltext_loader.IngestError, match="canonical URL"):
+        s.write_rows(_engine(spec), _engine(spec), r2, fulltext_loader.load_config(), report["n_spans"])
+    assert _counts(spec) == before
+    from vera.url_key import normalize_url
+    assert normalize_url(rows[0]["source"]["canonical_url"] + "#other") == rows[0]["source"]["canonical_url"]

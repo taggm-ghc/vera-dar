@@ -71,8 +71,9 @@ def licence_observation_rows(cand: dict, run_id=None, now=None) -> list[dict]:
 class WoCorpusStore:
     """Write-only persistence: no SELECT on content columns, no UPDATE of immutable rows."""
 
-    def __init__(self, engine, question_text: str):
-        self.engine, self.question_text = engine, question_text
+    def __init__(self, engine, question_text: str, key_lookup=None):
+        # key_lookup (R3NORM-FIX-1028 D1): read-only object with any_known(keys) -> bool (vera.canonical_lookup.RoKeyLookup)
+        self.engine, self.question_text, self.key_lookup = engine, question_text, key_lookup
         self._run_id, self._lock = None, threading.Lock()
 
     def _one(self, conn, sql: str, params: dict):
@@ -119,6 +120,10 @@ class WoCorpusStore:
                 return "duplicate_in_run"
             if cand.get("gate_a_decision") != "fetch":
                 return f"recorded_{cand.get('gate_a_decision') or 'unscored'}"
+            if self.key_lookup is not None:  # D1: a row under any legacy spelling means the source is known; no duplicate
+                from vera.url_key import lookup_keys
+                if self.key_lookup.any_known(lookup_keys({"doi": cand.get("doi"), "url": cand["url"]})):
+                    return "known"
             csid = self._insert_new(c, "INSERT INTO {S}.canonical_sources (canonical_url) VALUES (:u) "
                                        "RETURNING canonical_source_id",
                              {"u": cand["canonical_url"]})
@@ -235,6 +240,8 @@ _STORE: dict = {}
 
 
 def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
+    """Legacy-spelling check (D1) uses the read-only URL in the env var named cfg['db_url_ro_env'] (default VERA_DB_URL_RO);
+    when it is unset the store works as before (no lookup)."""
     """The process-wide store, or None when corpus admission is disabled or its DB URL is unset."""
     if not cfg or not cfg.get("enabled"):
         return None
@@ -244,7 +251,13 @@ def store_from_env(cfg: dict, env=os.environ, engine_factory=None):
     if "store" not in _STORE:
         if engine_factory is None:
             from sqlalchemy import create_engine as engine_factory
-        _STORE["store"] = WoCorpusStore(engine_factory(url, pool_pre_ping=True, hide_parameters=True), cfg["question_text"])
+        ro_url = (env.get(cfg.get("db_url_ro_env") or "VERA_DB_URL_RO") or "").strip()
+        lookup = None
+        if ro_url:
+            from vera.canonical_lookup import RoKeyLookup
+            lookup = RoKeyLookup(engine_factory(ro_url, pool_pre_ping=True, hide_parameters=True))
+        _STORE["store"] = WoCorpusStore(engine_factory(url, pool_pre_ping=True, hide_parameters=True), cfg["question_text"],
+                                        lookup)
     return _STORE["store"]
 
 

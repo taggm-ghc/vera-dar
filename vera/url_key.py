@@ -8,8 +8,11 @@ old normalisations are still found, so no duplicate is inserted for a stored sou
 Conservative by design: only transformations that cannot join two distinct documents are applied.
   - scheme and host lower-cased; default port (80 http, 443 https) dropped; fragment dropped;
   - trailing slashes dropped (matches both legacy forms for the root path);
-  - known tracking parameters (utm_*, fbclid, gclid, ...) dropped, the rest sorted, blank values kept;
-  - percent-escape hex upper-cased (no decoding);
+  - known tracking parameters (utm_*, fbclid, gclid, ...) dropped (matched on the decoded, lower-cased name); the remaining
+    query parameters are sorted by raw name only (stable: repeated names keep their relative order, so ?id=2&id=1 is
+    NOT ?id=1&id=2); the query is never decoded or re-encoded, so 'a+b', 'a%20b', 'a/b' and 'a%2Fb' stay distinct and
+    '?flag' stays distinct from '?flag='; empty segments (stray '&') are dropped;
+  - percent-escape hex upper-cased in path and query (no decoding);
   - DOI forms (doi:, dx.doi.org, doi.org, case) -> https://doi.org/<lower-case doi>;
   - arXiv abs / pdf / .pdf -> https://arxiv.org/abs/<id>; a version suffix (v2) is KEPT (versions can differ);
   - http -> https only for hosts known to serve both identically (doi.org, arxiv.org).
@@ -18,7 +21,7 @@ Everything else (www., path case, path dot-segments, other hosts' scheme, non-tr
 from __future__ import annotations
 
 import re
-from urllib.parse import parse_qsl, urlsplit, urlunsplit, quote
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 TRACKING_PARAMS = frozenset({"fbclid", "gclid", "dclid", "msclkid", "yclid", "mc_cid", "mc_eid", "_hsenc", "_hsmi",
                              "igshid", "ref_src"})
@@ -36,7 +39,7 @@ def normalize_doi(doi) -> str:
 
 
 def _is_tracking(name: str) -> bool:
-    n = name.lower()
+    n = unquote(name).lower()
     return n in TRACKING_PARAMS or n.startswith(TRACKING_PREFIXES)
 
 
@@ -68,8 +71,9 @@ def normalize_url(url) -> str:
         m = _ARXIV_PATH.match(path)
         if m:
             path = "/abs/" + m.group(1).lower()
-    pairs = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if not _is_tracking(k)]
-    query = "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in sorted(pairs))
+    segs = [(_upper_pct(seg.split("=", 1)[0]), _upper_pct(seg)) for seg in p.query.split("&") if seg]
+    segs = [(k, seg) for k, seg in segs if not _is_tracking(k)]
+    query = "&".join(seg for _, seg in sorted(segs, key=lambda kv: kv[0]))  # stable sort on the raw name only
     user = f"{p.username}@" if p.username and p.password is None else ""
     if p.password is not None:
         user = f"{p.username or ''}:{p.password}@"
