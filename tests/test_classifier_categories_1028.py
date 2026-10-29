@@ -310,9 +310,12 @@ DRAFT = (ROOT / "db" / "migrations" / "pending" / "012-DRAFT-classifier-categori
 def test_app_role_list_is_one_constant_and_matches_the_draft():
     assert sr.APP_ROLE_NAMES == frozenset({"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro", "vera_claude_code_rw",
                                            "vera_pipeline_wo", "vera_eval_ro"})
-    pre = DRAFT.split("R1(a) preflight", 1)[1].split("CREATE SCHEMA", 1)[0]
-    assert set(re.findall(r"'(vera_\w+)'", pre)) >= sr.APP_ROLE_NAMES
-    assert "pg_auth_members" in pre and "pg_has_role" not in pre and "current_user" in pre and "RAISE EXCEPTION" in pre
+    pre = DRAFT.split("R1(a) preflight", 1)[1].split("CREATE TABLE", 1)[0]
+    assert set(re.findall(r"'(vera_\w+)'", pre)) >= {"vera_vjay_wo", "vera_vjay_rw", "vera_vjay_ro"}
+    assert "current_setting('vera012.rw')" in pre  # logins come from the psql variables (defaults = the three names below)
+    head = DRAFT.split("BEGIN;", 1)[0]
+    assert {"vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"} <= set(re.findall(r"vera_\w+", head))
+    assert "pg_auth_members" in pre and "current_user" in pre and "RAISE EXCEPTION" in pre
     assert "(m.inherit_option OR m.set_option)" in pre  # PG16+ ADMIN-only rows must not lock out the owner
     assert "PG 18.6" in pre and "dedicated owner role" in pre
     src = (ROOT / "vera" / "scope_router.py").read_text()

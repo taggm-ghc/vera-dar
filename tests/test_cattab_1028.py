@@ -371,7 +371,8 @@ def test_migration_seed_matches_json_seed_with_version_and_active():
 def test_migration_text_privileges_and_checks():
     assert "CHECK (state IN ('draft','active','suspended','retired'))" in SQL
     assert "CHECK (disposition IN ('in_scope','off_topic','refuse','unsupported_use'))" in SQL
-    assert "REVOKE UPDATE, DELETE, TRUNCATE" in SQL
+    assert "REVOKE ALL ON vera_vjay.clscat_categories FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;" in SQL
+    assert "REVOKE ALL ON vera_vjay.clscat_categories FROM %I, %I, %I" in SQL  # the three login roles, from psql variables
     assert "GRANT SELECT ON vera_vjay.clscat_categories TO vera_vjay_ro" in SQL
     assert "GRANT SELECT, INSERT ON vera_vjay.clscat_categories TO vera_vjay_rw" in SQL
     assert not re.search(r"GRANT[^;]*(UPDATE|DELETE|TRUNCATE)[^;]*TO", SQL)
@@ -402,7 +403,8 @@ def test_migration_review_fixes_d1_to_d4_d8_d9_text():
     assert re.search(r"AND EXISTS \(SELECT 1 FROM vera_vjay\.clscat_categories c\s+WHERE c\.code = NEW\.code AND c\.state = 'active'", act)
     assert act.index("AND EXISTS") < act.index("UPDATE vera_vjay.clscat_categories")
     # D2: default-deny, owner-only, no pg_has_role/MEMBER and no is_app_role
-    assert "pg_has_role" not in SQL and "MEMBER" not in SQL and "is_app_role" not in SQL
+    trig = SQL[SQL.index("CREATE FUNCTION"):SQL.index("CREATE TRIGGER clscat_a_guard_trg")]
+    assert "pg_has_role" not in trig and "MEMBER" not in SQL and "is_app_role" not in SQL  # pg_has_role only in the role preflight
     assert "pg_catalog.pg_get_userbyid(c.relowner) = current_user" in SQL and "MUST BE RUN AS THE OWNER ROLE" in SQL
     assert "DEFAULT-DENY" in SQL and "vera_vjay_admin" not in SQL
     # D3: no default on version; NULL auto-assigns; supplied must be max+1
@@ -436,8 +438,9 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     assert "psql -X -v ON_ERROR_STOP=1" in SQL
     body = SQL.split("BEGIN;", 1)[1]
     first = body.index("already applied or name collision")
-    assert first < body.index("CREATE SCHEMA") < body.index("CREATE TABLE")
-    pre = body[:body.index("CREATE SCHEMA")]
+    assert "CREATE SCHEMA" not in SQL and "IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay')" in SQL  # D5
+    assert first < body.index("CREATE TABLE")
+    pre = body[:body.index("CREATE TABLE")]
     # names derived from the file itself, so this cannot drift
     tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", SQL)
     funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", SQL)
@@ -447,5 +450,48 @@ def test_forward_is_strictly_additive_transactional_with_full_preflight():
     assert "to_regclass('%s')" % tables[0] in pre
     for n in funcs + idx + trg:
         assert "'%s'" % n in pre, n
+    # D4: identity sequence (named explicitly) and row type are collision-checked
+    assert "SEQUENCE NAME vera_vjay.clscat_categories_category_id_seq" in SQL
+    assert "to_regclass('vera_vjay.clscat_categories_category_id_seq')" in pre and "to_regtype('vera_vjay.clscat_categories')" in pre
     assert "pg_proc" in pre and "pg_namespace" in pre and "pg_trigger" in pre
     assert "postgres://" not in pre
+
+
+def test_error_prefix_is_clscat_categories_only():  # D6
+    msgs = re.findall(r"RAISE EXCEPTION '([a-z_]+):", SQL)
+    assert msgs and set(msgs) == {"clscat_categories"} and "classifier_categories:" not in SQL
+
+
+def test_roles_variables_preflight_and_final_grant_check():
+    acc = (ROOT / "db" / "accounts" / "create_vera_accounts.sql").read_text()
+    for name in ("vera_claude_code_rw", "vera_pipeline_wo", "vera_eval_ro"):
+        assert "CREATE ROLE %s LOGIN" % name in acc
+    for var, name in (("app_rw_login", "vera_claude_code_rw"), ("app_wo_login", "vera_pipeline_wo"), ("app_ro_login", "vera_eval_ro")):
+        assert "\\set %s %s" % (var, name) in SQL and ":'%s'" % var in SQL
+    assert "FINAL grant targets pending the owner's pre006 run (live roles); do not apply before that." in SQL
+    assert SQL.index("pg_has_role(l, g, 'USAGE')") < SQL.index("CREATE TABLE")
+    fin = SQL[SQL.index("Final privilege check"):]
+    assert fin.index("has_table_privilege") > fin.index("DO $$") and fin.rstrip().endswith("COMMIT;")
+    assert SQL.index("GRANT SELECT, INSERT ON") < SQL.index("Final privilege check")
+    for p in ("'SELECT'", "'INSERT'", "'UPDATE','DELETE','TRUNCATE'"):
+        assert p in fin
+    assert sorted(m for m in re.findall(r"vera_\w+_(?:rw|wo|ro)\b", "\n".join(l for l in SQL.splitlines() if "set app_" in l))) == ["vera_claude_code_rw", "vera_eval_ro", "vera_pipeline_wo"]
+
+
+def test_rollback_drops_exactly_the_forward_objects_per_name_in_dependency_order():  # D7
+    rb = (ROOT / "db" / "migrations" / "rollback" / "012-DRAFT-classifier-categories-rollback.sql.draft").read_text()
+    code = "\n".join(l for l in rb.splitlines() if not l.startswith("--"))
+    trg = re.findall(r"CREATE TRIGGER (\w+)", SQL)
+    funcs = re.findall(r"CREATE FUNCTION vera_vjay\.(\w+)", SQL)
+    idx = re.findall(r"CREATE UNIQUE INDEX (\w+)", SQL)
+    tables = re.findall(r"CREATE TABLE (vera_vjay\.\w+)", SQL)
+    d_trg = re.findall(r"DROP TRIGGER IF EXISTS (\w+) ON vera_vjay\.clscat_categories;", code)
+    d_idx = re.findall(r"DROP INDEX IF EXISTS vera_vjay\.(\w+);", code)
+    d_tab = re.findall(r"DROP TABLE IF EXISTS (vera_vjay\.\w+);", code)
+    d_fn = re.findall(r"DROP FUNCTION IF EXISTS vera_vjay\.(\w+)\(\);", code)
+    assert sorted(d_trg) == sorted(trg) and sorted(d_idx) == sorted(idx) and d_tab == tables and sorted(d_fn) == sorted(funcs)
+    assert len(d_trg) + len(d_idx) + len(d_tab) + len(d_fn) == len(re.findall(r"^DROP ", code, re.M))  # nothing else dropped
+    pos = lambda n: code.index(n)
+    assert max(map(pos, ("DROP TRIGGER IF EXISTS %s " % t for t in d_trg))) < pos("DROP TABLE") < min(pos("DROP FUNCTION IF EXISTS vera_vjay.%s(" % f) for f in d_fn)
+    assert max(pos("DROP INDEX IF EXISTS vera_vjay.%s;" % i) for i in d_idx) < pos("DROP TABLE")
+    assert pos("DROP FUNCTION IF EXISTS vera_vjay.clscat_guard_trgfn") < pos("DROP FUNCTION IF EXISTS vera_vjay.clscat_is_owner_fn")

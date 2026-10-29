@@ -39,17 +39,46 @@
 --   * UNTESTED against a real PostgreSQL: the triggers, the partial unique indexes and the CHECKs have never been executed.
 -- Rollback (destructive, separate approval, owner-gated like this file): db/migrations/rollback/012-DRAFT-classifier-categories-rollback.sql.draft
 -- REQUIRED ORDER: (1) roles via db/accounts/create_vera_accounts.sql, (2) migrations 001-005, (3) this file.
--- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (no -1 needed: the file has its own BEGIN/COMMIT; ON_ERROR_STOP makes psql stop
+-- *** FINAL grant targets pending the owner's pre006 run (live roles); do not apply before that. ***
+-- ROLES (owner instruction: verify grants against the actual application and administrative database roles before finalizing).
+--   Grants stay on the GROUP roles vera_vjay_ro / vera_vjay_rw (as 001-004). The LOGIN roles are named by psql variables, defaults
+--   from db/accounts/create_vera_accounts.sql: app_rw_login=vera_claude_code_rw (:20), app_wo_login=vera_pipeline_wo (:21),
+--   app_ro_login=vera_eval_ro (:23). Override after pre006 shows the live roles, e.g. -v app_rw_login=<live rw login>.
+--   REVOKE ALL is applied to PUBLIC, the three groups and the three logins; the preflight RAISEs unless each group and login exists and
+--   each login inherits its group (pg_has_role USAGE); a final DO block before COMMIT RAISEs (rolling everything back) unless
+--   rw login has SELECT+INSERT, ro login has SELECT, and no app login has UPDATE/DELETE/TRUNCATE (wo login: nothing at all).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_wo_login=.. -v app_ro_login=..] -f <this file>   (no -1 needed: the file has its own BEGIN/COMMIT; ON_ERROR_STOP makes psql stop
 -- at the first error, so the open transaction is never committed and PostgreSQL rolls everything back).
 -- STRICTLY ADDITIVE: the first statement after BEGIN is the collision preflight; it RAISEs if any object this file creates already
--- exists ("already applied or name collision"). All CREATEs are plain (no existence-tolerant or replacing forms); nothing existing is altered.
+-- exists ("already applied or name collision"). All CREATEs are plain (no existence-tolerant or replacing forms) and the schema is NOT
+-- created here: the preflight RAISEs if vera_vjay is absent. Nothing existing is altered.
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
 BEGIN;
+-- psql variables are not expanded inside $$ bodies, so they are passed to the DO blocks as transaction-local settings.
+SELECT set_config('vera012.rw', :'app_rw_login', true), set_config('vera012.wo', :'app_wo_login', true),
+       set_config('vera012.ro', :'app_ro_login', true);
 
 -- Collision preflight (strictly additive): stop cleanly if ANY object this file creates already exists.
 DO $$
 DECLARE n text;
 BEGIN
-  IF pg_catalog.to_regclass('vera_vjay.clscat_categories') IS NOT NULL THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '012 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.clscat_categories') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.clscat_categories_category_id_seq') IS NOT NULL
+     OR pg_catalog.to_regtype('vera_vjay.clscat_categories') IS NOT NULL THEN
     RAISE EXCEPTION '012 already applied or name collision';
   END IF;
   FOREACH n IN ARRAY ARRAY['clscat_is_owner_fn','clscat_guard_trgfn','clscat_forbid_truncate_trgfn','clscat_label_unique_trgfn','clscat_activate_trgfn'] LOOP
@@ -75,35 +104,48 @@ END $$;
 
 
 -- R1(a) preflight: the owner (this session's role) must not be an app role nor DIRECTLY granted one (pg_auth_members by name,
--- not the inherited-membership function, so a superuser is not caught).
+-- not the inherited-membership function, so a superuser is not caught). The login names come from the psql variables above.
 -- PG16+ NOTE: this relies on the pg_auth_members columns inherit_option and set_option (PostgreSQL 16+). A CREATEROLE admin that
 -- created the vera_vjay_* roles automatically holds an ADMIN-only membership row (inherit_option = false, set_option = false);
 -- that row confers neither privileges nor SET ROLE, so only a membership with (inherit_option OR set_option) is counted.
 -- Production was last observed as PG 18.6 (2026-10-21, unconfirmed since). 012 should preferably run as a dedicated owner role.
-DO $$ BEGIN
-  IF current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')
+DO $$
+DECLARE app text[] := ARRAY['vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro',
+                            current_setting('vera012.rw'), current_setting('vera012.wo'), current_setting('vera012.ro')];
+BEGIN
+  IF current_user = ANY (app)
      OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
                 JOIN pg_catalog.pg_roles mem ON mem.oid = m.member
                 JOIN pg_catalog.pg_roles grp ON grp.oid = m.roleid
                 WHERE mem.rolname = current_user
                   AND (m.inherit_option OR m.set_option)
-                  AND grp.rolname IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro', 'vera_claude_code_rw', 'vera_pipeline_wo', 'vera_eval_ro')) THEN
+                  AND grp.rolname = ANY (app)) THEN
     RAISE EXCEPTION '012 must be run as the table-owner role, not an application role or a direct member of one.';
   END IF;
 END $$;
 
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_wo')
-     OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_ro')
-     OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vera_vjay_rw') THEN
-    RAISE EXCEPTION '012 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
-  END IF;
+-- Role preflight: each group and each login must exist and each login must inherit its group.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera012.rw')],
+                                              ['vera_vjay_wo', current_setting('vera012.wo')],
+                                              ['vera_vjay_ro', current_setting('vera012.ro')]];
+BEGIN
+  FOR i IN 1 .. 3 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '012 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '012 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '012: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
 END $$;
 
-CREATE SCHEMA IF NOT EXISTS vera_vjay;
-
 CREATE TABLE vera_vjay.clscat_categories (
-    category_id    BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT clscat_categories_pk PRIMARY KEY,   -- insertion order = classifier prompt order
+    category_id    BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.clscat_categories_category_id_seq) CONSTRAINT clscat_categories_pk PRIMARY KEY,   -- insertion order = classifier prompt order
     -- code: lowercase letters and underscore, 2-32 chars (same pattern as scope_router._CODE_RE). One row per VERSION.
     code           TEXT NOT NULL CONSTRAINT clscat_code_chk CHECK (code ~ '^[a-z][a-z_]{1,31}$'),
     -- version: NO default. The guard trigger assigns max+1 when NULL and rejects any supplied value that is not max+1 (1 for a new code).
@@ -149,7 +191,7 @@ CREATE FUNCTION vera_vjay.clscat_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
   SET search_path = pg_catalog, pg_temp AS $f$
 BEGIN
   IF (NOT vera_vjay.clscat_is_owner_fn()) AND TG_OP <> 'INSERT' THEN
-    RAISE EXCEPTION 'classifier_categories: % not allowed for app roles', TG_OP;
+    RAISE EXCEPTION 'clscat_categories: % not allowed for app roles', TG_OP;
   END IF;
   IF TG_OP = 'DELETE' THEN
     RETURN OLD;                                   -- admin only; retire instead (returning NULL would cancel the DELETE)
@@ -157,11 +199,11 @@ BEGIN
   IF TG_OP = 'INSERT' THEN
     IF (NOT vera_vjay.clscat_is_owner_fn()) THEN
       IF EXISTS (SELECT 1 FROM vera_vjay.clscat_categories c WHERE c.code = NEW.code) THEN
-        RAISE EXCEPTION 'classifier_categories: app roles may insert only brand-new codes';
+        RAISE EXCEPTION 'clscat_categories: app roles may insert only brand-new codes';
       END IF;
       IF NEW.origin <> 'runtime' OR NEW.disposition NOT IN ('in_scope','off_topic') OR NEW.refusal_rank IS NOT NULL
          OR NEW.aliases <> '{}' THEN
-        RAISE EXCEPTION 'classifier_categories: app roles may insert only origin=runtime, non-refusing, alias-free rows';
+        RAISE EXCEPTION 'clscat_categories: app roles may insert only origin=runtime, non-refusing, alias-free rows';
       END IF;
       NEW.created_at := now();                    -- accounting fields are not caller-controlled
     END IF;
@@ -171,7 +213,7 @@ BEGIN
       IF NEW.version IS NULL THEN
         NEW.version := nxt;
       ELSIF NEW.version <> nxt THEN
-        RAISE EXCEPTION 'classifier_categories: version must be % (max+1) for code %', nxt, NEW.code;
+        RAISE EXCEPTION 'clscat_categories: version must be % (max+1) for code %', nxt, NEW.code;
       END IF;
     END;
     NEW.modified_at := NEW.created_at;
@@ -183,7 +225,7 @@ BEGIN
      OR NEW.refusal_rank IS DISTINCT FROM OLD.refusal_rank OR NEW.aliases IS DISTINCT FROM OLD.aliases
      OR NEW.origin IS DISTINCT FROM OLD.origin OR NEW.created_at IS DISTINCT FROM OLD.created_at
      OR NEW.category_id IS DISTINCT FROM OLD.category_id THEN
-    RAISE EXCEPTION 'classifier_categories: content is immutable; insert a new version instead (only state may change)';
+    RAISE EXCEPTION 'clscat_categories: content is immutable; insert a new version instead (only state may change)';
   END IF;
   IF NEW.state IS DISTINCT FROM OLD.state THEN
     NEW.modified_at := now();
@@ -197,7 +239,7 @@ CREATE FUNCTION vera_vjay.clscat_forbid_truncate_trgfn() RETURNS trigger LANGUAG
   SET search_path = pg_catalog, pg_temp AS $f$
 BEGIN
   IF (NOT vera_vjay.clscat_is_owner_fn()) THEN
-    RAISE EXCEPTION 'classifier_categories: TRUNCATE not allowed for app roles';
+    RAISE EXCEPTION 'clscat_categories: TRUNCATE not allowed for app roles';
   END IF;
   RETURN NULL;
 END $f$;
@@ -208,12 +250,12 @@ CREATE FUNCTION vera_vjay.clscat_label_unique_trgfn() RETURNS trigger LANGUAGE p
 BEGIN
   IF NEW.state = 'active' THEN
     IF NEW.code = ANY (NEW.aliases) THEN
-      RAISE EXCEPTION 'classifier_categories: a row''s alias equals its own code';
+      RAISE EXCEPTION 'clscat_categories: a row''s alias equals its own code';
     END IF;
     IF EXISTS (SELECT 1 FROM vera_vjay.clscat_categories c
                WHERE c.state = 'active' AND c.code <> NEW.code
                  AND (c.code = ANY (NEW.aliases) OR c.aliases && NEW.aliases OR NEW.code = ANY (c.aliases))) THEN
-      RAISE EXCEPTION 'classifier_categories: code or alias collides with another active row''s code or alias';
+      RAISE EXCEPTION 'clscat_categories: code or alias collides with another active row''s code or alias';
     END IF;
   END IF;
   RETURN NEW;
@@ -258,9 +300,35 @@ SELECT v.code, v.version, v.description, v.disposition, v.refusal_rank, v.aliase
   ) AS v(code, version, description, disposition, refusal_rank, aliases, origin, state)
  WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.clscat_categories t WHERE t.code = v.code);
 
-REVOKE ALL ON vera_vjay.clscat_categories FROM PUBLIC;
-REVOKE UPDATE, DELETE, TRUNCATE ON vera_vjay.clscat_categories FROM vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+REVOKE ALL ON vera_vjay.clscat_categories FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.clscat_categories FROM %I, %I, %I',
+                            current_setting('vera012.rw'), current_setting('vera012.wo'), current_setting('vera012.ro'));
+END $$;
 GRANT SELECT ON vera_vjay.clscat_categories TO vera_vjay_ro;
 GRANT SELECT, INSERT ON vera_vjay.clscat_categories TO vera_vjay_rw;
+
+-- Final privilege check against the actual login roles (runs inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE t constant text := 'vera_vjay.clscat_categories'; r text; p text;
+BEGIN
+  IF NOT (pg_catalog.has_table_privilege(current_setting('vera012.rw'), t, 'SELECT')
+          AND pg_catalog.has_table_privilege(current_setting('vera012.rw'), t, 'INSERT')
+          AND pg_catalog.has_table_privilege(current_setting('vera012.ro'), t, 'SELECT')) THEN
+    RAISE EXCEPTION '012 grant check failed: rw login needs SELECT+INSERT and ro login needs SELECT.';
+  END IF;
+  FOREACH r IN ARRAY ARRAY[current_setting('vera012.rw'), current_setting('vera012.ro')] LOOP
+    FOREACH p IN ARRAY ARRAY['UPDATE','DELETE','TRUNCATE'] LOOP
+      IF pg_catalog.has_table_privilege(r, t, p) THEN
+        RAISE EXCEPTION '012 grant check failed: login % holds % on the table.', r, p;
+      END IF;
+    END LOOP;
+  END LOOP;
+  FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE'] LOOP
+    IF pg_catalog.has_table_privilege(current_setting('vera012.wo'), t, p) THEN
+      RAISE EXCEPTION '012 grant check failed: wo login holds % on the table (wo gets no grant).', p;
+    END IF;
+  END LOOP;
+END $$;
 
 COMMIT;
