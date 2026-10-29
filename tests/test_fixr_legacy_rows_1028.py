@@ -40,6 +40,11 @@ def _old_prepare(monkeypatch_ctx):
     def prep(item, *a, **k):
         item.pop("licence_source", None)
         item.pop("discovered_via", None)
+        # CONVERGE-1028: the merged fulldoc_db re-check passes arxiv_evidence (ARX-SECREV-1023, main side); the frozen
+        # 7da574a writer predates it and had no arXiv route, so only a None value is accepted and dropped.
+        if k.get("arxiv_evidence", None) is not None:
+            raise AssertionError("7da574a writer has no arXiv evidence")
+        k.pop("arxiv_evidence", None)
         return old.prepare_from_parts(item, *a, **k)
     monkeypatch_ctx.setattr(fl, "prepare_from_parts", prep)
 
