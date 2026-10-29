@@ -59,7 +59,10 @@ def manifest_text(model_dir: str | Path, revision: str) -> str:
     if root.is_symlink() or not root.is_dir():
         raise RuntimeError("model directory missing or a symlink")
     rows = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    def _raise(err):  # an unreadable subdirectory must fail the manifest, never be skipped silently
+        raise err
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_raise):
         for name in list(dirnames) + list(filenames):
             q = Path(dirpath) / name
             if q.is_symlink():

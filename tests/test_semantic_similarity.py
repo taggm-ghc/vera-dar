@@ -327,26 +327,44 @@ def _idents(tree):
 _BANNED_DYN = {"importlib", "import_module", "__import__", "find_spec", "spec_from_file_location", "exec", "eval"}
 # explicit allowlist: file -> (banned thing, one-line reason). Checked: env_precedence only READS sys.modules names
 # (membership test of already-loaded test-module names in select_context); it imports nothing.
-_DYN_ALLOW = {"vera/env_precedence.py": ({"sys.modules"}, "select_context checks whether test modules are already loaded")}
+# Pinned to (file, enclosing function, construct); exactly one hit per entry (R3).
+_DYN_ALLOW = {("vera/env_precedence.py", "select_context", "sys.modules"):
+              "membership test of already-loaded test-module names; imports nothing"}
+
+
+
+def _node_hits(n):
+    hits = []
+    if isinstance(n, ast.Name) and n.id in _BANNED_DYN:
+        hits.append(n.id)
+    elif isinstance(n, ast.Attribute):
+        if n.attr in _BANNED_DYN:
+            hits.append(n.attr)
+        if n.attr == "modules" and isinstance(n.value, ast.Name) and n.value.id == "sys":
+            hits.append("sys.modules")
+    elif isinstance(n, ast.alias) and (n.name.split(".")[0] in _BANNED_DYN or n.name in _BANNED_DYN):
+        hits.append(n.name)
+    elif isinstance(n, ast.ImportFrom) and n.module == "sys" and any(a.name == "modules" for a in n.names):
+        hits.append("sys.modules")
+    elif isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value in _BANNED_DYN | {"sys.modules"}:
+        hits.append(n.value)  # e.g. getattr(x, "import_module")
+    return hits
 
 
 def _dyn_hits(tree):
-    hits = []
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Name) and n.id in _BANNED_DYN:
-            hits.append(n.id)
-        elif isinstance(n, ast.Attribute):
-            if n.attr in _BANNED_DYN:
-                hits.append(n.attr)
-            if n.attr == "modules" and isinstance(n.value, ast.Name) and n.value.id == "sys":
-                hits.append("sys.modules")
-        elif isinstance(n, ast.alias) and (n.name.split(".")[0] in _BANNED_DYN or n.name in _BANNED_DYN):
-            hits.append(n.name)
-        elif isinstance(n, ast.ImportFrom) and n.module == "sys" and any(a.name == "modules" for a in n.names):
-            hits.append("sys.modules")
-        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value in _BANNED_DYN | {"sys.modules"}:
-            hits.append(n.value)  # e.g. getattr(x, "import_module")
-    return hits
+    return [h for n in ast.walk(tree) for h in _node_hits(n)]
+
+
+def _fn_hits(tree, node_hits):
+    """[(enclosing function or '<module>', hit)] using a per-node hit function."""
+    out = []
+
+    def visit(node, fn):
+        out.extend((fn, h) for h in node_hits(node))
+        for c in ast.iter_child_nodes(node):
+            visit(c, c.name if isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn)
+    visit(tree, "<module>")
+    return out
 
 
 def test_guard_d_confined_helpers_and_no_dynamic_import():
@@ -360,11 +378,13 @@ def test_guard_d_confined_helpers_and_no_dynamic_import():
         for i in _idents(tree):
             if re.search(r"fastembed|TextEmbedding", i, re.I):
                 bad.append((rel, "fastembed ref", i[:40]))
-        allowed = _DYN_ALLOW.get(rel, (set(), ""))[0]
-        bad += [(rel, "banned dynamic import/exec/sys.modules", h) for h in _dyn_hits(tree) if h not in allowed]
+        pinned = {(f, c) for (r, f, c) in _DYN_ALLOW if r == rel}
+        bad += [(rel, "banned dynamic import/exec/sys.modules", fn, h) for fn, h in _fn_hits(tree, _node_hits)
+                if (fn, h) not in pinned]
     assert not bad, bad
-    for rel, (_what, why) in _DYN_ALLOW.items():  # allowlist entries must be real and justified
-        assert (ROOT / rel).exists() and why and _dyn_hits(_tree(ROOT / rel)), rel
+    for (rel, fn, construct), why in _DYN_ALLOW.items():  # each allowlist entry: real, justified, exactly one hit
+        n = [1 for f, h in _fn_hits(_tree(ROOT / rel), _node_hits) if (f, h) == (fn, construct)]
+        assert why and len(n) == 1, (rel, fn, construct, len(n))
 
 
 # fixed benign / should-refuse ids, re-using strings that existing tests already use (no new harmful text)
@@ -452,13 +472,18 @@ def test_guard_e_invariance_of_refusal_outcomes(monkeypatch):
     assert any(v[0] is True for k, v in base.items() if k.startswith("cat:")), "fixtures must include a refusal"
     assert any(v[0] is True for k, v in base.items() if k.startswith("route:")), "fixtures must include benign"
     assert any(v[0] is False for k, v in base.items() if k.startswith("route:")), "fixtures must include route declines"
-    for k, v in base.items():  # every catstep "refuse:" outcome carries a model-named refusal category
-        if k.startswith("cat:") and v[0]:
-            assert v[2].startswith(("refuse:", "nullified:")), (k, v)  # nullified = invalid/failed LLM step, no category
-            if v[2].startswith("refuse:recheck:"):  # scrutiny re-check: model-named category, always present
-                assert v[1] in sr.REFUSE_CATEGORIES and v[2] == "refuse:recheck:" + v[1], (k, v)
-            elif v[2].startswith("refuse:"):  # LLM field step: refusal word/token in the MODEL's own reply
-                assert v[2] in ("refuse:catstep_refusal_named", "refuse:catstep_refusal_token"), (k, v)
+    # nullified (invalid/failed LLM step, no category): only these exact reasons, only for these fixtures
+    nullified_ok = {"cat:anchor": "nullified:catstep_llm_error", "cat:none": "nullified:catstep_llm_error",  # chat=None
+                    "cat:llm_malformed": "nullified:catstep_malformed"}
+    for k, v in base.items():  # every catstep refusal: a model-named category, or an exactly-pinned nullified case
+        if not (k.startswith("cat:") and v[0]):
+            continue
+        if v[2].startswith("refuse:recheck:"):  # scrutiny re-check: model-named category, always present
+            assert v[1] in sr.REFUSE_CATEGORIES and v[2] == "refuse:recheck:" + v[1], (k, v)
+        elif v[2] in ("refuse:catstep_refusal_named", "refuse:catstep_refusal_token"):  # refusal in the MODEL's reply
+            assert v[1] == "" or v[1] in sr.REFUSE_CATEGORIES, (k, v)
+        else:
+            assert nullified_ok.get(k) == v[2] and v[1] == "", (k, v)
     assert any(v[2].startswith("refuse:") for k, v in base.items() if k.startswith("cat:") and v[0])
     orig_sd, orig_wm = ss.similarity_decision, ss.similarity_decision_with_mode
     shipped = dict(enabled=True, shadow=False, threshold_topic=0.5, threshold_category=0.5, max_input_chars=2000)
@@ -469,6 +494,9 @@ def test_guard_e_invariance_of_refusal_outcomes(monkeypatch):
             assert n >= 2, "expected at least the ss module attributes to be patched"
             mp.setattr(ss, "_load_config", lambda *a, **k: dict(shipped))  # unpatched paths get real decisions
             mp.setattr(ss, "_adapter", lambda *a, **k: ss.FakeEmbedder())
+            # references held in dicts/partials/class attributes bypass the identity scan: vary the score too
+            mp.setattr(ss, "_similarity_score",
+                       lambda *a, _s={"similar": 1.0, "dissimilar": -1.0, "unknown": None}[dec], **k: _s)
             assert _outcomes() == base, dec
 
 
@@ -529,9 +557,17 @@ def test_guard_f_no_module_feeds_a_decision_into_a_refusal_call():
     assert not bad, bad
 
 
-# explicit allowlist for run-time-named getattr (file -> reason); both are plain attribute proxies
-_GETATTR_ALLOW = {"vera/m6/fingerprint.py": "getattr(judge, name, default) on test stubs lacking attributes",
-                  "vera/run_mvp.py": "__getattr__ proxy delegating to the wrapped object"}
+# explicit allowlist for run-time-named getattr, pinned to (file, enclosing function); exactly one hit each (R3).
+# Only getattr is allowlisted: setattr/hasattr with a run-time name are never allowed.
+_GETATTR_ALLOW = {("vera/m6/fingerprint.py", "_judge_block"): "getattr(judge, name, default) lambda on test stubs",
+                  ("vera/run_mvp.py", "__getattr__"): "__getattr__ proxy delegating to the wrapped object"}
+
+
+def _dyn_getattr_node(n):
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "setattr", "hasattr") \
+            and len(n.args) >= 2 and not isinstance(n.args[1], ast.Constant):
+        return [n.func.id]
+    return []
 
 
 def test_guard_f_alias_tracking_finds_aliases_and_no_string_built_getattr():
@@ -539,17 +575,19 @@ def test_guard_f_alias_tracking_finds_aliases_and_no_string_built_getattr():
     assert {"_sd", "f"} <= _alias_names(t)
     bad = []
     for p in _py_files():
+        rel = str(p.relative_to(ROOT))
+        bad += [(rel, fn, h) for fn, h in _fn_hits(_tree(p), _dyn_getattr_node)
+                if not (h == "getattr" and (rel, fn) in _GETATTR_ALLOW)]
         for n in ast.walk(_tree(p)):
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in ("getattr", "setattr", "hasattr") \
-                    and len(n.args) >= 2 and not isinstance(n.args[1], ast.Constant):
-                if str(p.relative_to(ROOT)) not in _GETATTR_ALLOW:
-                    bad.append((str(p.relative_to(ROOT)), n.lineno))  # name built at run time (e.g. "similarity_" + "decision")
             if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Add) and isinstance(n.left, ast.Constant) \
                     and isinstance(n.right, ast.Constant) and isinstance(n.left.value, str) \
                     and isinstance(n.right.value, str) and re.search(r"similarity_decision|semantic_similarity",
                                                                     n.left.value + n.right.value):
-                bad.append((str(p.relative_to(ROOT)), n.lineno, "string-built similarity name"))
+                bad.append((rel, n.lineno, "string-built similarity name"))
     assert not bad, bad
+    for (rel, fn), why in _GETATTR_ALLOW.items():  # each entry: real, justified, exactly one hit
+        hits = [1 for f, h in _fn_hits(_tree(ROOT / rel), _dyn_getattr_node) if f == fn and h == "getattr"]
+        assert why and len(hits) == 1, (rel, fn, len(hits))
 
 
 def test_guard_g_importing_app_and_refusal_modules_does_not_load_fastembed():
@@ -574,3 +612,17 @@ def test_guard_module_exposes_no_refusal_names():
     bad = [n for n in names if re.search(r"refus|deny|denied|decline|reject|block|prohibit", n, re.I)]
     assert not bad, bad
     assert {ss.SIMILAR, ss.DISSIMILAR, ss.UNKNOWN} == {"similar", "dissimilar", "unknown"}
+
+
+def test_manifest_walk_errors_are_raised(model_dir, monkeypatch):
+    import os as _os
+    d, _ = model_dir
+    real_walk = _os.walk
+
+    def walk(top, topdown=True, onerror=None, followlinks=False):
+        assert onerror is not None, "os.walk must be given an onerror"
+        onerror(PermissionError("unreadable subdirectory"))
+        return real_walk(top, topdown, onerror, followlinks)
+    monkeypatch.setattr(ss.os, "walk", walk)
+    with pytest.raises(PermissionError):
+        ss.manifest_text(d, REV)
