@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from streamlit.testing.v1 import AppTest
@@ -165,7 +167,12 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
         assert any("does not use abstracts or snippets as evidence" in t for t in side)
     else:  # state 2: the exact state-2 sidebar text; the disclosure keeps the no-abstract-evidence statement
         assert any(sb._HOW_FULLDOC in t for t in side)
-        assert "does not use their abstracts or snippets as evidence" in page
+        # OD-1029-UI: the mechanism sentence moved from Ask to the About page (full disclosure unchanged there)
+        mech = "does not use their abstracts or snippets as evidence"
+        assert mech not in page  # absent from the Ask page
+        about = AppTest.from_file(str(ROOT / "pages" / "about.py"), default_timeout=30).run()
+        assert not about.exception
+        assert mech in re.sub(r"\s+", " ", "\n".join(_texts(about, *ALL)))  # rendered on About
     assert not any("characters each" in t for t in side)
     if case == "answer":  # (f) the gate is a kind check, not a deletion
         assert body["result_kind"] == "answer" and body["candidates"] == []

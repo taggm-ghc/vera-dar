@@ -1,0 +1,72 @@
+{
+  "about": {
+    "title": "About VERA-DAR",
+    "intro": "This page holds the full disclosure for VERA-DAR. The short notice on every page is a subset of it.",
+    "after_disclosure": [
+      {
+        "heading": "What the sidebar entry shows",
+        "paragraphs": [
+          "The sidebar entry \"What VERA-DAR draws on\" shows the number of sources in the collection and the date of the newest source, a short licence note, a short description of the collection and its topics, the scope of questions VERA-DAR handles, and a summary of how it answers. When a language model wrote the description, the sidebar says so and gives the date it was written, and the description may be imperfect; otherwise the description is a plain summary and no such line is shown."
+        ]
+      }
+    ]
+  },
+  "how_to_use": {
+    "title": "How to use VERA-DAR",
+    "intro": "A short guide to asking a question and reading what comes back.",
+    "sections": [
+      {
+        "heading": "What to ask",
+        "paragraphs": [
+          "Type one research question in your own words on the Ask VERA-DAR page, then press Enter.",
+          "Scope: {scope}",
+          "VERA-DAR does not write or fix code; it can point to published research instead. A question outside the collection may get a reading list instead of an answer. Some requests are refused for safety reasons."
+        ]
+      },
+      {
+        "heading": "What you get back",
+        "paragraphs": [
+          "An answer, marked Answer, cites the documents it is written from with numbers such as [1]. {answer_sources} An answer marked Partial answer does not cover every part of the question.",
+          "Under an answer, Cited passages lists a short quoted excerpt for each number, with whether the claim was supported or partly supported.",
+          "When VERA-DAR cannot answer from its documents it says so and shows a reading list: documents that may be relevant, with links, that VERA-DAR has not read. Declining to answer is a valid outcome, not an error; read the listed documents yourself."
+        ]
+      },
+      {
+        "heading": "How to read the citations",
+        "paragraphs": [
+          "A number in the answer matches the same number under Cited passages and in the source list. Where no excerpt is shown, the line says so and gives the passage reference instead.",
+          "The Evidence scope line says how many documents were inspected and how many passages were selected as possible evidence. The Claim check line says how many cited claims a model checked against the passages, and how many were supported, partly supported or removed.",
+          "Where a licence requires it, an attribution line names the creator, title and licence of the cited document."
+        ]
+      },
+      {
+        "heading": "Limits",
+        "paragraphs": [
+          "The checks are automated, not human review, and can be wrong. Quotes are short excerpts, not whole documents. Open the sources and read them before relying on a claim.",
+          "Requests are rate-limited; if you reach the limit, wait and try again later.",
+          "If the service has been idle it may need up to about {wake_minutes} minutes to start; your question is kept while it starts.",
+          "The Metrics block under a result shows counted tokens and cost for that request. It excludes the checker's tokens and any background indexing. 0 tokens means no counted model call ran."
+        ]
+      },
+      {
+        "heading": "Guardrail demo",
+        "paragraphs": [
+          "In the sidebar of the Ask page, the box Show a rejected-answer demonstration runs a test mode in which VERA-DAR builds a deliberately malformed reply and checks it against its reply format. The check rejects it and an error message is shown. No model call is made and no answer is produced, so the question you typed is not used."
+        ]
+      },
+      {
+        "heading": "The other pages",
+        "paragraphs": [
+          "Report: either a live report from asking VERA-DAR, or an offline example labelled \"illustrative, not a real run\".",
+          "Trace Eval: results of the project's evaluation runs."
+        ]
+      },
+      {
+        "heading": "Privacy",
+        "paragraphs": [
+          "{privacy} Full details are on the About page."
+        ]
+      }
+    ]
+  }
+}

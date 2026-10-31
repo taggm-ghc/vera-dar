@@ -136,11 +136,11 @@ def offtopic_sentence() -> str:
         return _OFFTOPIC
 
 
-def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
-                    chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
-    """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
-    (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
-    out = (_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + _THIRD_PARTY + _NO_SAVE
+def _tail(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
+          chain_path=answer_contract.CHAIN_CONFIG_PATH) -> str:
+    """The storage / memory sentences that follow the third-party and no-save sentences (flag-driven; shared by the
+    full disclosure and the Ask-page notice so the two cannot drift)."""
+    out = ""
     corpus_on = corpus_admission_enabled(chain_path)
     auto = auto_acquire_enabled()
     if not corpus_on and "L2" not in answer_contract.layers(contract_path):
@@ -159,9 +159,74 @@ def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
     return out
 
 
+def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
+                    chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
+    """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
+    (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
+    return ((_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + _THIRD_PARTY + _NO_SAVE
+            + _tail(path, contract_path, chain_path))
+
+
+# UI-ABOUT-1031 / OD-1029-UI: the full disclosure is split at sentence boundaries (no wording change) so the About page
+# can show it under headings and the Ask page can keep the required groups. Split points are markers inside the
+# existing owner-approved constants; nothing is reworded.
+_REFUSED = "Some requests are refused for safety reasons."
+_FD_MARKERS = ("Answers and lists are not", "Licences for documents in its own", "For listed records, only",
+               "VERA-DAR keeps no profile", "When it answers from its own")
+
+
+def _fulldoc_parts() -> tuple[str, str, str, str, str, str]:
+    """(how answers are produced incl. the AI-system sentence, reliability, own-collection licences, listed-record
+    licences, no profile, third-party passage sentence): consecutive slices of _BASE_FULLDOC whose join is _BASE_FULLDOC."""
+    idx = [_BASE_FULLDOC.index(m) for m in _FD_MARKERS]
+    cuts = [0] + idx + [len(_BASE_FULLDOC)]
+    return tuple(_BASE_FULLDOC[a:b] for a, b in zip(cuts, cuts[1:]))  # type: ignore[return-value]
+
+
+def required_notice_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
+                         chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
+    """OD-1029-UI: the mandatory Ask-page disclosure groups, verbatim and flag-driven: AI system, reliance caveat, no
+    profile, third-party AI services, refusal for safety, third-party / no-save, storage. The mechanism (how answers are
+    produced), licence and off-topic-answering sentences are on the About page instead."""
+    if fulldoc_enabled(fulldoc_path):
+        how, reliance, _own_lic, _list_lic, profile, passages = _fulldoc_parts()
+        head = how.split(" For each", 1)[0] + " " + reliance.strip() + " " + profile.strip() + " " + passages.strip()
+    else:
+        head = _BASE
+    return (head + (" " + _REFUSED if offtopic_sentence() else "") + _THIRD_PARTY + _NO_SAVE
+            + _tail(path, contract_path, chain_path))
+
+
+def disclosure_sections(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
+                        chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH):
+    """[(heading, text)] whose texts, joined in order, are exactly disclosure_text() (headings are the only addition)."""
+    off = offtopic_sentence()
+    tail = _THIRD_PARTY + _NO_SAVE + _tail(path, contract_path, chain_path)
+    if fulldoc_enabled(fulldoc_path):
+        how, reliance, own_lic, list_lic, profile, passages = _fulldoc_parts()
+        secs = [("What VERA-DAR is and how it answers", how), ("Reliability", reliance),
+                ("Licences", own_lic + list_lic), ("Privacy and data sent to third parties", profile + passages)]
+    else:
+        secs = [("What VERA-DAR is and how it answers", _BASE)]
+    if off:
+        secs.append(("Questions outside the collection, and refused requests", off))
+    secs.append(("Your question and what is stored", tail))
+    return [(h, t.strip()) for h, t in secs]
+
+
 DISCLOSURE_TEXT = disclosure_text()
 DISCLOSURE_TEXT_UNCONFIRMED = DISCLOSURE_TEXT  # identical while evidence recall is off
 
 
+ABOUT_LINKS = (("pages/about.py", "About: how VERA-DAR answers, licences, data"),
+               ("pages/how_to_use.py", "How to use VERA-DAR"))
+
+
 def render_disclosure(st) -> None:
-    st.caption(disclosure_text())
+    """Required notice on every page (OD-1029-UI), then links to the About and How to use pages."""
+    st.caption(required_notice_text())
+    for target, label in ABOUT_LINKS:
+        try:
+            st.page_link(target, label=label)
+        except Exception:  # noqa: BLE001  (StreamlitPageNotFoundError outside a multipage run, e.g. AppTest of a pages/ file)
+            pass

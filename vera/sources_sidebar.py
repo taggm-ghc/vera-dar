@@ -63,7 +63,8 @@ def scope_text(path: Path = SCOPE_PATH) -> str | None:
 
 
 # K3.I: UI labels for the page links (labels, not data). Order is the order shown.
-NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"))
+NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"),
+       ("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"))
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at"})

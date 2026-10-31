@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-PAGES = ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py"]
+PAGES = ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py", "pages/about.py", "pages/how_to_use.py"]
 
 
 def _first_st_call(tree: ast.Module):

@@ -9,7 +9,7 @@ from vera import disclosure
 from vera.memory_gate import CONFIG_PATH
 
 ROOT = Path(__file__).resolve().parent.parent
-PAGES = ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py"]
+PAGES = ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py", "pages/about.py", "pages/how_to_use.py"]
 
 
 def _store() -> dict:
@@ -98,7 +98,8 @@ def test_evidence_findings_sentence_only_when_recall_on(tmp_path):
 def test_render_calls_caption_with_text():
     st = mock.MagicMock()
     disclosure.render_disclosure(st)
-    st.caption.assert_called_once_with(disclosure.disclosure_text())
+    st.caption.assert_called_once_with(disclosure.required_notice_text())  # OD-1029-UI: required groups; full text is on About
+    assert [c.args[0] for c in st.page_link.call_args_list] == [t for t, _ in disclosure.ABOUT_LINKS]
 
 
 def test_every_page_calls_render_disclosure_once():

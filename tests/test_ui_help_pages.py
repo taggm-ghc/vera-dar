@@ -1,0 +1,214 @@
+"""UI-ABOUT-1031 / OD-1029-UI: the Ask-page required notice, the About page (full disclosure, split only) and the
+How to use page. Offline; AppTest renders each page."""
+import json
+import re
+from pathlib import Path
+
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from vera import disclosure, help_pages
+
+ROOT = Path(__file__).resolve().parent.parent
+_NORM = lambda t: re.sub(r"\s+", " ", t).strip()  # noqa: E731
+
+
+def _fd(tmp_path, on):
+    p = tmp_path / "fd.json"
+    p.write_text(json.dumps({"fulldoc": {"enabled": on}}))
+    return p
+
+
+@pytest.mark.parametrize("on", [True, False])
+def test_sections_join_to_the_full_disclosure_verbatim(tmp_path, on):
+    fp = _fd(tmp_path, on)
+    secs = disclosure.disclosure_sections(fulldoc_path=fp)
+    assert _NORM(" ".join(t for _, t in secs)) == _NORM(disclosure.disclosure_text(fulldoc_path=fp))
+    assert all(h and t for h, t in secs)
+
+
+def test_required_notice_keeps_the_seven_groups_verbatim_and_drops_the_movable_ones():
+    req, full = disclosure.required_notice_text(), disclosure.disclosure_text()
+    for must in ("VERA-DAR is an AI system.", "may be wrong. Check the sources and read them yourself before relying on any claim.",
+                 "VERA-DAR keeps no profile of you and does not tailor answers to you.",
+                 "are sent to third-party AI services.", disclosure._THIRD_PARTY.strip(), disclosure._NO_SAVE.strip(),
+                 disclosure._AUTO_ACQUIRE_MAY_STORE.strip(), "Some requests are refused for safety reasons."):
+        assert must in req, must
+    for moved in ("first searches a small collection", "Licences for documents in its own collection",
+                  "For listed records, only the indexing", "in the same request"):
+        assert moved in full and moved not in req, moved
+    assert len(req.split()) < len(full.split()) // 2
+
+
+def test_required_notice_follows_flags(tmp_path):
+    chain = tmp_path / "chain.json"
+    chain.write_text(json.dumps({"corpus": {"enabled": False}}))
+    t = disclosure.required_notice_text(chain_path=chain)
+    assert disclosure._CORPUS_MAY_STORE.strip() not in t
+    assert disclosure._THIRD_PARTY.strip() in t and disclosure._NO_SAVE.strip() in t
+    assert disclosure.required_notice_text(fulldoc_path=_fd(tmp_path, False)).startswith(disclosure._BASE)
+
+
+def test_json_holds_no_disclosure_constants_or_internal_terms():
+    raw = (ROOT / "config" / "ui_help_pages.json").read_text()
+    text = json.loads(raw)
+    assert text["about"] and text["how_to_use"]["sections"]
+    for c in (disclosure._THIRD_PARTY, disclosure._NO_SAVE, disclosure._AUTO_ACQUIRE_MAY_STORE, disclosure._BASE_FULLDOC):
+        assert c.strip() not in raw
+    from tests.test_item78_sources_sidebar import _no_internal_terms
+    prose = " ".join(p for s in text["how_to_use"]["sections"] for p in s["paragraphs"])
+    _no_internal_terms(prose)
+    assert not re.search(r"https?://|www\.|onrender|localhost", raw, re.I)
+
+
+def _run(page):
+    at = AppTest.from_file(str(ROOT / page), default_timeout=30).run()
+    assert not at.exception, [e.value for e in at.exception]
+    return at
+
+
+def _text(at):
+    return " ".join(e.value for k in (at.title, at.subheader, at.markdown, at.caption) for e in k)
+
+
+def test_about_page_renders_full_disclosure_once_under_headings():
+    at = _run("pages/about.py")
+    t = _NORM(_text(at))
+    assert not any(_NORM(disclosure.disclosure_text()) in _NORM(c.value) for c in at.caption)  # split under headings
+    for h, body in disclosure.disclosure_sections():
+        assert h in [s.value for s in at.subheader] and _NORM(body) in t
+    assert [x.value for x in at.title] == ["About VERA-DAR"]
+
+
+def test_how_to_use_page_renders_sections_and_uses_config_scope():
+    at = _run("pages/how_to_use.py")
+    heads = [s.value for s in at.subheader]
+    for h in ("What to ask", "What you get back", "How to read the citations", "Limits", "Guardrail demo", "Privacy"):
+        assert h in heads, h
+    t = _text(at)
+    assert "{scope}" not in t and "{privacy}" not in t and "{" not in t
+    assert (disclosure._THIRD_PARTY + disclosure._NO_SAVE).strip() in _NORM(t)
+
+
+def test_unreadable_config_shows_fallback(tmp_path):
+    class St:
+        def __init__(self): self.out = []
+        def title(self, x): self.out.append(x)
+        def info(self, x): self.out.append(x)
+        def markdown(self, x): self.out.append(x)
+    s = St()
+    help_pages.render_about(s, cfg=help_pages.load(tmp_path / "missing.json"))
+    assert help_pages.FALLBACK in s.out
+
+
+def test_sidebar_nav_has_both_pages_and_files_exist():
+    from vera.sources_sidebar import NAV
+    assert NAV[-2:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"))
+    assert all((ROOT / p).exists() for p, _ in NAV)
+    assert {t for t, _ in disclosure.ABOUT_LINKS} == {"pages/about.py", "pages/how_to_use.py"}
+
+
+# ---- UI-ABOUT-FIX-1031 -------------------------------------------------------------------------------------
+def _howto_text():
+    cfg = json.loads((ROOT / "config" / "ui_help_pages.json").read_text())
+    return " ".join(p for s in cfg["how_to_use"]["sections"] for p in s["paragraphs"]), cfg
+
+
+def test_json_has_no_internal_task_notes():
+    raw = (ROOT / "config" / "ui_help_pages.json").read_text()
+    cfg = json.loads(raw)
+    assert "todo_owner" not in raw and "_note" not in raw and "todo_owner" not in cfg["how_to_use"]
+    assert not re.search(r"OD-\d|UI-ABOUT|\bC5\b|main\.py", raw)
+
+
+def test_answer_claim_matches_off_topic_answering():
+    text, _ = _howto_text()
+    assert "written only from passages in the collection" not in text
+    assert "{answer_sources}" in text
+    assert "in the same request" in disclosure._OFFTOPIC_ANSWERING  # wording derives from the approved sentence
+
+
+def test_no_answer_wording_is_plain():
+    text, _ = _howto_text()
+    assert "No answer from VERA-DAR is a correct result" not in text
+    assert "Declining to answer is a valid outcome, not an error" in text
+
+
+def test_about_sidebar_text_matches_what_the_sidebar_shows():
+    _, cfg = _howto_text()
+    t = " ".join(p for s in cfg["about"]["after_disclosure"] for p in s["paragraphs"])
+    assert "never names an individual document" not in t.lower() and "totals only" not in t
+    for shown in ("number of sources", "newest source", "licence note", "language model", "scope", "topics"):
+        assert shown in t, shown
+    assert "last updated" not in t
+    from vera import sources_sidebar as sb  # each claimed element exists in the renderer
+    import inspect
+    src = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar)
+    for el in ("newest source", "LICENCE_SIDEBAR", "topics", "agentic_model", "scope_text"):
+        assert el in src, el
+
+
+def test_tokens_note_mentions_checker_exclusion_and_wake_time_comes_from_config(monkeypatch):
+    text, _ = _howto_text()
+    assert "excludes the checker's tokens" in text and "counted tokens" in text
+    assert "3 minutes" not in text and "{wake_minutes}" in text
+    from vera import ui_wake
+    assert help_pages.wake_minutes() == max(1, round(ui_wake.load_config().max_total_s / 60))
+    monkeypatch.setattr(ui_wake, "load_config", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    assert help_pages.wake_minutes() is None  # no hardcoded fallback; the sentence is omitted
+    out = []
+    class St:
+        def subheader(self, x): pass
+        def markdown(self, x): out.append(x)
+    help_pages._section(St(), {"heading": "h", "paragraphs": ["a {wake_minutes} b", "kept"]})
+    assert out == ["kept"]
+
+
+def test_guardrail_and_report_paragraphs_describe_code_behaviour():
+    text, cfg = _howto_text()
+    assert "No model call is made" in text and "malformed reply" in text and "sends your question" not in text
+    assert "illustrative, not a real run" in text
+    import pages.vera_demo  # noqa: F401  (labels live in the page: OFFLINE text must contain the quoted label)
+
+
+@pytest.mark.parametrize("fd,off,corp,auto,layers,recall", list(__import__("itertools").product(
+    [True, False], ["none", "plain", "answering"], [True, False], [True, False], [("L0",), ("L0", "L2")], [True, False])))
+def test_disclosure_state_equivalence_96(monkeypatch, fd, off, corp, auto, layers, recall):
+    """Regression guard only, NOT a base-versus-change comparison: expected values are derived from the changed
+    disclosure code. Sections join to the full text; the required notice equals it minus the mechanism (S2), licence (S4)
+    and off-topic sentences, with the verbatim refusal sentence replacing the off-topic one. Base equivalence is
+    evidenced separately by scratch/UI-ABOUT-REVIEW-1031/cmp.py (see README)."""
+    from vera import answer_contract
+    o = {"none": "", "plain": disclosure._OFFTOPIC, "answering": disclosure._OFFTOPIC_ANSWERING}[off]
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: fd)
+    monkeypatch.setattr(disclosure, "offtopic_sentence", lambda: o)
+    monkeypatch.setattr(disclosure, "corpus_admission_enabled", lambda *a, **k: corp)
+    monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: auto)
+    monkeypatch.setattr(answer_contract, "layers", lambda *a, **k: layers)
+    monkeypatch.setattr(answer_contract, "evidence_recall_enabled", lambda *a, **k: recall)
+    full, req = disclosure.disclosure_text(), disclosure.required_notice_text()
+    secs = " ".join(t for _, t in disclosure.disclosure_sections())
+    assert _NORM(secs) == _NORM(full)
+    bf = disclosure._BASE_FULLDOC
+    s2 = bf[bf.index("For each"):bf.index("Answers and lists")]
+    s4 = bf[bf.index("Licences for documents"):bf.index("VERA-DAR keeps no")]
+    expect = full
+    if fd:
+        expect = expect.replace(s2, "").replace(s4, "")
+    if o:
+        expect = expect.replace(o, " Some requests are refused for safety reasons.")
+    assert _NORM(req) == _NORM(expect)
+    assert req == req.strip() and "  " not in req
+    assert disclosure._REFUSED in disclosure._OFFTOPIC and disclosure._REFUSED in disclosure._OFFTOPIC_ANSWERING
+
+
+@pytest.mark.parametrize("fd,answering", [(True, True), (True, False), (False, True), (False, False)])
+def test_answer_sources_follows_flags(monkeypatch, fd, answering):
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: fd)
+    monkeypatch.setattr(disclosure, "offtopic_sentence",
+                        lambda: disclosure._OFFTOPIC_ANSWERING if answering else disclosure._OFFTOPIC)
+    t = help_pages._fill("{answer_sources}")
+    assert "{answer_sources}" not in t
+    assert ("open-access documents found in the same request" in t) == (fd and answering)
+    assert ("Those documents are in VERA-DAR's collection." == t) == (fd and not answering)
+    assert ("switched off" in t) == (not fd)

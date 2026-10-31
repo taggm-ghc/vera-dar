@@ -133,10 +133,13 @@ def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
     monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(json=lambda: {"commit": "abcdef1234"}))
     at = AppTest.from_file(str(ROOT / page), default_timeout=30).run()
     assert not at.exception
+    # OD-1029-UI: every page shows the required notice; the full text (S2 mechanism, licences) is on the About page
+    assert any(c.value == disclosure.required_notice_text() for c in at.caption)
     if not fulldoc:
         assert any(_BASE[:60] in c.value for c in at.caption)
-    else:  # state 2: the full state-2 base text, including the passage-transmission sentence
-        assert any(_BASE_FULLDOC in c.value for c in at.caption)
+    else:  # state 2: the passage-transmission sentence is in the required notice; the full base text is on About
+        assert any("are sent to third-party AI services." in c.value for c in at.caption)
+        assert _BASE_FULLDOC in " ".join(t for _, t in disclosure.disclosure_sections())
 
 
 def test_static_guard_references():
