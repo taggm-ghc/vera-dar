@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md)
 
-VERA-DAR provides a FastAPI service for bounded research questions. This page describes the public behaviour of the endpoints; it is not a statement about any particular deployed release.
+VERA-DAR provides a FastAPI service for bounded research questions. This page describes the public behaviour of the endpoints; it is not a statement about any particular deployed release. The route list below matches the routes defined in `main.py` as of 2026-10-29; there is no `/ingest` route. `POST /ask/stream` is the streaming variant of `/ask` (newline-delimited JSON; see [Streaming request](#streaming-request-post-askstream)).
 
 ## Endpoints
 
@@ -10,8 +10,11 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 |---|---|---|
 | `GET /health` | Basic service health; returns only `status` and a coarse `dar` readiness field (`ready`, `degraded`, `unavailable`, `disabled` or `unknown`) | None |
 | `GET /health/dar` | Detailed readiness, including a `fulldoc` block for the full-document path | `VERA_API_KEY` |
-| `GET /version` | Exposes build commit identifier | None |
-| `POST /ask` | Research question: reading list, or grounded answer on the optional full-document path | `VERA_API_KEY` |
+| `GET /version` | Exposes build commit identifier (`commit`, `short`) | None |
+| `GET /trace/public` | Public TRACE evaluation view (historical aggregate, no secrets) | None |
+| `GET /trace/private` | Private TRACE evaluation view | Separate trace-viz key (`VERA_TRACE_VIZ_KEY`) |
+| `POST /ask` | Research question: grounded answer from admitted full-document passages, otherwise a reading list or decline (see [Default behaviour](#default-behaviour)) | `VERA_API_KEY` |
+| `POST /ask/stream` | Same request body as `POST /ask`; answers with newline-delimited JSON progress lines, then one result line (see below) | `VERA_API_KEY` |
 | `GET /corpus-summary` | Aggregated summary of admitted source records | `VERA_API_KEY` |
 | `GET /memory/pending` | Pending findings for owner review | Owner key |
 | `POST /memory/{claim_id}/confirm` | Confirm a pending finding | Owner key |
@@ -20,6 +23,21 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 Endpoints that require `VERA_API_KEY` expect it in the `X-API-Key` header.
 
 The owner-only endpoints require `VERA_OWNER_KEY` in the `X-Owner-Key` header; without that configuration, the owner routes remain unavailable. The public demonstration does not expose owner actions.
+
+## Streaming request (`POST /ask/stream`)
+
+Contract version `1.3`. The body is the `POST /ask` body. Authentication (401) and the public-mode usage caps (429) are checked before streaming starts, and one POST uses one cap slot. The response is `application/x-ndjson` with `X-Accel-Buffering: no` and `Cache-Control: no-cache`; each line is flushed as it is written. Nothing is stored server side beyond the request.
+
+Lines (one JSON object each):
+
+- `{"v":"1.3","type":"event","seq":n,"ts":"<iso>","stage":S,"state":T,"counts":{k:int}}`. Stages: `received scope corpus corpus_verdict search acquire write check retry done`. The `acquire` stage also has the states `limited` and `busy`. Counts are integers only: `inspected admitted found checked usable budget stored target queued attempt shortlisted held step ceiling why`. `why` is a closed code: 1 no more open sources found, 2 sources busy, 3 the day's search limit reached, 4 stalled, 5 the answering service at its limit. No provider or portal names, hosts, URLs or titles are carried.
+- While the server waits or runs a slow step, an `event` line (state `update`, on the last lifecycle stage seen) and each `hb` line also carry the current activity as integers: `act` (closed code: 1 rate-limit wait, 2 polite wait, 3 slow read, 4 retry, 5 busy fallback, 6 connection), optionally `wait_s`, `k`, `n`, and on `hb` lines `elapsed` (whole seconds in that activity). Without an activity, `hb` lines carry none of these.
+- `{"v":"1.3","type":"hb","seq":n,"elapsed_s":int}` when no other line was written for `stream.heartbeat_s` seconds.
+- `{"v":"1.3","type":"result","status":200,"body":<the POST /ask response>}` exactly once, last. A failure is `{"v":"1.3","type":"result","status":429|500|502|503,"kind":"busy|error|provider_error|unavailable"}`; it never contains error text. A client that disconnects gets no result.
+
+There is no total deadline on the stream; a run ends when it is met, resource limited, or stalled (no progress event for 300 s, `live.stall_s` in `config/auto_acquire.json`). A heartbeat line is sent every 10 s of silence (`stream.heartbeat_s`). If the client disconnects, the server finishes the in-flight step, keeps documents already admitted, starts nothing new and writes no answer.
+
+Flags: `stream.enabled` in `config/progress.json` (ships true; when false the route answers 404). `VERA_PROGRESS_DISABLED=1` forces the route off. The polling side channel (`GET /ask/progress/{rid}`) is governed separately by `enabled` and stays off.
 
 ## Research request
 
@@ -37,6 +55,8 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 - `sources` and `traced_sources`: source records, and records traced from links but not used.
 - `claim_check`: a summary of the claim check, present when an answer was checked.
 - Evidence fields for the full-document path (`evidence_status`, `corpus_source`, `examined_full_documents`, `admitted_evidence`, `citations`), omitted otherwise. `corpus_source` is `{"kind": "db"}` or `{"kind": "bundle"}` and is present only when the full-document corpus loaded successfully (it says where the corpus was loaded from); it is omitted on failure and on web-only responses.
+- Research fields (`triggers`, `freshness`, `research_outcome`), present only when the freshness or research step ran. `triggers` lists which research triggers fired (`insufficient`, `stale` or `freshness_unknown`); `research_outcome` reports what was tried, what was admitted and why candidates were not.
+- On source and candidate entries, `acquisition` is `full_document_acquired` for stored full documents.
 
 ### The `outcome` field
 
@@ -59,17 +79,25 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 
 ## Default behaviour
 
-By default `/ask` returns a reading list: it searches scholarly indexes and the web, lists documents that may be relevant, and generates no answer and no claim check. A grounded answer is produced only on the optional verified full-document path, which is enabled only when `fulldoc.enabled` is true in config/fulldoc_answer.json and a verified bundle is configured via VERA_FULLDOC_BUNDLE_DIR. The precise schema is defined by the application.
+This section is the canonical description of what `/ask` does by default. It describes the shipped configuration in this repository, not any particular deployed build.
+
+1. **Scope check.** The scope router (`config/scope_router.json`) loads when the API starts and fails closed if its configuration is invalid. A declined question gets a fixed decline text; a question judged off-topic may instead go to inline acquisition when acquisition is in effect (step 4).
+2. **Full-document answering.** Full-document answering ships enabled: `fulldoc.enabled` is `true` in `config/fulldoc_answer.json`. It takes effect only when a corpus source is configured, either a verified bundle directory named by `VERA_FULLDOC_BUNDLE_DIR` or a database-backed corpus named by the run id in `VERA_FULLDOC_DB_RUN_ID`. Configuring both is refused: the corpus is reported unusable rather than one source being silently preferred. With no corpus source configured, the path is off and `/ask` returns reading lists only.
+3. **Admission.** An answer is generated only from admitted passages, with a claim check on each cited sentence. No admitted passage means no generated answer: the response is a reading list or a decline instead.
+4. **Acquisition.** Acquisition is enabled in `config/auto_acquire.json`, but takes effect only when both database URLs (`VERA_DB_URL_RO`, `VERA_DB_URL_WO`) are set and the kill switch `VERA_AUTOACQ_DISABLED` is not set to a true-like value. Acquired documents are served only alongside the database-backed corpus (bundle directory unset, run id set). Acquisition, including inline acquisition within the request, is offline-tested only; its live production behaviour has not been verified.
+5. **Reading list fallback.** Otherwise the response lists documents that may be relevant, with links, from scholarly indexes and the web. VERA-DAR has not read those documents.
+
+The precise schema is defined by the application.
 
 ## Provenance and evidence limits
 
-Source entries include bibliographic and retrieval metadata. On the default path they do **not** establish that the complete paper was read, identify an immutable document version, or supply page-level provenance. Labels implying full-document verification would exceed the inspection performed. A reading-list entry for a text that is stored but was not inspected for the answer is labelled "full document stored (not inspected for this answer)". A document that declares any text kind other than the configured full-document kind (for example an abstract only, or an unrecognised label) is refused rather than treated as a full document. Abstracts and snippets are not used as evidence.
+Source entries include bibliographic and retrieval metadata. On a reading list they do **not** establish that the complete paper was read, identify an immutable document version, or supply page-level provenance. Labels implying full-document verification would exceed the inspection performed. A reading-list entry for a text that is stored but was not inspected for the answer is labelled "full document stored (not inspected for this answer)". A document that declares any text kind other than the configured full-document kind (for example an abstract only, or an unrecognised label) is refused rather than treated as a full document. Abstracts and snippets are not used as evidence.
 
 Recorded licence decisions are based on licence information attributed to indexing services; metadata licences are not licences to reproduce the article. Rights have not been confirmed with individual rights holders.
 
 ## Data handling
 
-Questions are transmitted to third-party AI and search services, each with its own data-handling practices. When the optional full-document path is enabled, up to six selected passages (text, title, link) and the draft answer sentences are transmitted too. The demonstration configuration disables newly persisted corpus additions, discovery notes, memory writes, and the DuckDuckGo query cache. That does not establish the retention behaviour of external providers or the hosting platform. Records written by earlier configurations are not automatically erased by switching to demonstration mode. The disclosure text shown to visitors is quoted in the [README](../README.md#privacy-and-disclosure).
+Questions are transmitted to third-party AI and search services, each with its own data-handling practices. When the optional full-document path is enabled, up to six selected passages (text, title, link) and the draft answer sentences are transmitted too. The demonstration configuration disables newly persisted corpus additions, discovery notes, memory writes, and the DuckDuckGo query cache. That does not establish the retention behaviour of external providers or the hosting platform. Records written by earlier configurations are not automatically erased by switching to demonstration mode. The disclosure text shown to visitors is quoted in the [README](../README.md#privacy-and-data-handling).
 
 ## Usage safeguards
 

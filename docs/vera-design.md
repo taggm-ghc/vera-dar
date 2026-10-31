@@ -1,6 +1,6 @@
 # VERA-DAR — Verifiable Evidence-based Research Answers
 
-Status: see the root README.
+Status as of 2026-10-30: current status is in the root README (canonical); migration status is in `db/README.md`; gate status is in `release-checks.md`; routes are in `api.md`. This document is a design record and is not a current-status source. Updated 2026-10-29: see "Status as of 2026-10-29" below; the body reflects 2026-09 to 2026-10-20 and is annotated where later work changed it.
 
 
 **Provenance-grounded agentic context engineering for auditable research synthesis**
@@ -10,6 +10,19 @@ Prepared September 2026
 > This is the public design overview. It describes the text evidence-selection,
 > critical-appraisal, reasoning, synthesis, evaluation, and provenance architecture
 > implemented for the capstone.
+
+## Status as of 2026-10-29
+
+Updated 2026-10-29 (DOCS-1029). This document was last substantively written on 2026-10-20 and earlier. The sections below are kept as written (history is not rewritten); the points here and the inline "Updated 2026-10-29" notes record what changed. Sources: DOCS-1029 facts sheet (fact numbers in brackets) and code in this repository.
+
+- **Canonical code and revision.** `repo/` is the canonical code base; the nested `vera/` copy at the project root is non-canonical [7]. `main` is at d6681ae (CONVERGE-1028) [1]. A later gate candidate, b863375, is two commits ahead of `main` and is not contained in it [3].
+- **API surface.** Current routes are listed in [api.md](api.md) (canonical). `POST /ask/stream` exists as the streaming variant of `/ask`, returning newline-delimited JSON progress events (see [Streaming request](api.md#streaming-request-post-askstream)); there is no `/ingest` route.
+- **Database.** Production database `vera_dar_db`, schema `vera_vjay` [23]. Migration apply status is owned by [db/README.md](../db/README.md) ("Migration apply history per database"). Migration 007 (domain registry) and the related stored-branch change are **pending owner decision**; they are not done. The runtime switches for 011/012 ship OFF [26, 37].
+- **Flags.** `config/domain_routing.json` has `enabled: true` (owner decision OD-DARINT-DAR-ON, 2026-10-18; thresholds not calibrated on real data) and `stored_branch_enabled: true` as of main d6681ae (a change to this flag is pending owner decision and is not merged); `admission_hook_enabled` is false [29]. Phase A staged retrieval/answer switches and the progress side channel ship OFF and are on branches ahead of `main` [30].
+- **Release gate.** Gate status is owned by [release-checks.md](release-checks.md). As of 2026-10-30 the gate has not passed for `main` [12A].
+- **Timeline and hosting.** The course ended 2026-10-25; Demo Day was 2026-10-23 [31]. Production is kept running through 2026-11-30 (OD-1027(5)) [32]. Render is the interim host; the long-term host is non-Render with PostgreSQL retained [33].
+- **Full-document acquisition (DEC-FDA1).** Still described below as required and designed. `repo/README.md` records discovery-to-answer acquisition as offline-tested only, not validated live [35]. Whether the code now meets the requirement is (unverified) here.
+- **Tests.** No authoritative test count is stored in the repository; reported counts are branch-specific [13]. Use the command in `docs/development.md` and record revision and counts.
 
 ---
 
@@ -241,9 +254,11 @@ Source text is stored only in the database, never in the repository (AGENTS.md r
 
 Full documents are external content. Their text is data, never instructions (AGENTS.md rule 3; Authority invariant). This applies to every part of an acquired document, including body text, footnotes, metadata, embedded links and hidden markup. No passage can authorise a tool call, fetch, memory write or configuration change. No memory row may hold an instruction taken from a document.
 
-### Current state vs required (2026-10-14)
+### Current state vs required (HISTORICAL, as of 2026-10-14; superseded by README and the status block above where they differ)
 
-Status: **REQUIRED, DESIGNED, NOT IMPLEMENTED.** The requirement is not yet met. Not implementing it before Demo Day is an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1. Today VERA-DAR works at index-record and abstract level. `vera/grounded_ask.py` grounds on abstracts from search results. `vera/source_resolver.py` follows link-only results to an identifier and resolves it to OpenAlex or Semantic Scholar metadata and abstract (`stored_text_kind` `abstract_metadata`). `vera/claim_check.py` checks cited claims against the cited abstracts. `vera/memory_gate.py` and `vera/memory_store.py` gate and store findings whose support was checked against those abstracts. The M2 path (`vera/m2_runner.py` via `vera/selective_fetch.py`) fetches HTML only, usually a DOI landing page, refuses PDFs and over-cap bodies, and labels what it stores `abstract_metadata`. The database has `candidates.fetch_status` (`pending` / `fetched` / `failed`) but no representation type, acquisition-failure reason, inspection outcome, version type or version identifier field. **Known DEC-EI1 breaches on `main` (2026-10-14; code fixes, under the code freeze):** `vera/corpus_admission.py:130` sets `candidates.fetch_status='fetched'` for a search snippet that was never fetched; the seed-fallback provider labels an agent snippet `stored_text_kind` `full_content` (`vera/search_providers.py:1026`); the M5 claim verifier reports `verified` / `revised_verified` (`vera/m5/claim_verification.py:131`, `vera/m4_m5_runner.py:59`) without saying it checked M2 text that is usually a landing page; memory attaches one "evidence span" over the whole stored abstract text per cited source (`vera/memory_store.py:336`), so a memory row cites no examined passage; and the sidebar said web results are "followed back to the original papers" and "traced from web results to the original source" when they are followed only to an index record (and its abstract, where one exists) (EI-5; reworded under DEC-FL2, commit pending the owner's approval; not deployed, and the live build still shows the old labels; related wording in `vera/disclosure.py` and `vera/memory_panel.py` was clarified under the same lift; the defect closes only when the corrected strings are verified on `main` and in the live build). Today's licence gate (accept / hold for review / reject) judges intermediary-asserted terms. Under the baseline its outcomes are at most dispositions `permitted` / `unresolved` / `restricted` with provenance `asserted_by_intermediary` or `unknown`, never `verified_at_source`, so none meets the evidence admission rule. Licences recorded for abstracts are often intermediary assertions (for example OpenAlex's metadata licence) or unknown. Abstract-level grounding is the current state, not the intended end state. The gap analysis is kept in the owner's planning records outside this repository. Any implementation remains subject to the existing code freeze and the owner's approval controls; this section authorises no code or deployment.
+Status: **REQUIRED, DESIGNED, NOT IMPLEMENTED.** The requirement is not yet met. Not implementing it before Demo Day is an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1. Today VERA-DAR works at index-record and abstract level. `vera/grounded_ask.py` grounds on abstracts from search results. `vera/source_resolver.py` follows link-only results to an identifier and resolves it to OpenAlex or Semantic Scholar metadata and abstract (`stored_text_kind` `abstract_metadata`). `vera/claim_check.py` checks cited claims against the cited abstracts. `vera/memory_gate.py` and `vera/memory_store.py` gate and store findings whose support was checked against those abstracts. The M2 path (`vera/m2_runner.py` via `vera/selective_fetch.py`) fetches HTML only, usually a DOI landing page, refuses PDFs and over-cap bodies, and labels what it stores `abstract_metadata`. The database has `candidates.fetch_status` (`pending` / `fetched` / `failed`) but no representation type, acquisition-failure reason, inspection outcome, version type or version identifier field. **Known DEC-EI1 breaches on `main` (2026-10-14; code fixes, under the code freeze):** `vera/corpus_admission.py:130` (location may have moved; spot-checked 2026-10-30, line content differs) sets `candidates.fetch_status='fetched'` for a search snippet that was never fetched; the seed-fallback provider labels an agent snippet `stored_text_kind` `full_content` (`vera/search_providers.py:1026` (location may have moved; spot-checked 2026-10-30, line content differs)); the M5 claim verifier reports `verified` / `revised_verified` (`vera/m5/claim_verification.py:131` (location may have moved; spot-checked 2026-10-30, line content differs), `vera/m4_m5_runner.py:59`) without saying it checked M2 text that is usually a landing page; memory attaches one "evidence span" over the whole stored abstract text per cited source (`vera/memory_store.py:336` (location may have moved; spot-checked 2026-10-30, line content differs)), so a memory row cites no examined passage; and the sidebar said web results are "followed back to the original papers" and "traced from web results to the original source" when they are followed only to an index record (and its abstract, where one exists) (EI-5; reworded under DEC-FL2, commit pending the owner's approval; not deployed, and the live build still shows the old labels; related wording in `vera/disclosure.py` and `vera/memory_panel.py` was clarified under the same lift; the defect closes only when the corrected strings are verified on `main` and in the live build). Today's licence gate (accept / hold for review / reject) judges intermediary-asserted terms. Under the baseline its outcomes are at most dispositions `permitted` / `unresolved` / `restricted` with provenance `asserted_by_intermediary` or `unknown`, never `verified_at_source`, so none meets the evidence admission rule. Licences recorded for abstracts are often intermediary assertions (for example OpenAlex's metadata licence) or unknown. Abstract-level grounding is the current state, not the intended end state. The gap analysis is kept in the owner's planning records outside this repository. Any implementation remains subject to the existing code freeze and the owner's approval controls; this section authorises no code or deployment.
+
+> Updated 2026-10-29: the "code freeze" and "before Demo Day" wording here is historical (Demo Day was 2026-10-23). Whether the DEC-EI1 breaches listed above have since been fixed on `main` is (unverified); file:line references date from 2026-10-14 and may have moved. Treat this section as the 2026-10-14 record. Full-document acquisition is implemented and offline-tested only; live behaviour is not verified (see README and api.md) [35].
 
 Two further gaps are recorded (Codex audit reconciliation, DEC-CX1). First, owner confirmation (`POST /memory/{id}/confirm`) is today a protected status transition only. It checks the row's state and expiry, then updates the status in a separate statement. It does not re-check spans, source version or hash, rights or eligibility, and the read and the update are not one atomic conditional operation. Second, the offline M3 stage reads every stored source's content for extraction with no representation or eligibility check, so it can process abstracts and landing pages as if they were documents. Both are recorded in the gap analysis (CX-1, CX-3) and stay under the code freeze.
 
@@ -434,6 +449,8 @@ VERA-DAR preserves validated historical observations about search, appraisal, ev
 
 ## Course session mapping
 
+> Updated 2026-10-29: historical. The course ended 2026-10-25; the sessions below are not an active schedule.
+
 | Course layer | Increment | Definition of done |
 | --- | --- | --- |
 | Pre-course | FastAPI skeleton, `/health`, GitHub, environment | Service runs locally and project is ready. |
@@ -462,6 +479,8 @@ The public service contract exposes the research answer together with enough evi
 Detailed provenance, uncertainty, reasoning, and evaluation records remain available to the system's audit layer. A generic scalar confidence field is not the governing contract; dimension-level quality and uncertainty remain inspectable.
 
 **Current implementation (2026-10-14): abstract-grounded; no full-document acquisition.** The contract above is the target. Today `/ask` writes answers from retrieved index records and their abstracts or search snippets and checks each cited claim against the cited abstract or snippet (full-document acquisition: REQUIRED, DESIGNED, NOT IMPLEMENTED; DEC-FDA1, DEC-OD10). Each returned source carries source-record provenance only: provider, identifier, retrieval time and the licence gate's decision on the metadata licence VERA-DAR records for the provider (not verified at source). It carries no immutable document version, no content hash, no passage location and no explicit inspection-scope label. The label is a recorded requirement (see "Evidentiary-inspection ceiling").
+
+> Updated 2026-10-29: `POST /ask` (`main.py:623`) requires an API key and enforces caps; it is a single blocking call. `POST /ask/stream` now streams progressive stage updates as newline-delimited JSON (OD-1027); see [Streaming request](api.md#streaming-request-post-askstream). The service also exposes `GET /version`, `GET /health/dar`, `GET /trace/public`, `GET /trace/private`, `GET /corpus-summary`, and owner-key routes `GET /memory/pending` and `POST /memory/{claim_id}/confirm|reject`. The JSON shape above is the design target; exact response fields are defined in code and `docs/api.md`, not verified field by field here (unverified).
 
 ## TRACE-oriented and comparative evaluation
 
@@ -501,7 +520,7 @@ For each evaluation question `i`: `ΔQ_i = Quality(R_capstone,i) - Quality(R_dir
 
 "Significantly superior" is a measured outcome target, not an architectural assumption. One Demo Day example can demonstrate capability; repeatable superiority requires a multi-question evaluation set and a predefined judging method.
 
-## Demo Day script
+## Demo Day script (HISTORICAL: Demo Day was 2026-10-23; kept as the original plan, not a current status)
 
 - Enter one bounded research question and show its Evidence Requirements Map.
 - Show candidate sources and Gate A priority decisions, including at least one uncertain candidate retained to protect recall.
@@ -525,11 +544,13 @@ Capabilities such as richer bias analysis, full meta-drift implementation, gener
 
 ## Acceptance criteria
 
+> Dated note (2026-10-30): the "Demo Day" criteria in this section and in A.5 are the original plan, not a current status; see the README for current status.
+
 - One capstone one-liner describes the implemented text evidence-and-reasoning system.
 - `GET /health` and `POST /ask` operate through FastAPI with validated structured outputs.
 - Each research question produces explicit evidence requirements before retrieval.
 - Search candidates are prioritized before acquisition, with uncertainty preserved and Gate A tuned to avoid premature exclusion of plausible high-value evidence.
-- The complete accessible document of each selected source is staged, hashed, and registered before semantic admission; failed or blocked acquisition is recorded, never replaced by an abstract. (REQUIRED, DESIGNED, NOT IMPLEMENTED for Demo Day: an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1; see "Current state vs required")
+- The complete accessible document of each selected source is staged, hashed, and registered before semantic admission; failed or blocked acquisition is recorded, never replaced by an abstract. (REQUIRED, DESIGNED, NOT IMPLEMENTED for Demo Day [historical wording, as of 2026-10-14; Demo Day has passed]: an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1; see "Current state vs required")
 - At least one deterministic content-integrity tool is invoked by the agent.
 - Semantic evidence is traceable to exact source version and span.
 - Source/process appraisal, data/evidence quality, applicability, independence, uncertainty, bias, and integrity remain separable canonical signals.
@@ -615,7 +636,7 @@ The three decision gates are deliberately simplified for the MVP:
 | Service contract | `GET /health` and validated `POST /ask` through FastAPI. |
 | Evidence requirements | Create a small, explicit map of the material findings or subquestions needed to answer the bounded research question. |
 | Candidate discovery | Search the web and register candidate title, URL, snippet/rank, query/run, and Gate A decision. |
-| Full-document acquisition | For each source selected by Gate A, acquire the complete accessible document, stage it, compute a content hash, and preserve retrieval provenance, version and acquisition status; record failures (see "Full-document acquisition"). (REQUIRED, DESIGNED, NOT IMPLEMENTED for Demo Day: an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1; see "Current state vs required") |
+| Full-document acquisition | For each source selected by Gate A, acquire the complete accessible document, stage it, compute a content hash, and preserve retrieval provenance, version and acquisition status; record failures (see "Full-document acquisition"). (REQUIRED, DESIGNED, NOT IMPLEMENTED for Demo Day [historical wording as of 2026-10-14; Demo Day has passed]: an accepted schedule/scope divergence (DEC-OD10), not a waiver or retirement of DEC-FDA1; see "Current state vs required") |
 | Semantic evidence | Extract machine-addressable evidence spans tied to the exact source version. |
 | Critical appraisal | Evaluate each consequential evidence unit with a fixed, inspectable rubric. Minimum dimensions: relevance, source/process quality, claim support, applicability, uncertainty, and support/challenge relation. |
 | Context decisions | Apply Gate B and retain the decision, rationale, contributing evidence, method/rubric version, and provenance. |
@@ -688,7 +709,7 @@ The following remain part of the full design but are not required to establish t
 - Derived source dashboards, generalized feedback analytics, and broad cross-run reputation models.
 - Multimodal ingestion, universal ontology architecture, adaptive semantic geometry, and distributed orchestration.
 
-## A.7 Delivery milestones to 12 October 2026
+## A.7 Delivery milestones to 12 October 2026 (HISTORICAL plan; the 12 October date and the "code freeze" in M8 are superseded, and the Status column is the 18 Sep 2026 snapshot)
 
 Milestones are outcome gates rather than promises to implement every subsystem in the full design. A milestone is complete only when its artifact works end to end at the stated boundary.
 
@@ -740,6 +761,8 @@ Actual status against A.7 is recorded in that table's Status column rather than 
 - **M2** — missed. No search, Gate A, selective fetch, staging/hashing, or source/version provenance exists. The window closed 19 Sep with none of this built.
 - **M3 onward** — not started, and cannot meaningfully start until M2's foundation exists.
 
+> Updated 2026-10-29: the M0 to M3 status above is the 2026-09-18 snapshot and is superseded. The code now has search, retrieval, a database layer, migrations 001u, 003, 004, 005 plus 006/011/012 (2026-10-29) applied (see "Status as of 2026-10-29"), and the 10-route API. Milestone-by-milestone status against A.7 was not re-assessed in this pass (unverified).
+
 **Infra blocker underneath M1 and M2.** `main.py` already documents why model-pricing configuration is version-controlled JSON rather than a runtime database: Render's filesystem is ephemeral and does not survive a redeploy. The same constraint applies to every record M1–M3 need to persist. Closing M1's persistence gap and M2's provenance requirement therefore requires provisioning a real hosted database (e.g. Render managed Postgres) before any Gate A/B code can log a decision. This is an external provisioning step with its own lead time and has not been started — it should be treated as the first concrete action, ahead of writing Gate A/B logic itself.
 
 **Governing rule invoked.** Per the A.9 stop/go rule — "if a proposed feature does not improve answer quality, evidence adequacy, or traceability, defer it" — the retrieval-quality digest's fuller scope (retrieval history, hybrid BM25/RRF, reranking) is deferred past M2/M3. Whenever it is picked up, it should extend rather than duplicate the gates above; implementing it now would build refinement onto a retrieval/evidence layer that does not yet exist.
@@ -751,3 +774,5 @@ Actual status against A.7 is recorded in that table's Status column rather than 
 ### A.11 addendum: status
 
 Status: see the root README.
+
+> Updated 2026-10-29: the Render-managed Postgres note above stands as intent. Current state: the production database is `vera_dar_db` (schema `vera_vjay`); Render is the interim host and production runs through 2026-11-30; the long-term non-Render host is planned / not implemented [23, 32, 33].
