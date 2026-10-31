@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 
 from vera import acq_config, acq_rounds, rate_limit
 from vera import auto_acquire as aa
-from vera import research_outcome, search_providers, source_type
+from vera import research_outcome, search_providers, source_type, stream_ctx
 
 logger = logging.getLogger("vera.autoacq")
 
@@ -54,6 +54,24 @@ CAPPED = frozenset({"rate", "daily_cap"})  # DAR-TRACE-1022: the shared hourly/d
 # result_ttl_s (re-running them early would only burn the shared jobs_per_hour cap).
 TRANSIENT = frozenset({"search_failed", "deadline"})
 BELOW_PERSIST_MIN = "below_persist_min"  # ONE-SPAN-1021 per-document telemetry reason
+INF = float("inf")
+# STREAM-1031: licence-hold reason keys (a candidate that is open but held back for licence reasons), counts only.
+HELD_KEYS = ("arxiv_licence_hold", "preprint_licence_unverified", "preprint_not_permitted", "licence_absent", "no_licence")
+# STREAM-1031 closed "why" set for acquire/limited (INTERFACES.md): 1 no more open sources, 2 sources busy, 3 search
+# limit reached, 4 stalled, 5 answering service at its limit.
+WHY_NO_MORE, WHY_BUSY, WHY_CAPPED, WHY_STALLED, WHY_EXHAUSTED = 1, 2, 3, 4, 5
+
+
+def _emit(stage: str, state: str, **counts) -> None:
+    """STREAM-1031: counts-only progress event, only on the streamed path (legacy /ask emits nothing from here).
+    Never raises; never carries a provider, host, URL, title, DOI or question text."""
+    if not stream_ctx.active():
+        return
+    try:
+        from vera import progress
+        progress.emit(stage, state, **{k: int(v) for k, v in counts.items()})
+    except Exception:  # noqa: BLE001  telemetry never breaks the run
+        pass
 
 
 @dataclass
@@ -83,6 +101,9 @@ class Outcome:
     # T1 (IMPL-1028-T1O1; None = router off): {"route", "basis": [rule ids], "scores": {"s","g"}}; per request, never
     # stored with identity, never the question text
     source_route: dict | None = None
+    # OD-1031-P1 item 4: {"status": met|resource_limited|incomplete_deadline, "stored": n, "target": n}; counts only
+    # (no titles, hosts, URLs or provider names). None = no search ran. Observational: changes no cap or gate.
+    acquisition: dict | None = None
 
     @property
     def n_answer_eligible(self) -> int:
@@ -106,7 +127,8 @@ class Outcome:
                 **({"diag_status_counts": research_outcome.diag_counts(self.candidates)}
                    if self.candidates is not None else {}),  # P0DTA-DIAG: aggregate per status
                 **({"background": dict(self.background)} if self.background is not None else {}),
-                **({"source_route": dict(self.source_route)} if self.source_route is not None else {})}
+                **({"source_route": dict(self.source_route)} if self.source_route is not None else {}),
+                **({"acquisition": dict(self.acquisition)} if self.acquisition is not None else {})}
 
     @property
     def queued(self) -> int:
@@ -198,6 +220,7 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
                 disc = acq_discovered.discovered_candidates(discovered, acq, question)
         key = _cache_key(question, served, disc) if disc is not None else _cache_key(question, served)
         now = clock()
+        busy = False  # STREAM-1031: a busy refusal is also a stream event (emitted after the lock is released)
         with _I.lock:
             ttl = _b(acq, "result_ttl_s", 600)
             fttl = min(ttl, _b(acq, "failure_ttl_s", 60))  # DAR-TRACE-1022: a TRANSIENT failure is replayed <= 60 s
@@ -209,21 +232,28 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
             owner = slot is None
             if not owner:
                 if slot[2] >= int(_b(acq, "max_waiters", 4)):
-                    return Outcome("busy")
-                slot[2] += 1
+                    busy = True
+                else:
+                    slot[2] += 1
             elif _I.active >= int(_b(acq, "max_concurrent", 2)):
-                return Outcome("busy")
+                busy = True
             else:
                 _I.active += 1
-                slot = _I.inflight[key] = [threading.Event(), None, 0]
+                slot = _I.inflight[key] = [threading.Event(), None, 0, stream_ctx.current()]
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
         return Outcome("error")
+    if busy:
+        _emit("acquire", "busy")
+        return Outcome("busy")
     if not owner:  # an identical question is in flight: wait (bounded) for its outcome
-        slot[0].wait(timeout=_b(acq, "waiter_wait_s", 45))
+        _wait_for_holder(slot, acq)
         with _I.lock:
             slot[2] -= 1
-        return slot[1] if slot[1] is not None else Outcome("busy")
+        if slot[1] is None:
+            _emit("acquire", "busy")
+            return Outcome("busy")
+        return slot[1]
     out = Outcome("error")  # an unexpected failure is never reported as "searched" (no search notice is shown)
     try:
         out = _run(question, acq, env, clock, deps_factory, served,
@@ -245,11 +275,53 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
     return out
 
 
+def _check_stop(ctx, st: dict) -> bool:
+    """STREAM-1031: True when the request must start nothing new (disconnect, stall, providers exhausted). The first
+    reason seen is recorded in st so the final status does not depend on a later clock reading."""
+    r = ctx.stop_reason()
+    if r is not None and st.get("stop") is None:
+        st["stop"] = r
+        logger.info("autoacq inline stop reason=%s since_progress_s=%d", r, int(ctx.since_progress()))  # code + count only
+    return r is not None
+
+
+def _stop_reason(ctx, st: dict):
+    return st.get("stop") or getattr(ctx, "_stop", None)
+
+
+def _emit_final(o: Outcome, acq: dict, codes: dict, stop) -> None:
+    """The Stage A Outcome.acquisition surfaced as the final acquire event (counts only)."""
+    a = o.acquisition or {}
+    if a.get("status") == "met":
+        _emit("acquire", "done", stored=a["stored"], target=a["target"])
+    elif a.get("status") == "resource_limited":
+        why = (WHY_STALLED if stop == stream_ctx.STALLED else WHY_EXHAUSTED if stop == stream_ctx.PROVIDERS_EXHAUSTED
+               else WHY_BUSY if codes.get(acq_config.reason(acq, "rate_limited")) else WHY_NO_MORE)
+        _emit("acquire", "limited", stored=a["stored"], target=a["target"], why=why)
+
+
+def _wait_for_holder(slot, acq) -> None:
+    """Wait for the in-flight identical question's outcome. Legacy: at most waiter_wait_s (45). Streamed path
+    (STREAM-1031, OD-1031-NODEADLINE): 1 s ticks on the holder's Event, bounded by the holder's lifetime (the Event is
+    always set when it ends), its stall rule, and this waiter's own disconnect; against a legacy holder (no stream ctx)
+    the legacy bound applies. Each tick counts as progress for this waiter."""
+    own, holder = stream_ctx.current(), slot[3] if len(slot) > 3 else None
+    if own is None or holder is None:
+        slot[0].wait(timeout=_b(acq, "waiter_wait_s", 45))
+        return
+    while not slot[0].wait(timeout=1.0):
+        if own.cancelled or holder.should_stop():
+            return
+        own.touch()
+
+
 def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
          topic_key="") -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
-    with rate_limit.deadline_scope(time.monotonic() + float(_b(acq, "deadline_s", 45))):
+    # STREAM-1031 / OD-1031-NODEADLINE: on the streamed path there is no inline deadline (per-wait max_wait_s still applies)
+    scope = None if stream_ctx.active() else time.monotonic() + float(_b(acq, "deadline_s", 45))
+    with rate_limit.deadline_scope(scope):
         return _run_body(question, acq, env, clock, deps_factory, served,
                          **({"disc": disc} if disc is not None else {}),
                          **({"prefer_recent": True} if prefer_recent else {}),
@@ -354,7 +426,9 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
               topic_key="") -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
-    deadline = t0 + _b(acq, "deadline_s", 45)
+    ctx = stream_ctx.current()  # STREAM-1031: set only by POST /ask/stream; None = the legacy path, unchanged below
+    deadline = INF if ctx is not None else t0 + _b(acq, "deadline_s", 45)  # OD-1031-NODEADLINE
+    live = acq_config.live(acq)
     ms: dict = {}
     codes: dict = {}
 
@@ -394,6 +468,29 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             # P0DTA-DIAG: same status vocabulary on the discovered entries
             for d in o.discovered:
                 research_outcome.annotate_diag(d)
+        if st["portals"] is not None:  # a search ran: report the outcome against the round target (counts only)
+            tgt = acq_rounds.target_of(acq)
+            stop = _stop_reason(ctx, st) if ctx is not None else None
+            fb = st.get("fresh_budget")  # the pass's fresh-document budget (None if never reserved)
+            if o.stored >= tgt:
+                aq_status = "met"
+            elif ctx is not None and stop == stream_ctx.DISCONNECTED:  # STREAM-1031
+                aq_status = "incomplete_disconnected"
+            elif st.get("search_failed"):  # every provider failed: the search, not supply, is the cause
+                aq_status = "search_failed"
+            elif isinstance(fb, int) and fb < tgt:  # budget below the target: kill switch (2) or spent daily budget (0)
+                aq_status = "capped"
+            elif ctx is None and (clock() >= deadline or acq_config.reason(acq, "deadline") in codes):
+                aq_status = "incomplete_deadline"  # legacy path only: the stream path has no deadline status
+            else:
+                aq_status = "resource_limited"  # budget >= target, search worked, routes ran out: supply
+            o.acquisition = {"status": aq_status, "stored": int(o.stored), "target": int(tgt),
+                             **({"stop": stop} if ctx is not None and aq_status == "resource_limited"
+                                and stop in (stream_ctx.STALLED, stream_ctx.PROVIDERS_EXHAUSTED) else {})}
+            if ctx is not None:
+                _emit_final(o, acq, codes, stop)
+        elif ctx is not None and o.status in CAPPED:  # the shared job caps refused: nothing searched
+            _emit("acquire", "limited", stored=0, target=int(acq_rounds.target_of(acq)), why=WHY_CAPPED)
         ms["total"] = int((clock() - t0) * 1000)
         o.source_route = st.get("route")
         o.codes, o.ms = dict(sorted(codes.items())), ms
@@ -416,7 +513,9 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     deps = (deps_factory or default_deps)(acq, env)
     reserved, used = 0, 0
     try:
-        budget = reserved = aa.docs_budget(acq, deps, clock=clock, reserve=True)  # VER L5: reserved under the lock
+        budget = reserved = aa.docs_budget(acq, deps, clock=clock, reserve=True,
+                                           per_job=acq_config.inline_fresh_docs(acq))  # OD-1031-CEIL31 per-prompt limit; VER L5: reserved under the lock
+        st["fresh_budget"] = max(0, min(budget, acq_config.inline_fresh_docs(acq)))  # SA-FIX: read by done()
 
         def track(n_stored):  # ROUNDS-1028 (observational): the job's stored count and route exhaustion -> topic round
             if budget <= 0:
@@ -431,9 +530,12 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         search_failed = False
         with search_providers.portal_scope() as portals_l:
             st["portals"] = portals_l
+            _emit("search", "start", step=1)
             try:
                 # P0DTA-PRIO D3: the search phase ends a fetch reserve (per_doc_timeout_s) before the inline deadline
+                # (STREAM-1031: no inline deadline, so the search keeps only its own timeout_s)
                 cands = list(deps.search(question, int(s.get("results_per_provider", 10)),
+                                         float(s.get("timeout_s", 20)) if ctx is not None else
                                          max(1.0, min(float(s.get("timeout_s", 20)),
                                                       deadline - clock() - _b(acq, "per_doc_timeout_s", 25)))) or [])
                 if not portals_l:  # FRESH-1023: a search callable that records no portals counts as ONE portal
@@ -442,10 +544,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 if not portals_l:
                     search_providers.record_portal("acquisition_search", "failed", 0)
                 count(acq_config.reason(acq, "search_failed"))
+                st["search_failed"] = True  # SA-FIX: read by done() (acquisition status)
                 if not (disc is not None and disc[0]):
                     return done(Outcome("search_failed"))
                 cands, search_failed = [], True  # P0-5: the discovered candidates still go through acquisition
         ms["search"] = int((clock() - t) * 1000)
+        if ctx is not None:
+            ctx.touch()  # the search rung finished: progress
+            _check_stop(ctx, st)  # T10d: a disconnect/stop during the search starts no fetch below
         fdcfg = aa._fd_cfg()
         icfg = acq_config.ingest_cfg(fl.load_config(), acq)
         # R2: skip only what the stored-corpus attempt actually tried. The served acquired corpus may have finished
@@ -484,7 +590,9 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         t = clock()
         reuse_info: dict = {}
         reused, ranked_left = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg,
-                                          clock=clock, deadline=deadline, info=reuse_info)
+                                          clock=clock, deadline=deadline, info=reuse_info,
+                                          **({"ctx": ctx, "max_checks": int(live["max_reuse_checks_per_prompt"])}
+                                             if ctx is not None else {}))
         for cid, (oc, why) in reuse_info.items():
             if cid in rec_by:
                 rec_by[cid]["outcome"], rec_by[cid]["reason"] = oc, why
@@ -496,14 +604,18 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     e["outcome"] = "already_stored"
         ranked = aa.reserve_reads(ranked_left, max(0, min(budget, acq_config.inline_fresh_docs(acq))), acq, route)
         ms["reuse"] = int((clock() - t) * 1000)
+        _emit("search", "done", found=len(cands), shortlisted=len(ranked))
         # ACQ S4-0 L4b-0 (B3): the fresh budget is separate from reuse; documents answered from stored rows no longer
-        # reduce it. Same cap value as before (bounds.inline_fresh_docs, default max_docs_per_job), still bounded by the
-        # remaining daily budget.
+        # reduce it. The per-prompt value comes from acq_config.inline_fresh_docs (max_docs_per_prompt 31 with the flag on, else
+        # max_docs_per_job 2), still bounded by the remaining daily budget.
         fresh_budget = max(0, min(budget, acq_config.inline_fresh_docs(acq)))
         t = clock()
         per: dict = {}  # FRESH-1023 C3: always collected (per-candidate records); entries stay disc-only
         sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
-        if fresh_budget > 0 and ranked and deadline - clock() < _b(acq, "per_doc_timeout_s", 25):
+        if ctx is not None and _check_stop(ctx, st):  # STREAM-1031: stopped before any fetch: nothing starts
+            plans = []
+            sk.update({i: acq_config.reason(acq, "defer_cap") for i in range(len(ranked))})
+        elif fresh_budget > 0 and ranked and deadline - clock() < _b(acq, "per_doc_timeout_s", 25):
             # P0DTA-PRIO D3: one full fetch no longer fits: nothing starts; each candidate is a deadline skip
             # (P0DTA-INTEG: recorded through the DIAG skip map, so done() and annotate_diag give skipped/deadline)
             count(acq_config.reason(acq, "deadline"))
@@ -511,7 +623,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             plans = []
         else:
             plans = _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, fresh_budget, count,
-                                       ms, per=per, skips=sk) if fresh_budget > 0 else []
+                                       ms, per=per, skips=sk, **({"ctx": ctx, "st": st}
+                                                                if ctx is not None else {})) if fresh_budget > 0 else []
         if fresh_budget <= 0:  # nothing evaluated: the daily document quota (budget 0) or the per-job document limit
             sk.update({i: acq_config.reason(acq, "daily_cap" if budget <= 0 else "doc_budget") for i in range(len(ranked))})
         by_plan: dict = {}
@@ -589,6 +702,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     rc["persist_reason"] = None if rc["persisted"] else "in_corpus"
                 if w.get("status") == "stored":
                     out.stored += 1
+                    if ctx is not None:
+                        ctx.touch()  # a document was stored: progress
                     count(acq_config.reason(acq, "stored"))
                     out.documents.append({"persisted": True})
                 else:
@@ -662,7 +777,7 @@ def _protected_keys(cands, acq, deps):
 
 
 def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, clock=None, deadline=None,
-                info: dict | None = None):
+                info: dict | None = None, ctx=None, max_checks: int | None = None):
     """((sources, spans) of the ranked candidates already stored as acquired documents, at most max_docs_per_job, in
     rank order), and the ranked candidates left to evaluate. Read-only; a lookup failure reuses nothing (the
     evaluate stage's known check still prevents duplicates).
@@ -672,7 +787,10 @@ def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, 
     unchecked and filled max_docs_per_job, so fresh_budget fell to 0, no fresh candidate was evaluated, and the
     ephemeral corpus admitted nothing (status "unanswered", no answer-writer call). A failing stored document is
     counted R-ACQ-REUSE-IRRELEVANT (or R-ACQ-REUSE-UNUSABLE when the reader refused its rows) and never re-acquired
-    (it is known). The checks stop at `deadline` (review S5): a row not checked in time is not reused."""
+    (it is known). The checks stop at `deadline` (review S5): a row not checked in time is not reused.
+    STREAM-1031 (ctx given; the deadline is infinite): at most max_checks relevance checks per prompt
+    (live.max_reuse_checks_per_prompt) and none once ctx.should_stop(); an unchecked row is not reused and, being
+    known, not re-acquired."""
     from vera.corpus_admission import canonical_url
     fn = getattr(deps, "stored_rows", None)
     if fn is None or not ranked:
@@ -694,17 +812,27 @@ def _stored_for(ranked, acq, deps, count, question=None, fdcfg=None, icfg=None, 
     for sp in spans or ():
         by_src.setdefault(sp.get("source_id"), []).append(sp)
     take, rest = [], []
+    n_checks = 0
     for cu0, lks, r in zip(cus, legacy, ranked):
         cu = next((k for k in [cu0, *lks] if k in newest), cu0)  # current key first, then a legacy-keyed row
         if cu in newest and len(take) < int(acq_config.bound(acq, "max_docs_per_job")):
             row = newest.pop(cu)
             if question is not None:
+                if ctx is not None and ((max_checks is not None and n_checks >= max_checks) or ctx.should_stop()):
+                    why0 = acq_config.reason(acq, "doc_budget")  # STREAM-1031: bounded by count/stop, never a deadline
+                    count(why0)
+                    if info is not None:
+                        info[id(r[2])] = ("reuse_rejected", why0)
+                    continue
                 if clock is not None and deadline is not None and clock() >= deadline:
                     count(acq_config.reason(acq, "deadline"))
                     if info is not None:
                         info[id(r[2])] = ("reuse_rejected", acq_config.reason(acq, "deadline"))
                     continue
+                n_checks += 1
                 why = _reuse_relevant(question, row, by_src.get(row.get("source_id"), []), acq, fdcfg, icfg)
+                if ctx is not None:
+                    ctx.touch()
                 if why:
                     count(why)
                     if info is not None:
@@ -748,22 +876,8 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
         return REUSE_UNUSABLE
 
 
-def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms,
-                       per: dict | None = None, skips: dict | None = None) -> list:
-    """Every ranked candidate through the job's evaluate stage in a small pool; per-document timeout capped by the
-    inline deadline; stops at `budget` admitted documents. Returns the admitted row plans (rank order). per (P0-5,
-    flag on only): filled with rank index -> plan or reason code for each finished evaluation."""
-    from vera import fulltext_loader as fl
-    if not ranked or clock() >= deadline:
-        if ranked:
-            count(acq_config.reason(acq, "deadline"))
-            if skips is not None:
-                skips.update({i: acq_config.reason(acq, "deadline") for i in range(len(ranked))})
-        return []
-    per_doc = _b(acq, "per_doc_timeout_s", 25)
-    pool = ThreadPoolExecutor(max_workers=max(1, int(_b(acq, "fetch_workers", 4))), thread_name_prefix="vera-inline")
-    durs: list = []
-
+def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl):
+    """The per-candidate evaluation closure shared by the legacy and the streamed pool (unchanged behaviour)."""
     def one(idx, score, doi, cand, isbn):
         d: dict = {}
         durs.append(d)
@@ -785,6 +899,110 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
             return idx, None, aa.error_code(acq, e)
         finally:
             job.question = ""
+    return one
+
+
+def _slow_read(pending, started, n, slow, every: float = 10.0, now=time.monotonic) -> None:
+    """NOISY-UI: at 10 s and every 10 s after, the oldest still-running source read is reported (k of n, seconds).
+    Counts only. Cleared when nothing is pending."""
+    from vera import progress
+    if not pending:
+        slow["mark"] = 0
+        progress.clear_activity()
+        return
+    idx, t0 = min((started[f] for f in pending if f in started), key=lambda x: x[1], default=(None, None))
+    if idx is None:
+        return
+    age = now() - t0
+    mark = int(age // every)
+    if mark >= 1 and mark != slow["mark"]:
+        slow["mark"] = mark
+        progress.set_activity(progress.ACT_SLOW_READ, k=idx + 1, n=n, elapsed=int(age))
+    elif mark < 1:
+        slow["mark"] = 0
+
+
+def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, count, ms, per, skips, ctx, st, fl) -> list:
+    """STREAM-1031 / OD-1031-NODEADLINE: the streamed-path evaluation. No inline deadline: waits are <= 1 s ticks (never
+    wait(timeout=inf)); ctx.should_stop() is checked between candidates: once set, NO new candidate starts, in-flight
+    ones finish (bounded by their own per-document timeouts) and their admitted documents are kept for the persist step.
+    One pass over the shortlist: at most len(ranked) evaluations. Each finished candidate is a progress event
+    (ctx.touch) and an acquire/update (counts only)."""
+    if not ranked:
+        return []
+    per_doc = _b(acq, "per_doc_timeout_s", 25)
+    workers = max(1, int(_b(acq, "fetch_workers", 4)))
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vera-inline")
+    durs: list = []
+    one = _runner(question, acq, deps, icfg, fdcfg, clock, INF, durs, per_doc, fl)  # each fetch keeps its own timeout
+    tgt = acq_rounds.target_of(acq)
+    held_codes = {acq_config.reason(acq, k) for k in HELD_KEYS}
+    got: dict = {}
+    seen = {"held": 0}
+    pending: set = set()
+    started: dict = {}  # NOISY-UI: future -> (index, monotonic start)
+    slow = {"mark": 0}
+    nxt = 0
+    try:
+        while True:
+            stopped = _check_stop(ctx, st)
+            # start candidates only while running, below the document budget (admitted + in flight) and with a free worker
+            while not stopped and nxt < len(ranked) and len(got) + len(pending) < budget and len(pending) < workers:
+                fut = pool.submit(contextvars.copy_context().run, one, nxt, *ranked[nxt])
+                started[fut] = (nxt, time.monotonic())
+                pending.add(fut)
+                nxt += 1
+            if not pending:
+                break
+            fin, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            _slow_read(pending, started, len(ranked), slow)
+            for f in fin:
+                idx, plan, code = f.result()
+                if per is not None:
+                    per[idx] = plan if plan is not None else code
+                if plan is not None:
+                    got[idx] = plan
+                else:
+                    count(code)
+                    if code in held_codes:
+                        seen["held"] += 1
+                ctx.touch()
+                _emit("acquire", "update", checked=len(per) if per is not None else len(got) + 0, usable=len(got),
+                      held=seen["held"],
+                      stored=sum(1 for p in got.values() if aa.persist_eligible(p, acq)), target=int(tgt),
+                      shortlisted=len(ranked))
+            if len(got) >= budget:
+                break  # the document budget is reached: stragglers are not waited for (legacy behaviour)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    if skips is not None:
+        why = acq_config.reason(acq, "doc_budget" if len(got) >= budget else "defer_cap")
+        skips.update({i: why for i in range(len(ranked)) if i not in (per or {})})
+    for d in durs:
+        for k in ("fetch", "verify"):
+            ms[k] = max(ms.get(k, 0), int(d.get(k, 0)))
+    return [got[i] for i in sorted(got)][:budget]
+
+
+def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline, budget, count, ms,
+                       per: dict | None = None, skips: dict | None = None, ctx=None, st: dict | None = None) -> list:
+    """Every ranked candidate through the job's evaluate stage in a small pool; per-document timeout capped by the
+    inline deadline; stops at `budget` admitted documents. Returns the admitted row plans (rank order). per (P0-5,
+    flag on only): filled with rank index -> plan or reason code for each finished evaluation."""
+    from vera import fulltext_loader as fl
+    if ctx is not None:  # STREAM-1031: no inline deadline; own loop
+        return _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, count, ms, per, skips, ctx,
+                                st if st is not None else {}, fl)
+    if not ranked or clock() >= deadline:
+        if ranked:
+            count(acq_config.reason(acq, "deadline"))
+            if skips is not None:
+                skips.update({i: acq_config.reason(acq, "deadline") for i in range(len(ranked))})
+        return []
+    per_doc = _b(acq, "per_doc_timeout_s", 25)
+    pool = ThreadPoolExecutor(max_workers=max(1, int(_b(acq, "fetch_workers", 4))), thread_name_prefix="vera-inline")
+    durs: list = []
+    one = _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl)
 
     futs = {pool.submit(contextvars.copy_context().run, one, i, *r) for i, r in enumerate(ranked)}  # RATE-1022 C2
     got: dict = {}

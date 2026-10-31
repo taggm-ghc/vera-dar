@@ -37,7 +37,8 @@ def is_public_mode(env=None) -> bool:
 @dataclass(frozen=True)
 class Caps:
     req_per_min_per_client: int = 6
-    req_per_day_per_client: int = 40
+    req_per_hour_per_client: int = 30
+    req_per_day_per_client: int = 180
     req_per_day_global: int = 400
     cost_usd_per_day_global: float = 2.0
     cost_usd_per_day_per_client: float = 0.25
@@ -66,12 +67,13 @@ def client_id(request: Request, caps: Caps) -> str:
 
 
 class CapLimiter:
-    """Sliding minute window plus per-UTC-day counters, per client and global. Thread-safe."""
+    """Sliding minute and hour windows plus per-UTC-day counters, per client and global. Thread-safe."""
 
     def __init__(self, caps: Caps, clock=time.time):
         self.caps, self.clock = caps, clock
         self._lock = threading.Lock()
         self._minute: dict[str, list[float]] = {}
+        self._hour: dict[str, list[float]] = {}  # OD-1031-PROMPTLIM: rolling 3600 s window, in-memory, per process
         self._day = ""
         self._day_req: dict[str, int] = {}
         self._day_cost: dict[str, float] = {}
@@ -96,8 +98,15 @@ class CapLimiter:
             if len(recent) >= c.req_per_min_per_client:
                 self._minute[client] = recent
                 return False
+            hour = [t for t in self._hour.get(client, []) if now - t < 3600]
+            if len(hour) >= c.req_per_hour_per_client:
+                self._minute[client] = recent
+                self._hour[client] = hour
+                return False
             recent.append(now)
+            hour.append(now)
             self._minute[client] = recent
+            self._hour[client] = hour
             self._global_req += 1
             self._day_req[client] = self._day_req.get(client, 0) + 1
             return True
@@ -188,6 +197,185 @@ def post_ask_tracked(base_url: str, question: str, mode: str, api_key: str, rid:
                  "X-VERA-Request-Id": rid, "X-VERA-Session": session_token},
         timeout=timeout,
     )
+
+
+# --- OD-1031-STREAM-ON: NDJSON stream client (contract v1.3). No total timeout: only connect and no-data bounds. ---------
+
+STREAM_V = "1.3"
+_LIT_STAGES = frozenset({"received", "scope", "corpus", "corpus_verdict", "search", "acquire", "write", "check", "retry", "done"})
+_LIT_STATES = frozenset({"start", "update", "done", "skipped", "sufficient", "insufficient", "stale", "answered", "partial",
+                         "no_answer", "declined", "error", "limited", "busy"})
+_LIT_COUNTS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued",
+                         "attempt", "shortlisted", "held", "step", "ceiling", "why"})
+_RESULT_KINDS = frozenset({"busy", "error", "provider_error", "unavailable"})
+_RESULT_STATUSES = frozenset({200, 429, 500, 502, 503})
+_MAX_COUNT = 1_000_000
+_MAX_LINE = 4_000_000
+_MAX_EVENT_LINE = 65_536
+
+
+class StreamNeverConnected(Exception):
+    """No stream line was ever received (connect failure or non-200). Carries only a status int; never host or text."""
+
+    def __init__(self, status: int | None = None):
+        super().__init__("never_connected")
+        self.status = status
+
+
+class StreamLost(Exception):
+    """The stream broke after it started. reason is a closed code: no_data | connection | ended."""
+
+    def __init__(self, reason: str = "connection"):
+        super().__init__("stream_lost")
+        self.reason = reason
+
+
+def _stream_sets():
+    """Closed sets: the progress contract when present, else the literal sets above (union, so both are tolerated)."""
+    stages, states, counts = set(_LIT_STAGES), set(_LIT_STATES), set(_LIT_COUNTS)
+    try:
+        from vera import progress
+
+        stages |= {s.value for s in progress.Stage}
+        states |= {s.value for s in progress.State}
+        counts |= set(progress.COUNT_KEYS)
+    except Exception:  # noqa: BLE001
+        pass
+    return stages, states, counts
+
+
+def validate_stream_line(obj, sets=None) -> bool:
+    """True only for a well-formed v1.3 event | hb | result line (closed sets, int counts)."""
+    if not isinstance(obj, dict) or obj.get("v") != STREAM_V:
+        return False
+    t = obj.get("type")
+    if t == "hb":
+        extra = {k: v for k, v in obj.items() if k not in ("v", "type", "seq", "elapsed_s")}  # NOISY-UI: activity ints only
+        return (type(obj.get("seq")) is int and type(obj.get("elapsed_s")) is int and obj["elapsed_s"] >= 0
+                and all(k in ("act", "wait_s", "k", "n", "elapsed") and type(v) is int and 0 <= v <= _MAX_COUNT
+                        for k, v in extra.items()))
+    if t == "event":
+        stages, states, counts = sets or _stream_sets()
+        seq = obj.get("seq")
+        if type(seq) is not int or seq < 0 or obj.get("stage") not in stages or obj.get("state") not in states:
+            return False
+        if not isinstance(obj.get("ts", ""), str):
+            return False
+        c = obj.get("counts", {})
+        if not isinstance(c, dict):
+            return False
+        return all(k in counts and type(v) is int and 0 <= v <= _MAX_COUNT for k, v in c.items())
+    if t == "result":
+        st = obj.get("status")
+        if type(st) is not int or st not in _RESULT_STATUSES:
+            return False
+        if st == 200:
+            return isinstance(obj.get("body"), dict)
+        return obj.get("kind") in _RESULT_KINDS
+    return False
+
+
+class AskStream:
+    """Iterator of validated line dicts. `.dropped` counts invalid lines; `.close()` ends the connection."""
+
+    def __init__(self, base_url, question, mode, api_key, *, connect_timeout, no_data_timeout, should_stop=None, session=None):
+        self._args = (base_url, question, mode, api_key)
+        self._ct, self._nd = connect_timeout, no_data_timeout
+        self._should_stop = should_stop
+        self._http = session if session is not None else requests
+        self.dropped = 0
+        self.stopped = False  # True when should_stop ended the iteration
+        self._resp = None
+        self._gen = self._run()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._gen)
+
+    def close(self) -> None:
+        try:
+            self._gen.close()
+        finally:
+            self._close_resp()
+
+    def _close_resp(self) -> None:
+        r, self._resp = self._resp, None
+        if r is not None:
+            try:
+                r.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _run(self):
+        base_url, question, mode, api_key = self._args
+        sets = _stream_sets()
+        try:
+            try:
+                r = self._http.post(
+                    f"{base_url.rstrip('/')}/ask/stream", json={"question": question, "mode": mode},
+                    headers={"Content-Type": "application/json", "X-API-Key": api_key, "Accept": "application/x-ndjson"},
+                    stream=True, timeout=(self._ct, self._nd))
+            except Exception:  # noqa: BLE001  no text kept: the message can carry the host
+                raise StreamNeverConnected(None) from None
+            self._resp = r
+            if getattr(r, "status_code", None) != 200:
+                st = getattr(r, "status_code", None)
+                raise StreamNeverConnected(st if type(st) is int else None)
+            got = False
+            saw_result = False
+            try:
+                for raw in r.iter_lines():
+                    got = True
+                    if self._should_stop is not None and self._should_stop():
+                        self.stopped = True
+                        return
+                    if not raw:
+                        continue
+                    if isinstance(raw, bytes):
+                        if len(raw) > _MAX_LINE:
+                            self.dropped += 1
+                            continue
+                        try:
+                            raw = raw.decode("utf-8")
+                        except UnicodeDecodeError:
+                            self.dropped += 1
+                            continue
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        self.dropped += 1
+                        continue
+                    if not validate_stream_line(obj, sets) or (obj["type"] != "result" and len(raw) > _MAX_EVENT_LINE):
+                        self.dropped += 1
+                        continue
+                    if saw_result:  # exactly once, last
+                        self.dropped += 1
+                        continue
+                    yield obj
+                    if obj["type"] == "result":
+                        saw_result = True
+                        return
+            except requests.exceptions.ReadTimeout:
+                raise StreamLost("no_data") from None
+            except (StreamLost, StreamNeverConnected, GeneratorExit):
+                raise
+            except Exception:  # noqa: BLE001
+                if not got:
+                    raise StreamNeverConnected(200) from None
+                raise StreamLost("connection") from None
+            raise StreamLost("ended")
+        finally:
+            self._close_resp()
+
+
+def iter_ask_stream(base_url: str, question: str, mode: str, api_key: str, *, connect_timeout: float,
+                    no_data_timeout: float, should_stop=None, session=None) -> AskStream:
+    """POST /ask/stream and iterate validated v1.3 lines. Bounds: connect_timeout and per-read no_data_timeout only
+    (no total timeout). Raises StreamNeverConnected / StreamLost; neither carries the key, host or exception text."""
+    return AskStream(base_url, question, mode, api_key, connect_timeout=connect_timeout,
+                     no_data_timeout=no_data_timeout, should_stop=should_stop, session=session)
 
 
 class _Gone:

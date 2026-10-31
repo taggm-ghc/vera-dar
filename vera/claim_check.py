@@ -133,9 +133,28 @@ def _client(checker: dict, timeout_s: float):
                   timeout=timeout_s, **({"http_client": hc} if hc is not None else {}))
 
 
+def _fallback_cost(p: int, c: int, checker: dict) -> float | None:
+    """EXG-FIX-1031 D2: a checker without its own prices is costed from the authoritative config/model-pricing.json
+    record for its model; if there is none, conservatively at the highest known per-1M price of that provider (logged).
+    A provider with no price records at all (e.g. the free-tier Groq checkers) stays unpriced: None, no warning."""
+    from vera.pricing.config import latest_pricing_for, load_model_pricing
+    pricing = load_model_pricing()
+    rec = latest_pricing_for(checker["model"], pricing)
+    if rec is not None and rec.provider == checker.get("provider"):
+        return round(p / 1e6 * rec.input + c / 1e6 * rec.output, 6)
+    same = [r for r in (pricing.records if pricing else []) if r.provider == checker.get("provider")]
+    if not same:
+        return None
+    hi_in = max((r.input for r in same), default=0.0)
+    hi_out = max((r.output for r in same), default=0.0)
+    logger.warning("/ask claim check %s:%s has no price; costed at the highest known %s price",
+                   checker.get("provider"), checker.get("model"), checker.get("provider"))
+    return round(p / 1e6 * hi_in + c / 1e6 * hi_out, 6)
+
+
 def _record_usage(r, label: str, checker: dict) -> None:
     """S5: append {checker, tokens, cost_usd} to the caller-set USAGE list (additive; callers that set none see no
-    change). cost_usd uses the checker's own input_per_1m/output_per_1m when configured, else is None (unpriced)."""
+    change). cost_usd uses the checker's own input_per_1m/output_per_1m when configured, else the config/model-pricing.json fallback (_fallback_cost), which is None for a provider with no price records."""
     rows = USAGE.get()
     u = getattr(r, "usage", None)
     if rows is None or u is None:
@@ -147,6 +166,8 @@ def _record_usage(r, label: str, checker: dict) -> None:
     cost = None
     if checker.get("input_per_1m") is not None and checker.get("output_per_1m") is not None:
         cost = round(p / 1e6 * float(checker["input_per_1m"]) + c / 1e6 * float(checker["output_per_1m"]), 6)
+    if cost is None:
+        cost = _fallback_cost(p, c, checker)
     rows.append({"checker": label, "tokens": p + c, "cost_usd": cost})
 
 
@@ -156,7 +177,13 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None,
     With `question` (responsiveness on) each verdict also carries "responsive" (yes|partial|no) - same call."""
     msgs = _messages(claims, sources, question, cfg)
     openai_on = None
+    from vera import provider_exhaustion as _px
+    grace = _px.GRACE.get()  # OD-1031-EXHAUST-GRACE: mid-response completion; only the OpenAI checker (free ones are exhausted)
     for checker in cfg["checkers"]:
+        if call is None and grace is not None:
+            if checker.get("base_url") is not None:
+                continue
+            openai_on = True
         if call is None and checker.get("base_url") is None:
             # the built-in OpenAI last-resort checker: only when the fallback switch is on. An injected `call` (tests,
             # fulldoc stubs) owns its own transport, so it is not filtered here.
@@ -168,6 +195,9 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None,
         if not (os.getenv(checker["api_key_env"]) or "").strip():
             continue
         label = f"{checker['provider']}:{checker['model']}"
+        from vera import stream_ctx as _sc
+        _sc.check_cancelled()  # EXG-FIX-1031 D3: client gone -> no paid checker call (outside the try: propagates)
+        from vera import provider_exhaustion; provider_exhaustion.guard()  # OD-1031-TOKENS: all providers exhausted -> stop
         try:
             if call is not None:
                 text = call(checker, msgs)

@@ -149,7 +149,31 @@ def evidence_source_line(data: dict | None) -> str | None:
     return f"Evidence source: {label}." if label else None
 
 
+def acquisition_notice_line(data: dict | None) -> str | None:
+    """OD-1031-P1 item 4: plain notice when a live search stored fewer new sources than targeted. Counts only; no
+    titles, hosts, URLs or provider names. None when the target was met or the block is absent or malformed."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
+    aq = ia.get("acquisition") if isinstance(ia.get("acquisition"), dict) else {}
+    n, t = aq.get("stored"), aq.get("target")
+    if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in (n, t)) or n >= t:
+        return None
+    if aq.get("status") == "resource_limited":
+        return f"Found {n} of the {t} new sources targeted; supply was limited."
+    if aq.get("status") == "incomplete_deadline":
+        return f"Found {n} of the {t} new sources targeted; the search stopped at the time limit."
+    if aq.get("status") == "search_failed":
+        return f"Found {n} of the {t} new sources targeted; the search could not be completed."
+    if aq.get("status") == "capped":
+        return f"Found {n} of the {t} new sources targeted; the limit on new sources for this request was reached."
+    return None
+
+
 def render_evidence_scope(st, data) -> None:
+    note = acquisition_notice_line(data)
+    if note:
+        st.caption(note)
     line = evidence_scope_line(data)
     if line:
         st.caption(line)
@@ -164,6 +188,9 @@ def render_fallback_reason(st, data) -> None:
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     token = contract.get("fallback")
     if token is None and data.get("evidence_status") is None:
+        note = acquisition_notice_line(data)  # SA-FIX: a plain reading-list non-answer still shows the acquisition notice
+        if note:
+            st.caption(note)
         return
     st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents"))))
     render_evidence_scope(st, data)

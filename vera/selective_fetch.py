@@ -284,7 +284,9 @@ class HostPacer:
             return
         gap = self.last.get(host, float("-inf")) + interval - self.clock()
         if gap > 0:
-            self.sleep(gap)
+            from vera import progress as _prog  # NOISY-UI: politeness (crawl-delay) wait is visible
+            with _prog.waiting(_prog.ACT_POLITE, gap):
+                self.sleep(gap)
         self.last[host] = self.clock()
 
 

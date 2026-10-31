@@ -17,6 +17,8 @@ from openai import OpenAI, OpenAIError
 
 from vera.ask_service import AskResult, answer_in_scope
 from vera import progress as _progress
+from vera import provider_exhaustion as _px
+from vera.provider_exhaustion import ProvidersExhausted
 from vera.pricing.config import PricingRecord
 
 logger = logging.getLogger("vera")
@@ -90,22 +92,52 @@ def load_chain(openai_model: str, openai_pricing: PricingRecord | None, path: Pa
 
 
 def answer_via_chain(question: str, entries: list[ChainEntry], grounding=None) -> tuple[AskResult, str]:
-    """Return (result, label of the entry that answered). Raises the last entry's error if all fail."""
+    """Return (result, label of the entry that answered). Raises the last entry's error if all fail.
+    OD-1031-EXHAUST-GRACE: a ProvidersExhausted raised AFTER work started (the scope decision exists) completes the
+    response from what exists (ask_service.complete_after_exhaustion); a fresh prompt (nothing started) still raises."""
+    state: dict = {"work": False}
+    tok = _px.WORK.set(state)
+    try:
+        return _chain_run(question, entries, grounding)
+    except ProvidersExhausted as exc:
+        if not state.get("work"):
+            raise
+        from vera.ask_service import complete_after_exhaustion
+        logger.warning("/ask providers exhausted after work started; completing the response from what exists")
+        res = complete_after_exhaustion(question, grounding, state)
+        return res, "exhaustion_grace"
+    finally:
+        _px.WORK.reset(tok)
+
+
+def _chain_run(question: str, entries: list[ChainEntry], grounding=None) -> tuple[AskResult, str]:
     if not entries:
         raise RuntimeError("no provider available for /ask")
+    _px.register_chain([e.label for e in entries])
+    tried = False
     for i, e in enumerate(entries):
         last = i == len(entries) - 1
+        if not _px.try_acquire(e.label):  # exhausted until its Retry-After, or another prompt holds the probe
+            continue
+        tried = True
         try:
             kw = {"grounding": grounding} if grounding is not None else {}
             result = answer_in_scope(question, e.model, e.pricing, client=e.client(), extra_body=e.extra_body or None,
                                      **kw)
             if not (result.answer or "").strip():
                 raise EmptyAnswerError(f"empty answer from {e.label}")
+            _px.note_success(e.label)
             return result, e.label
         except OpenAIError as exc:
+            _px.note_failure(e.label, exc)
             if last:
+                if _px.exhausted():
+                    _px.stop_and_raise()
                 raise
             logger.warning("/ask provider %s failed (%s, status %s, code %s); trying next", e.label,
                            type(exc).__name__, getattr(exc, "status_code", "-"), getattr(exc, "code", "-"))
             _progress.emit("retry", "start", attempt=i + 2)  # PROG-1027 W2a: the next provider re-runs every stage
-    raise AssertionError("unreachable")
+    # no entry callable (all exhausted, or probes held by other prompts), or skipped entries after a failure
+    if _px.exhausted() or not tried:
+        _px.stop_and_raise()
+    raise ProvidersExhausted("no provider callable")

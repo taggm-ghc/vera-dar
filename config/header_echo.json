@@ -1,0 +1,4 @@
+{
+  "_comment": "RENDER-XFF-1031 / W10 (ii): enables GET /diag/header-shape (owner key required; returns header SHAPES only, never IP values or hosts). Ships OFF. Set true only for the owner-run header check, then back to false. Not a limit; no numeric value.",
+  "enabled": false
+}

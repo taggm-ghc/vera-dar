@@ -159,6 +159,7 @@ def env(monkeypatch):
 
 def test_document_budget_stop_is_recorded_per_candidate_as_doc_budget(env):
     env["bounds"]["max_docs_per_job"] = 1
+    env["bounds"]["max_docs_per_prompt"] = 1  # OD-1031-CEIL31
     env["inline"]["fetch_workers"] = 1
     dois = [f"10.9999/dg.ok{i}" for i in range(4)]
     web = A.Web({x: A.epmc_record(x, pmcid=f"PMC73000{i}") for i, x in enumerate(dois)},

@@ -107,7 +107,8 @@ def test_last_entry_error_propagates(monkeypatch):
         raise _status_error(RateLimitError, 429)
 
     monkeypatch.setattr(ic, "answer_in_scope", boom)
-    with pytest.raises(RateLimitError):
+    from vera.provider_exhaustion import ProvidersExhausted  # STREAM-1031 W12: all entries 429 = provider exhaustion
+    with pytest.raises(ProvidersExhausted):
         ic.answer_via_chain("q", _entries())
 
 

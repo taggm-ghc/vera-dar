@@ -1109,16 +1109,19 @@ def reserve_job(cfg: dict, question: str, clock=time.monotonic) -> str | None:
     return None
 
 
-def docs_budget(cfg: dict, deps: Deps, clock=time.monotonic, reserve: bool = False) -> int:
+def docs_budget(cfg: dict, deps: Deps, clock=time.monotonic, reserve: bool = False, per_job: int | None = None) -> int:
     """Documents this job may still store: min(docs_per_day remaining (local and DB count, minus documents other
     in-progress inline jobs reserved), max_docs_per_job). Fails closed (0) when the DB count is unavailable.
     VER L5: reserve=True reserves the returned number under the same lock (release it with settle_docs), so two
     concurrent inline jobs can no longer both spend the same remaining daily budget.
     DAR-TRACE-1022 (owner 2026-10-22): docs_per_day null = no daily cap: max_docs_per_job only, and the RO daily count
-    is not read at all (a failed count can no longer block acquisition)."""
+    is not read at all (a failed count can no longer block acquisition).
+    OD-1031-CEIL31: per_job overrides the per-job document limit (the inline caller passes
+    acq_config.inline_fresh_docs = bounds.max_docs_per_prompt); None = bounds.max_docs_per_job (background jobs)."""
+    lim = int(acq_config.bound(cfg, "max_docs_per_job")) if per_job is None else int(per_job)
     cap = acq_config.docs_per_day_cap(cfg)
     if cap is None:
-        n = max(0, int(acq_config.bound(cfg, "max_docs_per_job")))
+        n = max(0, lim)
         if reserve:
             with _S.lock:
                 _S.docs_reserved += n
@@ -1131,7 +1134,7 @@ def docs_budget(cfg: dict, deps: Deps, clock=time.monotonic, reserve: bool = Fal
     with _S.lock:
         _prune(_S.docs_day, now, 86400.0)
         local_day = len(_S.docs_day)
-        n = max(0, min(cap - max(local_day, db_day) - _S.docs_reserved, int(acq_config.bound(cfg, "max_docs_per_job"))))
+        n = max(0, min(cap - max(local_day, db_day) - _S.docs_reserved, lim))
         if reserve:
             _S.docs_reserved += n
     return n

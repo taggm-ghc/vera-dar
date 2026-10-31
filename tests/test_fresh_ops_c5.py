@@ -73,10 +73,11 @@ def _reset_state():
 def _stale_world(world, fc):
     # The HTTP layer has its OWN public cap (public_mode.Caps: 6 req/min, 40 req/day per client): lift it for the storm so the test
     # exercises the acquisition caps, not the request limiter (reported separately as a second guard).
-    public_mode.reset_limiter(public_mode.CapLimiter(public_mode.Caps(req_per_min_per_client=10**6, req_per_day_per_client=10**6,
+    public_mode.reset_limiter(public_mode.CapLimiter(public_mode.Caps(req_per_min_per_client=10**6, req_per_day_per_client=10**6, req_per_hour_per_client=10**6,
                                                                        req_per_day_global=10**6)))
     world.mp.setattr(public_mode, "reset_limiter", public_mode.reset_limiter)
     world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))  # added 30 h ago -> 'stale' (corpus_added_at) on every ask
+    world.rig.cfg["bounds"].update(jobs_per_hour=6, jobs_per_day=30, max_docs_per_prompt=2)  # pinned: these storms test the cap mechanism at the pre-OD-1031-PROMPTLIM values
     world.rig.cfg["inline"]["result_ttl_s"] = 0  # no outcome reuse: every ask is a real acquisition attempt
     world.rig.cfg["inline"]["failure_ttl_s"] = 0
     _three_candidates(world)
@@ -104,7 +105,7 @@ def _jobs_run(world):
 def test_shipped_bounds_and_budget_values():
     c = acq_config.load_config()
     b = lambda k: int(acq_config.bound(c, k))  # noqa: E731
-    assert (b("jobs_per_hour"), b("jobs_per_day"), b("max_docs_per_job")) == (6, 30, 2)
+    assert (b("jobs_per_hour"), b("jobs_per_day"), b("max_docs_per_job")) == (30, 180, 2)  # OD-1031-PROMPTLIM
     assert acq_config.docs_per_day_cap(c) is None
     assert float(c["inline"]["deadline_s"]) == 45 and b("job_deadline_s") == 120
     assert public_mode.ASK_TIMEOUT_S == 180

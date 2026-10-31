@@ -257,6 +257,7 @@ REL_MANY = [(f"mas_many{i}", f"10.9999/ddfix.masmany{i}.z", f"PMC91002{i:02d}",
 
 def test_p2_relevant_candidates_fill_every_slot_and_no_false_positive_is_selected(acc):
     """P2 rule = ORCHESTRATOR DECISION 2026-10-23: with relevant candidates >= the slot count, no false positive is selected."""
+    acc.cfg["bounds"]["max_candidates_resolved"] = 6  # pinned: shipped ceiling is 31 (OD-1031-SHORTLIST31); REL_MANY has 6
     marks = [r[1].split("/", 1)[1].lower() for r in REL_MANY]
     cands = [_fp_cand(*f) for f in FP] + [_rel_cand(*x) for x in REL_MANY]  # false positives first, as live
     _r, _ds, ia = _ask(acc, cands, _web(rel=REL_MANY))

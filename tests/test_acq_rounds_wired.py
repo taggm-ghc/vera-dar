@@ -78,7 +78,7 @@ def test_inline_and_background_jobs_share_one_round_per_topic():
     class Rig:
         pass
     d = A.deps([A.cand(DOIS[0]), A.cand(DOIS[1])], _web(DOIS[0:2]))
-    o = inline_acquire.acquire(A.Q_EPI, A.cfg(), env=A.ENV_ON, deps_factory=lambda a, e: d)
+    o = inline_acquire.acquire(A.Q_EPI, A.cfg(max_docs_per_prompt=2), env=A.ENV_ON, deps_factory=lambda a, e: d)  # pinned (OD-1031-CEIL31)
     assert o.status == "ok" and o.stored == 2
     _bg(DOIS[2:4])
     _bg(DOIS[4:6])
@@ -130,7 +130,7 @@ def test_max_open_comes_from_config_and_defaults():
 # ------------------------------------------------------------------------------------------------ no behaviour change
 def test_caps_and_results_unchanged_by_tracking(monkeypatch):
     b = acq_config.load_config()["bounds"]
-    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"], b["queue_max"]) == (6, 30, 2, 4)
+    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"], b["queue_max"]) == (30, 180, 2, 4)  # OD-1031-PROMPTLIM
     with_t = [_bg(DOIS[2 * i:2 * i + 2]) for i in range(3)]
     state_with = (len(auto_acquire._S.docs_day), len(auto_acquire._S.jobs_hour), auto_acquire._S.docs_reserved)
     auto_acquire.reset_for_tests()

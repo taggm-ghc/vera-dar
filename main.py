@@ -1,9 +1,16 @@
+import asyncio
+import contextvars
+import json
 import logging
 import os
+import queue
+import threading
+import time
 from enum import Enum
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AuthenticationError, OpenAIError, RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer
 
@@ -81,6 +88,8 @@ MODEL = _model_selection.selected_model if _model_selection else "gpt-4o-mini"
 CURRENT_PRICING = latest_pricing_for(MODEL, _model_pricing)
 OPENAI_FALLBACK = openai_fallback_enabled()  # config/ask-provider-chain.json openai_fallback.enabled (shipped false)
 ASK_CHAIN = load_chain(MODEL, CURRENT_PRICING, openai_enabled=OPENAI_FALLBACK)  # item #77: free providers first; OpenAI last only when enabled
+from vera import provider_exhaustion as _px_grace  # noqa: E402
+_px_grace.set_grace_openai(MODEL, CURRENT_PRICING)  # OD-1031-EXHAUST-GRACE: scoped mid-response completion model (config-gated; fresh prompts never use it)
 GROUNDING = load_grounding()  # item #79: live scholarly retrieval for /ask (None = ungrounded)
 CORPUS = load_corpus_cfg()  # item #79 phase C: corpus admission settings (None = disabled)
 _DESC_CFG = load_corpus_description_cfg()  # item #83
@@ -137,6 +146,7 @@ except _acq_config.ConfigError:
 # (config/classifier_categories.json) is loaded and validated now; an invalid table raises ScopeConfigError and the
 # service does not start (fail closed). The lazy imports in the request paths stay as a second line.
 import vera.scope_router as _scope_router  # noqa: E402,F401
+from vera.provider_exhaustion import ProvidersExhausted  # noqa: E402
 _scope_router.load_config()  # FINAL-REVIEW-1028 D3: scope_router.json + rendered category slots fail closed at start
 
 # DAR readiness (codes only, read-only; the probe is bounded by config/dar_health.json timeouts). The startup line is
@@ -647,6 +657,230 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
             progress.SINK.reset(token)
 
 
+# ------------------------------------------------------------------------------------------------ RENDER-XFF-1031 echo
+from pathlib import Path as _PathE  # noqa: E402
+_HEADER_ECHO_CFG = _PathE(__file__).resolve().parent / "config" / "header_echo.json"
+
+
+def _header_echo_enabled() -> bool:
+    try:
+        return json.loads(_HEADER_ECHO_CFG.read_text(encoding="utf-8")).get("enabled") is True
+    except Exception:  # noqa: BLE001  missing/invalid file = off
+        return False
+
+
+@app.get("/diag/header-shape", dependencies=[Depends(verify_owner_key)])
+def header_shape(request: Request):
+    """W10 (ii): owner-key-protected, config-disabled (config/header_echo.json enabled=false). Returns header SHAPES only:
+    never an IP value or host. leftmost_is_probe compares the first X-Forwarded-For entry with the owner-sent
+    X-Echo-Probe marker (a boolean only)."""
+    if not _header_echo_enabled():
+        raise HTTPException(status_code=404)
+    h = request.headers
+    xff = [e.strip() for e in (h.get("x-forwarded-for") or "").split(",") if e.strip()]
+    probe = (h.get("x-echo-probe") or "").strip()
+    return {"xff_entries": len(xff),
+            "leftmost_is_probe": bool(probe and xff and xff[0] == probe),
+            "present": {n: (n.lower() in h) for n in ("True-Client-IP", "CF-Connecting-IP", "X-Real-IP", "Forwarded", "Via")}}
+
+
+# ------------------------------------------------------------------------------------------------ STREAM-1031
+def _require_stream() -> None:
+    """OD-1031-STREAM-ON: 404 when the stream flag is off (config stream.enabled false or VERA_PROGRESS_DISABLED)."""
+    if not progress.stream_enabled():
+        raise HTTPException(status_code=404)
+
+
+def _stream_stall_s() -> float:
+    """live.stall_s from config/auto_acquire.json through the acq_config accessor; direct read only if the accessor is absent."""
+    from vera import acq_config
+    cfg = acq_config.load_config()
+    fn = getattr(acq_config, "live", None)
+    if fn is not None:
+        return float(fn(cfg)["stall_s"])
+    import json as _json
+    from pathlib import Path as _Path
+    raw = _json.loads((_Path(__file__).resolve().parent / "config" / "auto_acquire.json").read_text(encoding="utf-8"))
+    return float(raw["live"]["stall_s"])
+
+
+class _StreamSink:
+    """Duck-typed progress sink for one stream (.append/.queued/.close). Bounded: non-terminal events are dropped once
+    `limit` are waiting; the done event and the result are never dropped. Holds nothing after the request."""
+
+    def __init__(self, limit: int):
+        self.limit, self.queued = limit, 0
+        self.items: queue.Queue = queue.Queue()
+        self._lock = threading.Lock()
+        self._loop = self._wake = None
+        self._done_seen = False
+        self.closed = False
+        self.activity = None  # NOISY-UI: (code, counts, monotonic start) of the wait / slow step in progress
+        self.stage = progress.Stage.ACQUIRE.value  # last lifecycle stage seen (carries the activity event)
+
+    def set_activity(self, code: int, counts: dict) -> None:
+        self.activity = (code, dict(counts), time.monotonic())
+        self.append(self.stage, progress.State.UPDATE.value, {"act": code, **counts})
+
+    def clear_activity(self) -> None:
+        self.activity = None
+
+    def hb_fields(self) -> dict:
+        """Heartbeat payload: the current activity (code + generic counts + elapsed seconds in it), else {}."""
+        a = self.activity
+        if a is None:
+            return {}
+        code, counts, t = a
+        out = {k: int(v) for k, v in counts.items()}
+        out["act"] = code
+        out.setdefault("elapsed", max(0, int(time.monotonic() - t)))  # EXG-FIX-1031 N-D1: keep the event's own elapsed
+        return out
+
+    def attach(self, loop, wake) -> None:
+        self._loop, self._wake = loop, wake
+
+    def _signal(self) -> None:
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._wake.set)
+            except RuntimeError:  # loop already closed: the client is gone
+                pass
+
+    def append(self, stage: str, state: str, counts: dict) -> bool:
+        with self._lock:
+            terminal = stage == progress.Stage.DONE.value
+            if stage in (progress.Stage.SCOPE.value, progress.Stage.CORPUS.value, progress.Stage.SEARCH.value,
+                         progress.Stage.ACQUIRE.value, progress.Stage.WRITE.value, progress.Stage.CHECK.value):
+                self.stage = stage
+            if self.closed or (terminal and self._done_seen):
+                return False
+            if not terminal and self.items.qsize() >= self.limit:
+                progress._drop("stream_full")
+                return False
+            self._done_seen = self._done_seen or terminal
+            self.items.put(("event", stage, state, dict(counts), progress._utc_iso()))
+        self._signal()
+        return True
+
+    def put_result(self, status: int, body=None, kind=None) -> None:
+        self.items.put(("result", status, body, kind))
+        self._signal()
+
+    def close(self) -> None:
+        with self._lock:
+            self.closed = True
+
+
+_STREAM_KINDS = {"busy", "error", "provider_error", "unavailable"}
+
+
+def _stream_error(exc: BaseException) -> tuple[int, str]:
+    """Closed mapping to (status, kind); the exception text never leaves the process."""
+    try:
+        from vera.provider_exhaustion import ProvidersExhausted
+        if isinstance(exc, ProvidersExhausted):
+            return 503, "unavailable"
+    except ImportError:
+        pass
+    if isinstance(exc, (RateLimitError,)):
+        return 429, "busy"
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 429:
+            return 429, "busy"
+        if exc.status_code in (502, 504):
+            return 502, "provider_error"
+        if exc.status_code == 503:
+            return 503, "unavailable"
+    if isinstance(exc, OpenAIError):
+        return 502, "provider_error"
+    return 500, "error"
+
+
+def _stream_worker(sink: _StreamSink, ctx, req, request, bg) -> None:
+    from vera import stream_ctx
+    stream_ctx.CTX.set(ctx)
+    progress.SINK.set(sink)
+    try:
+        resp = _ask_impl(req, request, bg)
+        st = progress.outcome(resp)
+        progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, sink))
+        sink.put_result(200, body=jsonable_encoder(resp))
+    except stream_ctx.StreamCancelled:
+        sink.put_result(0)  # silent stop: nothing is written
+    except BaseException as exc:  # noqa: BLE001
+        status, kind = _stream_error(exc)
+        logger.warning("stream request failed (%s)", type(exc).__name__)
+        progress.emit(progress.Stage.DONE, progress.State.ERROR)
+        sink.put_result(status, kind=kind)
+    finally:
+        sink.close()
+
+
+def _line(obj: dict) -> bytes:
+    return (json.dumps(obj, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+
+
+async def _stream_lines(sink: _StreamSink, ctx, thread, hb_s: float):
+    V = progress.STREAM_CONTRACT_VERSION
+    wake = asyncio.Event()
+    sink.attach(asyncio.get_running_loop(), wake)
+    t0 = time.monotonic()
+    seq = 0
+    finished = False
+    try:
+        while True:
+            try:
+                item = sink.items.get_nowait()
+            except queue.Empty:
+                wake.clear()
+                if not sink.items.empty():
+                    continue
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=hb_s)
+                except asyncio.TimeoutError:
+                    seq += 1
+                    yield _line({"v": V, "type": "hb", "seq": seq, "elapsed_s": int(time.monotonic() - t0), **sink.hb_fields()})
+                continue
+            if item[0] == "event":
+                seq += 1
+                yield _line({"v": V, "type": "event", "seq": seq, "ts": item[4], "stage": item[1], "state": item[2],
+                             "counts": item[3]})
+                continue
+            _, status, body, kind = item
+            finished = True
+            if status == 0:
+                return
+            if status == 200:
+                yield _line({"v": V, "type": "result", "status": 200, "body": body})
+            else:
+                yield _line({"v": V, "type": "result", "status": status, "kind": kind})
+            return
+    finally:
+        if not finished:  # client gone (cancelled/closed generator): stop at the current candidate, keep admitted docs
+            ctx.cancel()
+
+
+@app.post("/ask/stream", dependencies=[Depends(_require_stream), Depends(verify_api_key), Depends(enforce_caps)])
+async def ask_stream(req: AskRequest, request: Request):
+    """STREAM-1031 / OD-1031-STREAM-ON: NDJSON progress lines then exactly one result line. Auth (401) and caps (429)
+    run as dependencies, before any streaming; one POST = one cap slot. Nothing is stored beyond the request."""
+    from vera import stream_ctx
+    try:
+        ctx = stream_ctx.StreamCtx(stall_s=_stream_stall_s())
+    except Exception as exc:  # noqa: BLE001
+        logger.error("stream stall_s config unusable (%s)", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Server misconfigured") from None
+    scfg = progress.CFG.stream
+    sink = _StreamSink(limit=progress.CFG.max_events_per_record)
+    sink.append(progress.Stage.RECEIVED.value, progress.State.DONE.value, {})
+    bg = BackgroundTasks()
+    thread = threading.Thread(target=contextvars.copy_context().run, args=(_stream_worker, sink, ctx, req, request, bg),
+                              name="ask-stream", daemon=True)
+    thread.start()
+    return StreamingResponse(_stream_lines(sink, ctx, thread, scfg.heartbeat_s), media_type="application/x-ndjson",
+                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}, background=bg)
+
+
 def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
     from vera.ask_service import REQUEST_BUDGET, request_budget
     budget = request_budget()  # CMF-1022: the request-level deadline starts ONCE, here, at handler entry
@@ -720,6 +954,16 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
             result, answered_by = answer_via_chain(req.question, ASK_CHAIN, grounding)
         finally:
             REQUEST_BUDGET.reset(_tok)
+    except ProvidersExhausted as exc:  # REL-FIX-1031: legacy /ask keeps its pre-diff 429 for "every provider rate-limited/exhausted"
+        from vera import stream_ctx as _sc
+        if _sc.active():  # OD-1031-EXHAUST-GRACE: a fresh streamed prompt keeps the 503 "unavailable" mapping (_stream_error)
+            raise
+        logger.warning("/ask: all answering providers exhausted (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=429,
+            detail=("The free answering provider is rate-limited; retry shortly." if not OPENAI_FALLBACK
+                    else "OpenAI rate limit hit (too many requests). Wait a few seconds and retry."),
+        ) from exc
     except RuntimeError as exc:
         # empty chain (no free provider key) or the default-client latch: provider-neutral, never a paid call
         if not (isinstance(exc, OpenAIFallbackDisabled) or str(exc).startswith("no provider available")):

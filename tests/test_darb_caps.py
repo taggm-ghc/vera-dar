@@ -28,6 +28,7 @@ def test_shipped_bounds_are_the_ones_under_test():
 def test_three_eligible_discovered_records_store_at_most_max_docs_per_job():
     web, srcs = _three_good()
     cfg = cfg_on()
+    cfg["bounds"]["max_docs_per_prompt"] = 2  # pinned: shipped inline ceiling is 31 (OD-1031-CEIL31); this tests the cap mechanism
     assert acq_config.docs_per_day_cap(cfg) is None  # shipped null cap: only max_docs_per_job bounds the job
     o, store = run(cfg, srcs, web)
     job_max = int(acq_config.bound(cfg, "max_docs_per_job"))
@@ -41,6 +42,7 @@ def test_cap_of_one_is_respected():
     web, srcs = _three_good()
     cfg = cfg_on()
     cfg["bounds"]["max_docs_per_job"] = 1
+    cfg["bounds"]["max_docs_per_prompt"] = 1  # OD-1031-CEIL31: the inline prompt limit is its own key
     o, store = run(cfg, srcs, web)
     assert o.stored == 1 and len(store.plans) == 1
     assert [e["outcome"] for e in o.public()["discovered"]].count("admitted") == 1

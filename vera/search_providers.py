@@ -1352,7 +1352,9 @@ class DOAJProvider:
             self.gate.stamp(self._clock())
             wait = self.gate.wait_needed(self._clock())
             if wait > 0:
-                self._sleep(wait)
+                from vera import progress as _prog  # NOISY-UI
+                with _prog.waiting(_prog.ACT_RATE, wait):
+                    self._sleep(wait)
             self.last_query["note"] = "0 hits for core+extra terms; retried once with core terms only"
             self.last_query["retry_query"] = " ".join(core)
             resp = self._get(core, n, timeout_s)
@@ -1698,7 +1700,9 @@ class DuckDuckGoLiteProvider:
                 self.gate.stamp(self._clock())
                 wait = self.gate.wait_needed(self._clock())
                 if wait > 0:
-                    self._sleep(wait)
+                    from vera import progress as _prog  # NOISY-UI
+                    with _prog.waiting(_prog.ACT_RATE, wait):
+                        self._sleep(wait)
             try:
                 self._spend()
             except ProviderUnavailable:

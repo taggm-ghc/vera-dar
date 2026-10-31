@@ -133,7 +133,7 @@ def test_europepmc_search_query_and_parse():
     ecfg = A.cfg()["search"]["europepmc"]
     out = sp.europepmc_search(Q, 10, 5, ecfg, transport=tx)
     assert [c["doi"] for c in out] == ["10.9999/yield.5"]
-    assert "OPEN_ACCESS:y AND HAS_FT:y" in seen["query"] and seen["resultType"] == "lite" and seen["pageSize"] == 10
+    assert "OPEN_ACCESS:y AND HAS_FT:y" in seen["query"] and seen["resultType"] == "lite" and seen["pageSize"] == 31  # OD-1031-SHORTLIST31 page size
 
 
 # ---- DDG mapping -------------------------------------------------------------------------------------------------

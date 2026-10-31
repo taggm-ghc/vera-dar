@@ -62,6 +62,7 @@ def env(monkeypatch):
     e = Env()
     prev = progress.CFG
     progress.configure(CFG)
+    monkeypatch.setattr(progress, "stream_enabled", lambda: False)  # these tests cover the PROG-E polling flow
     monkeypatch.delenv("VERA_PROGRESS_DISABLED", raising=False)
     monkeypatch.setenv("VERA_PUBLIC_MODE", "1")
     monkeypatch.setenv("VERA_API_KEY", "k")
@@ -112,7 +113,7 @@ def _finish(env, at):
 
 
 def test_flag_off_keeps_spinner_path(env, monkeypatch):
-    progress.configure(progress.validate_config({**CFG.__dict__, "enabled": False}))
+    progress.configure(progress.validate_config({**{k: v for k, v in CFG.__dict__.items() if k != "stream"}, "enabled": False}))
     monkeypatch.setattr(pm, "post_ask", lambda *a, **k: SimpleNamespace(status_code=200, json=lambda: ANSWER))
     at = _ask(env)
     assert "vera_inflight" not in at.session_state and not env.posts

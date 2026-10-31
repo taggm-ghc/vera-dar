@@ -158,7 +158,8 @@ def test_no_retry_when_last_entry_fails_or_first_succeeds(rec, monkeypatch):
 
     monkeypatch.setattr(ic, "answer_in_scope", boom)
     one = _entries()[-1:]
-    with pytest.raises(RateLimitError):
+    from vera.provider_exhaustion import ProvidersExhausted  # STREAM-1031 W12: the only entry is 429 = exhausted
+    with pytest.raises(ProvidersExhausted):
         ic.answer_via_chain("q", one)
     assert seq(rec) == []  # a single entry has no next attempt
 

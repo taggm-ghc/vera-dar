@@ -269,3 +269,23 @@ def test_ka3_every_st_json_call_is_inside_if_not_public():
 
 def test_ka4_no_unread_full_response_stored_in_session_state():
     assert "last_ask_response" not in Path(APP).read_text()
+
+
+def test_hourly_per_client_window_rolling_3600s():  # OD-1031-PROMPTLIM
+    t = [1_000_000.0]
+    lim = pm.CapLimiter(_caps(req_per_min_per_client=100, req_per_day_per_client=1000, req_per_hour_per_client=3),
+                        clock=lambda: t[0])
+    assert lim.allow("a") and lim.allow("a") and lim.allow("a") and not lim.allow("a")
+    assert lim.allow("b")  # per client
+    t[0] += 3599
+    assert not lim.allow("a")  # still inside the rolling hour
+    t[0] += 2
+    assert lim.allow("a")  # the first three have aged out
+
+
+def test_shipped_prompt_limits_od_1031_promptlim():
+    c = pm.load_caps()
+    assert (c.req_per_min_per_client, c.req_per_hour_per_client, c.req_per_day_per_client,
+            c.req_per_day_global) == (6, 30, 180, 400)
+    assert c.trust_proxy_headers is False and c.trusted_proxy_hops == 1
+    assert (c.cost_usd_per_day_global, c.cost_usd_per_day_per_client) == (2.0, 0.25)

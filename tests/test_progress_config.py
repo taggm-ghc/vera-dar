@@ -8,11 +8,13 @@ from vera import progress as p
 CFG_DIR = Path(p.__file__).resolve().parent.parent / "config"
 LABELS = json.loads((CFG_DIR / "progress-stages.json").read_text(encoding="utf-8"))
 TERMINAL_KEYS = {"answered", "partial", "no_answer", "declined", "error", "provider_error", "busy", "expired",
-                 "poll_timeout_received", "poll_timeout_unreceived"}
+                 "poll_timeout_received", "poll_timeout_unreceived",
+                 "unavailable", "connection_lost", "never_connected", "stalled"}
 # INTERFACE-CONTRACT s3 banned words plus the v2 list (gate, layer, R-ACQ, DEC-, M#, provider names).
 BANNED = [r"scope", r"curated", r"scholarly-only", r"outside what VERA-DAR answers", r"\bgate", r"\blayer", r"R-ACQ", r"DEC-",
           r"\bM\d\b", r"provider", r"groq", r"openai", r"openrouter", r"mistral", r"basis", r"verdict", r"categor", r"eligib"]
-PLACEHOLDERS = {"rid", "inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "attempt", "minutes"}
+PLACEHOLDERS = {"rid", "inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "attempt", "minutes",
+                "shortlisted", "held", "step", "ceiling", "why_text"}
 
 
 def _strings():

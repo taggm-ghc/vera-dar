@@ -41,7 +41,8 @@ def test_labels_cover_every_terminal_and_stage_state():
     for st, states in progress.VALID.items():
         for sa in states:
             assert LABELS.stage_label(st.value, sa.value, {"inspected": 1, "admitted": 2, "found": 3, "checked": 4, "usable": 5,
-                                                           "budget": 2, "stored": 1, "target": 6, "attempt": 2}, RID)
+                                                           "budget": 2, "stored": 1, "target": 6, "attempt": 2, "shortlisted": 9, "held": 1,
+                                                           "step": 1, "ceiling": 31, "why": 1}, RID)
 
 
 def test_label_missing_counts_never_invented():

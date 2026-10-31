@@ -144,7 +144,9 @@ def test_180s_is_a_client_side_constant_with_no_server_side_enforcement_pin():
     assert public_mode.ASK_TIMEOUT_S == 180
     main_src = (ROOT / "main.py").read_text()
     assert "ASK_TIMEOUT_S" not in main_src
-    assert not re.search(r"wait_for|asyncio\.timeout|add_middleware|BaseHTTPMiddleware|timeout-keep-alive", main_src)
+    # STREAM-1031: the only wait_for is the stream heartbeat tick (hb_s), not a request termination
+    stripped = "\n".join(l for l in main_src.splitlines() if "wait_for(wake.wait(), timeout=hb_s)" not in l)
+    assert not re.search(r"wait_for|asyncio\.timeout|add_middleware|BaseHTTPMiddleware|timeout-keep-alive", stripped)
     users = {p.name for p in (ROOT / "vera").glob("*.py") if "ASK_TIMEOUT_S" in p.read_text()}
     assert users == {"public_mode.py", "ask_service.py", "progress_ui.py"}  # PROG-1027: the UI poller imports the constant (client side, plan s3c)
 

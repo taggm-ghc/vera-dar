@@ -104,7 +104,7 @@ def test_second_identical_request_queues_no_duplicate_jobs(bg):
 # ------------------------------------------------------------------------------------------------ candidate cut
 def test_per_request_cut_of_six_with_nine_eligible_enqueues_three(bg):
     dois = _dois(9)
-    cfg = A.cfg()
+    cfg = A.cfg(max_candidates_resolved=6)  # pinned: the shipped ceiling is 31 since OD-1031-SHORTLIST31; this tests the cut mechanism
     assert int(cfg["bounds"]["max_candidates_resolved"]) == 6
     d = A.deps([A.cand(x) for x in dois], A.Web({}, {}))  # no Europe PMC record: the 6 evaluated end R-ACQ-NOTOA
     o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)

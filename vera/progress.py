@@ -29,6 +29,7 @@ from pathlib import Path
 log = logging.getLogger("vera.progress")
 
 CONTRACT_VERSION = "1"
+STREAM_CONTRACT_VERSION = "1.3"  # STREAM-1031 NDJSON lines; polling Record events keep CONTRACT_VERSION
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "progress.json"
 KILL_SWITCH_ENV = "VERA_PROGRESS_DISABLED"
 _KILL_VALUES = ("1", "true", "yes", "on")  # case-insensitive
@@ -62,21 +63,63 @@ class State(str, Enum):
     NO_ANSWER = "no_answer"
     DECLINED = "declined"
     ERROR = "error"
+    LIMITED = "limited"  # ACQUIRE only (STREAM-1031)
+    BUSY = "busy"  # ACQUIRE only
 
 
-COUNT_KEYS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued", "attempt"})
+COUNT_KEYS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued", "attempt",
+                        "shortlisted", "held", "step", "ceiling", "why",
+                        "act", "wait_s", "k", "n", "elapsed"})  # EXHAUST-GRACE/NOISY-UI: current-activity code + generic counts
 _LIFECYCLE = frozenset({State.START, State.UPDATE, State.DONE, State.SKIPPED})
 VALID: dict[Stage, frozenset] = {
     Stage.CORPUS_VERDICT: frozenset({State.SUFFICIENT, State.INSUFFICIENT, State.STALE}),
     Stage.DONE: frozenset({State.ANSWERED, State.PARTIAL, State.NO_ANSWER, State.DECLINED, State.ERROR}),
     Stage.RETRY: frozenset({State.START}),
     Stage.RECEIVED: frozenset({State.DONE}),
-    **{s: _LIFECYCLE for s in (Stage.SCOPE, Stage.CORPUS, Stage.SEARCH, Stage.ACQUIRE, Stage.WRITE, Stage.CHECK)},
+    **{s: _LIFECYCLE for s in (Stage.SCOPE, Stage.CORPUS, Stage.SEARCH, Stage.WRITE, Stage.CHECK)},
+    Stage.ACQUIRE: _LIFECYCLE | {State.LIMITED, State.BUSY},
 }
 _QUEUED_TERMINALS = frozenset({State.ANSWERED, State.PARTIAL, State.NO_ANSWER})
 
 
 # ------------------------------------------------------------------------------------------------ config
+@dataclass(frozen=True)
+class StreamCfg:
+    enabled: bool
+    heartbeat_s: float
+    client_no_data_s: float
+    connect_timeout_s: float
+    orphan_s: float
+
+
+_STREAM_NUM = {"heartbeat_s": (0.01, 300), "client_no_data_s": (1, 3600), "connect_timeout_s": (0.1, 300),
+               "orphan_s": (1, 86400)}
+DEFAULT_STREAM = StreamCfg(enabled=True, heartbeat_s=10, client_no_data_s=60, connect_timeout_s=10, orphan_s=120)
+
+
+def validate_stream(raw) -> StreamCfg:
+    """Raise ValueError naming every bad key of the nested "stream" block."""
+    if not isinstance(raw, dict):
+        raise ValueError("stream must be a JSON object")
+    problems: list[str] = []
+    for k in raw:
+        if k not in {"enabled", *_STREAM_NUM} and not str(k).startswith("_"):
+            problems.append(f"stream: unknown key {k!r}")
+    if not isinstance(raw.get("enabled"), bool):
+        problems.append("stream.enabled must be a boolean")
+    vals: dict = {"enabled": raw.get("enabled") is True}
+    for k, (lo, hi) in _STREAM_NUM.items():
+        v = raw.get(k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+            problems.append(f"stream.{k} must be a number in [{lo}, {hi}]")
+        vals[k] = v
+    if not problems and raw["client_no_data_s"] <= raw["heartbeat_s"]:
+        problems.append("stream.client_no_data_s must be > stream.heartbeat_s")
+    if problems:
+        raise ValueError("; ".join(problems))
+    return StreamCfg(**vals)
+
+
 @dataclass(frozen=True)
 class Config:
     enabled: bool
@@ -89,6 +132,7 @@ class Config:
     first_event_grace_s: float
     get_timeout_s: float
     max_count: int
+    stream: StreamCfg = DEFAULT_STREAM
 
 
 _INT_KEYS = {"max_records": (1, 100000), "max_events_per_record": (2, 10000), "max_events_per_poll": (1, 10000),
@@ -102,7 +146,7 @@ def validate_config(raw) -> Config:
     problems: list[str] = []
     if not isinstance(raw, dict):
         raise ValueError("progress config must be a JSON object")
-    known = {"enabled", *_INT_KEYS, *_NUM_KEYS}
+    known = {"enabled", "stream", *_INT_KEYS, *_NUM_KEYS}
     for k in raw:
         if k not in known and not str(k).startswith("_"):
             problems.append(f"unknown key {k!r}")
@@ -123,9 +167,15 @@ def validate_config(raw) -> Config:
         problems.append("max_events_per_poll must be >= max_events_per_record")
     if not problems and raw["get_timeout_s"] > 2 * raw["poll_interval_s"]:
         problems.append("get_timeout_s must be <= 2 x poll_interval_s")
+    stream = DEFAULT_STREAM
+    if "stream" in raw:  # absent = DEFAULT_STREAM (older callers); the shipped file always carries the block
+        try:
+            stream = validate_stream(raw["stream"])
+        except ValueError as exc:
+            problems.append(str(exc))
     if problems:
         raise ValueError("; ".join(problems))
-    return Config(**vals)
+    return Config(**vals, stream=stream)
 
 
 def load_config(path: Path = CONFIG_PATH) -> Config | None:
@@ -151,6 +201,13 @@ def configure(cfg: Config | None) -> None:
 def enabled() -> bool:
     """Single flag source: config `enabled` (ships false); env VERA_PROGRESS_DISABLED=1/true/yes/on forces off."""
     return CFG is not None and CFG.enabled and os.environ.get(KILL_SWITCH_ENV, "").strip().lower() not in _KILL_VALUES
+
+
+def stream_enabled() -> bool:
+    """OD-1031-STREAM-ON: POST /ask/stream flag (config stream.enabled ships true). Independent of the polling flag
+    `enabled`; the same kill switch VERA_PROGRESS_DISABLED forces it off."""
+    return (CFG is not None and CFG.stream.enabled
+            and os.environ.get(KILL_SWITCH_ENV, "").strip().lower() not in _KILL_VALUES)
 
 
 def valid_rid(rid) -> bool:
@@ -305,6 +362,47 @@ def emit(stage, state, **counts) -> None:
     except Exception as exc:  # noqa: BLE001
         _drop("exception")
         log.warning("progress emit failed (%s)", type(exc).__name__)
+
+
+# NOISY-UI (owner 2026-10-31): every wait / slow step is visible. Closed activity codes (labels: progress-stages.json
+# "activities"); counts only (wait_s, k, n, elapsed), never a provider, host, URL, title or question text.
+ACT_RATE, ACT_POLITE, ACT_SLOW_READ, ACT_RETRY, ACT_BUSY_FALLBACK, ACT_CONN = 1, 2, 3, 4, 5, 6
+ACTIVITY_CODES = frozenset({1, 2, 3, 4, 5, 6})
+
+
+def set_activity(code: int, **counts) -> None:
+    """Make the current activity visible (stream path only: the stream sink implements set_activity). Never raises."""
+    try:
+        sink = SINK.get()
+        fn = getattr(sink, "set_activity", None)
+        if fn is not None and code in ACTIVITY_CODES:
+            fn(int(code), {k: int(v) for k, v in counts.items() if k in COUNT_KEYS and type(v) in (int, float) and v >= 0})
+    except Exception:  # noqa: BLE001
+        _drop("exception")
+
+
+def clear_activity() -> None:
+    try:
+        fn = getattr(SINK.get(), "clear_activity", None)
+        if fn is not None:
+            fn()
+    except Exception:  # noqa: BLE001
+        _drop("exception")
+
+
+class waiting:
+    """Context manager around a sleep/wait: `with progress.waiting(ACT_RATE, secs): sleep(secs)`."""
+
+    def __init__(self, code: int, secs: float):
+        self.code, self.secs = code, secs
+
+    def __enter__(self):
+        set_activity(self.code, wait_s=int(max(0, round(self.secs))))
+        return self
+
+    def __exit__(self, *exc):
+        clear_activity()
+        return False
 
 
 def set_queued(n) -> None:

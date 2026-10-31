@@ -220,6 +220,7 @@ def _b3_run(direct, **bounds):
     assert len(first.plans) == 1
     inline_acquire.reset_for_tests()
     cfg["bounds"].update(bounds)  # the second pass only
+    cfg["inline"]["per_prompt_ceiling_enabled"] = True  # OD-1031-HITL4: the legacy inline_fresh_docs key applies only with the flag on
     store = A.Store()
     d2 = A.deps([A.cand("10.9999/acq.epi4"), A.cand("10.9999/acq.epi5")], web, store=store,
                 lookup=A.Lookup(known={"10.9999/acq.epi4"}))
@@ -242,9 +243,13 @@ def test_b3_fresh_cap_still_binds_and_zero_acquires_nothing(direct):
     assert o.reused == 1 and store.plans == []
 
 
+def ON(bounds):
+    return {"bounds": bounds, "inline": {"per_prompt_ceiling_enabled": True}}
+
+
 def test_b3_inline_fresh_docs_accessor_defaults_and_fails_closed():
     assert acq_config.inline_fresh_docs({"bounds": {"max_docs_per_job": 2}}) == 2
-    assert acq_config.inline_fresh_docs({"bounds": {"max_docs_per_job": 2, "inline_fresh_docs": 5}}) == 5
-    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": "x"}}) == 0
-    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": True}}) == 0
-    assert acq_config.inline_fresh_docs({"bounds": {"inline_fresh_docs": -3}}) == 0
+    assert acq_config.inline_fresh_docs(ON({"max_docs_per_job": 2, "inline_fresh_docs": 5})) == 5
+    assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": "x"})) == 0
+    assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": True})) == 0
+    assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": -3})) == 0

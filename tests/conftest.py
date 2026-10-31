@@ -280,3 +280,30 @@ def _no_continuation_worker(monkeypatch):
     from vera import auto_acquire
     real = auto_acquire.enqueue_candidates
     monkeypatch.setattr(auto_acquire, "enqueue_candidates", lambda *a, **k: real(*a, **{**k, "start_worker": False}))
+
+
+# OD-1031-STREAM-ON: the stream ships ON, so the Ask page would take the stream path. These modules drive the LEGACY
+# /ask page (post_ask / polling) through AppTest and keep doing so; stream tests (test_stream_ui_*) are not listed.
+_LEGACY_ASK_PAGE_MODULES = frozenset({
+    "test_ui_wake", "test_ui_wake_page", "test_item72_public_mode", "test_item83_port", "test_ui_render_extract",
+    "test_tab_title", "test_disclosure", "test_p0_2_ask_inline_status", "test_ui_fulldoc_display", "test_metrics_scope_note",
+    "test_k2_integrated_contract", "test_item78_sources_sidebar", "test_version_marker", "test_startup_smoke_darint",
+    "test_fulldoc_d8_surfaces", "test_g23_owner_scenario_ui", "test_dar_pipeline_audit_gaps", "test_discovery_panel",
+    "test_discovery_reasons", "test_selfref_1028"})
+
+
+@pytest.fixture(autouse=True)
+def _legacy_ask_page_without_stream(request, monkeypatch):
+    if request.module.__name__.rsplit(".", 1)[-1] in _LEGACY_ASK_PAGE_MODULES:
+        from vera import progress
+        monkeypatch.setattr(progress, "stream_enabled", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _provider_exhaustion_reset():
+    """STREAM-1031 W12: the exhaustion state is process-local; never let one test's 429s leak into another."""
+    from vera import provider_exhaustion
+    provider_exhaustion.reset_for_tests()
+    yield
+    provider_exhaustion.reset_for_tests()

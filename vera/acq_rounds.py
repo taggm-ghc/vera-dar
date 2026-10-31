@@ -5,7 +5,7 @@ target at least 6 new docs. If there simply are not 6 more new docs to be found,
 process failure."
 
 A round belongs to one micro-topic key and targets `bounds.acq_round_target_new_docs` (6) NEW stored documents. The
-job caps stand (6 jobs/h, 30/day, 2 docs/job, owner 2026-10-22), so one round spans several jobs. Each job of the round
+job caps stand (30 jobs/h, 180/day, 2 docs/job for background jobs; OD-1031-PROMPTLIM; a live prompt may store up to 31, OD-1031-CEIL31), so one round spans several jobs. Each job of the round
 reports how many documents it stored and whether its search routes were exhausted (no candidate left unevaluated for
 lack of time or budget). Outcomes:
   - "open": fewer than the target so far and the routes are not exhausted (the next job of the topic continues it);

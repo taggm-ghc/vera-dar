@@ -21,7 +21,21 @@ LABELS_PATH = Path(__file__).resolve().parent.parent / "config" / "progress-stag
 TERMINAL_KINDS = ("answered", "partial", "no_answer", "declined", "error", "provider_error", "busy", "expired",
                   "poll_timeout_received", "poll_timeout_unreceived")
 _TOP_KEYS = ("sending", "finishing", "progress_unavailable", "reload_caption", "already_running", "background_line")
-_FIELDS = frozenset(progress.COUNT_KEYS) | {"rid"}
+_STREAM_COUNT_KEYS = frozenset({"shortlisted", "held", "step", "ceiling", "why"})
+_COUNT_KEYS = frozenset(progress.COUNT_KEYS) | _STREAM_COUNT_KEYS | {"act", "wait_s", "k", "n", "elapsed"}
+_FIELDS = _COUNT_KEYS | {"rid", "why_text"}
+_EXTRA_STATES = {"acquire": frozenset({"limited", "busy"})}  # stream states; tolerated until progress.VALID carries them
+STREAM_TERMINALS = ("unavailable", "connection_lost", "never_connected", "stalled")
+# Generic fallbacks (no exception text, no names) when config/progress-stages.json lacks a stream terminal key.
+_GENERIC_TERMINALS = {
+    "unavailable": "VERA-DAR cannot answer right now; please try again shortly",
+    "connection_lost": "The connection was interrupted. Documents VERA-DAR already saved stay in its collection; ask again to use them.",
+    "never_connected": "VERA-DAR could not be reached; please try again shortly",
+    "stalled": "VERA-DAR stopped searching because no further progress was made; ask again to use what it already saved.",
+    "busy": "VERA-DAR is busy right now; please try again shortly",
+    "error": "Something went wrong; please try again",
+    "provider_error": "The answer could not be generated right now; please try again shortly",
+}
 _TERMINAL_FIELDS = _FIELDS | {"minutes"}  # F5: wording derives from ASK_TIMEOUT_S (no duplicated literal), terminals only
 ERROR_KINDS = frozenset({"connect_timeout", "read_timeout", "connection_error", "chunked", "other"})
 
@@ -64,13 +78,27 @@ class Labels:
             if st not in {s.value for s in progress.Stage} or not isinstance(states, dict):
                 raise ValueError(f"labels: unknown stage {st!r}")
             for sa, text in states.items():
-                if sa not in {s.value for s in progress.VALID[progress.Stage(st)]}:
+                if sa not in {s.value for s in progress.VALID[progress.Stage(st)]} | _EXTRA_STATES.get(st, frozenset()):
                     raise ValueError(f"labels: invalid state {st}.{sa}")
                 _check_text(f"{st}.{sa}", text)
         for kind in TERMINAL_KINDS:
             _check_text(f"terminals.{kind}", terms.get(kind), _TERMINAL_FIELDS)
+        why = raw.get("why", {})
+        if not isinstance(why, dict):
+            raise ValueError("labels: why must be an object")
+        for k, text in why.items():
+            _check_text(f"why.{k}", text)
+        acts = raw.get("activities", {})  # NOISY-UI: generic live-activity text by closed code
+        if not isinstance(acts, dict) or any(k not in {str(c) for c in progress.ACTIVITY_CODES} for k in acts):
+            raise ValueError("labels: activities must be an object keyed by activity code")
+        for k, text in acts.items():
+            _check_text(f"activities.{k}", text)
+        self._acts = acts
+        for kind in STREAM_TERMINALS:
+            if kind in terms:
+                _check_text(f"terminals.{kind}", terms.get(kind), _TERMINAL_FIELDS)
         self._raw = raw
-        self._stages, self._terms = stages, terms
+        self._stages, self._terms, self._why = stages, terms, why
 
     @classmethod
     def load(cls, path: Path = LABELS_PATH) -> "Labels":
@@ -102,13 +130,25 @@ class Labels:
     def background_line(self) -> str:
         return self._raw["background_line"]
 
+    def activity_label(self, counts: dict | None) -> str | None:
+        """Text for the activity code `act` in counts (an event's counts or a heartbeat's fields); None when absent/unknown
+        or when a needed count is missing."""
+        c = counts or {}
+        text = getattr(self, "_acts", {}).get(str(c.get("act")))
+        if text is None:
+            return None
+        values = {k: v for k, v in c.items() if type(v) is int}
+        return text.format_map(values) if _fields_of(text) <= set(values) else None
+
     def stage_label(self, stage: str, state: str, counts: dict | None, rid: str) -> str | None:
         """Label for (stage, state) or None when unknown. Counts are shown only when the event carries them: a label
         whose placeholders are not all present falls back to the stage's `start` label, else None."""
         text = (self._stages.get(stage) or {}).get(state)
         if text is None:
             return None
-        values = {k: v for k, v in (counts or {}).items() if k in progress.COUNT_KEYS}
+        values = {k: v for k, v in (counts or {}).items() if k in _COUNT_KEYS and type(v) is int}
+        if "why" in values and str(values["why"]) in self._why:
+            values["why_text"] = self._why[str(values["why"])]
         values["rid"] = rid
         if _fields_of(text) <= set(values):
             return text.format_map(values)
@@ -120,7 +160,7 @@ class Labels:
     def terminal_text(self, kind: str, rid: str = "") -> str:
         text = self._terms.get(kind)
         if text is None:
-            text = self._terms["error"]
+            text = _GENERIC_TERMINALS.get(kind) or self._terms["error"]
         return text.format_map({"rid": rid, "minutes": _minutes_phrase(ASK_TIMEOUT_S)})
 
 
@@ -304,3 +344,166 @@ def start_tracked(ses, mk_rid, token: str, now, client_fn, args_tail, ui, labels
 
 def _spawn(fn, *a) -> None:
     threading.Thread(target=fn, args=a, daemon=True).start()
+
+
+# ----------------------------------------------------------------------------------------------- OD-1031-STREAM-ON
+# Stream path: a worker thread (never calls st.*) fills a StreamHolder; a fragment renders it once a second.
+STREAM_HOLDER_KEY = "vera_stream"
+STREAM_LAST_KEY = "vera_stream_last"
+_LOG_MAX = 12
+_RESULT_KIND_TERMINAL = {"busy": "busy", "error": "error", "provider_error": "provider_error", "unavailable": "unavailable"}
+
+
+@dataclass
+class StreamHolder:
+    """Appended to by the worker only (list append / attribute set; `done` set LAST); `last_read` is stamped by the
+    fragment each tick. Holds line dicts and closed codes, never exception text."""
+    t0: float
+    last_read: float
+    events: list = field(default_factory=list)
+    last_line_at: float = 0.0
+    result: dict | None = None
+    status: int | None = None
+    kind: str | None = None
+    terminal: str | None = None
+    dropped: int = 0
+    activity: dict | None = None  # NOISY-UI: latest act fields (event counts or heartbeat); cleared by a later plain line
+    done: threading.Event = field(default_factory=threading.Event)
+
+
+def stream_worker(holder: StreamHolder, stream_fn, args, now, orphan_s: float) -> None:
+    """`stream_fn(*args, should_stop=...)` returns an iterable of validated lines (public_mode.iter_ask_stream) that
+    raises StreamNeverConnected / StreamLost. The stream is closed when the fragment has not read for > orphan_s."""
+    from vera.public_mode import StreamLost, StreamNeverConnected
+
+    def orphaned() -> bool:
+        return now() - holder.last_read > orphan_s
+
+    stream = None
+    try:
+        stream = stream_fn(*args, should_stop=orphaned)
+        for line in stream:
+            holder.last_line_at = now()
+            if line.get("type") == "hb":
+                a = {k: line[k] for k in ("act", "wait_s", "k", "n", "elapsed") if k in line}
+                holder.activity = a if "act" in a else None
+            elif line.get("type") == "event":
+                holder.events.append(line)
+                c = line.get("counts") or {}
+                holder.activity = dict(c) if "act" in c else None
+            elif line.get("type") == "result":
+                holder.status = line.get("status")
+                if holder.status == 200:
+                    holder.result = line.get("body")
+                    holder.terminal = "answer"
+                else:
+                    holder.kind = line.get("kind")
+                    holder.terminal = _RESULT_KIND_TERMINAL.get(holder.kind, "error")
+            if orphaned():
+                break
+        if holder.terminal is None:
+            holder.terminal = "orphaned" if orphaned() else "connection_lost"
+    except StreamNeverConnected as e:
+        holder.status = e.status
+        holder.terminal = "busy" if e.status == 429 else "never_connected"
+    except StreamLost as e:
+        holder.terminal = "stalled" if e.reason == "no_data" else "connection_lost"
+    except BaseException:  # noqa: BLE001  closed code only, no text
+        holder.terminal = "connection_lost"
+    finally:
+        try:
+            holder.dropped = int(getattr(stream, "dropped", 0) or 0)
+            if stream is not None and hasattr(stream, "close"):
+                stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+        holder.done.set()
+
+
+def _latest_counts(events) -> dict:
+    out: dict = {}
+    for ev in events:
+        for k, v in (ev.get("counts") or {}).items():
+            out[k] = v
+    return out
+
+
+def _duration(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 60} min {s % 60} s"
+
+
+def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
+    """Pure view model: label, log lines, bars [(text, fraction)], and the still-working caption."""
+    log: list[str] = []
+    label = "Working on your question"
+    for ev in list(holder.events):
+        if ev.get("stage") == "received":  # its label carries the request id, which the stream does not use
+            continue
+        if "act" in (ev.get("counts") or {}):  # activity events are the live status line, not log lines
+            continue
+        text = labels.stage_label(ev.get("stage"), ev.get("state"), ev.get("counts"), "")
+        if text is None:
+            continue
+        label = text
+        if not log or log[-1] != text:
+            log.append(text)
+    counts = _latest_counts(list(holder.events))
+    bars = []
+    for done_k, total_k, name in (("checked", "shortlisted", "Checked"), ("stored", "target", "Saved")):
+        total = counts.get(total_k)
+        if type(total) is int and total > 0 and type(counts.get(done_k)) is int:
+            bars.append((f"{name} {min(counts[done_k], total)} of {total}", min(1.0, counts[done_k] / total)))
+    since = now - (holder.last_line_at or holder.t0)
+    caption = f"Still working · {_duration(now - holder.t0)} · last update {max(0, int(since))} s ago"
+    act = labels.activity_label(holder.activity) if holder.activity else None
+    if act is None and not holder.events and since >= 5:
+        act = "Waiting for a connection"  # nothing received yet: say so instead of showing a silent spinner
+    line = f"{act or label} · {_duration(now - holder.t0)} elapsed"
+    return {"label": label, "log": log[-_LOG_MAX:], "bars": bars, "caption": caption, "activity": line}
+
+
+@dataclass
+class StreamLast:
+    """Durable copy of a finished stream run (session state); `rendered` flips only after a successful render."""
+    terminal: str
+    result: dict | None = None
+    status: int | None = None
+    rendered: bool = False
+
+
+def stream_tick(holder: StreamHolder, ses, ui, now, labels: Labels) -> bool:
+    """One fragment tick, free of Streamlit. Stamps last_read; returns True when a completion rerun is needed."""
+    t = now()
+    holder.last_read = t
+    done = holder.done.is_set()  # read BEFORE the view: events precede done
+    if not done:
+        try:
+            v = stream_view(holder, labels, t)
+            with ui.status(v["label"], state="running", expanded=True):
+                for line in v["log"]:
+                    ui.write(line)
+            for text, frac in v["bars"]:
+                ui.progress(frac, text=text)
+            ui.info(v["activity"]) if hasattr(ui, "info") else ui.caption(v["activity"])  # live status line: latest activity + elapsed
+            ui.caption(v["caption"])
+            ui.caption(labels.reload_caption)
+        except Exception:  # noqa: BLE001  nothing raised in the body reaches the page
+            ui.caption(labels.progress_unavailable)
+        return False
+    term = holder.terminal or "connection_lost"
+    ses[STREAM_LAST_KEY] = StreamLast(term, holder.result, holder.status)
+    ses.pop(STREAM_HOLDER_KEY, None)
+    return True
+
+
+def start_stream(ses, now, stream_fn, args, orphan_s: float, spawn=None) -> StreamHolder:
+    """Single flight keyed on the session: a rerun returns the existing holder and never POSTs a second time."""
+    cur = ses.get(STREAM_HOLDER_KEY)
+    if cur is not None:
+        return cur
+    t = now()
+    holder = StreamHolder(t0=t, last_read=t, last_line_at=t)
+    ses[STREAM_HOLDER_KEY] = holder
+    (spawn or _spawn)(stream_worker, holder, stream_fn, args, now, orphan_s)
+    return holder

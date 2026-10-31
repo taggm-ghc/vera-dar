@@ -1,7 +1,9 @@
 {
   "_comment": "Caps and client-identity settings for VERA-DAR public mode (item #72 W2). Values are proposals; tune before deploy.",
   "req_per_min_per_client": 6,
-  "req_per_day_per_client": 40,
+  "req_per_hour_per_client": 30,
+  "req_per_day_per_client": 180,
+  "_req_per_hour_day_note": "owner decision OD-1031-PROMPTLIM (2026-10-31): hourly prompt limit 30 per client (rolling 3600 s, in-memory per process), daily 180 per client (was 40). Owner values; NOT calibrated: no live traffic data exists for the per-client request distribution. req_per_min_per_client 6 and req_per_day_global 400 are unchanged (400 global/day is now below 3 clients x 180). What would change it: observed 429 share and per-client request counts from live logs, and the cost_usd caps (unchanged here, owner decision pending).",
   "req_per_day_global": 400,
   "cost_usd_per_day_global": 2.0,
   "cost_usd_per_day_per_client": 0.25,

@@ -409,7 +409,9 @@ class PortalAdapter:
             if res is None:
                 res = self._skip("concurrency", float(self.c["poll_s"]))
         if isinstance(res, Permit) and res.waited_s > 0:
-            self._sleep(res.waited_s)
+            from vera import progress as _prog  # NOISY-UI: a rate-limit wait is visible on the stream path
+            with _prog.waiting(_prog.ACT_RATE, res.waited_s):
+                self._sleep(res.waited_s)
         return res
 
     async def acquire_async(self, deadline: float | None = None):

@@ -104,11 +104,20 @@ def bound(cfg: dict, key: str, default=None):
 
 
 def inline_fresh_docs(cfg: dict) -> int:
-    """ACQ S4-0 L4b-0 (B3): fresh-document budget of one inline pass, separate from the reuse budget. Key
-    bounds.inline_fresh_docs; absent = max_docs_per_job (the current cap). Anything not a non-negative int fails
+    """Fresh-document budget of ONE inline (live prompt) pass. OD-1031-CEIL31 / OD-1031-NO500: the 31-document ceiling
+    (bounds.max_docs_per_prompt) applies when inline.per_prompt_ceiling_enabled is true (shipped true; the flag is a
+    kill switch). Flag false or absent = bounds.max_docs_per_job (the previous behaviour, 2). With the flag on, a legacy bounds.inline_fresh_docs overrides max_docs_per_prompt but is clamped to it (retired
+    from the shipped config). Background jobs always use bounds.max_docs_per_job. Anything not a non-negative int fails
     closed to 0 (a malformed cap acquires nothing)."""
-    b = (cfg or {}).get("bounds") or {}
-    v = b.get("inline_fresh_docs", b.get("max_docs_per_job"))
+    c = cfg or {}
+    b = c.get("bounds") or {}
+    if (c.get("inline") or {}).get("per_prompt_ceiling_enabled") is True:
+        v = b.get("inline_fresh_docs", b.get("max_docs_per_prompt", b.get("max_docs_per_job")))
+        cap = b.get("max_docs_per_prompt")  # SA-FIX: a legacy override never exceeds the 31 ceiling
+        if isinstance(v, int) and not isinstance(v, bool) and isinstance(cap, int) and not isinstance(cap, bool):
+            v = min(v, cap)
+    else:
+        v = b.get("max_docs_per_job")
     if v is None:
         raise KeyError("auto_acquire bound 'max_docs_per_job' missing")
     try:
@@ -305,3 +314,20 @@ def licence_url_for(declared, cfg: dict) -> str | None:
     key = re.sub(r"\s+", " ", str(declared or "").strip().lower())
     v = m.get(key) if key and not key.startswith("_") else None
     return v if isinstance(v, str) and v.startswith("https://") else None
+
+
+_LIVE_DEFAULTS = {"stall_s": 300, "max_reuse_checks_per_prompt": 31, "persist_timeout_s": 15}
+
+
+def live(cfg: dict | None) -> dict:
+    """STREAM-1031 / OD-1031-HITL4 item 4 / OD-1031-CEIL31: the streamed-path bounds {stall_s, max_reuse_checks_per_prompt,
+    persist_timeout_s} (PROVISIONAL, see config live._calibration_note). Each value must be a positive number; an absent,
+    malformed or non-positive value falls back to the shipped default, so no bound can become unbounded."""
+    raw = (cfg or {}).get("live") if isinstance(cfg, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    out = {}
+    for k, d in _LIVE_DEFAULTS.items():
+        v = raw.get(k, d)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < float("inf")
+        out[k] = v if ok else d
+    return out

@@ -26,7 +26,7 @@ def env(monkeypatch):
     monkeypatch.setattr(arxiv_fulltext, "_sleep", lambda s: None)
     auto_acquire.reset_for_tests()
     inline_acquire.reset_for_tests()
-    acq = A.cfg()
+    acq = A.cfg(max_candidates_resolved=6, jobs_per_hour=6, jobs_per_day=30)  # pinned: shipped ceiling is 31 (OD-1031-SHORTLIST31)
     acq["inline"]["enabled"] = True
     yield acq
     auto_acquire.reset_for_tests()

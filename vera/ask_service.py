@@ -3,6 +3,7 @@ extraction, and cost calculation. OpenAI SDK exceptions intentionally
 propagate to the routing layer, where main.py translates provider failures
 into HTTP responses — this module has no knowledge of HTTP.
 """
+import asyncio
 import contextvars
 import json
 import logging
@@ -14,6 +15,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from vera import progress as _progress
+from vera import stream_ctx as _stream_ctx
 from vera.pricing.config import PricingRecord
 
 
@@ -72,6 +74,10 @@ def reset_default_client_latch() -> None:
 def _get_client() -> OpenAI:
     """Latch check first (never reaches the constructor, so it cannot be bypassed by the cache), then the cached
     constructor."""
+    from vera import provider_exhaustion as _px
+    g = _px.GRACE.get()
+    if g is not None and g.get("client") is not None:  # OD-1031-EXHAUST-GRACE: scoped completion client (not the latch)
+        return g["client"]
     if _DEFAULT_CLIENT_FORBIDDEN:
         raise OpenAIFallbackDisabled("the OpenAI fallback is disabled (config/ask-provider-chain.json)")
     return _build_client()
@@ -125,8 +131,23 @@ class RequestBudget:
 
 
 def request_budget() -> RequestBudget:
+    if _stream_ctx.active():  # STREAM-1031 / OD-1031-NODEADLINE: the streamed path has no request deadline (no 125 s guard)
+        return RequestBudget(float("inf"))
     from vera.public_mode import ASK_TIMEOUT_S
     return RequestBudget(time.monotonic() + ASK_TIMEOUT_S)
+
+
+def _pre_llm(writer: bool = False) -> None:
+    """STREAM-1031: before a writer / claim-check step. Raises StreamCancelled when the client is gone (no-op off the
+    stream path). With writer=True also the provider-exhaustion guard (vera.provider_exhaustion, written concurrently:
+    tolerated absent)."""
+    _stream_ctx.check_cancelled()
+    if writer:
+        try:
+            from vera import provider_exhaustion
+        except ImportError:
+            return
+        provider_exhaustion.guard()
 
 
 # The budget travels with the request in a context variable (set once by main.ask, around answer_via_chain), so the
@@ -196,12 +217,17 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective")
             return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
+    if _stream_ctx.active() and budget.deadline != float("inf"):
+        budget.deadline = float("inf")  # STREAM-1031: whichever budget was passed, the streamed path has no deadline
     decision = route(original, model, pricing, chat=chat if (client or extra_body) else None)  # D1: route nullifies
     decision = _catstep(decision, question, model, pricing, chat if (client or extra_body) else None)  # CATSTEP-1028
+    from vera import provider_exhaustion as _pxw
+    _pxw.note_work(decision=decision)  # OD-1031-EXHAUST-GRACE: work has started; the decision is what a completion reuses
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
     _log_basis(decision)  # PATHA-1028 CT-4: the topic label is a log tag only (class tokens, never reason text)
     if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
         decision = replace(decision, accepted=True)
+        _pxw.note_work(decision=decision)  # EXG-FIX-1031 D1: the completion must see the research-eligible override
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     offline_spent: dict = {}  # PATHA-1028 CT-2: spend of a corpus attempt that produced no checked answer
     offline_text = ""  # REFUSE-FIX-1028 V4: that attempt's fixed insufficient-evidence text (config text, never model text)
@@ -391,6 +417,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
         kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
+    from vera import provider_exhaustion as _pxw
+    _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
@@ -801,6 +829,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                 decision.cost_usd, texts["corpus_unusable_text"] if unusable else _with_count(texts["insufficient_text"], ev))
     from vera import fulldoc_answer
 
+    _pre_llm(writer=True)  # STREAM-1031 (no-op off the stream path unless providers are exhausted)
     out = fulldoc_answer.answer(question, ev, model, pricing, chained=chained,
                                 grounding_cfg=grounding[1] if grounding else None, cfg=cfg,
                                 base_tokens=decision.tokens_used, base_cost=decision.cost_usd,
@@ -834,6 +863,7 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
     from vera.grounded_ask import count_valid_citations, fix_citations, messages_for, public_candidates
 
     kind = "answer"
+    _pre_llm(writer=True)  # STREAM-1031
     _progress.emit("write", "start")  # PROG-1027 W2a (legacy path; test-only today)
     result = complete(messages_for(question, sources), model, pricing, **chained)
     _progress.emit("write", "done")
@@ -848,6 +878,7 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
         from vera.claim_check import RECORDS, check_answer
 
         records: list = []
+        _pre_llm()  # STREAM-1031: no claim check for a prompt whose client is gone
         token = RECORDS.set(records)
         _progress.emit("check", "start")  # PROG-1027 W2a
         try:
@@ -1146,6 +1177,7 @@ def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
     except Exception:  # noqa: BLE001
         acq_corpus = None
     ref = _reference_texts(merged, (o.corpus, base_corpus, acq_corpus))
+    _pre_llm(writer=True)  # STREAM-1031
     out = fulldoc_answer.answer(question, merged, model, pricing, chained=chained,
                                 grounding_cfg=grounding[1] if grounding else None, cfg=cfg,
                                 base_tokens=fd.tokens_used, base_cost=fd.cost_usd, reference_texts=ref)
@@ -1224,3 +1256,85 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
                        backfill=bf, answer_basis="abstained")
     _record_discovery(rec, res, _QUESTION.get())
     return replace(res, contract={**(res.contract or {}), "research": rec})
+
+
+# ---------------------------------------------------------------------------------------------- EXHAUST-GRACE-1031
+def complete_after_exhaustion(question: str, grounding, state: dict) -> AskResult:
+    """OD-1031-EXHAUST-GRACE: every free provider is exhausted AFTER work started on this Ask. No further free-provider
+    call; no new acquisition. Completes the response with what exists, best first:
+      1. OpenAI (scoped, config exhaustion.grace.openai_completion, OPENAI_API_KEY present): the unchanged full-document
+         writer and claim check over the admitted evidence (including this request's inline-admitted documents); a
+         verified answer is returned normally;
+      2. else the existing non-LLM reading list (or the correct no-answer text when nothing was found) via _reading_list.
+    Never an unverified claim; evidence and licence standards are untouched. The result carries
+    contract.exhaustion_grace = {mode, stage} and a plain-text notice."""
+    import os
+
+    from vera import answer_contract as contract
+    from vera import progress as _prog
+    from vera import provider_exhaustion as _px
+    from vera.scope_router import decline_text
+
+    decision = state.get("decision")
+    gcfg = _px.grace_cfg()
+    stage = None
+    try:
+        rec = _prog.SINK.get()
+        stage = (rec._events[-1]["stage"] if rec is not None and rec._events else None)
+    except Exception:  # noqa: BLE001
+        stage = None
+    budget = REQUEST_BUDGET.get()
+    if budget is not None:
+        budget.inline_used = True  # no new acquisition in the completion
+    _prog.set_activity(_prog.ACT_BUSY_FALLBACK)  # NOISY-UI: "free AI providers are busy; finishing with backup"
+    info = {"mode": "reading_list", "stage": stage}
+    if state.get("inline"):
+        info["inline_acquisition"] = state["inline"]
+
+    def finish(res: AskResult, mode: str, notice_key: str) -> AskResult:
+        info["mode"] = mode
+        note = (gcfg.get(notice_key) or "").strip()
+        ctr = {**(res.contract or {}), "exhaustion_grace": dict(info)}
+        if info.get("inline_acquisition") and "inline_acquisition" not in ctr:
+            ctr["inline_acquisition"] = info["inline_acquisition"]
+        return replace(res, answer=f"{res.answer} {note}".strip() if note else res.answer, contract=ctr)
+
+    if decision is None or not decision.accepted:  # nothing LLM-dependent was pending; the unchanged decline text
+        return finish(AskResult(answer=decline_text(), tokens_used=getattr(decision, "tokens_used", 0) or 0,
+                                cost_usd=getattr(decision, "cost_usd", 0.0) or 0.0, result_kind="decline"),
+                      "decline", "notice_fallback")
+
+    fd = None
+    gp = _px.grace_openai()
+    key_ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
+    if gp is not None and key_ok and _px.grace_openai_enabled():
+        model, pricing = gp
+        tok = None
+        try:
+            from openai import OpenAI
+            client = OpenAI(max_retries=0, **({"timeout": t} if (t := _chain_timeout_s()) else {}))
+            tok = _px.GRACE.set({"client": client})
+            logging.getLogger("vera").info("exhaustion grace: OpenAI completion (writer and claim check only)")
+            fd = _fulldoc(question, model, pricing, decision, {"client": client}, grounding,
+                          acquired_only=state.get("ephemeral") is not None, ephemeral=state.get("ephemeral"), used={})
+        except (asyncio.CancelledError, _stream_ctx.StreamCancelled):
+            raise  # EXG-FIX-1031 D3: a client disconnect must stop the paid completion, never fall through to the reading list
+        except Exception as exc:  # noqa: BLE001  (OpenAI absent/failed/rate-limited: the non-LLM completion below)
+            logging.getLogger("vera").warning("exhaustion grace: OpenAI completion failed (%s)", type(exc).__name__)
+            fd = None
+        finally:
+            if tok is not None:
+                _px.GRACE.reset(tok)
+        if isinstance(fd, AskResult) and fd.result_kind == "answer":
+            return finish(replace(fd, accepted=True), "openai_completed", "notice_openai")
+    # non-LLM completion: the existing reading list / no-answer path, no model call
+    tokens = int(fd[2] or 0) if isinstance(fd, tuple) and len(fd) == 5 else decision.tokens_used  # fd spend includes the base
+    cost = decision.cost_usd
+    if isinstance(fd, tuple) and len(fd) == 5:
+        cost = round(float(fd[3] or decision.cost_usd), 6)  # keep the spend of the attempted writer/check
+    try:
+        res = _reading_list(question, "", None, decision, {}, grounding, contract, tokens=tokens, cost=cost)
+    except Exception as exc:  # noqa: BLE001  (search seam unavailable: the correct no-answer result)
+        logging.getLogger("vera").warning("exhaustion grace: reading list unavailable (%s)", type(exc).__name__)
+        res = contract.reading_list_result((), tokens, cost)
+    return finish(res, "reading_list" if res.candidates else "no_answer", "notice_fallback")

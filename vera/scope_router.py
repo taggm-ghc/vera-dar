@@ -416,6 +416,7 @@ def classifier_messages(question: str, cfg: RouterConfig) -> list[dict]:
 def default_chat(messages: list[dict], model: str, l2: dict, client=None,
                  extra_body: dict | None = None) -> tuple[str, int, int]:
     from vera.ask_service import _get_client
+    from vera import provider_exhaustion; provider_exhaustion.guard()  # OD-1031-TOKENS
 
     c = (client or _get_client()).chat.completions.create(
         model=model, messages=messages, temperature=l2["temperature"], max_tokens=l2["max_tokens"],

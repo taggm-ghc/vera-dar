@@ -333,7 +333,9 @@ def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, host
         if wait > 0:
             if deadline is not None and clock() + wait >= deadline:
                 raise aa._Stop(acq_config.reason(acq, "crawl_delay"))  # P0DTA-ARXFIX C: distinct, background-eligible
-            _sleep(wait)
+            from vera import progress as _prog  # NOISY-UI
+            with _prog.waiting(_prog.ACT_POLITE, wait):
+                _sleep(wait)
     c = _route_cfg(acq, r.get("content_types") or ("text/html",))
     try:
         return aa._guarded_get(url, c, deps, int(max_bytes), float(acq_config.bound(acq, "fetch_timeout_s")), False,

@@ -1,5 +1,5 @@
 {
-  "_comment": "PROG-1027 user-facing progress labels (only place for stage and terminal text). Placeholders: {rid} request id (shown by design), {minutes} (terminals only; derived from ASK_TIMEOUT_S, rounded up, includes the unit word), counts {inspected} {admitted} {found} {checked} {usable} {budget} {stored} {target} {attempt}. Labels name no gate, layer, provider, category, verdict code, basis or source. Counts are shown only when the event carries them.",
+  "_comment": "PROG-1027 user-facing progress labels (only place for stage and terminal text). Placeholders: {rid} request id (shown by design), {minutes} (terminals only; derived from ASK_TIMEOUT_S, rounded up, includes the unit word), counts {inspected} {admitted} {found} {checked} {usable} {budget} {stored} {target} {attempt}. Labels name no gate, layer, provider, category, verdict code, basis or source. Counts are shown only when the event carries them. STREAM-1031 additions: counts {shortlisted} {held} {step} {ceiling} and {why_text} (rendered from the top-level why map by the client). Generic wording only: counts and stages, never a provider, portal, host, URL or title.",
   "sending": "Sending your question (request {rid})",
   "finishing": "Finishing",
   "progress_unavailable": "Live progress is not available right now; still waiting for the answer",
@@ -7,16 +7,62 @@
   "already_running": "A question is already being answered; ask again when it finishes",
   "background_line": "VERA-DAR will keep looking for sources on this topic after this answer",
   "stages": {
-    "received": {"done": "Question received (request {rid})"},
-    "scope": {"start": "Checking what the question asks", "update": "Checking what the question asks", "done": "Checked what the question asks", "skipped": "Skipped the question check"},
-    "corpus": {"start": "Searching VERA-DAR's collection", "update": "{inspected} documents inspected, {admitted} passages usable", "done": "{inspected} documents inspected, {admitted} passages usable", "skipped": "Collection search not available this time"},
-    "corpus_verdict": {"sufficient": "The collection has enough evidence", "insufficient": "The collection does not have enough evidence yet", "stale": "Some of the collection's evidence may not be current; checking for newer sources"},
-    "search": {"start": "Looking for new open-access sources", "update": "Looking for new open-access sources", "done": "{found} candidates found", "skipped": "No new search this time"},
-    "acquire": {"start": "Reading full-text documents (this request can add up to {budget})", "update": "{checked} checked, {usable} usable so far", "done": "{usable} usable", "skipped": "No new documents read this time"},
-    "write": {"start": "Writing the answer from the usable passages", "update": "Writing the answer from the usable passages", "done": "Answer written; checking it next", "skipped": "Skipped writing"},
-    "check": {"start": "Checking each claim against its sources", "update": "Checking each claim against its sources", "done": "Claims checked", "skipped": "Skipped the claim check"},
-    "retry": {"start": "Trying again with another model"},
-    "done": {"answered": "Finishing", "partial": "Finishing", "no_answer": "Finishing", "declined": "Finishing", "error": "Finishing"}
+    "received": {
+      "done": "Question received (request {rid})"
+    },
+    "scope": {
+      "start": "Checking what the question asks",
+      "update": "Checking what the question asks",
+      "done": "Checked what the question asks",
+      "skipped": "Skipped the question check"
+    },
+    "corpus": {
+      "start": "Searching VERA-DAR's collection",
+      "update": "{inspected} documents inspected, {admitted} passages usable",
+      "done": "{inspected} documents inspected, {admitted} passages usable",
+      "skipped": "Collection search not available this time"
+    },
+    "corpus_verdict": {
+      "sufficient": "The collection has enough evidence",
+      "insufficient": "The collection does not have enough evidence yet",
+      "stale": "Some of the collection's evidence may not be current; checking for newer sources"
+    },
+    "search": {
+      "start": "Searching open-access sources (step {step})",
+      "update": "Looking for new open-access sources",
+      "done": "{found} possible sources found; {shortlisted} to check",
+      "skipped": "No new search this time"
+    },
+    "acquire": {
+      "start": "Reading full-text documents (this request can add up to {budget})",
+      "update": "Checked {checked} of {shortlisted} · {usable} usable · {held} held back for licence · {stored} of {target} saved",
+      "done": "Saved {stored} new documents",
+      "skipped": "No new documents read this time",
+      "limited": "Saved {stored} of {target}: {why_text}",
+      "busy": "VERA-DAR is busy; try again shortly"
+    },
+    "write": {
+      "start": "Writing the answer from the usable passages",
+      "update": "Writing the answer from the usable passages",
+      "done": "Answer written; checking it next",
+      "skipped": "Skipped writing"
+    },
+    "check": {
+      "start": "Checking each claim against its sources",
+      "update": "Checking each claim against its sources",
+      "done": "Claims checked",
+      "skipped": "Skipped the claim check"
+    },
+    "retry": {
+      "start": "Trying again with another model"
+    },
+    "done": {
+      "answered": "Finishing",
+      "partial": "Finishing",
+      "no_answer": "Finishing",
+      "declined": "Finishing",
+      "error": "Finishing"
+    }
   },
   "terminals": {
     "answered": "Finished",
@@ -28,6 +74,25 @@
     "busy": "VERA-DAR is busy right now; please try again shortly",
     "expired": "The service restarted while answering; please ask again",
     "poll_timeout_received": "Still working after {minutes}. The server may still finish; ask again later (request {rid})",
-    "poll_timeout_unreceived": "No reply after {minutes}; please ask again later (request {rid})"
+    "poll_timeout_unreceived": "No reply after {minutes}; please ask again later (request {rid})",
+    "unavailable": "The answering service is at its limit right now; please try again later",
+    "connection_lost": "The connection was interrupted. Documents VERA-DAR already saved stay in its collection; ask again to use them.",
+    "never_connected": "Could not reach VERA-DAR; please try again shortly",
+    "stalled": "VERA-DAR stopped searching because no further progress was made; documents already saved stay in its collection."
+  },
+  "why": {
+    "1": "no more open sources found",
+    "2": "sources are busy right now",
+    "3": "today's search limit was reached",
+    "4": "no further progress was made",
+    "5": "the answering service is at its limit"
+  },
+  "activities": {
+    "1": "Waiting about {wait_s} s for a search provider's rate limit",
+    "2": "Waiting about {wait_s} s between requests to a source, to be polite to it",
+    "3": "Still reading source {k} of {n} ({elapsed} s)",
+    "4": "A step failed; trying again in about {wait_s} s",
+    "5": "Free AI providers are busy; finishing with backup",
+    "6": "Waiting for a connection ({elapsed} s)"
   }
 }

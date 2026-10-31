@@ -16,7 +16,7 @@ FD = None
 
 
 def _cfg(router=False, fit=False):
-    c = A.cfg()
+    c = A.cfg(max_candidates_resolved=6)  # pinned: shipped ceiling is 31 (OD-1031-SHORTLIST31); these test the cut mechanism
     c["source_type_router"]["enabled"] = router
     c["topic_fit_order"]["enabled"] = fit
     return c

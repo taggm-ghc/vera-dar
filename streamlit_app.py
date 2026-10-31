@@ -13,7 +13,8 @@ from vera.m7.live_report import INLINE_STATUS
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera import progress, progress_ui, ui_wake
-from vera.public_mode import get_progress, is_public_mode, post_ask, post_ask_tracked, upstream_base_url
+from vera.public_mode import (get_progress, is_public_mode, iter_ask_stream, post_ask, post_ask_tracked,
+                              upstream_base_url)
 from vera.sources_sidebar import cited_numbers, plain, render_nav, render_sources, render_sources_sidebar
 from vera.ui_evidence import (is_fulldoc, render_answer_scope_note, render_citations, render_evidence_scope,
                               render_fallback_reason)
@@ -204,6 +205,17 @@ def _load_labels():
 # PROG-1027: flag on only when config/progress.json enabled (and the kill switch is unset) and the labels validate.
 LABELS = _load_labels() if progress.enabled() else None
 PROGRESS_ON = LABELS is not None
+# OD-1031-STREAM-ON: the stream is independent of the PROG-E polling flag. Missing accessor or labels -> legacy flow.
+_stream_enabled = getattr(progress, "stream_enabled", None)
+STREAM_ON = False
+if callable(_stream_enabled):
+    try:
+        STREAM_ON = bool(_stream_enabled())
+    except Exception:  # noqa: BLE001
+        STREAM_ON = False
+if STREAM_ON and LABELS is None:
+    LABELS = _load_labels()
+    STREAM_ON = LABELS is not None
 _ses = st.session_state
 
 
@@ -233,10 +245,33 @@ def _poller(inf) -> None:
         st.rerun()  # full rerun drops run_every and renders the durable result
 
 
+def _stream_cfg():
+    return progress.CFG.stream
+
+
+def _render_stream_terminal(last) -> None:
+    """Final text for a finished stream run: the answer renders exactly as the legacy path; every other terminal is a
+    fixed label (config/progress-stages.json, else a generic string). No exception text, host or name."""
+    if last.terminal == "answer" and isinstance(last.result, dict):
+        render_result(last.result)
+        return
+    st.error(LABELS.terminal_text(last.terminal))
+    if PUBLIC and last.terminal == "never_connected":
+        _show_triage(base_url=api_base_url)
+
+
+@st.fragment(run_every=1)
+def _stream_view(holder) -> None:
+    """Client-driven 1 s tick; each tick stamps holder.last_read (the worker's orphan check reads it)."""
+    if progress_ui.stream_tick(holder, _ses, st, ui_wake.clock, LABELS):
+        st.rerun()
+
+
 # Ask button. UIWAKE-1022: the question is queued in session state and sent only once GET /health answers,
 # so a sleeping API is woken first and the question survives a rerun during the wait.
 _inflight = _ses.get("vera_inflight") if PROGRESS_ON else None
-_clicked = st.button("Ask", type="primary", disabled=_inflight is not None)  # evaluated first (R2-PROG-Q-8)
+_sholder = _ses.get(progress_ui.STREAM_HOLDER_KEY) if STREAM_ON else None
+_clicked = st.button("Ask", type="primary", disabled=_inflight is not None or _sholder is not None)  # evaluated first (R2-PROG-Q-8)
 if _clicked and _inflight is not None:  # race: the click landed before the disabled render
     st.info(LABELS.already_running)
 elif _clicked:
@@ -247,7 +282,28 @@ elif _clicked:
     else:
         ui_wake.queue_question(st.session_state, {"question": question, "force_bad": bool(force_bad)})
 
-if PROGRESS_ON:
+if STREAM_ON:
+    if _sholder is None and _ses.get(ui_wake.PENDING_KEY):
+        _pending = ui_wake.take_ready_question(st, api_base_url, allow_restart_hook=PUBLIC)
+        if _pending:
+            _scfg = _stream_cfg()
+            _sholder = progress_ui.start_stream(
+                _ses, ui_wake.clock,
+                lambda *a, **kw: iter_ask_stream(*a, connect_timeout=_scfg.connect_timeout_s,
+                                                 no_data_timeout=_scfg.client_no_data_s, **kw),
+                (api_base_url, _pending["question"], "force_bad" if _pending["force_bad"] else "normal", api_key),
+                _scfg.orphan_s)
+            st.rerun()
+    _slast = _ses.get(progress_ui.STREAM_LAST_KEY)
+    if _sholder is not None:
+        _stream_view(_sholder)
+    elif _slast is not None and not _slast.rendered:
+        _render_stream_terminal(_slast)
+        _slast.rendered = True
+    elif not _clicked:
+        st.info("👆 Click 'Ask' to get started.")
+        ui_wake.page_load_check(st, api_base_url, allow_restart_hook=PUBLIC)
+elif PROGRESS_ON:
     if _ses.get("vera_ptoken") is None:
         _ses["vera_ptoken"] = secrets.token_urlsafe(32)  # per browser session; header-only, never rendered
     if _inflight is None and _ses.get(ui_wake.PENDING_KEY):
