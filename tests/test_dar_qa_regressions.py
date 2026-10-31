@@ -124,7 +124,7 @@ def test_registry_docstring_states_the_new_derivation_rule():
     assert r.list_domains() == []  # record_uncertain itself never registers
 
 
-def test_shipped_flag_on_and_blocks_carry_calibration_note():
+def test_shipped_routing_on_stored_branch_off_and_blocks_carry_calibration_note():
     """OD-DARINT-DAR-ON: shipped ON (note says so); OFF settable; ON + domains:[] + empty registry == baseline."""
     assert SHIPPED["enabled"] is True and SHIPPED["domains"] == []
     assert "OD-DARINT-DAR-ON" in SHIPPED["_calibration_note"]
@@ -135,8 +135,22 @@ def test_shipped_flag_on_and_blocks_carry_calibration_note():
     assert out is base
     for blk in ("identification", "corpus"):
         assert "synthetic fixtures only" in SHIPPED[blk]["_calibration_note"] and "not on real data" in SHIPPED[blk]["_calibration_note"]
-    # D-DARINT-037/-019: /ask must retrieve stored corpus evidence, so the stored branch ships ON; the hook stays OFF
-    assert SHIPPED["corpus"]["stored_branch_enabled"] is True and SHIPPED["corpus"]["admission_hook_enabled"] is False
+    # Shipped stored_branch_enabled=false per OD-1029-P4-IIA (2026-10-29), which supersedes only the flag-state
+    # part of D-DARINT-019 and D-DARINT-037. The hook stays OFF.
+    assert SHIPPED["corpus"]["stored_branch_enabled"] is False and SHIPPED["corpus"]["admission_hook_enabled"] is False
+
+
+def test_shipped_config_stored_branch_off_get_corpus_inert():
+    """C1 (OD-1029-P4-IIA): against the UNPATCHED shipped config get_corpus is inert: None, no engine built."""
+    from vera import dar_runtime
+    dar_runtime.reset_for_tests()
+    calls = []
+    try:
+        assert dar_runtime.get_corpus(env={"VERA_DB_URL_RO": "postgresql://u:p@host.invalid:5432/d"},
+                                      engine_factory=lambda *a, **k: calls.append(1)) is None
+        assert calls == [] and dar_runtime.status() == "disabled"
+    finally:
+        dar_runtime.reset_for_tests()
 
 
 # ---- stored-corpus integration (CX-3, CX-4, CX-6, CX-8, CX-9) ----

@@ -170,10 +170,12 @@ def check_tests(root: Path = ROOT) -> list[str]:
         return [f"test suite exceeded {PYTEST_TIMEOUT_S}s"]
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    if p.returncode in (64, 78):   # vera_test_runner EXIT_REFUSED / EXIT_ISOLATION (boundary refusals are 78 too)
-        what = ("test run refused by the sanctioned runner (exit 64)" if p.returncode == 64 else
-                "test isolation was not established for this run (exit 78: the runner or the test boundary refused)")
-        return [what] + [_printable(x) for x in (p.stderr or "").strip().splitlines()[-5:]]
+    if p.returncode == 78:   # GATEDIAG-1029: diagnostic only; same refusal, plus a bounded, redacted stderr excerpt
+        return ["test isolation was not established for this run (exit 78: the runner or the test boundary refused)",
+                "exit 78 detail (test-boundary or sandbox refusal); child stderr (sanitized):"] + sanitize_child_stderr(p.stderr or "", os.environ)
+    if p.returncode == 64:   # vera_test_runner EXIT_REFUSED
+        return ["test run refused by the sanctioned runner (exit 64)"] + [
+            _printable(x) for x in (p.stderr or "").strip().splitlines()[-5:]]
     lines = [ln for ln in (p.stdout or "").strip().splitlines() if ln.strip()]
     summary = lines[-1] if lines else "(no output)"
     if p.returncode != 0:
@@ -193,6 +195,65 @@ _UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
 
 def _child_env(env: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in env.items() if not _CHILD_ENV_DENY.search(k)}
+
+
+_SECRET_ENV_NAME = re.compile(r"KEY|TOKEN|SECRET|PASS|URL|DSN", re.I)
+_REDACT_PATTERNS = (   # applied in order, after the exact env-value pass
+    re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://\S+"),                                   # URLs (any scheme)
+    re.compile(r"[^\s:@]{1,512}:[^\s@]{1,512}@\S{1,512}"),                                                    # user:pass@host
+    re.compile(r"(?i)\b[\w.\-]*(?:key|token|passw(?:or)?d|secret|dsn)[\w.\-]*\s*[=:]\s*\S+"),  # key=/token=/password= values
+    re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),                                      # IPv4
+    re.compile(r"(?i)(?<![\w:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])"),         # IPv6-like
+    re.compile(r"[A-Za-z0-9+/_\-]{24,}={0,2}"),                                        # hex / base64 / token runs >= 24
+    re.compile(r"(?i)\b(?:[a-z0-9\-]+\.)+(?:com|net|org|io|dev|ai|edu|gov|cloud|app|co|us|eu|uk|de|local|internal)\b"),
+)
+STDERR_MAX_LINES = 20
+STDERR_MAX_BYTES = 2048
+STDERR_RAW_MAX = 8192        # F1: raw input bound applied before any regex runs
+STDERR_LINE_MAX = 512        # F1: per-line bound applied before any regex runs
+_CONTROL = re.compile(r"[^\x20-\x7e]")   # F3: everything outside printable ASCII is removed (not replaced) before redaction so it cannot split a keyword
+STDERR_CUT_MARK = "[TRUNCATED]"
+
+
+def sanitize_child_stderr(text: str, environ=None) -> list[str]:
+    """GATEDIAG-1029: bounded, redacted tail of a child's stderr (last 20 lines, at most 2 KB). Values of env vars whose
+    name contains KEY/TOKEN/SECRET/PASS/URL/DSN (4+ chars) are removed first; then URLs, user:pass@, key=/token=/
+    password= values, IPs, hex/base64 runs >= 24 and hostnames; then control characters. Never raises."""
+    try:
+        # Known limits (F4): heuristic redaction; JSON-quoted secrets, short keyword-less tokens, bare internal host
+        # names and account/db names can pass; N2: the user:pass@host bound is widened to the 512-char line cap (worst case 20x512 timed 0.78 s). The child env is allowlisted, which is the primary control.
+        vals = sorted({v for k, v in (environ or {}).items() if _SECRET_ENV_NAME.search(k) and len(v) >= 4},
+                      key=len, reverse=True)
+        raw = str(text)
+        for v in vals:   # N1: exact env-value pass on the full input, before any truncation (str.replace is linear)
+            raw = raw.replace(v, "[REDACTED]")
+        if len(raw) > STDERR_RAW_MAX:   # N1: raw cut; the first line is then partial and is dropped
+            partial = raw[-STDERR_RAW_MAX - 1] != "\n"   # N5: the first line is partial only if the cut is mid-line
+            raw = raw[-STDERR_RAW_MAX:]
+            if partial:
+                raw = raw.split("\n", 1)[1] if "\n" in raw else ""
+            if not raw.strip():
+                return ["(stderr tail truncated: no complete line in last 8 KB)"]
+        lines = []
+        for ln in raw.strip().splitlines()[-STDERR_MAX_LINES:]:
+            if len(ln) > STDERR_LINE_MAX:   # N1: line cut; drop the (possibly partial) last token and mark the cut
+                ln = ln[:STDERR_LINE_MAX]
+                ln = ln[:max(ln.rfind(" "), ln.rfind("\t")) + 1] + STDERR_CUT_MARK
+            lines.append(ln)
+        out = []
+        for ln in lines:
+            ln = _CONTROL.sub("", ln)
+            for v in vals:   # N4: again after removal, so a secret split by a removed character is still matched
+                ln = ln.replace(v, "[REDACTED]")
+            for rx in _REDACT_PATTERNS:
+                ln = rx.sub("[REDACTED]", ln)
+            out.append(_printable(ln))
+        joined = "\n".join(out)
+        if len(joined) > STDERR_MAX_BYTES:
+            joined = "..." + joined[-STDERR_MAX_BYTES:]
+        return joined.splitlines()
+    except Exception:  # diagnostic path must never change the gate outcome
+        return ["(stderr excerpt unavailable)"]
 
 
 def _printable(text: str) -> str:

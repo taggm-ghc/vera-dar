@@ -131,7 +131,7 @@
   "sub_question_required": true,
   "admission_hook_enabled": false,
   "contract_config_path": null,
-  "stored_branch_enabled": true,
+  "stored_branch_enabled": false,
   "stored_merge_max": 2,
   "stored_discovered_via": "stored_corpus",
   "doc_min_chunks": 2,

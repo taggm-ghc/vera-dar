@@ -14,8 +14,10 @@ in-memory engine that implements exactly the SQL dar_store.py issues. A separate
 ephemeral Postgres outside the runner.
 
 Overrides and stubs (all via monkeypatch, in-process; no config file is edited):
-  * NO CONFIG OVERRIDE (owner D-041): the ACTUAL SHIPPED config/domain_routing.json is used (enabled=true,
-    corpus.stored_branch_enabled=true); a test asserts both flags so a regression of the shipped value fails loudly.
+  * NO CONFIG FILE EDIT: the shipped config/domain_routing.json (enabled=true, corpus.stored_branch_enabled=false per
+    OD-1029-P4-IIA) is asserted by the fixture so a regression of the shipped value fails loudly; the fixture then
+    turns the stored branch ON in an in-memory copy only (domain_registry.load_config patched) so these behaviour
+    tests exercise the stored branch.
   * SCOPE ROUTER: vera.scope_router.route is patched to an in-scope decision (scope widening is owner-held).
   * LLM: ask_service.complete returns a fixed cited text; claim_check.check_answer returns a fixed pass; the L3 seam
     answer_contract.examined_full_documents is opened (as tests/test_k2_integrated_contract.py does) so /ask yields
@@ -226,7 +228,13 @@ def app_env(monkeypatch):
     from tests.test_item79_claim_check import PRICING
 
     cfg = _cfg()
-    assert cfg.get("enabled") is True and cfg["corpus"].get("stored_branch_enabled") is True, "shipped flags not ON"
+    # Shipped stored_branch_enabled=false per OD-1029-P4-IIA (2026-10-29), which supersedes only the flag-state
+    # part of D-DARINT-019 and D-DARINT-037.
+    assert cfg.get("enabled") is True and cfg["corpus"].get("stored_branch_enabled") is False, "shipped flags wrong"
+    # These behaviour tests exercise the stored branch (post-migration-007 state): in-memory copy only, the shipped
+    # file stays OFF.
+    cfg["corpus"]["stored_branch_enabled"] = True
+    monkeypatch.setattr(domain_registry, "load_config", lambda *a, **k: copy.deepcopy(cfg))
     monkeypatch.setenv("VERA_API_KEY", KEY)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-" + "o" * 40)                      # fake; every model call is stubbed
     monkeypatch.setenv("VERA_DB_URL_RO", "postgresql://ro:x@db.invalid:5432/none")  # never connected

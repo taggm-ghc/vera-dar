@@ -1962,7 +1962,8 @@ def test_gate_reports_exit_78_as_isolation_not_established(monkeypatch, gate_rep
     g = _gate()
     monkeypatch.setattr(g.subprocess, "run", _fake_run(78, lambda n: ""))
     out = g.check_tests(gate_repo)
-    assert out == ["test isolation was not established for this run (exit 78: the runner or the test boundary refused)"]
+    assert out == ["test isolation was not established for this run (exit 78: the runner or the test boundary refused)",
+                   "exit 78 detail (test-boundary or sandbox refusal); child stderr (sanitized):"]      # GATEDIAG-1029 (empty stderr)
     assert "unavailable on this host" not in out[0]                     # GATEFIX-1029: no misleading host claim
     def refused(cmd, **kw):
         return subprocess.CompletedProcess(cmd, 64, stdout="", stderr="vera_test_runner: refused: x\x1b[2J\n")
