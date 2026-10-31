@@ -132,6 +132,48 @@ def make_run_tmp(root):
     raise OSError("cannot create a unique run directory")
 
 
+# OD-1030-C3 (primary): pytest creates `<name>current` convenience symlinks in every numbered tmp dir, with or without
+# --basetemp (verified, pytest 9.1.1: `_pytest.pathlib.make_numbered_dir` calls `_force_symlink` unconditionally; no option
+# or ini key disables it). The launcher replaces `-m pytest` (same interpreter flags, same argv after it) and neutralises
+# that one helper in-process before running pytest.__main__ via runpy (identical to -m pytest), so the link is never created. The attribute check keeps it a no-op on a
+# pytest without the helper; unlink_symlinks below is the backstop.
+PYTEST_LAUNCHER = ("import sys, _pytest.pathlib as _p\n"
+                   "if hasattr(_p, '_force_symlink'): _p._force_symlink = lambda *a, **k: None\n"
+                   "import runpy\n"
+                   "runpy.run_module('pytest', run_name='__main__', alter_sys=True)")
+MAX_CLEANUP_ENTRIES = 200000                     # bound for the symlink sweep (fail verbosely, never loop unbounded)
+
+
+def unlink_symlinks(run, limit=MAX_CLEANUP_ENTRIES):
+    """Delete symlinks (pytest's `*current` links, fixture links) under this run's directory only. No-follow: scandir
+    entries are tested with is_symlink(); links are unlinked, never traversed, and symlinked directories are not
+    descended. Bounded by `limit` entries; returns (removed, truncated)."""
+    removed = seen = 0
+    if not run or os.path.islink(run) or not os.path.isdir(run):
+        return 0, False
+    stack = [run]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    seen += 1
+                    if seen > limit:
+                        os.write(2, f"vera_test_runner: symlink sweep truncated at {limit} entries\n".encode())
+                        return removed, True
+                    if e.is_symlink():
+                        try:
+                            os.unlink(e.path)
+                            removed += 1
+                        except OSError:
+                            pass
+                    elif e.is_dir(follow_symlinks=False):
+                        stack.append(e.path)
+        except OSError:
+            pass
+    return removed, False
+
+
 def remove_run_tmp(root, run):
     """Remove only this run's directory (must be a real, non-symlink direct child of test-tmp)."""
     base = os.path.realpath(test_tmp_base(root))
@@ -144,6 +186,7 @@ def remove_run_tmp(root, run):
                 func(path)
             except OSError:
                 pass
+        unlink_symlinks(run)                              # OD-1030-C3: no link survives the run, even if rmtree fails
         shutil.rmtree(run, onerror=_fix)
 
 
@@ -517,7 +560,7 @@ def sandbox_script(root, venv, gitdirs, cred_files, uid, gid, py, pytest_args, e
           f"cd {q(root)} || fail cd",
           "unset WSL_INTEROP WSL_DISTRO_NAME WSLENV"]
     envs = " ".join(q(f"{k}={v}") for k, v in sorted(env.items()))
-    cmd = [py, "-I", "-B", "-X", f"pycache_prefix={PYCACHE}", "-m", "pytest", "-c", os.path.join(root, "pytest.ini"),
+    cmd = [py, "-I", "-B", "-X", f"pycache_prefix={PYCACHE}", "-c", PYTEST_LAUNCHER, "-c", os.path.join(root, "pytest.ini"),
            "--rootdir", root, "-p", "no:cacheprovider", *pytest_args]
     L.append(f"exec {UNSHARE} --user --map-user={uid} --map-group={gid} -- {ENV} -i {envs} "
              + " ".join(q(c) for c in cmd) + " || fail exec")

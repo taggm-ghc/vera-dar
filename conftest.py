@@ -53,6 +53,12 @@ import pytest as _pytest  # noqa: E402
 
 @_pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
+    # OD-1030-C3 / G2: no `<name>current` tmp_path symlinks in ANY pytest that loads this conftest (direct, nested, runner).
+    # Runs before any basetemp/tmp_path creation and before the --help return. If pytest renames the private helper the
+    # patch is skipped here and tests/test_no_pytest_current_links.py fails loudly (it asserts the helper exists).
+    import _pytest.pathlib as _pl
+    if hasattr(_pl, "_force_symlink"):
+        _pl._force_symlink = lambda *a, **k: None
     if config.getoption("help", False):
         return
     bad = _vera_outside_tests(config)
