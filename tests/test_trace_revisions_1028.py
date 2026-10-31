@@ -21,6 +21,24 @@ def test_shipped_config_statuses():
     assert by["Licence observations"][0].startswith("batch loader LIVE")  # fulltext_ingest.json true
 
 
+def test_derived_rows_follow_config():
+    base = ui._read_cfgs()
+    by = _by(base)
+    assert by["Scope handling"][0] == "LIVE"
+    assert by["Safety patterns"][0] == "LIVE"
+    assert by["Research topics"][0] == "LIVE (fixed seed)"
+    c = copy.deepcopy(base)
+    c["scope"]["offtopic_reading_list"] = False
+    c["scope"]["injection_separation"] = False
+    c["acq"]["micro_topic"]["registry_table"]["read_from_db"] = True
+    by = _by(c)
+    assert by["Scope handling"][0] == "OFF"
+    assert by["Safety patterns"][0] == "LIVE; instruction separation OFF"
+    assert by["Research topics"][0] == "LIVE (database)"
+    c["scope"]["layer1"]["injection_patterns"] = []
+    assert _by(c)["Safety patterns"][0] == "UNKNOWN"
+
+
 def test_statuses_follow_config_not_text():
     base = ui._read_cfgs()
     c = copy.deepcopy(base)
@@ -31,7 +49,7 @@ def test_statuses_follow_config_not_text():
     assert _by(c)["Semantic similarity"][0] == "SHADOW"
     empty = {"acq": {}, "scope": {}, "ingest": {}, "sem": {}}
     for f, (s, _) in _by(empty).items():
-        assert s != "LIVE" or f in ("Scope handling", "Safety patterns"), f  # unreadable config never shows LIVE
+        assert not s.startswith("LIVE"), f  # unreadable config never shows LIVE (no hardcoded LIVE rows)
 
 
 def test_text_has_no_internals_lists_or_admitted():

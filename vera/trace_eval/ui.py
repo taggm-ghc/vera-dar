@@ -384,8 +384,22 @@ def revision_items(cfgs: dict | None = None) -> list:
         lic = "UNKNOWN"
     else:
         lic = f"batch loader {_onoff(ing)}; automatic acquisition {_onoff(ovl)}"
+    # Derived rows (no hardcoded LIVE): the shipped switch that each description depends on, or UNKNOWN when unreadable.
+    scope_status = _onoff(scope.get("offtopic_reading_list")) if "offtopic_reading_list" in scope else "UNKNOWN"
+    inj_patterns = _g(scope, "layer1", "injection_patterns")
+    if not (isinstance(inj_patterns, list) and inj_patterns):
+        safety_status = "UNKNOWN"
+    elif scope.get("injection_separation") is True:
+        safety_status = "LIVE"
+    else:
+        safety_status = "LIVE; instruction separation OFF" if "injection_separation" in scope else "UNKNOWN"
+    topics_path = _g(acq, "micro_topic", "registry_path")
+    if not (isinstance(topics_path, str) and topics_path):
+        topics_status = "UNKNOWN"
+    else:
+        topics_status = "LIVE (database)" if reg.get("read_from_db") is True else "LIVE (fixed seed)"
     return [
-        ("Scope handling", "LIVE",
+        ("Scope handling", scope_status,
          "VERA-DAR no longer restricts questions to a fixed topic list. A question outside the existing corpus goes to "
          "research instead of a scope refusal. Refusals are reserved for harmful intent or restricted use, and a code "
          "request is treated as an unsupported use, not a refused topic."),
@@ -404,7 +418,7 @@ def revision_items(cfgs: dict | None = None) -> list:
         ("Unknown-category step", step_status,
          "When a label is not recognised, a proximity check compares it with refused categories. It only logs a signal; "
          "similarity alone never refuses."),
-        ("Research topics", "LIVE (fixed seed)",
+        ("Research topics", topics_status,
          "Documents are grouped into narrow topics. Topics decide how documents are keyed, counted and served in balance, "
          "with at least six documents per topic as a floor, not a ceiling. Topic descriptions are never shown here."),
         ("Topic registry in the database",
@@ -423,7 +437,7 @@ def revision_items(cfgs: dict | None = None) -> list:
          "Questions the corpus cannot answer trigger automatic source acquisition. Sources are selected as possible "
          "evidence by stricter relevance and coverage thresholds, an irrelevant-record filter and truthful in-progress "
          "notices."),
-        ("Safety patterns", "LIVE",
+        ("Safety patterns", safety_status,
          "Fewer false positives in the prompt-injection and personal-advice checks; an injected sentence is separated from "
          "the legitimate question; claims of a changed mode are ignored; self-description comes from fixed public text."),
         ("Licence observations", lic,
