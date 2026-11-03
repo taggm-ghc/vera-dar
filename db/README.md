@@ -1,31 +1,27 @@
 # VERA-DAR vera_vjay schema (M1-M7)
 
-*Annotated 2026-10-01 (R7a author, R11a records) and 2026-10-02 (R11a, facts checked against the migrations and code): the STATUS block below is the 2026-09-30 M1 record and is kept; later state is in the "Current state" block that follows it. Pre-edit copies are kept privately.*
+*Current state is at the top. Dated 2026-09/10 history is kept, not deleted, in "Appendix: history (dated)" at the end of this file.*
 
-STATUS (2026-09-30 22:05 PDT): DEPLOYED to production as an in-place upgrade (not a reset).
-`001u_vera_upgrade_in_place.sql` + `003_vera_m3_plus_tables.sql` applied; round-trip test 17/17 PASS in 5s.
-The 20 pre-existing candidates, 1 question and 1 run are intact (checksum identical before/after;
-a local JSON backup (not published)).
-`001` + `002` are for FRESH installs only (001 refuses to drop a schema that holds data); on this
-database the upgrade replaced them. Differences on the upgraded DB: ids are BIGINT with serial-style
-defaults (not IDENTITY); legacy candidates have `gate_a_decision` NULL = "not recorded" and the
-"scored => decision" CHECK is NOT VALID (enforced for new/updated rows only). Existing `idx_*` indexes kept.
-M2 code writing Gate A scores MUST now also set `gate_a_decision` (fetch/defer/reject).
-Deployment order for this DB: done. For a fresh DB: 001, 002, then 003 at M3.
+**Status as of 2026-10-30.** This file owns migration status. Migrations 007 (domain registry) and 009 (portal discovery) are not applied; 007 is **pending owner decision**. Sections dated earlier than 2026-10-29 are history. Details from 2026-10-29 (DOCS-1029-W2): Production database `vera_dar_db` (schema `vera_vjay`): migrations 001u, 003, 004, 005 applied earlier; 006, 011 and 012 applied by the owner on 2026-10-29 and verified (see "Migration apply history per database"). Migrations 007 (domain registry) and 009 (portal discovery) are DRAFT and NOT applied; the decision on 007 (apply, revise or keep as draft) is pending the owner. Sections below dated earlier are history and are kept as written unless marked. Files keep their `pending/` locations and `.sql.draft` names; they are not renamed after application.
 
-## Current state (2026-10-01)
-- Per the 2026-09-30 read-only catalog check (Round 1 summary), the live `vera_vjay` schema has 13 tables:
-  migrations 001-004 are applied, not only M1. The "NOT YET DEPLOYED" wording in the 003 and 004 `.sql` headers was stale and was corrected 2026-10-02 (comment-only edits; no SQL statement changed).
-- Migration 005 (`005_vera_m6_schema_sync.sql`, B1) columns exist live, verified read-only 2026-10-01 (see the
-  last section). The working-tree 005 differs from the committed one: the `evidence_relations.run_id` backfill was
-  removed (spans have no `run_id`; the table was empty at apply time). M4 owns setting `run_id` on new rows;
-  that ownership is to be confirmed by R1. The 005 header comment was corrected 2026-10-02 to say so (comment-only).
-- Three login accounts were applied 2026-10-01 (see "Accounts and password hashing"). The pipeline runners are
-  not yet repointed to them; the write-only grants were exercised for `/ask` corpus admission on 2026-10-07 (see
-  "Update 2026-10-07" below).
-- Migration states, read from the files 2026-10-02: 001 and 002 are fresh-install files (not applied on this database; 001u replaced them); 001u applied; 003 and 004 applied; 005 applied. The 005 grants (UPDATE on `appraisals` and `evidence_relations`, UPDATE on `runs` for the rw group) mean those two tables are **not** append-only by grant; only `sources` and `canonical_sources` are immutable (trigger plus grants).
-- Dev and production share this one schema (account distinction only). Nothing under `db/` is committed
-  except what B1 committed; commit only after the owner validates.
+## Migration apply history per database (current state; as of 2026-10-30)
+VERA-DAR uses the database `vera_dar_db`; `vera_vjay` is the schema inside it. The earlier VERA-era database, in which the schema was also named `vera_vjay`, is the historical legacy VERA database and is not VERA-DAR; its column is kept as history.
+The files stay where they are (`pending/`, `.sql.draft` names unchanged); this table records where each was applied. Numbers and file contents are not changed after application.
+
+| Migration | File (sha256 prefix) | Historical legacy VERA database (not VERA-DAR) | `vera_dar_db` |
+| --- | --- | --- | --- |
+| 006 licence observations | `pending/006_vera_licence_observations.sql` (`c7c55a43`) | applied 2026-10-09 (owner-approved, commit f1f044a) | applied 2026-10-29 by the owner, verified (OD-1028(59)) |
+| 011 topic registry | `pending/011-DRAFT-topic-registry.sql.draft` (`311b1cdc`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
+| 012 classifier categories | `pending/012-DRAFT-classifier-categories.sql.draft` (`f8267e6c`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
+
+Not applied to `vera_dar_db` (state recorded 2026-10-29, not re-checked against the database 2026-10-30):
+
+| Migration | File | Status |
+| --- | --- | --- |
+| 007 domain registry | `pending/007-DRAFT-domain-registry.sql.draft` | DRAFT, not applied; **pending owner decision** (apply / revise / keep draft). Not done |
+| 009 portal discovery | `pending/009-DRAFT-portal-discovery.sql.draft` | DRAFT, not applied |
+
+This file owns migration status; other documents link here. Rollbacks in `rollback/` were not used. The runtime switches for 011 and 012 (`read_from_db`, `registration_enabled`, the topic judge) ship off.
 
 ## Files
 | File | Purpose |
@@ -39,10 +35,10 @@ Deployment order for this DB: done. For a fresh DB: 001, 002, then 003 at M3.
 | `accounts/create_vera_accounts.sql` | Not a migration (`apply_migrations.py` does not pick it up). Creates the 3 login accounts; applied 2026-10-01; contains no passwords |
 | `apply_migrations.py` | Subcommands `plan` (alias `--dry-run`; never connects), `inspect`, `rehearse` (local only), `apply`, `rollback` (inspect only, never executes). One transaction per file plus a `schema_migrations` row. See "Migration tool" below |
 | `migration_guard.py` | Stdlib-only id validation, exact file resolution, SQL lint, offline target classification |
-| `test_m1_roundtrip.py` | Round-trip test; always cleans up its rows |
+| `test_m1_roundtrip.py` | Round-trip test; always cleans up its rows. Observation as of 2026-10-29: not present in `repo/db/` (the "Round-trip test" section below is history) |
 
 ## Migration order
-- Fresh database: 001, 002, 003, 004, 005, in that order. This database was upgraded instead: 001u, then 003, 004, 005 (all applied; nothing is pending).
+- Fresh database: 001, 002, 003, 004, 005, in that order. This database was upgraded instead: 001u, then 003, 004, 005 (all applied as of 2026-10-01). As of 2026-10-29 also applied: 006, 011, 012 (see the apply-history table); not applied: 007 and 009 (DRAFT).
 - Idempotency: only 005 (and parts of 001u) can be re-run safely. **Do not re-run 003 or 004** against the live schema; they fail on existing objects. 001 refuses to drop a schema that holds data.
 - *Superseded by "Migration tool" below (historical record of the 120ab53 tool):* run any migration only as the admin identity and after a dry run (the OLD `--dry-run` ran the file then rolled back, and the old script imported `db.get_admin_engine` from week-1v2). The hardened tool's `--dry-run` never connects, and it never imports week-1v2 code.
 - Manual alternative: `psql -1 -f <file>` (single transaction).
@@ -60,7 +56,7 @@ Deployment order for this DB: done. For a fresh DB: 001, 002, then 003 at M3.
   given with `--approve-sha NNN=<sha256>` and matches the reviewed bytes (recorded as `approval_ref = OD-<id>@<sha12>`).
   The SQL lint is an advisory pre-check, not a safety certification: the gate is human review of the exact file.
   These are accident and audit controls; the barrier against misuse is the owner's custody of the admin password.
-- Bootstrap: `migrations/008_vera_schema_migrations.sql` is the only file accepted while the tracking table is absent.
+- Bootstrap: `migrations/008_vera_schema_migrations.sql` is the only file accepted while the tracking table is absent. Observation as of 2026-10-29: no file of that name exists in `repo/db/migrations/` (listing: 001, 001u, 002-005, `pending/`, `rollback/`), and `pending/` holds 006, 007, 009, 011, 012 only; the 008 bootstrap and the `schema_migrations` table are therefore not present in this tree (unverified whether the table exists in the database). The bootstrap and baseline text in this section describes the tool's design and is historical until such a file exists.
   `pending/006` stays in `pending/` until the owner-run baseline (catalog-verified, Approval 4) records it.
 - Options are per subcommand; any option a subcommand does not take is refused, never ignored. `--env-file` was removed
   (K18W INC-2). `--approve-sha`, when given, is enforced on every subcommand, including `plan` and local runs.
@@ -100,22 +96,6 @@ Deployment order for this DB: done. For a fresh DB: 001, 002, then 003 at M3.
 - The tool never executes a rollback file. `rollback <id>` only shows what the file would drop. Rollbacks are owner-run on
   an isolated database (`psql -1 -f`) with a separate same-turn approval, never on production for an applied migration.
 
-## Round-trip test
-`.venv/bin/python ../../../ai-eng-bootcamp.vera/db/test_m1_roundtrip.py` (needs a database and credentials) from the week-1v2 directory.
-Writes to PRODUCTION (EXTERNAL_DB_URL and INTERNAL_DB_URL are one instance). It creates a question ->
-run -> search iteration -> candidate (Gate A 0.85/fetch) -> fetches https://example.com (offline
-fallback text if unreachable) -> stores content + sha256 -> joins back and recomputes the hash ->
-checks immutability and CHECK constraints -> deletes every test row (marker `M1-ROUNDTRIP-TEST-<uuid>`)
-and asserts zero remain. Prints PASS/FAIL per check and total time. Cleanup runs even on failure.
-Identity sequences advance; that is not reversible and harmless.
-
-## Credentials
-`db.get_admin_engine()` reads `week-1v2/.env.db-accounts` (DB_ADMIN_ROLE, DB_ADMIN_PASSWORD, host, DB_NAME).
-Accepted divergence: the admin login is the one provided by the hosting platform (CREATEROLE/CREATEDB), which cannot be renamed. DDL uses it.
-The schema is `vera_vjay`. Migration 001 creates NOLOGIN group roles `vera_vjay_rw` / `vera_vjay_ro` only (no
-passwords). The login accounts the pipeline should use now exist (see "Accounts and password hashing"); the
-earlier plan to create a further `vera_api_rw` login is not to be carried out (no more accounts).
-
 ## Schema walkthrough (every table serves a gate or an audit need)
 - `questions`: governing question + Evidence Requirements Map (JSONB). Audit anchor.
 - `runs`: one execution; baseline vs engineered response, `eval_metrics` JSONB (M6).
@@ -145,7 +125,7 @@ earlier plan to create a further `vera_api_rw` login is not to be carried out (n
 The standalone `001_m4_m5_vera_vjay.sql` (TEXT run_id, no FKs) no longer exists: it was replaced by
 `004_vera_m4_m5_additions.sql` (per the 004 header). Nothing is left to reconcile with it. Still open: R1 to confirm that
 M4 owns the removed 005 `evidence_relations.run_id` backfill; the evaluation-design schema additions (`as_of_quarter`,
-`run_type`, config fingerprint, per-sub-test rows) are not written (see `VERA-EVAL-BEST-PRACTICES.md`, O7).
+`run_type`, config fingerprint, per-sub-test rows) are not written (planned, not tracked in this repository).
 
 ## Accounts and password hashing (applied 2026-10-01)
 Three logins (created by `db/accounts/create_vera_accounts.sql`, applied 2026-10-01; the script is idempotent): `vera_claude_code_rw` (dev, read/write),
@@ -166,38 +146,16 @@ Update 2026-10-07:
 - **Read-only URL added.** `VERA_DB_URL_RO` (`vera_eval_ro`) was added for the corpus description (`GET /corpus-summary`, item #83). The read-only SQL contract test now uses VERA-DAR's own `EXTERNAL_DB_URL` host, not another project's file.
 - **Still open.** `run_m2` under the write-only account (see above) is still unrun. Column grants of `vera_pipeline_wo` are UNTESTED against a live `m2_runner.py` run. Dev and prod share one schema (accepted divergence).
 
-## Live verification and contract test (2026-10-01)
-- B1 (migration 005, commit 28aae11) and B2 (eval freeze, 9fef487) verified live, read-only: the 005 columns exist (`runs.run_label`, `evaluated_at`, `engineered_score`, `baseline_score`, `question`; `appraisals.rubric_version`/`policy_version`; `evidence_relations.run_id`); the frozen question text equals `questions.question_id=2`. `question_id=7` is a test row pending an approved deletion.
-- C4: `tests/test_sql_contract.py` checks 87 (table, column) pairs against `vera_vjay`; all exist. M3's store writes `rubric_version`/`policy_version` to columns. `pytest tests`: 178 passed, 2 skipped, as of 2026-10-01, not re-run since.
-- Sources are stored here as immutable rows; no raw external sources in the repo (see `docs/vera-design.md` invariants).
-
 ## What the pipeline persists, and what it does not (code read 2026-10-02; live rows not queried)
 - Persisted: `gate_c_decisions` (decision and full detail per attempt; thresholds are code constants and are not stored with the rows); `claims.detailed_status` and `issues` (M5 fine-grained status); answers by stage with tokens, cost and latency; relations (`span1_id`, `span2_id`, `relation_type`, `confidence` only; `rationale` and `run_id` are not written by that insert); appraisals with rubric/policy version.
 - Not persisted: M2 search cost (returned in memory; appended to the file named by `$VERA_COST_LOG` only if set); the appraisal values and years behind an M5 `weak` label; relations dropped by the 60-cap or as malformed.
-- Not created by any production code: `runs` rows (only tests insert them), and `sub_question_ids` (read by Gate C, set by nothing). The pipeline therefore cannot yet run end to end; the plan is in the owner's private planning notes (not published).
-
-## Update 2026-10-12
-- **Migration 006** (`migrations/pending/006_vera_licence_observations.sql`, additive `licence_observations` table; destructive rollback in `migrations/rollback/`) was applied per database: to the legacy database `vera_vjay` on 2026-10-09 with the owner's approval (commit f1f044a); and to `vera_dar_db` by the owner on 2026-10-29 (sha256 c7c55a437bbc0c5521f6853be94b86ab81d47e027056ab65c1c3a8fee0bd3cae), verified 5/5 (see `records/decisions.md` OD-1028(59) and CLERK-1028-161/162). The file still sits in `pending/`. The loader is behind `licence_observations_enabled` (code default off; switched on in `config/ask-provider-chain.json` by R1 decision 2026-10-10). With 006, migrations 001u, 003, 004, 005 and 006 are applied.
-- **Memory rows** use the existing `claims`, `answers` and `evidence` tables under one fixed memory label; `claims.detailed_status` carries the D6 lifecycle: `memory:g1:pending` (written by `/ask`, not recalled) -> `memory:g1:confirmed` (owner-confirmed, the only recall-eligible state) or `memory:rejected`; `memory:tombstoned` marks forgotten rows and `memory:g1` marks legacy pre-D6 auto-written rows (not recalled, listed for review).
-- **Test count.** The 178-passed figure above is stale: `pytest tests` was 965 passed, 3 skipped on 2026-10-12.
-- **Hosting.** The hosting database plan was upgraded (2026-10-12); the earlier 2026-10-17 expiry no longer applies. The database remains the shared production instance.
-
-## Migration apply history per database (2026-10-29)
-The files stay where they are (`pending/`, `.sql.draft` names unchanged); this table records where each was applied. Numbers and file contents are not changed after application.
-
-| Migration | File (sha256 prefix) | Legacy `vera_vjay` | `vera_dar_db` |
-| --- | --- | --- | --- |
-| 006 licence observations | `pending/006_vera_licence_observations.sql` (`c7c55a43`) | applied 2026-10-09 (owner-approved, commit f1f044a) | applied 2026-10-29 by the owner, verified (OD-1028(59)) |
-| 011 topic registry | `pending/011-DRAFT-topic-registry.sql.draft` (`311b1cdc`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
-| 012 classifier categories | `pending/012-DRAFT-classifier-categories.sql.draft` (`f8267e6c`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
-
-Rollbacks in `rollback/` were not used. The runtime switches for 011 and 012 (`read_from_db`, `registration_enabled`, the topic judge) ship off.
+- Not created by any production code: `runs` rows (only tests insert them), and `sub_question_ids` (read by Gate C, set by nothing). The pipeline therefore could not run end to end as of that date (history; not re-assessed).
 
 ## Migration 007 (domain registry, DRAFT) role order
-`pending/007-DRAFT-domain-registry.sql.draft` fails closed. Required order: (1) roles via `db/accounts/create_vera_accounts.sql`, (2) migrations 001-005, (3) 007. If `vera_vjay_wo` or `vera_vjay_ro` is missing, 007 raises in its first statement, before any DDL (run with `psql -1`), instead of skipping the grants and leaving later writes to fail with "permission denied for table research_domains". `vera_vjay_rw` stays optional (NOTICE, grant skipped). Grants: RO = SELECT; WO = INSERT plus SELECT (domain_id). Still a draft: not executed, pending owner Approval 1.
+`pending/007-DRAFT-domain-registry.sql.draft` fails closed. Required order: (1) roles via `db/accounts/create_vera_accounts.sql`, (2) migrations 001-005, (3) 007. If `vera_vjay_wo` or `vera_vjay_ro` is missing, 007 raises in its first statement, before any DDL (run with `psql -1`), instead of skipping the grants and leaving later writes to fail with "permission denied for table research_domains". `vera_vjay_rw` stays optional (NOTICE, grant skipped). Grants: RO = SELECT; WO = INSERT plus SELECT (domain_id). Still a draft as of 2026-10-29: not executed; the owner's decision on 007 is pending (the topic registry went to 011 instead). The release gate's live catalog check (a2) reports (table, column) pairs missing for the domain-registry schema (`research_domains.*`, `domain_chunks.asserted_by`) while 007 stays unapplied (see `docs/release-checks.md`).
 
 ## Update 2026-10-19 (PLAN-ENV, ENV-C): env files, disabled paths
-- Env files now come from `R/config/env` via `vera.env_files` (`.env-intern` and `.env-vera`, read only to fingerprint
+- Env files now come from the project-root `config/env` directory (written `R/config/env` in the original note) via `vera.env_files` (`.env-intern` and `.env-vera`, read only to fingerprint
   production endpoints, password values dropped). The `WEEK1` search is gone. `.env-local-pg` and `.test-db-marker` are
   named there; the marker is never read.
 - D-ENV-5 (owner decision: DEFER): `--target production` is DISABLED (`PRODUCTION_PATH_ENABLED = False`) and refuses with
@@ -208,3 +166,60 @@ Rollbacks in `rollback/` were not used. The runtime switches for 011 and 012 (`r
   refuses when no fingerprint source exists (`no_sources`). `plan` and `rollback` never connect and still work.
 - After fingerprinting, inherited DB URL, PG*, KRB5*, GSS*, admin, TLS and proxy names are removed from the process env.
 - Migrations 006 and 007 are not run by this tool.
+
+## Appendix: history (dated; HISTORICAL, kept as written, superseded by the sections above where they differ)
+
+Everything below is a dated record from 2026-09-30 to 2026-10-12 and is not a current-status source.
+
+STATUS (2026-09-30 22:05 PDT): DEPLOYED to production as an in-place upgrade (not a reset).
+`001u_vera_upgrade_in_place.sql` + `003_vera_m3_plus_tables.sql` applied; round-trip test 17/17 PASS in 5s.
+The 20 pre-existing candidates, 1 question and 1 run are intact (checksum identical before/after;
+a local JSON backup (not published)).
+`001` + `002` are for FRESH installs only (001 refuses to drop a schema that holds data); on this
+database the upgrade replaced them. Differences on the upgraded DB: ids are BIGINT with serial-style
+defaults (not IDENTITY); legacy candidates have `gate_a_decision` NULL = "not recorded" and the
+"scored => decision" CHECK is NOT VALID (enforced for new/updated rows only). Existing `idx_*` indexes kept.
+M2 code writing Gate A scores MUST now also set `gate_a_decision` (fetch/defer/reject).
+Deployment order for this DB: done. For a fresh DB: 001, 002, then 003 at M3.
+
+## Current state (2026-10-01)
+- Per the 2026-09-30 read-only catalog check (Round 1 summary), the live `vera_vjay` schema has 13 tables:
+  migrations 001-004 are applied, not only M1. The "NOT YET DEPLOYED" wording in the 003 and 004 `.sql` headers was stale and was corrected 2026-10-02 (comment-only edits; no SQL statement changed).
+- Migration 005 (`005_vera_m6_schema_sync.sql`, B1) columns exist live, verified read-only 2026-10-01 (see the
+  last section). The working-tree 005 differs from the committed one: the `evidence_relations.run_id` backfill was
+  removed (spans have no `run_id`; the table was empty at apply time). M4 owns setting `run_id` on new rows;
+  that ownership is to be confirmed by R1. The 005 header comment was corrected 2026-10-02 to say so (comment-only).
+- Three login accounts were applied 2026-10-01 (see "Accounts and password hashing"). The pipeline runners are
+  not yet repointed to them; the write-only grants were exercised for `/ask` corpus admission on 2026-10-07 (see
+  "Update 2026-10-07" below).
+- Migration states, read from the files 2026-10-02: 001 and 002 are fresh-install files (not applied on this database; 001u replaced them); 001u applied; 003 and 004 applied; 005 applied. The 005 grants (UPDATE on `appraisals` and `evidence_relations`, UPDATE on `runs` for the rw group) mean those two tables are **not** append-only by grant; only `sources` and `canonical_sources` are immutable (trigger plus grants).
+- Dev and production share this one schema (account distinction only). Nothing under `db/` is committed
+  except what B1 committed; commit only after the owner validates.
+
+## Update 2026-10-12
+- **Migration 006** (`migrations/pending/006_vera_licence_observations.sql`, additive `licence_observations` table; destructive rollback in `migrations/rollback/`) was applied per database: to the historical legacy VERA database (not VERA-DAR) on 2026-10-09 with the owner's approval (commit f1f044a); and to `vera_dar_db` by the owner on 2026-10-29 (sha256 c7c55a437bbc0c5521f6853be94b86ab81d47e027056ab65c1c3a8fee0bd3cae), verified 5/5 (owner decisions OD-1028(59), recorded outside this repository). The file still sits in `pending/`. The loader is behind `licence_observations_enabled` (code default off; switched on in `config/ask-provider-chain.json` by R1 decision 2026-10-10). With 006, migrations 001u, 003, 004, 005 and 006 are applied.
+- **Memory rows** use the existing `claims`, `answers` and `evidence` tables under one fixed memory label; `claims.detailed_status` carries the D6 lifecycle: `memory:g1:pending` (written by `/ask`, not recalled) -> `memory:g1:confirmed` (owner-confirmed, the only recall-eligible state) or `memory:rejected`; `memory:tombstoned` marks forgotten rows and `memory:g1` marks legacy pre-D6 auto-written rows (not recalled, listed for review).
+- **Test count.** The 178-passed figure above is stale: `pytest tests` was 965 passed, 3 skipped on 2026-10-12, both historical and not authoritative. No count is stored in the repo; run the offline command in `docs/development.md` and record the revision and counts with the result.
+- **Hosting.** The hosting database plan was upgraded (2026-10-12); the earlier 2026-10-17 expiry no longer applies. The database remains the shared production instance.
+
+## Live verification and contract test (2026-10-01)
+- B1 (migration 005, commit 28aae11) and B2 (eval freeze, 9fef487) verified live, read-only: the 005 columns exist (`runs.run_label`, `evaluated_at`, `engineered_score`, `baseline_score`, `question`; `appraisals.rubric_version`/`policy_version`; `evidence_relations.run_id`); the frozen question text equals `questions.question_id=2`. `question_id=7` is a test row pending an approved deletion.
+- C4: `tests/test_sql_contract.py` checks 87 (table, column) pairs against `vera_vjay`; all exist. M3's store writes `rubric_version`/`policy_version` to columns. `pytest tests`: 178 passed, 2 skipped, as of 2026-10-01, not re-run since.
+- Sources are stored here as immutable rows; no raw external sources in the repo (see `docs/vera-design.md` invariants).
+
+## Round-trip test (historical; script not present in repo/db as of 2026-10-29)
+Historical invocation, from a different (course-service) tree; the script is not in this repository. Do not run it: the configured database is production.
+Writes to PRODUCTION (EXTERNAL_DB_URL and INTERNAL_DB_URL are one instance). It creates a question ->
+run -> search iteration -> candidate (Gate A 0.85/fetch) -> fetches https://example.com (offline
+fallback text if unreachable) -> stores content + sha256 -> joins back and recomputes the hash ->
+checks immutability and CHECK constraints -> deletes every test row (marker `M1-ROUNDTRIP-TEST-<uuid>`)
+and asserts zero remain. Prints PASS/FAIL per check and total time. Cleanup runs even on failure.
+Identity sequences advance; that is not reversible and harmless.
+
+## Credentials
+(Historical, course-service era; the current tool reads env files via `vera.env_files`, see Update 2026-10-19.) `db.get_admin_engine()` reads `week-1v2/.env.db-accounts` (DB_ADMIN_ROLE, DB_ADMIN_PASSWORD, host, DB_NAME).
+Accepted divergence: the admin login is the one provided by the hosting platform (CREATEROLE/CREATEDB), which cannot be renamed. DDL uses it.
+The schema is `vera_vjay`. Migration 001 creates NOLOGIN group roles `vera_vjay_rw` / `vera_vjay_ro` only (no
+passwords). The login accounts the pipeline should use now exist (see "Accounts and password hashing"); the
+earlier plan to create a further `vera_api_rw` login is not to be carried out (no more accounts).
+

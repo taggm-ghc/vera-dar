@@ -4,7 +4,9 @@
 
 VERA-DAR's principal evaluation question is whether evidence-grounded context construction results in materially better research answers than an otherwise comparable model answering directly. The available experiments are informative but do not establish that claim.
 
-## Historical TRACE comparison
+## Historical TRACE comparison (HISTORICAL; not the current system)
+
+This is the canonical copy of the TRACE v1 results; other pages link here. The results are HISTORICAL: they were run on an earlier build (0094955) with an abstract-grounded variant, and they do not describe the current full-document system. The Trace Eval page (`GET /trace/public`) shows the same historical aggregate with its method and limitations.
 
 A 2026-10-04 experiment used 30 frozen, agent-authored questions (20 development, 10 held-out). Two variants used `gpt-4.1-nano`: a question-only baseline and a grounded variant supplied with up to five numbered arXiv abstracts. Both were scored using the same frozen deterministic checks.
 
@@ -25,9 +27,24 @@ The analysis also reports that four deterministic checks over-flagged some passi
 
 ## Later, non-comparable measurement
 
-A separate evaluation of a later abstract-grounded `/ask` configuration (since superseded by the default reading-list behaviour) reported 19 of 30 questions answered with checked citations, zero unresolvable citations among 57, and 9 of 105 checked claims classified as unsupported (8.6%, with reported Wilson 95% interval 4.6%–15.5%) before removal from the displayed answer.
+A separate evaluation of a later abstract-grounded `/ask` configuration (since superseded: the current system answers only from admitted full-document passages, and abstracts are not used as evidence; see [Default behaviour](api.md#default-behaviour)) reported 19 of 30 questions answered with checked citations, zero unresolvable citations among 57, and 9 of 105 checked claims classified as unsupported (8.6%, with reported Wilson 95% interval 4.6%–15.5%) before removal from the displayed answer.
 
 **This is not a before-and-after estimate.** That later run did not have a direct-model baseline evaluated under the same claim-check procedure. It therefore does not prove a gain attributable to the retrieval and checking changes.
+
+## Scope-router fix (offline layer-1 measurement)
+
+This counts how the layer-1 rule set of the scope router (`config/scope_router.json`) routes questions; it is **not an answer success rate**. The earlier rules blocked topic words such as "medicine" or "stocks"; the fix replaces topic blocking with intent-based rules. Measured on the 85-probe set the fix was developed against (48 that should pass, 37 that should be blocked; not held out), layer 1 only, reproduced independently twice:
+
+| Measure (offline layer-1 scope router) | Before | After the fix |
+|---|---:|---:|
+| Benign questions wrongly blocked | 34/48 | 0/48 |
+| Should-block questions caught | 28/37 | 36/37 |
+
+Limits: layer 1 only, no model calls; the probe set was written before the fix, was used while developing it (three probes appear in the tests), is not held out and has not been externally reviewed; one operational-harm probe still passes layer 1 and relies on layer 2. Real-model layer-2 behaviour under the new prompt is untested (assumed).
+
+## Status note (as of 2026-10-30)
+
+**No current-system measurement exists.** No before/after measurement of the current full-document pipeline has been made, and no evaluation of the current discovery-to-answer path has been published. Not measured: answer quality of the current full-document path, any comparison with other systems, the accuracy of the claim checker, and live production behaviour of discovery-to-answer acquisition. The figures above are dated history (2026-10-04 and a later run); they were not re-measured in this documentation pass. Test-suite counts reported elsewhere are branch- and revision-specific; record the command, revision and counts rather than quoting one number.
 
 ## Remaining research questions
 

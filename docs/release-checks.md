@@ -4,6 +4,31 @@ Owner instruction DEPLOY-1 (2026-10-19): document and automate the non-destructi
 release-gate checks; the production release authorization stays with the owner. No hosts, secrets or evidence content
 appear here or in the tool output.
 
+**Status as of 2026-10-30:** this file owns gate status. The release gate has NOT passed for `main`; the latest recorded run, on a candidate ahead of `main`, failed check (a2) (live catalog evidence). Migration 007 and the related change C1 are pending owner decision; neither is done. Sections headed "history" below are dated records, kept as written.
+
+<!-- TODO(DOCS-1030 D-REL): after the owner disposes the pending C1 decision, re-touch this file (gate status, the (a2) paragraph and the 007 reference) and the README gate sentence. Do not edit before that decision. -->
+
+## The release gate: six checks (`scripts/release_gate.py`, as of 2026-10-29)
+
+Read from the code (`run_offline_checks`, `release_gate.py:631-649`); the module docstring still lists only (a)-(c) plus (d) and omits (a2), so follow this table and the code. The gate must be run isolated (`python -I`); it exits 1 with `RESULT: FAIL (gate not run isolated)` otherwise.
+
+| Check (key printed by the gate) | Function | What it requires |
+| --- | --- | --- |
+| (a) test suite | `check_tests` | Full suite, with nonce-bound proof of OS-level network isolation |
+| (a2) live catalog evidence (required, owner-run) | `check_live_catalog_evidence` | Owner-run output of `scripts/live_catalog_check.py` bound to the candidate commit and passing the pinned checker `scripts/check_catalog_evidence_freshness.py` (see binding below) |
+| (b) frozen-file integrity | `check_frozen` | sha256 of the frozen scope set and trace questions match their recorded hashes |
+| (c1) no env key in widgets | `check_no_env_in_widgets` | Static check of UI files |
+| (c2) no unsafe_allow_html on model text | `check_no_unsafe_html` | Static check of UI files |
+| (c3) public mode default | `check_public_default` | Run in an isolated child process |
+
+A full run prints `RESULT: PASS (6 checks, 0 failed)`. Flags: `--catalog-evidence PATH`, `--expect-candidate-sha FULL40`, `--skip-tests` (diagnostics only; forces a failed result) and `--live` (adds a seventh check, (d) scope router layer 1, `check_live_scope`; not part of the normal gate). Only the exact last line `RESULT: PASS (N checks, 0 failed)` counts.
+
+**(a2) has no waiver, exemption or pending-list mechanism in the code** (observation as of 2026-10-29: no such option exists in `release_gate.py`). Missing, stale, edited or wrong-commit evidence, or evidence whose own `RESULT` is `FAIL`, fails the gate. Evidence that reports missing (table, column) pairs therefore blocks the gate until the database is changed by the owner or the schema code stops requiring them; documents cannot override it.
+
+Reference observation (evidence file read, not re-run): the (a2) evidence recorded for candidate b863375 ended `RESULT: FAIL` with 13 of 158 (table, column) pairs missing, all belonging to the unapplied domain-registry migration 007 (research_domains (5 columns), domain_corpus (4) and domain_chunks (4), all from draft migration 007). b863375 is two commits ahead of main d6681ae, so this says nothing about main passing. The decision on 007 is pending the owner (see `db/README.md`).
+
+Owner runbook: the steps are summarised under "Owner-only steps" below; the owner keeps the full runbook outside this repository. Keep `catalog-evidence-<sha12>.txt` and its `.sidecar` outside the repo tree so the worktree stays clean; the steps below summarise it.
+
 ## What is automated (`scripts/release_preflight.py`)
 
 Read-only and offline: no database, no network, no file writes by the tool itself (`--with-tests` runs the suite, which creates per-run dirs under `tmp/release-gate`), never runs `live_catalog_check.py`, never deploys.
@@ -17,10 +42,10 @@ Read-only and offline: no database, no network, no file writes by the tool itsel
 | G3 | `release_gate.py --skip-tests` sub-checks: (b) frozen-file hashes, (c1) no env key in widgets, (c2) no unsafe HTML on model text, (c3) public-mode default | FAIL |
 | G4 | R-028 persistence config: `corpus.enabled` false and discovery `layers` equal `["L0"]` (static config, not proof of production behaviour) | FAIL |
 | G5 | `fulldoc.enabled` state in `config/fulldoc_answer.json` | Shipped as true at 8b16bf3; the corpus source and deploy check are G5b (OWNER-REQUIRED) |
-| G5b | deploy-time owner check (not run by the script; `scripts/` is dockerignored): `fulldoc.enabled=true` and a corpus source is configured (local bundle via `VERA_FULLDOC_BUNDLE_DIR` for local runs; DB-backed chunks for the deployed API once implemented and authorized) and the API-key-protected `/health/dar` reports `fulldoc.status` = `ok` (codes and counts only; `not_configured` or `unusable` means the full-document path is inert or fails closed) | OWNER-REQUIRED |
+| G5b | deploy-time owner check (not run by the script; `scripts/` is dockerignored): `fulldoc.enabled=true` and a corpus source is configured. The path is OFF unless one is set: a local bundle directory named by `VERA_FULLDOC_BUNDLE_DIR`, or database-backed documents selected by the run id in `VERA_FULLDOC_DB_RUN_ID` (acquired documents are served only beside the DB-backed base corpus, and configuring both sources is refused: the corpus is reported unusable with code R-SOURCE, FACTS a3). The API-key-protected `/health/dar` must report `fulldoc.status` = `ok` (codes and counts only; `not_configured` or `unusable` means the full-document path is inert or fails closed). Config read only; live behaviour not verified | OWNER-REQUIRED |
 | G6 | candidate = `git rev-parse HEAD`, worktree clean | OWNER-REQUIRED if dirty (the owner commits the candidate) |
 | G7 | catalog evidence for the candidate passes the pinned freshness checker (see binding below) | OWNER-REQUIRED if missing or stale |
-| G8 | with `--with-tests` only: full `release_gate.py` (suite under OS network isolation, plus a2) with no `--live` | PASS, OWNER-REQUIRED if only (a2) fails, else FAIL; SKIPPED without the flag |
+| G8 | with `--with-tests` only: full `release_gate.py` (suite under OS network isolation, plus a2) with no `--live` | PASS, OWNER-REQUIRED if only (a2) fails, else FAIL; SKIPPED without the flag. This is the preflight's classification only: the gate itself has no waiver for (a2) |
 
 `--root` selects the tree to check (default: this repo). `--candidate-sha`, if given, must equal that tree's HEAD (else G6 FAIL). Git calls use a fixed PATH, no system/global config, fsmonitor off, untracked=all. G7 refuses to run the checker (FAIL) when G2 fails.
 
@@ -37,7 +62,7 @@ counts, and the owner authorizes the release.
 
 ## Owner-only steps (not run by any agent)
 
-Steps 1-3 run in the candidate worktree.
+Steps 1-3 run in the candidate worktree. Write the evidence and sidecar files OUTSIDE the repo tree (for example the parent directory of the worktree) and pass that path in step 4: an untracked file in the worktree makes it "not clean" and fails (a2). The redirect targets shown in steps 2-4 are file names only; prefix them with that outside directory.
 
 1. Commit the candidate so the worktree is clean; note `SHA=$(git rev-parse HEAD)`.
 2. Live catalog check (read-only, connects through the read-only account; owner-run):
@@ -69,11 +94,11 @@ run, or from an unclean worktree is stale: release_gate (a2) FAILs, and the pref
 is valid only for the 9c3dd56 fallback candidate. Changing `live_catalog_check.py` or the checker changes the pins
 and needs a guarded, owner-approved edit to `release_gate.py`.
 
-## Current status (2026-10-19, uncommitted reconciled tree; historical)
+## Preflight status record, history (recorded 2026-10-19; HISTORICAL, superseded by the gate status at the top of this file)
 
 Status as of 2026-10-22: the table below was last recorded 2026-10-19 and has not been re-run in this documentation pass (untested, assumed unchanged). The tree has since had commits (HEAD 50767a2 on 2026-10-21 per local git) and uncommitted edits, so G6 and G7 must be re-evaluated for any candidate.
 
 G1, G2, G3, G4 PASS; G5 fulldoc.enabled was false as of 2026-10-19 (shipped true at 8b16bf3; see G5 row above) and G6 dirty worktree are OWNER-REQUIRED; G7 has no evidence for the
 new script hash, so catalog evidence is stale/missing and OWNER-REQUIRED; G8 SKIPPED unless `--with-tests`.
 Overall PREFLIGHT: OWNER-REQUIRED (exit 3). G4 also notes `corpus.licence_observations_enabled` and
-`discovery_memory.write_on_l0` are true; the owner confirms they are inert with the Demo Day persistence settings.
+`discovery_memory.write_on_l0` are true; the owner confirms they are inert with the persistence settings of that date (Demo Day, 2026-10-23, has since passed).

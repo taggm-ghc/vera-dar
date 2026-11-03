@@ -5,10 +5,19 @@
 ## Requirements
 
 - Python 3.11 or later
-- A virtual environment (`.venv`) and the project's declared dependencies
+- A virtual environment outside the source tree, with the project's declared dependencies. Keep virtual environments, caches and build artifacts out of the repository tree. On this page, `<venv>/bin/python` stands for that environment's interpreter.
 - Provider credentials for any tests or requests that require model inference
 
 Keep credentials in a gitignored local environment file. Never commit real `.env` files or paste their contents into public logs.
+
+## Local environment
+
+Copy `.env.example` to a gitignored `.env` and fill in only the names you need; it documents each name. The variable names the serving code reads, and which are required, are listed once in [Deployment: environment configuration](deployment.md#environment-configuration). For local work:
+
+- `/ask` needs `VERA_API_KEY` and, as shipped, `GROQ_API_KEY`. `OPENAI_API_KEY` is needed only if the OpenAI fallback is turned on in `config/ask-provider-chain.json`.
+- A local full-document corpus needs either `VERA_FULLDOC_BUNDLE_DIR` (a bundle directory) or `VERA_FULLDOC_DB_RUN_ID` with `VERA_DB_URL_RO` (a pinned database run), not both.
+- Automatic acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. Set `VERA_AUTOACQ_DISABLED=true` to keep it off locally.
+- The configured database is the production database (see Data safety below). Leave the database URLs unset unless the task needs them.
 
 ## Run the API
 
@@ -18,7 +27,7 @@ From the repository root:
 ./run.sh
 ```
 
-The default development address is `http://127.0.0.1:8001`. Check `/health` to verify readiness. The local FastAPI documentation is at `/docs`.
+The default development address is `http://127.0.0.1:8001` (a port argument or `PORT` overrides it). `run.sh` is for local development only: it runs with auto-reload and sets `VERA_ENV_CONTEXT=local_dev`. The container entry point `start.sh` refuses to run outside the hosting platform. Check `/health` to verify readiness. The local FastAPI documentation is at `/docs`.
 
 To select a different port:
 
@@ -45,10 +54,10 @@ VERA_DEMO_SOURCE=fixture ./run_demo.sh
 The offline suite runs with:
 
 ```bash
-.venv/bin/python -I scripts/vera_test_runner.py -- tests -q
+<venv>/bin/python -I scripts/vera_test_runner.py -- tests -q
 ```
 
-If your virtual environment uses a different path, substitute its Python executable. Tests run offline; the test boundary refuses network and database connections. Live-stage tests need the pytest flag `--run-live-stages` (the live API test also needs API_BASE_URL); run them with plain `pytest`, because the project test runner refuses `--run-live-stages`. Record the actual command, revision and counts when reporting a result.
+Tests run offline; the test boundary refuses network and database connections. Live-stage tests need the pytest flag `--run-live-stages` (the live API test also needs API_BASE_URL); run them with plain `pytest`, because the project test runner refuses `--run-live-stages`. Record the actual command, revision and counts when reporting a result. No test count is stored in the repo and no single number is authoritative: reported counts differ by revision and branch. State the command, the git revision and the pass/fail/skip counts you observed, with the date.
 
 ## Data safety
 

@@ -2,6 +2,8 @@
 
 [← Project overview](../README.md)
 
+Current project status (dated) is kept in one place: [Status](../README.md#status) in the project overview. Rules for coding and research agents working in this repository are in [AGENTS.md](../AGENTS.md).
+
 ## Overview documents
 
 | Document | Contents |
@@ -9,14 +11,14 @@
 | [API and data use](api.md) | Public endpoints, response semantics, privacy and provenance limits |
 | [Architecture](architecture.md) | Public conceptual architecture and known gaps |
 | [Development](development.md) | Local requirements, startup and testing |
-| [Deployment](deployment.md) | Docker and Render setup for separate API and UI services |
-| [Evaluation and findings](evaluation.md) | TRACE methodology, measured results and limitations |
+| [Deployment](deployment.md) | Docker and Render (interim host) setup for separate API and UI services |
+| [Evaluation and findings](evaluation.md) | TRACE methodology, historical results (build 0094955) and limitations |
 
 ## Design and checks
 
 | Document | Contents |
 |---|---|
 | [vera-design.md](vera-design.md) | Full design, governing invariants and milestone status |
-| [release-checks.md](release-checks.md) | Release check procedures |
+| [release-checks.md](release-checks.md) | Release gate check procedures |
 | [trace_eval/](trace_eval/) | Frozen TRACE evaluation label files |
 | [../db/README.md](../db/README.md) | Database documentation |
