@@ -559,7 +559,7 @@ def trace_live(days: int = 7):
         return live_stats.read_aggregates(days, owner=False)
     except Exception as exc:  # noqa: BLE001
         logger.warning("trace live failed (%s)", type(exc).__name__)
-        return {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+        return {"enabled": live_stats.enabled(), "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
 
 
 @app.get("/trace/live/owner", dependencies=[Depends(verify_owner_key)])
@@ -569,7 +569,7 @@ def trace_live_owner(days: int = 7):
         return live_stats.read_aggregates(days, owner=True)
     except Exception as exc:  # noqa: BLE001
         logger.warning("trace live owner failed (%s)", type(exc).__name__)
-        return {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+        return {"enabled": live_stats.enabled(), "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
 
 
 @app.get("/trace/private", dependencies=[Depends(trace_viz.verify_viz_key)])

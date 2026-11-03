@@ -501,7 +501,7 @@ TAB_HISTORICAL, TAB_LIVE = "Historical", "Live aggregate"
 BANNER_HISTORICAL = "HISTORICAL: evaluation run dated {date} on an earlier build; it does not describe the current service."
 BANNER_CURRENT = "Evaluation run dated {date} on the build deployed now."
 LIVE_NOT_COLLECTING_TEXT = "Live statistics: not yet collecting."
-LIVE_INTRO_TEXT = "Anonymous aggregate usage counts. No question text and no identifier is kept. Small counts are hidden."
+LIVE_INTRO_TEXT = "One anonymous record per answer, with the time rounded to the hour; no question text or identifiers. Counts are shown by day; small counts are hidden."
 LIVE_TIMEOUT_S = 5
 _LIVE_HIDDEN_KEYS = {"tokens", "cost", "cost_usd", "total_tokens", "total_cost", "token_total", "tokens_total",
                      "cost_usd_total"}

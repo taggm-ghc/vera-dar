@@ -10,6 +10,8 @@
 -- are named by psql variables (defaults from db/accounts/create_vera_accounts.sql): app_wo_login=vera_pipeline_wo, app_ro_login=vera_eval_ro.
 -- The preflight RAISEs unless each group and login exists and each login inherits its group (pg_has_role USAGE).
 -- No role is created or altered; GRANT/REVOKE on the new table is part of this owner-run DDL, not a privilege change to any role.
+-- TIME PRECISION: `ts` is stored truncated to the hour (UTC): column default plus a BEFORE INSERT trigger that truncates any supplied value,
+-- so the row cannot be joined to access logs at finer than hour precision. The app writer never sends a ts.
 -- APPEND-ONLY: UPDATE/DELETE/TRUNCATE are revoked from everyone and a BEFORE UPDATE OR DELETE trigger (plus a TRUNCATE trigger) RAISEs.
 -- UNTESTED against a real PostgreSQL: the CHECKs and triggers have never been executed.
 -- Rollback (destructive, separate approval): db/migrations/rollback/013-DRAFT-vera-live-ask-stats-rollback.sql.draft
@@ -34,7 +36,7 @@ BEGIN
   IF pg_catalog.to_regclass('vera_vjay.live_ask_stats') IS NOT NULL
      OR pg_catalog.to_regtype('vera_vjay.live_ask_stats') IS NOT NULL
      OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
-                 WHERE ns.nspname = 'vera_vjay' AND p.proname IN ('live_ask_stats_append_only_trgfn','live_ask_stats_no_truncate_trgfn')) THEN
+                 WHERE ns.nspname = 'vera_vjay' AND p.proname IN ('live_ask_stats_append_only_trgfn','live_ask_stats_no_truncate_trgfn','live_ask_stats_hour_trgfn')) THEN
     RAISE EXCEPTION '013 already applied or name collision';
   END IF;
 END $$;
@@ -60,7 +62,7 @@ END $$;
 
 CREATE TABLE vera_vjay.live_ask_stats (
     stat_id           BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT live_ask_stats_pk PRIMARY KEY,
-    ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ts                TIMESTAMPTZ NOT NULL DEFAULT date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
     result_kind       TEXT NOT NULL CONSTRAINT live_ask_stats_result_kind_chk
         CHECK (result_kind IN ('answer','partial_answer','decline','reading_list','self_description','other')),
     research_outcome  TEXT NOT NULL CONSTRAINT live_ask_stats_research_outcome_chk
@@ -73,6 +75,17 @@ CREATE TABLE vera_vjay.live_ask_stats (
     cost_usd          NUMERIC(12,6) NOT NULL CONSTRAINT live_ask_stats_cost_chk CHECK (cost_usd >= 0)
 );
 CREATE INDEX live_ask_stats_ts_idx ON vera_vjay.live_ask_stats (ts);
+COMMENT ON COLUMN vera_vjay.live_ask_stats.ts IS 'Answer time truncated to the hour (UTC); one anonymous row per answer.';
+
+-- Hour truncation on every INSERT, whatever the caller supplies.
+CREATE FUNCTION vera_vjay.live_ask_stats_hour_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  NEW.ts := pg_catalog.date_trunc('hour', COALESCE(NEW.ts, pg_catalog.now()) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER live_ask_stats_hour_trg BEFORE INSERT ON vera_vjay.live_ask_stats
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.live_ask_stats_hour_trgfn();
 
 -- Append-only: any UPDATE or DELETE raises, for every role.
 CREATE FUNCTION vera_vjay.live_ask_stats_append_only_trgfn() RETURNS trigger LANGUAGE plpgsql

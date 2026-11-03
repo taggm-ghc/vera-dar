@@ -57,7 +57,7 @@
         "heading": "The other pages",
         "paragraphs": [
           "Report: either a live report from asking VERA-DAR, or an offline example labelled \"illustrative, not a real run\".",
-          "Trace Eval: a dated evaluation run (Historical) and, once collection is switched on, live aggregate statistics (Live). The Historical figures describe that earlier run, not the current service."
+          "Trace Eval: a dated evaluation run (Historical) and, once collection is switched on, live usage statistics (Live). The Historical figures describe that earlier run, not the current service."
         ]
       },
       {

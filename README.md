@@ -112,6 +112,8 @@ These count how the rule layer routes questions. They say nothing about whether 
 
 ## Memory and what is stored
 
+**Live statistics (off by default).** When the owner enables live stats, one anonymous record is kept per answer (result type, counts, latency, time rounded to the hour; no question text or identifiers). While the flag is off, nothing changes.
+
 Five questions, answered from the code of this candidate:
 
 1. **What persists?** The evidence corpus: open-access full-text documents the operator selected or that automatic acquisition added (title, landing URL, licence, full-text chunks, provenance). **User memory is off**: no visitor profile, no conversation memory, and the question and the derived search query are not stored. `memory.store.enabled` is `false` in `config/ask-provider-chain.json`, and the owner review routes (`/memory/...`) return 503.

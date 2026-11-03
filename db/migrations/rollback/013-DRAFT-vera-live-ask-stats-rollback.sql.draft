@@ -4,10 +4,12 @@
 -- Export the table first. The schema vera_vjay is shared and NOT dropped; the USAGE grants on it predate this file for other tables.
 -- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
 BEGIN;
+DROP TRIGGER IF EXISTS live_ask_stats_hour_trg ON vera_vjay.live_ask_stats;
 DROP TRIGGER IF EXISTS live_ask_stats_no_truncate_trg ON vera_vjay.live_ask_stats;
 DROP TRIGGER IF EXISTS live_ask_stats_append_only_trg ON vera_vjay.live_ask_stats;
 DROP INDEX IF EXISTS vera_vjay.live_ask_stats_ts_idx;
 DROP TABLE IF EXISTS vera_vjay.live_ask_stats;
+DROP FUNCTION IF EXISTS vera_vjay.live_ask_stats_hour_trgfn();
 DROP FUNCTION IF EXISTS vera_vjay.live_ask_stats_no_truncate_trgfn();
 DROP FUNCTION IF EXISTS vera_vjay.live_ask_stats_append_only_trgfn();
 COMMIT;

@@ -292,3 +292,54 @@ def test_secret_and_host_scan():
         if p == Path(__file__):
             text = text.replace("postgresql://secret-host/db", "")
         assert not pat.search(text), p
+
+
+# ---- WP6b security hardening
+def test_migration_truncates_ts_to_the_hour_and_rollback_drops_it():
+    f, r = _sql(FWD), _sql(RBK)
+    assert "date_trunc('hour'" in f and "live_ask_stats_hour_trg BEFORE INSERT" in f and "COMMENT ON COLUMN" in f
+    assert "live_ask_stats_hour_trg" in r and "live_ask_stats_hour_trgfn" in r
+    assert "NOT EXECUTED" in FWD.read_text().splitlines()[0] and "NOT EXECUTED" in RBK.read_text().splitlines()[0]
+
+
+def test_writer_never_sends_a_timestamp():
+    eng = FakeEngine()
+    assert ls.record(BODY, 5, cfg=ON, env=ENV, engine_factory=factory(eng)) is True
+    ins = [(s, p) for s, p in eng.calls if "INSERT" in s][0]
+    assert "ts" not in ins[1] and " ts" not in ins[0].split("VALUES")[0]
+
+
+def test_wording_is_per_answer_record_rounded_to_hour():
+    from vera import help_pages
+    from vera.trace_eval import ui
+    for s in (help_pages.LIVE_STATS_LINE, ui.LIVE_INTRO_TEXT):
+        assert "one anonymous record per answer" in s.lower() and "rounded to the hour" in s
+        assert "no question text or identifiers" in s and "aggregate usage counts" not in s
+
+
+def test_failing_reader_is_bounded_and_negative_cached():
+    seen = {}
+
+    def fac(url, **kw):
+        seen.update(kw)
+        return FakeEngine(boom=True)
+    t0 = time.monotonic()
+    a = ls.read_aggregates(7, cfg=ON, env=ENV, engine_factory=fac)
+    assert time.monotonic() - t0 < 2.5 and a["total"] == 0
+    assert seen["pool_timeout"] <= 2.5 and seen["connect_args"]["connect_timeout"] <= 3
+    calls = []
+    ls.reset_for_tests()
+    eng = FakeEngine(boom=True)
+    kw = dict(cfg=ON, env=ENV, engine_factory=factory(eng))
+    x = ls.read_aggregates(7, **kw); y = ls.read_aggregates(7, **kw)
+    assert x is y and sum(1 for s, _ in eng.calls if "SET LOCAL" in s) == 1
+
+
+def test_trace_live_fallback_reports_the_real_flag(monkeypatch):
+    import main
+    monkeypatch.setattr(main.live_stats, "read_aggregates", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(main.live_stats, "enabled", lambda cfg=None: False)
+    c = TestClient(main.app)
+    assert c.get("/trace/live").json()["enabled"] is False
+    monkeypatch.setattr(main.live_stats, "enabled", lambda cfg=None: True)
+    assert c.get("/trace/live").json()["enabled"] is True

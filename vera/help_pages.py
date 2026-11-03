@@ -43,7 +43,7 @@ def answer_sources() -> str:
 
 
 LIVE_STATS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "live_stats.json"
-LIVE_STATS_LINE = "VERA-DAR keeps anonymous aggregate usage counts (no question text, no identifier)."
+LIVE_STATS_LINE = "VERA-DAR keeps one anonymous record per answer, with the time rounded to the hour; no question text or identifiers."
 
 
 def live_stats_enabled(path: Path = LIVE_STATS_CONFIG_PATH) -> bool:

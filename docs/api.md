@@ -28,7 +28,7 @@ The owner-only endpoints require `VERA_OWNER_KEY` in the `X-Owner-Key` header; w
 
 ## Streaming request (`POST /ask/stream`)
 
-Contract version `1.3`. The body is the `POST /ask` body. Authentication (401) and the public-mode usage caps (429) are checked before streaming starts, and one POST uses one cap slot. The response is `application/x-ndjson` with `X-Accel-Buffering: no` and `Cache-Control: no-cache`; each line is flushed as it is written. Nothing is stored server side beyond the request.
+Contract version `1.3`. The body is the `POST /ask` body. Authentication (401) and the public-mode usage caps (429) are checked before streaming starts, and one POST uses one cap slot. The response is `application/x-ndjson` with `X-Accel-Buffering: no` and `Cache-Control: no-cache`; each line is flushed as it is written. Nothing is stored server side beyond the request, except that when the owner enables live stats, one anonymous record per answer is kept (time rounded to the hour; no question text or identifiers); while the flag is off, nothing changes.
 
 Lines (one JSON object each):
 

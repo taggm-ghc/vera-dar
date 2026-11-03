@@ -3,6 +3,7 @@
 Stored fields are enums or ints only: no question text, no client id, no IP, no free text. The writer is fail-open and
 runs as a background task (never inline in the request). The public reader returns day-bucketed counts with small-count
 and complementary suppression and never tokens or cost; the owner reader adds token and cost totals.
+Row time: the writer never sends a timestamp; the table stores it truncated to the hour (UTC), one record per answer.
 NOT YET APPLIED: the table comes from the draft migration db/migrations/pending/013-DRAFT-*.sql.draft (owner-run DDL).
 """
 from __future__ import annotations
@@ -156,6 +157,7 @@ def _query(window_days: int, cfg: dict, env, factory, owner: bool) -> list:
         eng = _ENGINES.get(("ro", url))
         if eng is None:
             eng = factory(url, hide_parameters=True, pool_pre_ping=True, pool_size=1, max_overflow=0,
+                          pool_timeout=float(cfg.get("pool_timeout_s") or 2),
                           connect_args={"connect_timeout": int(cfg.get("connect_timeout_s") or 2),
                                         "options": f"-c statement_timeout={int(cfg.get('statement_timeout_ms') or 2000)}"})
             _ENGINES[("ro", url)] = eng
@@ -187,7 +189,10 @@ def read_aggregates(window_days: int = 7, *, owner: bool = False, cfg: dict | No
         rows = _query(w, cfg, env, engine_factory, owner)
     except Exception as exc:  # noqa: BLE001
         logger.warning("live_stats read failed: LS_READ_ERROR (%s)", type(exc).__name__)
-        return {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+        empty = {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+        with _CACHE_LOCK:  # negative cache: a slow or down reader is not retried by every unauthenticated call
+            _CACHE[key] = (now(), empty)
+        return empty
     rows = [{"day": str(r["day"]), "kind": _enum(r["result_kind"], RESULT_KINDS), "n": _int(r["n"]),
              "med": _int(r.get("median_latency_ms")), "tokens": _int(r.get("tokens")),
              "cost": float(r.get("cost_usd") or 0)} for r in rows]
