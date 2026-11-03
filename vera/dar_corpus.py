@@ -348,6 +348,32 @@ class DarCorpus:
         q = self._stems(question)
         return len(q & self._stems(text)) / len(q) if q else 0.0
 
+    def floor_external(self, question: str, external: list, pool: list | None = None) -> list:
+        """NONASK-1103 WP-H (FLAG-OFF: corpus.reading_list_floor.enabled must be exactly true; absent = off): drop
+        external results below a topical-fit floor. An item stays only if relevance(title + snippet) >= min_relevance
+        AND it contains a non-generic question stem (the WP-G1 anchor function, df over the candidate pool titles and
+        snippets, anchor cut max_df_ratio). Stored items (span / in_corpus) are never touched. Flag off, a missing or
+        invalid threshold, or any error returns the input list by identity."""
+        fc = self.ccfg.get("reading_list_floor")
+        if not isinstance(fc, dict) or fc.get("enabled") is not True:
+            return external
+        try:
+            from vera.fulldoc_admission import topic_anchor_stems
+
+            floor, cut = float(fc["min_relevance"]), float(fc["max_df_ratio"])
+            txt = lambda r: f"{r.get('title') or ''} {r.get('snippet') or ''}"  # noqa: E731
+            texts = [txt(r) for r in list(pool if pool is not None else external) if isinstance(r, dict)]
+            df: dict = {}
+            for t in texts:
+                for st in self._stems(t):
+                    df[st] = df.get(st, 0) + 1
+            anchors = topic_anchor_stems(self._stems(question), df, len(texts), cut)
+            keep = [r for r in external if not isinstance(r, dict) or r.get("span") or r.get("in_corpus")
+                    or (self.relevance(question, txt(r)) >= floor and (not anchors or anchors & self._stems(txt(r))))]
+            return keep if len(keep) != len(external) else external
+        except Exception:  # noqa: BLE001  (fails open to the current behaviour)
+            return external
+
     def rank_merge(self, question: str, external: list, stored: list, n: int) -> list:
         """Order external results and stored chunks under one policy; truncation happens later, in the caller.
         * the first head = min(len(external), max(min_fallback_slots, n - stored_merge_max)) external results are
@@ -359,6 +385,7 @@ class DarCorpus:
           (ties: external first, then original rank); a document present in both (same DOI/URL) appears once, the
           external entry kept."""
         ccfg = self.ccfg
+        external = self.floor_external(question, external, list(external) + list(stored))  # WP-H, flag off = identity
         if not external:
             return list(stored)
         m = int(ccfg["stored_merge_max"])

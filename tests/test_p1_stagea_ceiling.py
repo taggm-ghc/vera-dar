@@ -53,7 +53,7 @@ def test_inline_budget_respects_a_daily_cap_when_one_is_set():
 def test_page_size_supplies_31_candidates_per_provider_in_one_request():
     c = acq_config.load_config()
     assert c["search"]["results_per_provider"] == 31 and c["search"]["europepmc"]["page_size"] == 31
-    assert c["bounds"]["max_search_calls_per_job"] == 6 and c["search"]["max_calls_per_provider_per_job"] == 1
+    assert c["bounds"]["max_search_calls_per_job"] == 7 and c["search"]["max_calls_per_provider_per_job"] == 1
 
 
 def test_europepmc_one_request_uses_page_size_31():
@@ -75,7 +75,7 @@ def test_shortlist_ceiling_is_31_and_discovered_max_does_not_clip_it():  # OD-10
     c = acq_config.load_config()
     assert int(acq_config.bound(c, "max_candidates_resolved")) == 31
     assert acq_discovered.discovered_max(c) == 31
-    assert c["bounds"]["max_search_calls_per_job"] == 6 and c["inline"]["per_doc_timeout_s"] == 25
+    assert c["bounds"]["max_search_calls_per_job"] == 7 and c["inline"]["per_doc_timeout_s"] == 25
     assert c["inline"]["fetch_workers"] == 4
     assert "OD-1031-SHORTLIST31" in c["bounds"]["_max_candidates_resolved_note"]
     assert "NOT yet calibrated" in c["bounds"]["_max_candidates_resolved_note"]

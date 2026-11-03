@@ -69,6 +69,12 @@
     "min_relevance": 0.34,
     "_min_relevance_owner_note": "owner-set 0.34 (owner directive 2026-10-23, verbatim: \"drop it to 34% too\"); previous value 0.4 (see _calibration_note). not calibrated on live data; observed spread: none recorded; below 0.5 cannot be simulated on the recorded 137-document data (work/ddfix-1023/cov/COV.md in the DDFIX line). change when live admission and claim-check outcomes are measured. Per-span floor min_matched_stems 2 is unchanged.",
     "min_matched_stems": 2,
+    "topic_anchor": {
+      "_note": "NONASK-1103 WP-G1, FLAG-OFF. enabled=false => admission is byte-identical to before. When true a span must contain at least one question stem whose document frequency over the inspected body chunks is <= max_df_ratio (non-generic anchor; derived per request, no list). Only removes spans (reason low_relevance).",
+      "_calibration_note": "PENDING CAL: max_df_ratio is an uncalibrated placeholder; no threshold is enabled. Calibrate on the WP-E harness (scripts/nonask_1103_replay.py, CTQ3 >= 0.9, CTQ4 no drop; split calibration/holdout) per records/memory/feedback_threshold_calibration_rule.md. Observed spread: none recorded.",
+      "enabled": false,
+      "max_df_ratio": 0.2
+    },
     "adaptive_min_matched_stems": true,
     "_adaptive_min_matched_stems_note": "DAR-TRACE-1022 (orchestrator decision 2026-10-21, overrides review B2 for the legacy signal): the per-span floor is min(min_matched_stems, the question's content stems), never below 1, so a one-content-word question ('types of horses' -> {horse}) can ground; min_relevance and min_question_coverage still apply. Calibration: work/dar-trace-1022/CALIBRATION.md. false/absent = the fixed floor.",
     "max_spans_total": 6,
@@ -231,7 +237,9 @@
     "quote_max_chars": 200,
     "partial_marker": " (partly supported by the cited passage)",
     "removed_note": "Note: sentences the cited passages did not support were removed.",
-    "insufficient_text": "VERA-DAR searched {n_inspected} full document(s) but found no passage that answers this question well enough, so it has not written an answer or answered from memory.",
+    "insufficient_text": "VERA-DAR searched {n_docs_phrase} but found no passage that answers this question well enough, so it has not written an answer or answered from memory.",
+    "unsupported_text": "VERA-DAR found related material in {n_docs_phrase} but could not write a supported answer from it, so it has not answered.",
+    "verification_unavailable_text": "VERA-DAR could not complete its verification step for this answer. Please try again.",
     "corpus_unusable_text": "VERA-DAR's full-document collection could not be verified right now, so it has not answered from memory.",
     "unchecked_note": "Note: parts of the draft that did not cite a passage could not be checked and were left out.",
     "insufficient_marker": "INSUFFICIENT_EVIDENCE",

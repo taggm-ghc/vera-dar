@@ -1,0 +1,89 @@
+{
+ "_doc": "Identifier URL FORMAT examples only. Handle rows use the public resolver with a test prefix and .invalid hosts elsewhere; the doi, arxiv, pmcid and pmid rows (u06-u08 in the original numbering) may resolve to real records and are used only for their URL shape, never fetched. expected = vera.search_providers.ddg_identifier kind; WP-D must make the handle rows pass.",
+ "records": [
+  {
+   "id": "u01",
+   "url": "https://hdl.handle.net/20.500.99999/synthetic-0001",
+   "expected_kind": "handle",
+   "cluster": "u01",
+   "split": "holdout"
+  },
+  {
+   "id": "u02",
+   "url": "http://hdl.handle.net/20.500.99999/synthetic-0002",
+   "expected_kind": "handle",
+   "cluster": "u02",
+   "split": "holdout"
+  },
+  {
+   "id": "u03",
+   "url": "https://hdl.handle.net/20.500.99999/synthetic-0003?urlappend=x",
+   "expected_kind": "handle",
+   "cluster": "u03",
+   "split": "holdout"
+  },
+  {
+   "id": "u04",
+   "url": "hdl:20.500.99999/synthetic-0004",
+   "expected_kind": "handle",
+   "cluster": "u04",
+   "split": "calibration"
+  },
+  {
+   "id": "u05",
+   "url": "https://doi.org/10.1234/synthetic.5",
+   "expected_kind": "doi",
+   "cluster": "u05",
+   "split": "calibration"
+  },
+  {
+   "id": "u06",
+   "url": "https://arxiv.org/abs/2401.00001",
+   "expected_kind": "arxiv",
+   "cluster": "u06",
+   "split": "calibration"
+  },
+  {
+   "id": "u07",
+   "url": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1234567/",
+   "expected_kind": "pmcid",
+   "cluster": "u07",
+   "split": "calibration"
+  },
+  {
+   "id": "u08",
+   "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+   "expected_kind": "pmid",
+   "cluster": "u08",
+   "split": "holdout"
+  },
+  {
+   "id": "u09",
+   "url": "https://example.invalid/blog/orchestrating-agents",
+   "expected_kind": null,
+   "cluster": "u09",
+   "split": "calibration"
+  },
+  {
+   "id": "u10",
+   "url": "http://hdl.handle.net/20.500.99999/synthetic-0005",
+   "expected_kind": "handle",
+   "cluster": "u10",
+   "split": "holdout"
+  },
+  {
+   "id": "u11",
+   "url": "https://example.invalid/hdl/20.500.99999/synthetic-0006",
+   "expected_kind": null,
+   "cluster": "u11",
+   "split": "holdout"
+  },
+  {
+   "id": "u12",
+   "url": "https://handle.example.invalid/not-a-handle",
+   "expected_kind": null,
+   "cluster": "u12",
+   "split": "calibration"
+  }
+ ]
+}

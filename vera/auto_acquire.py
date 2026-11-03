@@ -164,11 +164,28 @@ def follow_url(c):
         ident = search_providers.ddg_identifier(str(u or ""))
         if ident is None or ident["kind"] == "pmid":  # a PMID needs a lookup request: not followed here
             continue
+        if ident["kind"] == "handle":  # WP-D: a stable PID with NO automatic route (landing_route is false): no request,
+            return {**c, "pid": {"kind": "handle", "value": ident["value"]}, "followed_from": "url"}  # no DOI invented
         if ident["kind"] == "pmcid":
             return {**c, "pmcid": ident["value"], "followed_from": "url"}
         doi = ident["value"] if ident["kind"] == "doi" else f"10.48550/arxiv.{ident['value']}"
         return {**c, "doi": doi, "followed_from": "url"}
     return c
+
+
+PID_NOROUTE = "R-ACQ-PID-NOROUTE"  # WP-D: a recognised stable identifier (Handle) with no automatic route
+
+
+def _handle_pid(c) -> bool:
+    """True when the candidate is a Handle (hdl.handle.net/<prefix>/<suffix> or hdl:), by its pid mark (follow_url) or its
+    URL alone. Metadata only: no request is made."""
+    if not isinstance(c, dict):
+        return False
+    if isinstance(c.get("pid"), dict) and c["pid"].get("kind") == "handle":
+        return True
+    from vera import search_providers
+    return any((search_providers.ddg_identifier(str(u or "")) or {}).get("kind") == "handle"
+               for u in (c.get("url"), c.get("discovered_url")))
 
 
 def _pkey(k: str) -> str:
@@ -335,8 +352,11 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None, clock=time.monotonic):
         from vera import search_and_fetch
         t_end = clock() + float(timeout_s)  # P0DTA-PRIO D3: the AND call and the OR retry share ONE timeout
         chain = (chain_fn or (lambda: search_and_fetch.cached_chain()[0]))()
-        provs = [p for p in chain if getattr(p, "name", None) in names]
-        if not provs:
+        # WP-F0: arXiv is called SEPARATELY from OpenAlex (not through the shared fan_out cut), so all OpenAlex results
+        # are kept; the OR retry below is OpenAlex only.
+        provs = [p for p in chain if getattr(p, "name", None) in names and getattr(p, "name", None) != "arxiv"]
+        arx = [p for p in chain if getattr(p, "name", None) == "arxiv" and "arxiv" in names]
+        if not provs and not arx:
             return []
         # ACQ-SEARCH-1021: acquisition-only OpenAlex profile (config search.openalex_profile); /ask never sets it.
         from vera import search_providers
@@ -344,18 +364,36 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None, clock=time.monotonic):
         fn = search_fn or search_and_fetch.search_question
         tok = search_providers.OPENALEX_PROFILE.set(profile)
         try:
-            out = search_and_clear(fn, provs, question, n, timeout_s)
-            if out or profile is None:
-                return out
-            # DAR-INLINE-1021-R2: the AND profile found nothing -> retry ONCE with the plain OR query (profile None).
-            left = min(float(timeout_s), t_end - clock())  # P0DTA-PRIO D3: the remainder, never a fresh timeout
-            if left <= 0:
-                return out
-            search_providers.OPENALEX_PROFILE.reset(tok)
-            tok = search_providers.OPENALEX_PROFILE.set(None)
-            return search_and_clear(fn, provs, question, n, left)
+            out = []
+            if provs:
+                out = search_and_clear(fn, provs, question, n, timeout_s)
+                if not out and profile is not None:
+                    # DAR-INLINE-1021-R2: the AND profile found nothing -> retry ONCE with the plain OR query (profile None).
+                    left = min(float(timeout_s), t_end - clock())  # P0DTA-PRIO D3: the remainder, never a fresh timeout
+                    if left > 0:
+                        search_providers.OPENALEX_PROFILE.reset(tok)
+                        tok = search_providers.OPENALEX_PROFILE.set(None)
+                        out = search_and_clear(fn, provs, question, n, left)
         finally:
             search_providers.OPENALEX_PROFILE.reset(tok)
+        if arx and search_providers.ARXIV_ALLOWED.get():  # exactly one arXiv call per job, if the budget left a slot
+            left = t_end - clock()
+            hand = search_providers.ARXIV_STATUS.get()
+            if left <= 0.1 and hand is not None:
+                hand[:] = ["timeout", 0]
+            if left > 0.1:
+                try:
+                    axr = search_and_clear(fn, arx, question, n, left)
+                    if hand is not None:
+                        hand[:] = ["completed", len(axr)]
+                except Exception as e:  # noqa: BLE001  an arXiv failure never loses the OpenAlex results
+                    axr = []
+                    if hand is not None:
+                        hand[:] = ["quota" if search_providers._is_quota_error(e) else
+                                   "timeout" if search_providers._is_timeout(e) else "failed", 0]
+                if axr:  # OpenAlex (PMC journal versions) first: a duplicate keeps the OpenAlex record
+                    out = search_providers.merge_sources(out, axr)
+        return out
     return search
 
 
@@ -909,9 +947,10 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
         doi = _doi(c)
         pmcid = None if doi else _pmcid(c)
         if not doi and not pmcid:
-            count(acq_config.reason(cfg, "no_doi"))
+            why_no = PID_NOROUTE if _handle_pid(c) else acq_config.reason(cfg, "no_doi")  # WP-D: a Handle has a name, no route
+            count(why_no)
             if drops is not None:
-                drops[id(c)] = acq_config.reason(cfg, "no_doi")
+                drops[id(c)] = why_no
             continue
         ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
         why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
@@ -947,13 +986,15 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     tf = _topic_fit_active(cfg, route)  # O1: None = today's order exactly
     if tf is not None and protected is None:
         tf = None  # O1 FAIL SAFE: stored-document lookup unavailable -> today's order entirely (no fit key, no swap)
-    base_key = lambda x: (x[5], not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2]), -x[0],  # noqa: E731
+    from vera import arxiv_fulltext as _axf
+    _arx = _axf.route_on(cfg)  # WP-F0: routable arXiv candidates rank in tier 1 only when the route is on
+    base_key = lambda x: (x[5], not routable_fulltext(x[2], cfg), search_providers.acq_rank_tier(x[2], _arx), -x[0],  # noqa: E731
                           x[4])
     keyf = base_key
     if tf is not None:  # O1: topic-fit AHEAD of routable_fulltext (relevance tier stays first)
         from vera import source_type
         keyf = lambda x: (x[5], source_type.fit(route, x[2], cfg), not routable_fulltext(x[2], cfg),  # noqa: E731
-                          search_providers.acq_rank_tier(x[2]), -x[0], x[4])
+                          search_providers.acq_rank_tier(x[2], _arx), -x[0], x[4])
     n_cut = int(acq_config.bound(cfg, "max_candidates_resolved"))
     if tf is None:
         ranked.sort(key=base_key)

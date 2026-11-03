@@ -1,0 +1,1 @@
+Synthetic fixtures; real-data calibration (plan 5b) still required before any flag flip. All text is self-authored; labels are draft, two-skeptic reviewed (work/NONASK-1103/label-review-*.md), owner spot-check pending; items marked "ambiguous": true are excluded from metrics.

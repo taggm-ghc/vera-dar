@@ -361,7 +361,7 @@ def test_a2_news_article_doi_only_in_text(world, spy):
     c = cands(body)
     assert len(c) == 1 and c[0]["route"] == "follow_url" and c[0]["reason"] == "R-ACQ-NODOI"  # DF-3: a discovery
     assert "No documents were found" not in _ro(body)["user_text"]
-    assert "no usable identifier yet" in _ro(body)["user_text"]  # the unsupported route is stated
+    assert "no identifier VERA-DAR can fetch automatically yet" in _ro(body)["user_text"]  # the unsupported route is stated
     assert not any("reuters.com" in u for u in world.rig.web.urls)  # never fetched
 
 

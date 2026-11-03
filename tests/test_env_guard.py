@@ -1370,6 +1370,10 @@ EXPECTED_SPAWN_SITES = {
     "test_item73_deploy.py": {"subprocess.run"}, "test_eval_config.py": {"subprocess.run"},
     "test_answer_contract.py": {"subprocess.run"}, "test_live_optin.py": {"subprocess.run"},
     "test_run_with_env.py": {"subprocess.run"}, "test_item72_scope.py": {"subprocess.run"},
+    # NONASK-1103 WP-E (WP6 review): [sys.executable, scripts/nonask_1103_replay.py, ...] with the inherited env, an
+    # ordinary (non -I) Python child, so the boundary bootstrap is installed in it (inherit rule); the script is
+    # stdlib-only and offline (synthetic fixtures under tests/fixtures/nonask_1103/).
+    "test_nonask_1103_replay.py": {"subprocess.run"},
     # K18W review: object constructions inside fakes (D-B5-1 binding tests), not process creation
     "test_release_gate_evidence_binding.py": {"subprocess.CompletedProcess", "subprocess.TimeoutExpired"},
 }

@@ -25,12 +25,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "UnknownElement",
@@ -195,12 +199,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "UnknownElement",
@@ -365,12 +373,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "UnknownElement",
@@ -519,12 +531,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "UnknownElement",
@@ -532,7 +548,7 @@
   ],
   [
    "Info",
-   "body: \"VERA-DAR searched 1 full document(s) but found no passage that answers this question well enough, so it has not written an answer or answered from memory.\"\nformat: INFO\n"
+   "body: \"VERA-DAR searched 1 full document but found no passage that answers this question well enough, so it has not written an answer or answered from memory.\"\nformat: INFO\n"
   ],
   [
    "Caption",
@@ -685,12 +701,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "UnknownElement",
@@ -815,12 +835,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "Warning",
@@ -937,12 +961,16 @@
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
   [
+   "Block",
+   "form {\n  form_id: \"ask_form\"\n  border: true\n  enter_to_submit: true\n}\n"
+  ],
+  [
    "TextInput",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
+   "id: \"$$ID-<H>-None\"\nlabel: \"Enter your research question:\"\ndefault: \"\"\nhelp: \"Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it cannot; otherwise it lists sources it has not read.\"\nform_id: \"ask_form\"\nplaceholder: \"What is VERA-DAR?\"\nlabel_visibility {\n}\n"
   ],
   [
    "Button",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Ask\"\ntype: \"primary\"\n"
+   "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
   ],
   [
    "Warning",

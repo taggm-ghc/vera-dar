@@ -22,7 +22,7 @@ HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask pag
                "cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the "
                "web and lists documents it has not read. Open the sources and read them yourself before relying on any claim.")
 NOT_READ_NEW = "VERA-DAR has not acquired or read the documents in this list. This is a discovery result, not an evidence-grounded answer."
-INSUFFICIENT_NEW = ("VERA-DAR searched {n_inspected} full document(s) but found no passage that answers this "
+INSUFFICIENT_NEW = ("VERA-DAR searched {n_docs_phrase} but found no passage that answers this "
                     "question well enough, so it has not written an answer or answered from memory.")
 BAD = "has not read the full documents"
 
@@ -96,7 +96,7 @@ def test_state3_fallback_and_not_read_lines_exact():
     cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())
     assert cfg["answer"]["insufficient_text"] == INSUFFICIENT_NEW
     line = ue.fallback_text("insufficient_full_document_evidence", n_inspected=2)
-    assert line.startswith("VERA-DAR searched 2 full document(s)") and BAD not in line
+    assert line.startswith("VERA-DAR searched 2 full documents") and BAD not in line
     assert "inspected" not in line and "{" not in line
     nr = json.loads((ROOT / "config" / "discovery_contract.json").read_text())["texts"]["not_read_line"]
     assert nr == NOT_READ_NEW and "these full documents" not in nr  # scoped to the listed web results
@@ -133,5 +133,5 @@ def test_p17_state2_with_auto_acquire_ends_with_the_acquisition_sentence(tmp_pat
 def test_insufficient_text_is_accurate_for_held_and_fetched_documents():
     cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())
     t = cfg["answer"]["insufficient_text"]
-    assert " it holds" not in t and " held" not in t and "{n_inspected}" in t
+    assert " it holds" not in t and " held" not in t and "{n_docs_phrase}" in t
     assert "NOT in this build" not in json.dumps(cfg)

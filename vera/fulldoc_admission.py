@@ -175,6 +175,16 @@ def idf_weights(stems, df: dict, n_chunks: int) -> dict:
     return {st: math.log((n + 1) / (int(df.get(st, 0)) + 1)) + 1.0 for st in stems}
 
 
+def topic_anchor_stems(q_stems, df: dict, n_chunks: int, max_df_ratio: float) -> set:
+    """NONASK-1103 WP-G1: the question stems that are NOT generic within the inspected documents: document frequency
+    over the body evidence chunks (the same df table as idf_weights) at most max_df_ratio of the chunks. Derived per
+    request from the question and the corpus; no hardcoded list. Empty set = no usable anchor (the rule then skips)."""
+    n = max(int(n_chunks), 0)
+    if n == 0:
+        return set()
+    return {st for st in q_stems if int(df.get(st, 0)) / n <= max_df_ratio}
+
+
 def _surname_stems(authors, icfg: dict, n: int) -> set:
     """Stems of author surnames from a manifest author field (a string such as "Gostic et al." or a list). The field is
     split on ; & and and commas; the LAST content token of each piece is its surname (a "Given Surname" piece, a bare
@@ -481,6 +491,16 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         min_rel = float(wcfg.get("min_relevance", 0.30))
         min_hits = max(MIN_MATCHED_STEMS_FLOOR, min_hits)  # fixed floor, never configurable away
     restrict = bool(selector_docs) and bool(scfg.get("restrict_candidates", True))
+    # NONASK-1103 WP-G1 (FLAG-OFF): a span must match >= 1 non-generic question stem. Can only remove spans.
+    tacfg = adm.get("topic_anchor") if isinstance(adm.get("topic_anchor"), dict) else {}
+    anchors: set = set()
+    if tacfg.get("enabled") is True and icfg:
+        try:
+            df_a, n_a = _df_table(corpus, acquired, icfg, stem_n, tg)
+            anchors = topic_anchor_stems(q_ns if weighted else _q_stems(question, icfg, stem_n, tg), df_a, n_a,
+                                         float(tacfg["max_df_ratio"]))
+        except (KeyError, TypeError, ValueError):
+            anchors = set()  # no usable threshold: the rule is inactive (fail open to current behaviour)
 
     try:
         cands = list(_call_retrieve(corpus, question, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
@@ -553,6 +573,9 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         # weighted signal keeps its fixed MIN_MATCHED_STEMS_FLOOR).
         need = max(1, min(min_hits, q_n)) if (adaptive and not weighted) else min_hits
         if rel < min_rel or hits < need or q_n == 0:
+            rej("low_relevance")
+            continue
+        if anchors and not (anchors & _stems(text, icfg, stem_n, tg)):  # WP-G1 topic anchor
             rej("low_relevance")
             continue
         if use_pointer and _pointer(text, pcfg):  # POL hook: a bare cross-reference / reference list is not evidence

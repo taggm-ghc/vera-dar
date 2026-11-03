@@ -1,0 +1,609 @@
+{
+ "_doc": "NONASK-1103 WP-E routing label set. Synthetic question texts only (no source text, no hosts). label = intended source route: technical (practitioner), scholarly, general. split = sha256(seed:cluster) parity (cluster-grouped so near-duplicate phrasings share a half), fixed before any tuning. ambiguous items are excluded from metrics and reported separately for the owner spot-check. SYNTHETIC FIXTURES; real-data calibration (plan 5b) still required before any flag flip. Labels are DRAFT: pending two-skeptic labelling on distinct models and an owner spot-check of >=10% (remediation-plan 5b); until then every metric is an offline fixture baseline.",
+ "split_seed": "nonask1103-v1",
+ "label_status": "draft_single_author_unreviewed",
+ "questions": [
+  {
+   "id": "q001",
+   "text": "How should I orchestrate multiple AI agents in a production software system?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q002",
+   "text": "What is the best way to coordinate several LLM agents working on one task?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q003",
+   "text": "How do I design a supervisor agent that delegates to worker agents?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q004",
+   "text": "What patterns exist for multi-agent orchestration with tool calling?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q005",
+   "text": "How can I retry and recover when one agent in a pipeline fails?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q006",
+   "text": "What is the difference between an orchestrator and a choreographed agent workflow?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q007",
+   "text": "How do I share state between agents without conflicting writes?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q008",
+   "text": "How should I structure prompts for a planner and an executor agent?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q009",
+   "text": "How do I evaluate an agent workflow with regression tests?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "eval_sets",
+   "split": "calibration"
+  },
+  {
+   "id": "q010",
+   "text": "What are good practices for logging and tracing agent tool calls?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q010",
+   "split": "calibration"
+  },
+  {
+   "id": "q011",
+   "text": "How can I limit the cost of an agent loop that calls a language model repeatedly?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "cost_cache",
+   "split": "holdout"
+  },
+  {
+   "id": "q012",
+   "text": "How should I manage context windows across long agent conversations?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q012",
+   "split": "holdout"
+  },
+  {
+   "id": "q013",
+   "text": "What is a good chunking strategy for retrieval augmented generation over documentation?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "rag",
+   "split": "holdout"
+  },
+  {
+   "id": "q014",
+   "text": "How do I choose between a vector database and keyword search for a support bot?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "rag",
+   "split": "holdout"
+  },
+  {
+   "id": "q015",
+   "text": "How can I reduce latency in a retrieval pipeline serving a chat assistant?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "rag",
+   "split": "holdout"
+  },
+  {
+   "id": "q016",
+   "text": "How do I deploy a FastAPI service with a Postgres database on a small server?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q016",
+   "split": "holdout"
+  },
+  {
+   "id": "q017",
+   "text": "What is the safest way to rotate API keys in a deployed web service?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q017",
+   "split": "holdout"
+  },
+  {
+   "id": "q018",
+   "text": "How should I design idempotent background jobs with a retry policy?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q019",
+   "text": "How do I add rate limiting to a public HTTP API?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q019",
+   "split": "calibration"
+  },
+  {
+   "id": "q020",
+   "text": "What are best practices for database migrations with rollback scripts?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q020",
+   "split": "calibration"
+  },
+  {
+   "id": "q021",
+   "text": "How do I write contract tests for a service that calls a third party API?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q021",
+   "split": "holdout"
+  },
+  {
+   "id": "q022",
+   "text": "How should I structure a Python monorepo with several packages?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q022",
+   "split": "holdout"
+  },
+  {
+   "id": "q023",
+   "text": "What is the right way to handle secrets in a continuous integration pipeline?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q023",
+   "split": "holdout"
+  },
+  {
+   "id": "q024",
+   "text": "How do I set up structured logging for a Python web application?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q024",
+   "split": "calibration"
+  },
+  {
+   "id": "q025",
+   "text": "How can I make a Streamlit application keep state between user interactions?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q025",
+   "split": "calibration"
+  },
+  {
+   "id": "q026",
+   "text": "What is a practical approach to guardrails for a customer facing chatbot?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q026",
+   "split": "holdout"
+  },
+  {
+   "id": "q027",
+   "text": "How do I detect prompt injection in documents fed to a language model?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q027",
+   "split": "calibration",
+   "ambiguous": true
+  },
+  {
+   "id": "q028",
+   "text": "How do I design an evaluation set for a question answering system?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "eval_sets",
+   "split": "calibration"
+  },
+  {
+   "id": "q029",
+   "text": "What should a runbook for an on call engineer contain?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q029",
+   "split": "calibration"
+  },
+  {
+   "id": "q030",
+   "text": "How do I choose a queue between a database table and a message broker?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q030",
+   "split": "calibration"
+  },
+  {
+   "id": "q031",
+   "text": "How should I version a public REST API without breaking clients?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q031",
+   "split": "holdout"
+  },
+  {
+   "id": "q032",
+   "text": "What is the best way to cache expensive model calls safely?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "cost_cache",
+   "split": "holdout"
+  },
+  {
+   "id": "q033",
+   "text": "How do I measure the quality of search results with offline relevance judgments?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "eval_sets",
+   "split": "calibration",
+   "ambiguous": true
+  },
+  {
+   "id": "q034",
+   "text": "How can I structure an agent memory store so old facts can be retired?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "orch",
+   "split": "holdout"
+  },
+  {
+   "id": "q035",
+   "text": "What are the trade offs of function calling versus structured output parsing?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q035",
+   "split": "calibration"
+  },
+  {
+   "id": "q036",
+   "text": "How do I run a canary release for a model backed service?",
+   "label": "technical",
+   "tag": null,
+   "cluster": "q036",
+   "split": "holdout"
+  },
+  {
+   "id": "q037",
+   "text": "Does vitamin D supplementation reduce the risk of respiratory infection in adults?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q037",
+   "split": "holdout"
+  },
+  {
+   "id": "q038",
+   "text": "What is the effect of statin therapy on all cause mortality in older patients?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q038",
+   "split": "holdout"
+  },
+  {
+   "id": "q039",
+   "text": "How effective is cognitive behavioural therapy for insomnia compared with medication?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q039",
+   "split": "holdout"
+  },
+  {
+   "id": "q040",
+   "text": "What evidence links sleep duration to cardiovascular disease?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q040",
+   "split": "holdout"
+  },
+  {
+   "id": "q041",
+   "text": "Do mask mandates reduce transmission of respiratory viruses in schools?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q041",
+   "split": "holdout"
+  },
+  {
+   "id": "q042",
+   "text": "What is the sensitivity of low dose CT screening for lung cancer?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q042",
+   "split": "calibration"
+  },
+  {
+   "id": "q043",
+   "text": "How does gut microbiome composition relate to type 2 diabetes risk?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q043",
+   "split": "calibration"
+  },
+  {
+   "id": "q044",
+   "text": "Is intermittent fasting more effective than caloric restriction for weight loss?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q044",
+   "split": "calibration"
+  },
+  {
+   "id": "q045",
+   "text": "What are the long term outcomes of bariatric surgery in adolescents?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q045",
+   "split": "calibration"
+  },
+  {
+   "id": "q046",
+   "text": "How reliable are polygenic risk scores across ancestry groups?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q046",
+   "split": "holdout"
+  },
+  {
+   "id": "q047",
+   "text": "What is the evidence for exercise as a treatment for depression?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q047",
+   "split": "calibration"
+  },
+  {
+   "id": "q048",
+   "text": "How large is the placebo effect in randomised trials of migraine prevention?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "q048",
+   "split": "calibration"
+  },
+  {
+   "id": "q049",
+   "text": "How does multi agent reinforcement learning handle non stationary environments?",
+   "label": "scholarly",
+   "tag": "marl_negative",
+   "cluster": "marl",
+   "split": "calibration"
+  },
+  {
+   "id": "q050",
+   "text": "What credit assignment methods exist for cooperative multi agent reinforcement learning?",
+   "label": "scholarly",
+   "tag": "marl_negative",
+   "cluster": "marl",
+   "split": "calibration"
+  },
+  {
+   "id": "q051",
+   "text": "How do decentralised policies scale in multi agent reinforcement learning benchmarks?",
+   "label": "scholarly",
+   "tag": "marl_negative",
+   "cluster": "marl",
+   "split": "calibration"
+  },
+  {
+   "id": "q052",
+   "text": "Which boxer has the most knockouts in heavyweight history?",
+   "label": "general",
+   "tag": null,
+   "cluster": "sports",
+   "split": "calibration"
+  },
+  {
+   "id": "q053",
+   "text": "What is a good recipe for sourdough bread?",
+   "label": "general",
+   "tag": null,
+   "cluster": "recipes",
+   "split": "holdout"
+  },
+  {
+   "id": "q054",
+   "text": "Who won the football world cup in 2010?",
+   "label": "general",
+   "tag": null,
+   "cluster": "sports",
+   "split": "calibration"
+  },
+  {
+   "id": "q055",
+   "text": "What are the best places to visit in Lisbon for a weekend trip?",
+   "label": "general",
+   "tag": null,
+   "cluster": "travel",
+   "split": "calibration"
+  },
+  {
+   "id": "q056",
+   "text": "How do I train for a first marathon?",
+   "label": "general",
+   "tag": null,
+   "cluster": "q056",
+   "split": "holdout"
+  },
+  {
+   "id": "q057",
+   "text": "What is the capital of France?",
+   "label": "general",
+   "tag": null,
+   "cluster": "q057",
+   "split": "calibration"
+  },
+  {
+   "id": "q058",
+   "text": "Which laptop is best for a student on a budget?",
+   "label": "general",
+   "tag": null,
+   "cluster": "q058",
+   "split": "calibration"
+  },
+  {
+   "id": "q059",
+   "text": "How do I make a classic margherita pizza at home?",
+   "label": "general",
+   "tag": null,
+   "cluster": "recipes",
+   "split": "holdout"
+  },
+  {
+   "id": "q060",
+   "text": "What are the rules of cricket for a beginner?",
+   "label": "general",
+   "tag": null,
+   "cluster": "sports",
+   "split": "calibration"
+  },
+  {
+   "id": "q061",
+   "text": "Which tennis player has won the most grand slam titles?",
+   "label": "general",
+   "tag": null,
+   "cluster": "sports",
+   "split": "calibration"
+  },
+  {
+   "id": "q062",
+   "text": "How do I plan an itinerary for a week in Japan?",
+   "label": "general",
+   "tag": null,
+   "cluster": "travel",
+   "split": "calibration"
+  },
+  {
+   "id": "q063",
+   "text": "What is the best way to store fresh basil?",
+   "label": "general",
+   "tag": null,
+   "cluster": "recipes",
+   "split": "holdout"
+  },
+  {
+   "id": "q064",
+   "text": "What does research say about the performance overhead of container orchestration platforms?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "container_research",
+   "split": "calibration"
+  },
+  {
+   "id": "q065",
+   "text": "How have container scheduling algorithms been evaluated in cluster simulations?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "container_research",
+   "split": "calibration"
+  },
+  {
+   "id": "q066",
+   "text": "What is the history of the word orchestration in music?",
+   "label": "general",
+   "tag": null,
+   "cluster": "container_research",
+   "split": "calibration"
+  },
+  {
+   "id": "q067",
+   "text": "What does empirical research show about the reliability of language model agents on long horizon tasks?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "llm_agent_research",
+   "split": "holdout"
+  },
+  {
+   "id": "q068",
+   "text": "How do benchmark studies measure tool use accuracy in language model agents?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "llm_agent_research",
+   "split": "holdout"
+  },
+  {
+   "id": "q069",
+   "text": "What evidence exists that multi agent debate improves the factual accuracy of language models?",
+   "label": "scholarly",
+   "tag": null,
+   "cluster": "llm_agent_research",
+   "split": "holdout"
+  },
+  {
+   "id": "q070",
+   "text": "How should I taper a patient off long term proton pump inhibitors?",
+   "label": "scholarly",
+   "tag": "practitioner_biomedical",
+   "cluster": "clinical_practice",
+   "split": "calibration"
+  },
+  {
+   "id": "q071",
+   "text": "What is a practical protocol for titrating insulin in newly diagnosed type 2 diabetes?",
+   "label": "scholarly",
+   "tag": "practitioner_biomedical",
+   "cluster": "clinical_practice",
+   "split": "calibration"
+  },
+  {
+   "id": "q072",
+   "text": "How do I screen a primary care patient for obstructive sleep apnoea?",
+   "label": "scholarly",
+   "tag": "practitioner_biomedical",
+   "cluster": "clinical_practice",
+   "split": "calibration"
+  },
+  {
+   "id": "q073",
+   "text": "How can wearable sensors and machine learning be used to monitor recovery after surgery?",
+   "label": "mixed",
+   "tag": null,
+   "cluster": "mixed_health_ai",
+   "split": "holdout"
+  },
+  {
+   "id": "q074",
+   "text": "What are the privacy considerations of using language model agents for hospital scheduling?",
+   "label": "mixed",
+   "tag": null,
+   "cluster": "mixed_health_ai",
+   "split": "holdout"
+  },
+  {
+   "id": "q075",
+   "text": "How do sports analytics teams use data pipelines to track athlete injury risk?",
+   "label": "mixed",
+   "tag": null,
+   "cluster": "q075",
+   "split": "calibration"
+  }
+ ]
+}

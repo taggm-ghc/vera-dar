@@ -285,6 +285,21 @@ def _check_stop(ctx, st: dict) -> bool:
     return r is not None
 
 
+def _supply_status(acq: dict, codes: dict, o) -> str:
+    """NONASK-1103 WP-C: why a search that worked still stored fewer than the target (counts only, no titles/hosts).
+    relevance_rejected: documents were fetched but none had enough relevant passages to keep; no_route: every
+    candidate lacked a route VERA-DAR can fetch automatically; else resource_limited (true under-supply)."""
+    def n(*keys):
+        return sum(int(codes.get(acq_config.reason(acq, k), 0) or 0) for k in keys)
+    rel = n("irrelevant", "few_spans") + int(o.answer_only)
+    if int(o.stored) == 0 and rel > 0:
+        return "relevance_rejected"
+    noroute = n("no_doi", "not_oa", "arxiv_licence_hold") + int(codes.get("R-ACQ-PID-NOROUTE", 0) or 0)
+    if noroute > 0 and rel == 0 and not o.documents and int(o.admitted) == 0:
+        return "no_route"
+    return "resource_limited"  # budget >= target, search worked, routes ran out: supply
+
+
 def _stop_reason(ctx, st: dict):
     return st.get("stop") or getattr(ctx, "_stop", None)
 
@@ -294,7 +309,7 @@ def _emit_final(o: Outcome, acq: dict, codes: dict, stop) -> None:
     a = o.acquisition or {}
     if a.get("status") == "met":
         _emit("acquire", "done", stored=a["stored"], target=a["target"])
-    elif a.get("status") == "resource_limited":
+    elif a.get("status") in ("resource_limited", "relevance_rejected", "no_route"):
         why = (WHY_STALLED if stop == stream_ctx.STALLED else WHY_EXHAUSTED if stop == stream_ctx.PROVIDERS_EXHAUSTED
                else WHY_BUSY if codes.get(acq_config.reason(acq, "rate_limited")) else WHY_NO_MORE)
         _emit("acquire", "limited", stored=a["stored"], target=a["target"], why=why)
@@ -483,7 +498,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             elif ctx is None and (clock() >= deadline or acq_config.reason(acq, "deadline") in codes):
                 aq_status = "incomplete_deadline"  # legacy path only: the stream path has no deadline status
             else:
-                aq_status = "resource_limited"  # budget >= target, search worked, routes ran out: supply
+                aq_status = _supply_status(acq, codes, o)
             o.acquisition = {"status": aq_status, "stored": int(o.stored), "target": int(tgt),
                              **({"stop": stop} if ctx is not None and aq_status == "resource_limited"
                                 and stop in (stream_ctx.STALLED, stream_ctx.PROVIDERS_EXHAUSTED) else {})}

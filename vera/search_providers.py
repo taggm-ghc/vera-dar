@@ -700,10 +700,23 @@ def normalise_doi(s) -> str | None:
     return d if re.fullmatch(r"10\.\d{4,9}/\S+", d) else None
 
 
+# NONASK-1103 WP-D: Handle System identifiers (stable PIDs). prefix = digits and dots and NOT "10." (a "10.<digits>" prefix
+# is a DOI, which stays a DOI even inside hdl.handle.net/10.x/y); suffix = any non-space text.
+_HANDLE_URL = re.compile(r"^https?://(?:hdl\.)?handle\.net/(?:api/handles/)?((?!10\.)\d+(?:\.\d+)*)/([^\s?#]+)", re.I)
+_HANDLE_SCHEME = re.compile(r"^hdl:\s*(?:/{0,2})((?!10\.)\d+(?:\.\d+)*)/([^\s?#]+)$", re.I)
+
+
 def ddg_identifier(url: str) -> dict | None:
-    """{"kind": "doi"|"pmcid"|"pmid"|"arxiv", "value"[, "version"]} from the URL alone (no request), or None. An arXiv
-    URL keeps its version ("v2") when it names one (DDGFIX-1023 DF-2); "value" stays the bare id."""
+    """{"kind": "doi"|"pmcid"|"pmid"|"arxiv"|"handle", "value"[, "version"]} from the URL alone (no request), or None. An
+    arXiv URL keeps its version ("v2") when it names one (DDGFIX-1023 DF-2); "value" stays the bare id. A Handle
+    (hdl.handle.net/<prefix>/<suffix> or hdl:<prefix>/<suffix>) is kind "handle", value "<prefix>/<suffix>"; it is a
+    persistent identifier with no automatic route (WP-D); a malformed handle is None."""
     u = str(url or "").strip()
+    from urllib.parse import unquote as _unq
+    m = _HANDLE_URL.match(u) or _HANDLE_SCHEME.match(u)
+    if m:
+        suffix = _unq(m.group(2)).strip("/")
+        return {"kind": "handle", "value": f"{m.group(1)}/{suffix}"} if suffix else None
     m = _ARXIV_URL.match(u)
     if m:
         return {"kind": "arxiv", "value": m.group(1).lower(), "version": (m.group(2) or "").lower() or None}
@@ -900,6 +913,13 @@ def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: 
             else:
                 counts["ddg_held"] += 1
             continue
+        if ident["kind"] == "handle":  # WP-D: no DOI/PMCID to map; a followable URL-only candidate, no request is made
+            if _landing_url_ok(str(r["url"])):
+                counts["ddg_url_only"] += 1
+                out.append(_ddg_url_cand(r))
+            else:
+                counts["ddg_held"] += 1
+            continue
         if ident["kind"] in ("pmcid", "pmid"):
             pending.append((ident, r))
             continue
@@ -946,19 +966,30 @@ def acq_source(c: Mapping) -> str:
     return "epmc" if c.get("provider") == "europepmc" else "openalex"
 
 
-def acq_rank_tier(c: Mapping) -> int:
-    """Ranking tier (lower first): DuckDuckGo-mapped candidates first (owner 2026-10-21), arXiv-mapped ones last
-    (Europe PMC refuses preprints, so the unchanged resolver cannot yield them), everything else in between."""
+def acq_rank_tier(c: Mapping, arxiv_route: bool = False) -> int:
+    """Ranking tier (lower first): DuckDuckGo-mapped candidates first (owner 2026-10-21), everything else in between.
+    arXiv-mapped ones are last (tier 2) unless `arxiv_route` is True (config arxiv_route.enabled) AND the candidate is one
+    the route can take (an arXiv id, or an arxiv.org / 10.48550/arXiv DOI): then tier 1 (NONASK-1103 WP-F0). The licence
+    is still decided at fetch by the arXiv route (non-CC is held). arxiv_route False = the previous tiers exactly."""
     if c.get("acq_source") == "ddg":
-        return 2 if c.get("ddg_id_kind") == "arxiv" else 0
+        if c.get("ddg_id_kind") == "arxiv":
+            return 1 if arxiv_route else 2
+        return 0
     if c.get("acq_source") == "wikipedia_portal":  # WIKIREF-1022 edit 2: arXiv refs last, others scholarly tier
-        return 2 if c.get("ref_id_kind") == "arxiv" else 1
-    if _arxiv_identified(c) and not _cand_pmcid(c):  # ROUTE-R3 (D3): discovered/OpenAlex/arXiv-listed arXiv records have
-        return 2  # no full-text route yet (Europe PMC refuses preprints; ARX-A2 pending): behind routable candidates
+        return (1 if arxiv_route else 2) if c.get("ref_id_kind") == "arxiv" else 1
+    if _arxiv_identified(c) and not _cand_pmcid(c):  # ROUTE-R3 (D3): no full-text route unless the arXiv route is on
+        return 1 if (arxiv_route and _arxiv_routable(c)) else 2
     return 1
 
 
 _ARXIV_MARK = re.compile(r"arxiv\.org/(?:abs|pdf)/|10\.48550/arxiv\.|\barxiv:", re.I)
+
+
+def _arxiv_routable(c: Mapping) -> bool:
+    """True when the arXiv route can take the candidate: an arXiv id, or an arxiv.org URL / 10.48550/arXiv DOI."""
+    d = c.get("discovery") if isinstance(c.get("discovery"), Mapping) else {}
+    return bool(c.get("arxiv_id") or _ARXIV_MARK.search(" ".join(str(x or "") for x in (
+        c.get("doi"), c.get("url"), c.get("discovered_url"), d.get("url"), d.get("record_id")))))
 
 
 def _arxiv_identified(c: Mapping) -> bool:
@@ -1074,6 +1105,8 @@ def _wiki_cfg() -> dict:
     return wiki_ref_portal.load_config()
 
 
+ARXIV_ALLOWED: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_allowed", default=True)  # WP-F0: budget slot
+ARXIV_STATUS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_status", default=None)  # [status, n] handoff
 PORTALS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_portals", default=None)
 
 
@@ -1119,7 +1152,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     """Wrap the acquisition job's search (vera.auto_acquire.make_search): DuckDuckGo Lite (config search.ddg_first),
     OpenAlex and Europe PMC run CONCURRENTLY within the same timeout, merged DDG first. Search calls are counted
     against bounds.max_search_calls_per_job: OpenAlex 2 (AND profile + OR retry; else 1), then DuckDuckGo 1, Europe
-    PMC 1, the DDG id lookup 1, each only while the cap leaves a call. Any provider failing returns the others' results;
+    PMC 1, Wikipedia 1, arXiv 1 (when in search.providers), the DDG id lookup 1, each only while the cap leaves a call. Any provider failing returns the others' results;
     all failing re-raises the OpenAlex error. Landing-page GETs are fetches (dcfg.max_landing_fetches), not searches."""
     import time as _time
     clock = clock or _time.monotonic
@@ -1136,6 +1169,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     wcfg = _wiki_cfg()
     use_wiki = wiki_ref_portal.enabled(wcfg) and left >= 1
     left -= 1 if use_wiki else 0
+    use_arxiv = "arxiv" in set(s.get("providers") or ()) and left >= 1  # WP-F0: arXiv counted, after DDG/EPMC/Wikipedia
+    left -= 1 if use_arxiv else 0
     lookup_left = left
     if use_wiki and wiki_get is None:
         import requests
@@ -1168,6 +1203,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         base, base_err = [], None
         futs_order = list(futs)  # ROUTE-R3: actual start order (dict insertion = submission = start order)
         st_oa = "completed"
+        arx_hand: list = []
         if _QUOTA.blocked(clock()):  # a recent OpenAlex 429/quota error: unavailable, no call (no retry storm)
             counts["openalex_skipped_quota"] = 1
             st_oa = "skipped_quota"
@@ -1176,7 +1212,13 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             tok = OPENALEX_OA_FIELDS.set(True)
             futs_order.append("openalex")  # ROUTE-R3: called after the concurrent portals started
             try:
-                base = list(base_search(question, n, max(0.1, t_end - clock())) or [])  # P0DTA-PRIO D3: capped at t_end
+                atok = ARXIV_ALLOWED.set(use_arxiv)  # make_search calls arXiv only when the budget left a slot
+                stok = ARXIV_STATUS.set(arx_hand)  # make_search reports the arXiv call here: [status, n]
+                try:
+                    base = list(base_search(question, n, max(0.1, t_end - clock())) or [])  # P0DTA-PRIO D3: capped at t_end
+                finally:
+                    ARXIV_ALLOWED.reset(atok)
+                    ARXIV_STATUS.reset(stok)
             except Exception as e:  # noqa: BLE001
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"
@@ -1230,14 +1272,18 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             counts.update(dcounts)
         try:  # FRESH-1023 C3: each configured portal exactly once, from this (the main) thread. ROUTE-R3: in actual
             # start order; an enabled portal left without a search-call slot is not_attempted (never "completed")
-            names = {"ddg": "ddg", "epmc": "europepmc", "wiki": "wikipedia", "openalex": "openalex"}
+            names = {"ddg": "ddg", "epmc": "europepmc", "wiki": "wikipedia", "openalex": "openalex", "arxiv": "arxiv"}
             stat = {**st_f, "openalex": st_oa}
             nres = {**{k: len(got.get(k) or ()) for k in futs}, "openalex": len(base)}
+            if arx_hand:  # WP-F0: arXiv was called (after OpenAlex, inside make_search): recorded in call order
+                futs_order.append("arxiv")
+                stat["arxiv"], nres["arxiv"] = arx_hand[0], int(arx_hand[1])
             for key in futs_order + ([] if "openalex" in futs_order else ["openalex"]):
                 record_portal(names[key], stat.get(key, "failed"), nres.get(key, 0))
             for key, enabled_cfg, used in (("ddg", dcfg.get("enabled") is True, use_ddg),
                                            ("epmc", ecfg.get("enabled") is True, use_epmc),
-                                           ("wiki", wiki_ref_portal.enabled(wcfg), use_wiki)):
+                                           ("wiki", wiki_ref_portal.enabled(wcfg), use_wiki),
+                                           ("arxiv", "arxiv" in set(s.get("providers") or ()), use_arxiv)):
                 if enabled_cfg and not used:
                     record_portal(names[key], "not_attempted", 0)
         except Exception:  # noqa: BLE001

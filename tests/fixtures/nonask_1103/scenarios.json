@@ -1,0 +1,431 @@
+{
+ "_doc": "NONASK-1103 WP-E synthetic admission scenarios. SYNTHETIC FIXTURES; real-data calibration (plan 5b) still required before any flag flip. Scenario split = split of its question's cluster. passages with ambiguous=true are excluded from metrics and reported for the owner spot-check. All text is invented for this repository (no third-party text, no real hosts: .invalid). Each passage carries an on_topic label for the scenario question. Labels are DRAFT pending two-skeptic review.",
+ "label_status": "draft_single_author_unreviewed",
+ "scenarios": [
+  {
+   "id": "s01_orchestration",
+   "question": "How should I orchestrate multiple AI agents in a production software system?",
+   "question_id": "q001",
+   "cluster": "orch",
+   "split": "holdout",
+   "note": "Reported-question analogue: on-topic doc plus lexically similar MARL and container-orchestration docs.",
+   "docs": [
+    {
+     "id": "dA",
+     "title": "Orchestrating LLM agents in software systems (synthetic)",
+     "url": "https://example.invalid/a",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "An orchestrator agent in a software system receives the task, plans the steps and assigns each step to a worker agent. Orchestration of multiple agents keeps the system observable because every delegation is logged."
+      },
+      {
+       "on_topic": true,
+       "text": "To orchestrate multiple agents safely, give the orchestrator a bounded budget and a retry policy. A production software system should stop the agents when the budget is exhausted."
+      },
+      {
+       "on_topic": true,
+       "text": "Shared state between agents should be written through the orchestrator so that two agents never write the same record. This keeps the multi agent system consistent."
+      }
+     ]
+    },
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "In multi agent reinforcement learning, multiple agents learn policies in a shared environment. Each agent observes a partial state and the system of agents receives a joint reward."
+      },
+      {
+       "on_topic": false,
+       "text": "Credit assignment among multiple agents is difficult because the reward is shared. Value decomposition splits the team value into per agent terms during training."
+      },
+      {
+       "on_topic": false,
+       "text": "Agents in the multi agent system explore the environment with an epsilon schedule, and the learning rate of every agent is annealed over episodes."
+      }
+     ]
+    },
+    {
+     "id": "dC",
+     "title": "Container orchestration for cluster operators (synthetic)",
+     "url": "https://example.invalid/c",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Container orchestration schedules multiple containers across the nodes of a cluster. The orchestrator restarts failed containers and keeps the software system at its declared state."
+      },
+      {
+       "on_topic": false,
+       "text": "A node agent on each machine reports health to the control plane. The orchestration system uses these reports to move workloads away from unhealthy nodes."
+      },
+      {
+       "on_topic": false,
+       "text": "Rolling updates replace containers a few at a time so that a production software system keeps serving requests during the release."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s02_orchestration_only_offtopic",
+   "question": "How should I orchestrate multiple AI agents in a production software system?",
+   "question_id": "q001",
+   "cluster": "orch",
+   "split": "holdout",
+   "note": "Negative: only off-topic docs are acquired; the ideal outcome is no admitted span.",
+   "docs": [
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "In multi agent reinforcement learning, multiple agents learn policies in a shared environment. Each agent observes a partial state and the system of agents receives a joint reward."
+      },
+      {
+       "on_topic": false,
+       "text": "Agents in the multi agent system explore the environment with an epsilon schedule, and the learning rate of every agent is annealed over episodes."
+      }
+     ]
+    },
+    {
+     "id": "dC",
+     "title": "Container orchestration for cluster operators (synthetic)",
+     "url": "https://example.invalid/c",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Container orchestration schedules multiple containers across the nodes of a cluster. The orchestrator restarts failed containers and keeps the software system at its declared state."
+      },
+      {
+       "on_topic": false,
+       "text": "Rolling updates replace containers a few at a time so that a production software system keeps serving requests during the release."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s03_handle_record",
+   "question": "How do I design a supervisor agent that delegates to worker agents?",
+   "question_id": "q003",
+   "cluster": "orch",
+   "split": "holdout",
+   "note": "Handle-identified record (hdl.handle.net) as the on-topic source.",
+   "docs": [
+    {
+     "id": "dH",
+     "title": "Supervisor and worker agent patterns (synthetic Handle record)",
+     "url": "https://hdl.handle.net/20.500.99999/synthetic-0001",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "A supervisor agent delegates subtasks to worker agents and collects their results. The supervisor design should state which worker agent owns each subtask."
+      },
+      {
+       "on_topic": true,
+       "text": "When a worker agent fails, the supervisor can delegate the subtask to another worker agent or return a partial result with the failure recorded."
+      },
+      {
+       "on_topic": false,
+       "text": "The repository that holds this record was migrated in an earlier year and its collection structure changed, which does not affect the delegation patterns described elsewhere."
+      }
+     ]
+    },
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "ambiguous": true,
+       "text": "A supervisor signal in hierarchical reinforcement learning selects a sub policy; the worker policy then acts until the sub goal is reached or a timeout occurs."
+      }
+     ]
+    }
+   ],
+   "identifier_url": "https://hdl.handle.net/20.500.99999/synthetic-0001"
+  },
+  {
+   "id": "s04_scholarly_biomedical",
+   "question": "Does vitamin D supplementation reduce the risk of respiratory infection in adults?",
+   "question_id": "q037",
+   "cluster": "q037",
+   "split": "holdout",
+   "note": "Scholarly biomedical question: must keep working (CTQ4 no drop).",
+   "docs": [
+    {
+     "id": "dV",
+     "title": "Vitamin D and respiratory infection (synthetic)",
+     "url": "https://example.invalid/v",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "Vitamin D supplementation was associated with a lower risk of respiratory infection in adults in this synthetic trial summary, with the largest effect in adults who were deficient at baseline."
+      },
+      {
+       "on_topic": true,
+       "text": "Adults receiving vitamin D supplementation reported fewer respiratory infection episodes than adults receiving placebo over twelve months."
+      },
+      {
+       "on_topic": false,
+       "text": "Dietary sources of calcium include dairy products and leafy vegetables, and the recommended intake differs between adults and children."
+      }
+     ]
+    },
+    {
+     "id": "dW",
+     "title": "Respiratory protection in factories (synthetic)",
+     "url": "https://example.invalid/w",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Workers in dusty factories should use respiratory protection, and employers must keep adults and young workers away from the most hazardous areas."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s05_offtopic_question",
+   "question": "What is the capital of France?",
+   "question_id": "q057",
+   "cluster": "q057",
+   "split": "calibration",
+   "note": "Question is outside this synthetic collection's coverage (no passage here can answer it); no span is expected from it. This is a coverage observation, not a scope refusal: the owner does not want scope refusal.",
+   "docs": [
+    {
+     "id": "dF",
+     "title": "Tourism statistics (synthetic)",
+     "url": "https://example.invalid/f",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "The number of visitors to the region increased in the summer months, and the capital of the province hosted most of the conferences."
+      },
+      {
+       "on_topic": false,
+       "text": "France and its neighbours reported rising rail traffic, with the capital cities showing the largest growth."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s06_orchestration_phrase_variant",
+   "question": "What patterns exist for multi-agent orchestration with tool calling?",
+   "question_id": "q004",
+   "cluster": "orch",
+   "split": "holdout",
+   "note": "Second orchestration phrasing.",
+   "docs": [
+    {
+     "id": "dA",
+     "title": "Orchestrating LLM agents in software systems (synthetic)",
+     "url": "https://example.invalid/a",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "Common orchestration patterns for multi agent systems include a central orchestrator, a pipeline of agents and a router that selects one agent per request. Tool calling is wrapped by the orchestrator so every call is logged."
+      },
+      {
+       "on_topic": true,
+       "text": "Tool calling inside an orchestrated agent workflow should use typed arguments, and the orchestrator should validate the result before passing it to the next agent."
+      }
+     ]
+    },
+    {
+     "id": "dC",
+     "title": "Container orchestration for cluster operators (synthetic)",
+     "url": "https://example.invalid/c",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Orchestration patterns for containers include a central control plane, a rolling update and a sidecar. Multiple pods are called through a service, and each call is logged by the proxy."
+      }
+     ]
+    },
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "ambiguous": true,
+       "text": "Multi agent patterns studied in reinforcement learning include centralised training with decentralised execution; the calling convention for communication between agents is learned."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s07_container_research",
+   "question": "What does research say about the performance overhead of container orchestration platforms?",
+   "question_id": "q064",
+   "cluster": "container_research",
+   "split": "calibration",
+   "note": "Container-orchestration research question with near-boundary agent passages sharing orchestration/platform/overhead words.",
+   "docs": [
+    {
+     "id": "dK",
+     "title": "Overhead measurements of container platforms (synthetic)",
+     "url": "https://example.invalid/k",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "This synthetic measurement study compares the performance overhead of container orchestration platforms. Scheduling latency grew with the number of nodes, and network overhead depended on the platform overlay."
+      },
+      {
+       "on_topic": true,
+       "text": "Orchestration platforms added a small memory overhead per node in the study, and the performance cost of the control plane was highest during rolling updates."
+      }
+     ]
+    },
+    {
+     "id": "dA",
+     "title": "Orchestrating LLM agents in software systems (synthetic)",
+     "url": "https://example.invalid/a",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "An orchestration platform for language model agents adds overhead because every delegation is logged, but the performance cost is small compared with the model call itself."
+      }
+     ]
+    },
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "The training platform scheduled many agents across nodes of a cluster; performance of the learning run depended on the number of nodes."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s08_agent_debate_research",
+   "question": "What evidence exists that multi agent debate improves the factual accuracy of language models?",
+   "question_id": "q069",
+   "cluster": "llm_agent_research",
+   "split": "holdout",
+   "note": "Scholarly LLM-agent question with MARL and human-debate near-boundary passages.",
+   "docs": [
+    {
+     "id": "dD",
+     "title": "Debate among language model agents (synthetic)",
+     "url": "https://example.invalid/d",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "In this synthetic evaluation, multi agent debate between language models improved the factual accuracy of answers on a set of questions, compared with a single model answering once."
+      },
+      {
+       "on_topic": true,
+       "text": "Factual accuracy gains from debate between language model agents shrank when all agents shared the same initial mistake."
+      }
+     ]
+    },
+    {
+     "id": "dB",
+     "title": "Cooperative multi agent reinforcement learning (synthetic)",
+     "url": "https://example.invalid/b",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Agents in a multi agent reinforcement learning game negotiate with a learned protocol, and the accuracy of the joint policy is measured by its reward."
+      }
+     ]
+    },
+    {
+     "id": "dE",
+     "title": "Competitive debating in schools (synthetic)",
+     "url": "https://example.invalid/e",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Students in a school debate team improved their accuracy in citing facts after a term of practice, according to the coach reports collected for this synthetic note."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s09_clinical_taper",
+   "question": "How should I taper a patient off long term proton pump inhibitors?",
+   "question_id": "q070",
+   "cluster": "clinical_practice",
+   "split": "calibration",
+   "note": "Practitioner biomedical question; near-boundary passages share taper/patient/long term words.",
+   "docs": [
+    {
+     "id": "dP",
+     "title": "Deprescribing acid suppression (synthetic)",
+     "url": "https://example.invalid/p",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "To taper a patient off long term proton pump inhibitors, reduce the dose in steps and review symptoms after each step. Some patients can then stop the inhibitor, and others need an on demand schedule."
+      },
+      {
+       "on_topic": true,
+       "text": "Rebound acid symptoms can follow when a patient stops a proton pump inhibitor abruptly, so a gradual taper is advised in this synthetic guidance summary."
+      },
+      {
+       "on_topic": false,
+       "text": "Proton pump inhibitors were introduced decades ago, and the patient groups first treated were those with severe ulcer disease."
+      }
+     ]
+    },
+    {
+     "id": "dT",
+     "title": "Tapering of exercise load in athletes (synthetic)",
+     "url": "https://example.invalid/t",
+     "passages": [
+      {
+       "on_topic": false,
+       "text": "Athletes taper their training load before a race, and the long term pattern of the taper matters more than any single session."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s10_mixed_wearables",
+   "question": "How can wearable sensors and machine learning be used to monitor recovery after surgery?",
+   "question_id": "q073",
+   "cluster": "mixed_health_ai",
+   "split": "holdout",
+   "note": "Mixed (clinical + ML) question.",
+   "docs": [
+    {
+     "id": "dM",
+     "title": "Wearable monitoring after surgery (synthetic)",
+     "url": "https://example.invalid/m",
+     "passages": [
+      {
+       "on_topic": true,
+       "text": "Wearable sensors record heart rate and movement after surgery, and a machine learning model flags patients whose recovery departs from the expected pattern."
+      },
+      {
+       "on_topic": true,
+       "text": "In this synthetic report the sensor data from wearable devices was used to monitor recovery at home after surgery, with alerts sent to the clinical team."
+      },
+      {
+       "on_topic": false,
+       "text": "Consumer wearable devices are marketed for fitness, and machine learning features in their apps mostly suggest new workout routines."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

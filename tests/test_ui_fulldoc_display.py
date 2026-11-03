@@ -155,7 +155,7 @@ def test_fallback_text_has_no_unfilled_placeholder(monkeypatch, token):
          "admitted_evidence": [], "contract": {"layers": [], "fallback": token}, "candidates": []}
     at = _render(monkeypatch, b)
     infos = " ".join(i.value for i in at.info)
-    assert "{" not in infos and "}" not in infos and "searched 2 full document" in infos
+    assert "{" not in infos and "}" not in infos and "2 full documents" in infos
 
 
 def test_long_quote_trimmed_to_config_cap(monkeypatch):

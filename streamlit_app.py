@@ -83,12 +83,6 @@ force_bad = st.sidebar.checkbox("Show a rejected-answer demonstration", value=Fa
 
 # Question input
 st.subheader("Ask a Question")
-question = st.text_input(
-    "Enter your research question:",
-    placeholder="What is VERA-DAR?",
-    help=ask_help_text()
-)
-
 METRICS_SCOPE_NOTE = ("Counts the answer-writing and scope-check model calls for this request, plus the answer checker's "
                       "cost when it is priced. It excludes the checker's tokens and any background indexing. "
                       "Calls to the free-tier provider are recorded at $0, and the answer checker is not priced. 0 tokens means no counted model call ran.")
@@ -351,8 +345,14 @@ def _stream_view(holder) -> None:
 # so a sleeping API is woken first and the question survives a rerun during the wait.
 _inflight = _ses.get("vera_inflight") if PROGRESS_ON else None
 _sholder = _ses.get(progress_ui.STREAM_HOLDER_KEY) if STREAM_ON else None
-_clicked = st.button("Ask", type="primary", disabled=_inflight is not None or _sholder is not None)  # evaluated first (R2-PROG-Q-8)
-if _clicked and _inflight is not None:  # race: the click landed before the disabled render
+with st.form("ask_form", clear_on_submit=False):  # Enter in the box submits exactly like the Ask button
+    question = st.text_input(
+        "Enter your research question:",
+        placeholder="What is VERA-DAR?",
+        help=ask_help_text()
+    )
+    _clicked = st.form_submit_button("Ask", type="primary", disabled=_inflight is not None or _sholder is not None)  # evaluated after _inflight/_sholder (R2-PROG-Q-8)
+if _clicked and (_inflight is not None or _sholder is not None):  # race: submit landed before the disabled render; queue nothing
     st.info(LABELS.already_running)
 elif _clicked:
     if not question:

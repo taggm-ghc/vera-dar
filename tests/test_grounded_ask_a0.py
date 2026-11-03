@@ -45,7 +45,7 @@ def test_reading_list_no_claims_no_claim_check_no_model_call():
     r = _ask((lambda: SRC, CFG))
     assert r.result_kind == "reading_list" and r.claims == () and r.claim_check is None and r.accepted
     assert r.answer == answer_contract.text("not_read_line") and r.answer  # C-7: fixed non-empty string
-    assert r.contract == {"layers": answer_contract.layers(), "fallback": None}
+    assert {k: v for k, v in r.contract.items() if k not in ("no_answer_cause", "research")} == {"layers": answer_contract.layers(), "fallback": None}  # NONASK-1103 WP-C: E5 keys added on non-answers
 
 
 def test_v1_internal_sources_stay_populated_for_admission():

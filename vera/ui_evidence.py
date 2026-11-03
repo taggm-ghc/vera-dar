@@ -24,7 +24,7 @@ _TOKEN_TEXT = {
     "checker_unavailable": None,
     "claim_check_insufficient": None,
     "claim_check_disabled": None,
-    "model_insufficient": "insufficient_text",
+    "model_insufficient": "unsupported_text",  # NONASK-1103: passages were selected; never "found no passage"
 }
 _TOKEN_DEFAULT = {
     "insufficient_full_document_evidence": "VERA-DAR found no passage in the documents it searched that answers this question well enough, so it has not written an answer.",
@@ -84,7 +84,8 @@ def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0) -> str:
     val = cfg.get(key) if key else None
     if isinstance(val, str) and val.strip():
         try:
-            out = val.format(n_inspected=_count(n_inspected))
+            n = _count(n_inspected)  # NONASK-1103 WP-C: {n_docs_phrase} = "1 full document" / "N full documents"
+            out = val.replace("{n_docs_phrase}", f"{n} full document" if n == 1 else f"{n} full documents").format(n_inspected=n)
         except (KeyError, IndexError, ValueError):
             return _TOKEN_DEFAULT[token]
         return out if "{" not in out else _TOKEN_DEFAULT[token]
@@ -161,6 +162,10 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         return None
     if aq.get("status") == "resource_limited":
         return f"Found {n} of the {t} new sources targeted; supply was limited."
+    if aq.get("status") == "relevance_rejected":
+        return f"Found {n} of the {t} new sources targeted; none of the documents fetched had enough relevant passages to keep."
+    if aq.get("status") == "no_route":
+        return f"Found {n} of the {t} new sources targeted; no identifier VERA-DAR can fetch automatically was available for the sources found."
     if aq.get("status") == "incomplete_deadline":
         return f"Found {n} of the {t} new sources targeted; the search stopped at the time limit."
     if aq.get("status") == "search_failed":

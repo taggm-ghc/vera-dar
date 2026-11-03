@@ -43,7 +43,7 @@ _ADMISSION_REJECTIONS = (
 # auto_acquire, fulldoc_corpus, fulldoc_db) at base 9d0d7643.
 _CODE_MAP: dict[str, str] = {
     # no open/usable acquisition route
-    "R-ACQ-NODOI": "no_route", "R-ACQ-NOTOA": "no_route",
+    "R-ACQ-NODOI": "no_route", "R-ACQ-NOTOA": "no_route", "R-ACQ-PID-NOROUTE": "no_route",
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
     # fetch/transport failures
@@ -217,7 +217,7 @@ _CAUSE_TEXT = {
     "quota": "a search service's request limit was reached",
     "error": "a search service had a failure",
     "budget": "the search budget ran out",
-    "awaiting_route": "some sources found have no usable identifier yet",  # CONT-1023: URL-only, queued to follow
+    "awaiting_route": "some sources found have no identifier VERA-DAR can fetch automatically yet",  # CONT-1023: URL-only, queued to follow
     "deadline_reached": "the time limit for this search was reached",
     "candidate_cap": "more documents were found than one request can check",
     "doc_budget_reached": "the limit on documents read per request was reached",

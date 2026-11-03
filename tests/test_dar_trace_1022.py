@@ -166,7 +166,7 @@ def _epmc_cfg():
     s["ddg_first"] = {"enabled": True}
     s["europepmc"] = {"enabled": True, "search_url": "https://example.invalid/epmc", "query_suffix": "OPEN_ACCESS:y",
                       "page_size": 5, "refuse_sources": ["PPR"]}
-    cfg.setdefault("bounds", {})["max_search_calls_per_job"] = 5
+    cfg.setdefault("bounds", {})["max_search_calls_per_job"] = 6  # NONASK-1103 WP-F0: +1 for the arXiv call (shipped providers), lookup slot kept
     return cfg
 
 

@@ -59,7 +59,10 @@ def test_ac1_doi_outputs_are_byte_identical_to_the_pre_change_tree():
     # "Europe PMC licence field + JATS licence elements", licence.content.version, and the manifest_sha256 that hashes the
     # item). A diff of before/after golden outputs showed no other change and no decision change. Previous pin:
     # 0f41c9faf40ec413bd46f518b5b985898bfd3da445d98e616437b193764c6bef
-    assert got == "abcfe3010a5e4b19e32fbfc4f2f48948507a9053497f2d3d282440760e20866d"
+    # NONASK-1103 WP-F0: moves ONLY for the provenance acquisition.providers list gaining "arxiv" (config search.providers);
+    # the golden dump differs in the two "providers" arrays (an "arxiv" element each) and nowhere else. Previous pin:
+    # abcfe3010a5e4b19e32fbfc4f2f48948507a9053497f2d3d282440760e20866d
+    assert got == "1615dd535bfd1918fe4bedf552fae7391b855270aaf670ca97e9341bdce0c89e"
 
 
 def test_ac1_doi_item_with_an_identifier_keeps_the_doi_identity():

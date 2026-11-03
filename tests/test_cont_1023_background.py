@@ -292,7 +292,7 @@ def test_url_only_queued_cause_is_awaiting_route_not_budget(bg):
     pub["portals"] = [{"portal": "p", "status": "completed", "results": 1}]
     rec = research_record.summarize(triggers=["insufficient"], inline=pub, used_new=False, older_available=False,
                                     fr_before=None)
-    assert rec["complete"] is False and "no usable identifier yet" in rec["user_text"]
+    assert rec["complete"] is False and "no identifier VERA-DAR can fetch automatically yet" in rec["user_text"]
     assert "budget ran out" not in rec["user_text"]
 
 

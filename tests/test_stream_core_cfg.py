@@ -67,7 +67,7 @@ def test_TB5_t_max_is_finite_with_every_term_non_negative():
     workers = int(cfg["inline"]["fetch_workers"])
     terms, total = _tmax(cfg, rungs=5, evals=93, workers=workers)  # the full PLAN s2.6 shape (multi-rung ladder)
     assert all(math.isfinite(v) and v >= 0 for v in terms.values()) and math.isfinite(total)
-    assert total == 3675.0  # PLAN s2.6(e): about 61 min
+    assert total == 3785.0  # PLAN s2.6(e): was 3675 (about 61 min); NONASK-1103 WP-F0 cap 6 -> 7 adds 5 rungs x (20 + 2) = 110 s
     # single pass over one 31-candidate shortlist (this child): strictly smaller
     t1, one = _tmax(cfg, rungs=1, evals=31, workers=workers)
     assert all(math.isfinite(v) and v >= 0 for v in t1.values()) and 0 < one < total

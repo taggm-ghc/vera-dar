@@ -320,7 +320,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         return _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in,
                                    budget)
     if fd is None:
-        return _reading_list(question, model, pricing, decision, chained, grounding, contract)
+        return _with_cause(_reading_list(question, model, pricing, decision, chained, grounding, contract),
+                           "reading_list", "VERA-DAR could not write an answer to this question. The sources below may still help; read them yourself.")
     ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
     inline_note = None
     ia: dict = {}  # P0-B1: the inline outcome for a non-answer, so the Report can say whether a search was made
@@ -361,7 +362,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
                             **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
-    return _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
+    out = _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
+    return _with_cause(out, _CAUSE_CODE.get(token, "no_supported_answer"), text)
 
 
 class _InlineNotice(str):
@@ -871,23 +873,57 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                                 reference_corpus=acq_corpus if acquired_only else None)
     if out.result is not None and out.result.result_kind == "answer":
         return replace(out.result, evidence=ev, accepted=True,
-                       contract={"layers": contract.layers(), "fallback": None})
+                       contract={**(out.result.contract or {}), "layers": contract.layers(), "fallback": None})  # NONASK-1103: MERGE; only layers+fallback are overridden (all other keys, e.g. trace, kept)
     if getattr(out, "premise", None) and out.fallback:  # DAR-PREMISE-1022: flagged premise, correction unverifiable
         from vera.fulldoc_answer import PREMISE_UNVERIFIED_TEXT
 
         return (ev, out.fallback, out.tokens_used, out.cost_usd, PREMISE_UNVERIFIED_TEXT)
-    return (ev, out.fallback or tokens_["insufficient"], out.tokens_used, out.cost_usd,
-            _with_count(texts["insufficient_text"], ev))
+    tok = out.fallback or tokens_["insufficient"]
+    # NONASK-1103 WP-C: passages WERE selected and the writer or checker declined, so never "found no passage"
+    key = "verification_unavailable_text" if tok == tokens_.get("checker_unavailable") else "unsupported_text"
+    return (ev, tok, out.tokens_used, out.cost_usd, _with_count(texts.get(key) or texts["insufficient_text"], ev, selected=True))
 
 
-def _with_count(text: str, ev) -> str:
-    """C-4: substitute {n_inspected} (a count only, never titles) with the number of examined full documents. Plain
-    str.replace, so braces elsewhere are safe and a text without the placeholder is returned unchanged."""
+def _plural_docs(n: int) -> str:
+    return f"{n} full document" if n == 1 else f"{n} full documents"
+
+
+def _with_count(text: str, ev, selected: bool = False) -> str:
+    """C-4: substitute {n_docs_phrase} ("1 full document" / "9 full documents") and the legacy {n_inspected} (a bare
+    number) with a count only, never titles. selected=True counts the documents the admitted passages came from. Plain
+    str.replace, so braces elsewhere are safe and a text without a placeholder is returned unchanged."""
     try:
         n = len(getattr(ev, "examined_full_documents", ()) or ())
+        if selected:
+            ids = {a.get("document_id") for a in (getattr(ev, "admitted", ()) or ()) if isinstance(a, dict)}
+            n = len(ids) if ids else n
     except TypeError:
         n = 0
-    return text.replace("{n_inspected}", str(n))
+    return text.replace("{n_docs_phrase}", _plural_docs(n)).replace("{n_inspected}", str(n))
+
+
+# NONASK-1103 WP-C (stream B contract E5): fallback token -> no_answer_cause code
+_CAUSE_CODE = {"insufficient_full_document_evidence": "no_passages", "full_document_corpus_unusable": "corpus_unusable",
+               "checker_unavailable": "verification_unavailable", "premise_unverified": "premise_unverified"}
+
+
+def _portal_counts(contract_: dict) -> tuple[int, int]:
+    ps = (contract_.get("inline_acquisition") or {}).get("portals")
+    ps = [p for p in ps if isinstance(p, dict)] if isinstance(ps, list) else []
+    return (sum(1 for p in ps if p.get("status") != "skipped"), sum(1 for p in ps if p.get("status") == "completed"))
+
+
+def _with_cause(res, code: str, text: str):
+    """E5: contract.no_answer_cause {code, text<=300} and contract.research.portals_attempted/completed ints, on a
+    non-answer only (an answer is returned unchanged)."""
+    if getattr(res, "result_kind", "answer") == "answer":
+        return res
+    ctr = dict(res.contract or {})
+    ctr["no_answer_cause"] = {"code": code, "text": str(text or "")[:300]}
+    att, comp = _portal_counts(ctr)
+    ctr["research"] = {**(ctr.get("research") if isinstance(ctr.get("research"), dict) else {}),
+                       "portals_attempted": att, "portals_completed": comp}
+    return replace(res, contract=ctr)
 
 
 def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) -> AskResult:
@@ -1236,8 +1272,8 @@ def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
     ans, nts = contract.add_note(out.result.answer, out.result.notes, "acquisition",
                                  inline_acquire.answer_note(acq, o), "prefix")
     return replace(out.result, answer=ans, notes=nts, evidence=merged,
-                   accepted=True, contract={"layers": contract.layers(), "fallback": None,
-                                            "inline_acquisition": o.public()}), False
+                   accepted=True, contract={**(out.result.contract or {}), "layers": contract.layers(), "fallback": None,
+                                            "inline_acquisition": o.public()}), False  # NONASK-1103: MERGE; overrides: layers, fallback, inline_acquisition
 
 
 _DATE_KEYS = ("corpus_added_at", "corpus_added_basis", "source_authored_at", "source_authored_precision")

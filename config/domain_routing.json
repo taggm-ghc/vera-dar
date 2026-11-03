@@ -139,6 +139,7 @@
   "doc_min_chunk_share": 0.25,
   "stored_fill_max": 5,
   "stored_min_relevance": 0.4,
+  "reading_list_floor": {"_note": "NONASK-1103 WP-H, FLAG-OFF: enabled=false => reading list byte-identical. PENDING CAL: min_relevance and max_df_ratio are uncalibrated placeholders (no threshold enabled); calibrate on the WP-E harness, CTQ5 >= 0.8 on holdout, per records/memory/feedback_threshold_calibration_rule.md.", "enabled": false, "min_relevance": 0.34, "max_df_ratio": 0.2},
   "relevance_stem_len": 5,
   "max_chunks_per_doc": 2,
   "max_stored_domain_branches": 2

@@ -108,7 +108,8 @@ def _merge_stored(results: list, question: str, dar_corpus, cfg: dict, info: dic
         stored, tr = dar_corpus.as_sources(question)
         info["stored"] = {k: v for k, v in (tr or {}).items() if isinstance(v, (int, str))}
         if not stored:
-            return results
+            floor = getattr(dar_corpus, "floor_external", None)  # WP-H reading-list floor (flag off = identity)
+            return floor(question, results) if callable(floor) else results
         return dar_corpus.rank_merge(question, list(results), list(stored), int(cfg["num_results"]))
     except Exception as exc:  # noqa: BLE001  (the stored branch never fails the request)
         logger.warning("DAR stored branch skipped (%s)", type(exc).__name__)

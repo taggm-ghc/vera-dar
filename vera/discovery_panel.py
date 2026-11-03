@@ -1,9 +1,11 @@
 """K2.I5: the Ask page's non-answer branch (reading list, decline, discovery notes). Fail-closed: anything that is not
 an evidentiary answer lands here. This module never calls st.success, render_sources or render_memory_panel and never
 reads sources, traced_sources, claim_check, recalled or memory_submitted (the answer branch owns those)."""
+import re
+
 from vera import answer_contract
 from vera.memory_panel import _as_count
-from vera.sources_sidebar import LICENCE_SIDEBAR, _link, plain
+from vera.sources_sidebar import LICENCE_SIDEBAR, _link, plain, plain_url
 from vera.ui_safety import safe_markdown
 
 KIND_ANSWER, KIND_DECLINE, KIND_READING_LIST = "answer", "decline", "reading_list"
@@ -27,7 +29,8 @@ OBTAINED_ALL = ("VERA-DAR obtained the full text of the documents in this list b
                 "This is a discovery result, not an evidence-grounded answer.")
 REASON_GENERIC = "This source could not be read for this answer."
 REASON_TEXT = {
-    "R-ACQ-NODOI": "No stable identifier, so the full text could not be fetched.",
+    "R-ACQ-NODOI": "No DOI, PubMed Central or arXiv identifier that VERA-DAR can fetch automatically.",
+    "R-ACQ-PID-NOROUTE": "Persistent identifier (Handle) found, but VERA-DAR has no automatic full-text route for it yet.",
     "R-ACQ-PREPRINT_LICENCE_UNVERIFIED": "Preprint: its reuse terms could not be confirmed.",
     "R-ACQ-PREPRINT_NOT_PERMITTED": "Preprint: reuse of the full text is not permitted.",
     "R-ACQ-ARXIV_LICENCE_HOLD": "Preprint: its arXiv licence does not permit reuse of the full text, so it was not used.",
@@ -108,6 +111,14 @@ def _reasons_by_url(data: dict) -> dict:
     return out
 
 
+_HANDLE = re.compile(r"(?:https?://)?hdl\.handle\.net/\S+", re.I)
+
+
+def _is_handle(identifier) -> bool:
+    """A Handle (hdl.handle.net) is a stable persistent identifier for display, even with no automatic route."""
+    return isinstance(identifier, str) and _HANDLE.fullmatch(identifier.strip()) is not None
+
+
 def _candidates(raw) -> list[dict]:
     """Public candidate fields only; non-lists and malformed items dropped; unknown acquisition -> not acquired."""
     if not isinstance(raw, list):
@@ -177,8 +188,10 @@ def render_discovery(st, data: dict) -> None:
             st.markdown(line)
             parts = []
             if c["identifier"] not in (None, ""):
-                parts.append(plain(c["identifier"]))
+                parts.append(plain_url(c["identifier"]))
             line_why = whys[i - 1]
+            if line_why == REASON_TEXT["R-ACQ-NODOI"] and _is_handle(c["identifier"]):
+                line_why = REASON_TEXT["R-ACQ-PID-NOROUTE"]  # a Handle is an identifier, so no 'No stable identifier'
             if line_why != OBTAINED_TEXT:  # never pair "Not acquired" with "Full text obtained"
                 parts.append(answer_contract.representation(c["acquisition"]))
             if line_why:

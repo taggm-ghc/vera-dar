@@ -206,7 +206,7 @@ def test_main_offtopic_search_is_scholarly_only_and_enqueues(monkeypatch):
 
 def test_acquisition_is_restricted_to_oa_scholarly_sources():
     c = acq_config.load_config()
-    assert c["search"]["providers"] == ["openalex"]
+    assert c["search"]["providers"] == ["openalex", "arxiv"]  # NONASK-1103 WP-F0
     r = c["resolve"]
     assert r["require_open_access"] is True and "preprint" in r["refuse_pub_types"] and "PPR" in r["refuse_sources"]
     assert r["fulltext_url_template"].startswith("https://www.ebi.ac.uk/europepmc/")
@@ -221,7 +221,7 @@ def test_acquisition_is_restricted_to_oa_scholarly_sources():
         return []
     s = auto_acquire.make_search(c, chain_fn=lambda: [P("arxiv"), P("openalex"), P("duckduckgo_lite"), P("news")],
                                  search_fn=search_fn)
-    assert s(OFF_Q, 10, 5) == [] and seen == ["openalex", "openalex"]  # R2: AND empty -> ONE OR retry, same provider
+    assert s(OFF_Q, 10, 5) == [] and seen == ["openalex", "openalex", "arxiv"]  # R2: AND empty -> ONE OR retry (OpenAlex only); NONASK-1103 WP-F0: arXiv once, separately; DDG/news never
 
 
 # ------------------------------------------------------------------------------------------------ SEC review fixes

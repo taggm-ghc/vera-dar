@@ -202,7 +202,9 @@ def test_ddg_candidates_rank_first_and_arxiv_last():
     ddg = {**_oa_cand(50), "title": "Synthetic widget", "snippet": "", "acq_source": "ddg", "ddg_id_kind": "doi"}
     arx = {**_oa_cand(51), "acq_source": "ddg", "ddg_id_kind": "arxiv"}
     others = [_oa_cand(i) for i in range(52, 56)]
-    ranked, _ = _rank(sp.merge_sources([ddg, arx], others))
+    cfg = A.cfg()
+    cfg["arxiv_route"]["enabled"] = False  # NONASK-1103 WP-F0: arXiv ranks last only while the route is off
+    ranked, _ = _rank(sp.merge_sources([ddg, arx], others), cfg)
     order = [d for _s, d, _c, _i in ranked]
     assert order[0] == "10.9999/yield.50" and order[-1] == "10.9999/yield.51"
 
@@ -262,7 +264,7 @@ def test_all_failing_raises():
 
 def test_config_caps_and_providers():
     c = A.cfg()
-    assert c["bounds"]["max_search_calls_per_job"] == 6  # INT-1022-B: +1 slot for the Wikipedia reference portal
+    assert c["bounds"]["max_search_calls_per_job"] == 7  # INT-1022-B: +1 slot for the Wikipedia reference portal; NONASK-1103 WP-F0: +1 for arXiv
     assert c["search"]["europepmc"]["enabled"] is True and c["search"]["ddg_first"]["enabled"] is True
 
 
