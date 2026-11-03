@@ -54,6 +54,30 @@ Answers from acquired documents carry a notice, and a question outside the scope
 
 Python, FastAPI and Uvicorn (API service), Streamlit (UI service), Pydantic, SQLAlchemy with psycopg2 on Postgres, the OpenAI-compatible client pointed at Groq (`openai/gpt-oss-20b`, then `openai/gpt-oss-120b`, for scope and answers; claim checking tries `qwen/qwen3.8-27b` first, then `openai/gpt-oss-120b`; the OpenAI fallback is off by default), defusedxml for JATS full-text conversion, pytest, Docker, and Render for interim hosting: one Render service for the API (`./start.sh api`), one for the UI (`./start.sh ui`), plus a Postgres database (see [Deployment](docs/deployment.md)). Dependencies are pinned in `requirements.txt`.
 
+## Pages and interface
+
+The Streamlit UI has five pages: **Ask VERA-DAR**, **Report**, **Trace Eval** (two tabs: **Historical**, a dated earlier evaluation run that does not describe the current service, and **Live aggregate**, anonymous aggregate statistics that stay off until the owner switches collection on), **How to use** and **About**. In the Ask question box, pressing Enter submits the question.
+
+Disclosure: every page except About shows one short notice (an AI system whose answers may be wrong, with the question sent to third-party AI and search services) that links to About. The full disclosure appears only on the **About** page.
+
+## Changes of 2026-11-03 (NONASK-1103)
+
+Status of everything below: **offline-tested only; not deployed; live behaviour unverified.** Nothing here has been run against the production service.
+
+Enabled in code:
+
+- Report page layer order, development-only internals hidden, and Enter-to-submit on the Ask page.
+- Trace Eval Historical and Live aggregate tabs; short notice on non-About pages; full disclosure on About only.
+- Truthful no-answer causes and plural-correct counts in status text; `contract.no_answer_cause`.
+- arXiv as an acquisition provider (own call, own budget slot).
+- Recognition of Handle identifiers (`hdl.handle.net/...`, `hdl:`), shown as persistent identifiers; no automatic fetch route.
+
+Prepared but flag-off (shipped disabled; thresholds are uncalibrated placeholders):
+
+- Topic anchor admission rule (`fulldoc_answer.json`, `topic_anchor.enabled=false`).
+- Reading-list relevance floor (`domain_routing.json`, `reading_list_floor.enabled=false`).
+- Live aggregate statistics (`config/live_stats.json`, `enabled=false`); needs the owner-run draft migration 013, which is not applied.
+
 ## Try it
 
 - Live demo: hosted on Render (interim, free-tier; the first request after idle can be slow while the service wakes). The address is not published in this file; ask the owner.

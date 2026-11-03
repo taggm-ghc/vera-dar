@@ -1,0 +1,13 @@
+-- 013_vera_live_ask_stats ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the live stats table and every row.
+-- Owner-only, never expected to run, needs the owner's separate same-turn approval. Never run via db/apply_migrations.py.
+-- Non-destructive rollback first: set "enabled" to false in config/live_stats.json (the app then writes and serves nothing).
+-- Export the table first. The schema vera_vjay is shared and NOT dropped; the USAGE grants on it predate this file for other tables.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+BEGIN;
+DROP TRIGGER IF EXISTS live_ask_stats_no_truncate_trg ON vera_vjay.live_ask_stats;
+DROP TRIGGER IF EXISTS live_ask_stats_append_only_trg ON vera_vjay.live_ask_stats;
+DROP INDEX IF EXISTS vera_vjay.live_ask_stats_ts_idx;
+DROP TABLE IF EXISTS vera_vjay.live_ask_stats;
+DROP FUNCTION IF EXISTS vera_vjay.live_ask_stats_no_truncate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.live_ask_stats_append_only_trgfn();
+COMMIT;

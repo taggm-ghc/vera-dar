@@ -122,7 +122,8 @@ def test_sidebar_has_no_titles_quotes_or_urls(monkeypatch):
 
 
 @pytest.mark.parametrize("fulldoc", [False, True])
-@pytest.mark.parametrize("page", ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py"])
+@pytest.mark.parametrize("page", ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py", "pages/how_to_use.py",
+                                  "pages/about.py"])
 def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
     from vera import disclosure
     from vera.disclosure import _BASE, _BASE_FULLDOC
@@ -133,13 +134,20 @@ def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
     monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(json=lambda: {"commit": "abcdef1234"}))
     at = AppTest.from_file(str(ROOT / page), default_timeout=30).run()
     assert not at.exception
-    # OD-1029-UI: every page shows the required notice; the full text (S2 mechanism, licences) is on the About page
-    assert any(c.value == disclosure.required_notice_text() for c in at.caption)
-    if not fulldoc:
-        assert any(_BASE[:60] in c.value for c in at.caption)
-    else:  # state 2: the passage-transmission sentence is in the required notice; the full base text is on About
-        assert any("are sent to third-party AI services." in c.value for c in at.caption)
-        assert _BASE_FULLDOC in " ".join(t for _, t in disclosure.disclosure_sections())
+    caps = " ".join(c.value for c in at.main.caption)
+    main = " ".join([c.value for c in at.main.caption] + [m.value for m in at.main.markdown]
+                    + [s.value for s in at.main.subheader])  # main area only: the sidebar is excluded (H8)
+    if page == "pages/about.py":  # R-031/H8: full sections exactly once, no short line, no required-notice caption
+        assert disclosure.SHORT_NOTICE not in caps and disclosure.required_notice_text() not in caps
+        for _h, t in disclosure.disclosure_sections():
+            assert main.count(t) == 1
+    else:  # one short line; the long disclosure is not repeated
+        assert any(c.value == disclosure.SHORT_NOTICE for c in at.main.caption)
+        assert disclosure.required_notice_text() not in main
+        assert _BASE[:60] not in main and _BASE_FULLDOC[:60] not in main
+        # WP6 (orchestrator decision): the third-party point appears exactly once, in the short notice, on every
+        # non-About page; How to use's Privacy section points to About instead of repeating it
+        assert main.lower().count("third-party") == 1
 
 
 def test_static_guard_references():

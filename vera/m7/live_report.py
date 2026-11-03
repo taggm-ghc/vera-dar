@@ -20,6 +20,7 @@ Exposure rules, enforced here and covered by tests/test_m7_live_report.py:
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import urlparse
 
 from vera import ui_evidence
@@ -230,7 +231,37 @@ def _research(contract: dict):
     return {"outcome_text": _str(rs.get("user_text") or rs.get("summary"), RESEARCH_SUMMARY_MAX),
             "triggers": [RESEARCH_TRIGGER_LABEL[t] for t in (rs.get("triggers") if isinstance(rs.get("triggers"), list) else [])
                          if isinstance(t, str) and t in RESEARCH_TRIGGER_LABEL],
-            "portals": portals, "complete": (rs.get("complete") if "complete" in rs else rs.get("all_portals_completed")) is True, "candidates": cands}
+            "portals": portals, "complete": (rs.get("complete") if "complete" in rs else rs.get("all_portals_completed")) is True, "candidates": cands,
+            "complete_reported": "complete" in rs or "all_portals_completed" in rs,
+            "portals_attempted": _int(rs.get("portals_attempted")), "portals_completed": _int(rs.get("portals_completed"))}
+
+
+# NONASK-1103 WP1: need-to-know filter for API-authored plain-language texts shown in public mode. A text that names an
+# internal (gate/stage/model/provider, a host, a hash, a count dump) is dropped whole rather than partly shown.
+_INTERNAL_RE = re.compile(
+    r"(https?://|\bg?sk[-_][A-Za-z0-9]{8,}|\bwww\.|\b[\w-]+\.(?:com|org|net|io|ai|dev|invalid|local|internal)\b|\b[0-9a-f]{32,}\b|"
+    r"\bgate[ _-]?[a-c]\b|\bstage\b|\bmodel\b|\bstored:|\banswer-eligible\b|\bwrite gate\b|\blicence gate\b|"
+    r"\b(?:" + "|".join(sorted(re.escape(k) for k in list(SERVICE_KIND) + ["openai", "anthropic", "groq", "llama", "gemini"])) +
+    r")\b)", re.I)
+
+
+def need_to_know(text) -> str:
+    """The text when it is safe for an end user, else empty."""
+    t = text.strip() if isinstance(text, str) else ""
+    return "" if not t or _INTERNAL_RE.search(t) else t
+
+
+def _notes(items) -> list:
+    return [t for t in (need_to_know(x) for x in ui_evidence._note_texts(items)) if t]
+
+
+def _cause(contract: dict, is_answer: bool):
+    """E5 soft contract: contract.no_answer_cause = {code, text}; absent -> None (graceful)."""
+    c = contract.get("no_answer_cause")
+    if is_answer or not isinstance(c, dict):
+        return None
+    text = _str(c.get("text"), 300)
+    return {"code": _str(c.get("code"), 60), "text": text} if text else None
 
 
 def build_live_report(data, question: str, latency_s: float) -> dict:
@@ -311,6 +342,13 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
 
     return {
         "kind": "live", "question": _str(question, 2000), "is_answer": is_answer,
+        "answer_status": data.get("answer_status") if isinstance(data.get("answer_status"), str) else "",
+        "status_label": (ui_evidence.answer_status_label(data) or "") if ui_evidence.has_layers(data) else "",
+        "limitations": _notes(data.get("limitations")), "process_notes": _notes(data.get("process_notes")),
+        "research_user_text": need_to_know(_str(_d(contract.get("research")).get("user_text")
+                                                or _d(contract.get("research")).get("summary"), RESEARCH_SUMMARY_MAX)),
+        "no_answer_cause": _cause(contract, is_answer),
+        "authorized": _pipeline(data, cc, contract, is_answer, 0, 0)[5].endswith("yes."),
         "partial": is_answer and cc.get("answer_completeness") == "partial",
         "answer": str(data.get("answer") or "") if is_answer else "",
         "no_answer_reason": "" if is_answer else ui_evidence.fallback_text(
@@ -342,35 +380,32 @@ def _ln(r, title, url) -> str:
     return r(_link(r(title), r(url)))
 
 
-def render_live_report(st, rep: dict, r=None) -> None:
-    """Draw one projected live report. `r` is the redactor (applied to every rendered string)."""
-    r = r or redactor()
-    st.success(LIVE_BANNER)
-    st.subheader("Question")
-    st.info(_md(r, rep.get("question")))
+def is_public(public=None) -> bool:
+    """Fail closed: dev sections open only when the mode resolves to exactly False. `None` resolves the process mode."""
+    if public is None:
+        try:
+            from vera.public_mode import is_public_mode
+            public = is_public_mode()
+        except Exception:  # noqa: BLE001
+            return True
+    return public is not False
 
-    st.header("1. Answer")
-    if rep.get("is_answer"):
-        (st.warning if rep.get("partial") else st.success)(_md(r, rep.get("answer")))
-        if rep.get("partial"):
-            st.caption("Partial answer: some parts of the question were not answered.")
-    else:
-        st.info(r(rep.get("no_answer_reason")))
 
-    if rep.get("scope_policy"):
-        st.caption(r(rep["scope_policy"]))
+def group_services(portals: list) -> list:
+    """L-c: one entry per service kind with a count per status, e.g. 'scholarly index: 2 completed'."""
+    by: dict = {}
+    for p in portals or []:
+        d = by.setdefault(p.get("label") or OTHER, {})
+        d[p.get("status") or OTHER] = d.get(p.get("status") or OTHER, 0) + 1
+    return [f"{lab}: " + ", ".join(f"{n} {st}" for st, n in sorted(d.items())) for lab, d in sorted(by.items())]
 
-    st.header("2. Claim check")
-    if rep.get("claim_check"):
-        st.caption(r(rep["claim_check"]))
-    rows = [{"Claim": c["claim"], "Check result": c["verdict"], "Source": f"[{c['n']}]" if c["n"] is not None else "?",
-             "Passage": r(c["passage"])} for c in rep.get("claims") or []]
-    if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-    else:
-        st.info("No cited claims in this report.")
 
-    st.header("3. Sources and short excerpts, by document")
+def _render_trace(st, rep: dict, r, pub: bool) -> None:
+    """Seam for the evidence-policy trace section (stream E). Intentionally empty."""
+    return None
+
+
+def _render_sources(st, rep: dict, r) -> None:
     for g in rep.get("groups") or []:
         date = f" ({plain(r(g['published']))})" if g.get("published") else ""
         nums = ", ".join(str(x) for x in (g.get("ns") or [g["n"]]))
@@ -397,66 +432,143 @@ def render_live_report(st, rep: dict, r=None) -> None:
                 line += f". Changes: {plain(r(at['changes']))}"
             if line:
                 st.caption(line)
-    if not rep.get("groups"):
+
+
+def _render_evidence(st, rep: dict, r) -> None:
+    """Layer 2 (as on Ask): limitations, policy note, sources and excerpts, reading list, claim table, evidence scope."""
+    ans = bool(rep.get("is_answer"))
+    rows = [{"Claim": c["claim"], "Check result": c["verdict"], "Source": f"[{c['n']}]" if c["n"] is not None else "?",
+             "Passage": r(c["passage"])} for c in rep.get("claims") or []]
+    if not (rep.get("limitations") or rep.get("scope_policy") or rep.get("groups") or rep.get("reading_list")
+            or rows or (ans and rep.get("scope"))):
+        return
+    st.header("Evidence and limitations")
+    for t in rep.get("limitations") or []:
+        st.markdown("- " + _md(r, t))
+    if rep.get("scope_policy"):
+        st.caption(r(rep["scope_policy"]))
+    _render_sources(st, rep, r)
+    if ans and not rep.get("groups"):
         st.info("No source was used for an answer.")
-    if rep.get("inspected"):
-        st.markdown("**Documents inspected** (passage counts; no document text is shown)")
-        st.dataframe([{"Document": r(d["title"]), "Published": r(d["published"]),
-                       "Passages inspected": d["chunks_inspected"], "Candidate passages": d["candidate_spans"],
-                       "Selected passages": d["admitted_spans"]} for d in rep["inspected"]],
-                     hide_index=True, use_container_width=True)
     if rep.get("reading_list"):
         st.markdown("**Reading list** (found but not used for an answer)")
         for i, c in enumerate(rep["reading_list"], 1):
             date = f" ({plain(r(c['published']))})" if c.get("published") else ""
             st.markdown(f"[{c['n'] if c['n'] is not None else i}] {_ln(r, c['title'], c['url'])}{date}")
+    if rows:
+        st.markdown("**Claim check**")
+        st.table(rows)  # st.table, not st.dataframe: a canvas is not readable text (DDFIX-1023)
+    if ans and rep.get("scope"):
+        st.caption(r(rep["scope"]))
+        if rep.get("scope_source"):
+            st.caption(r(rep["scope_source"]))
 
-    st.header("4. Evidence scope")
-    st.caption(r(rep.get("scope") or "This report carries no full-document evidence fields."))
-    if rep.get("scope_source"):
-        st.caption(r(rep["scope_source"]))
-    for line in rep.get("pipeline") or []:
-        st.caption(r(line))
 
-    st.header("5. Search and acquisition")
-    s = rep.get("search") or {}
-    st.caption(f"Results found or used: {s.get('results', 0)}. Counts only; individual search services are not named.")
-    for title, key in (("By kind of service", "by_service"), ("By acquisition", "by_acquisition"),
-                       ("By licence check", "by_licence")):
-        if s.get(key):
-            st.markdown(f"**{title}:** " + "; ".join(f"{k}: {v}" for k, v in s[key].items()))
-    inl = s.get("inline")
-    if inl:
-        st.markdown(f"**New search for this question:** {inl['status']}")
-        st.caption(f"Answer-eligible documents: {inl['answer_eligible']}; stored: {inl['stored']}; "
-                   f"reused from the collection: {inl['reused']}."
-                   + ("" if not inl.get("documents") else " Per document: "
-                      + "; ".join(f"{k}: {v}" for k, v in inl["documents"].items()) + "."))
+def _render_verification(st, rep: dict, r) -> None:
+    """Layer 3 (as on Ask): plain-language process notes, research outcome text and claim-check summary."""
+    notes, ro = rep.get("process_notes") or [], rep.get("research_user_text") or ""
+    cc = rep.get("claim_check") if rep.get("is_answer") else ""
+    if not (notes or ro or cc):
+        return
+    with st.expander("Research and verification", expanded=False):
+        for t in notes:
+            st.caption(plain(r(t)))
+        if ro:
+            st.caption("**Research outcome:** " + plain(r(ro)))
+        if cc:
+            st.caption(r(cc))
 
-    rs = rep.get("research")
-    if rs:  # FRESH-1023 C3: fixed labels only; portal names, reason codes and candidate URLs never rendered
-        st.markdown("**Research outcome**")
-        if rs.get("outcome_text"):
-            st.caption(r(rs["outcome_text"]))
-        if rs.get("triggers"):
-            st.caption("Research was run because: " + r("; ".join(rs["triggers"])) + ".")
-        if rs.get("portals"):
-            st.caption("Search services: " + r("; ".join(f"{p['label']}: {p['status']}" for p in rs["portals"]))
-                       + (". All completed." if rs.get("complete") else ". Not all completed."))
-        if rs.get("candidates"):
-            st.dataframe([{"Source": r(c["identifier"]), "Outcome": r(c["outcome"]), "Why": r(c["reason"])}
-                          for c in rs["candidates"]], hide_index=True, use_container_width=True)
 
-    st.header("6. Cost and latency")
-    u = rep.get("usage") or {}
-    a, b, c = st.columns(3)
-    a.metric("Tokens used", f"{int(u.get('tokens') or 0):,}")
-    b.metric("Cost (USD)", f"${float(u.get('cost_usd') or 0):.6f}")
-    c.metric("Latency (s)", f"{float(u.get('latency_s') or 0):.2f}")
-    st.caption("Latency is the round trip measured by this page. Cost is as reported by the service; calls to the free-tier provider are recorded at $0.")
-    if s.get("stages_ms"):
-        st.dataframe([{"Stage": k, "Time (ms)": v} for k, v in s["stages_ms"].items()], hide_index=True,
-                     use_container_width=True)
+def _render_technical(st, rep: dict, r) -> None:
+    """Layer 4, dev mode only: every count, stage, service and cost detail."""
+    with st.expander("Technical details", expanded=False):
+        if rep.get("authorized") and not rep.get("is_answer"):
+            st.caption("Dev note: passages were selected but no answer was generated.")
+        if rep.get("scope"):
+            st.caption(r(rep["scope"]))
+            if rep.get("scope_source"):
+                st.caption(r(rep["scope_source"]))
+        for line in rep.get("pipeline") or []:
+            st.caption(r(line))
+        ins = [d for d in rep.get("inspected") or []
+               if d.get("title") != "document" or any(d.get(k) for k in ("chunks_inspected", "candidate_spans", "admitted_spans"))]
+        if ins:
+            st.markdown("**Documents inspected** (passage counts; no document text is shown)")
+            st.table([{"Document": r(d["title"]), "Published": r(d["published"]),
+                       "Passages inspected": "" if d["chunks_inspected"] is None else d["chunks_inspected"],
+                       "Candidate passages": "" if d["candidate_spans"] is None else d["candidate_spans"],
+                       "Selected passages": "" if d["admitted_spans"] is None else d["admitted_spans"]} for d in ins])
+        st.markdown("**Search and acquisition**")
+        s = rep.get("search") or {}
+        st.caption(f"Results found or used: {s.get('results', 0)}. Counts only; individual search services are not named.")
+        for title, key in (("By kind of service", "by_service"), ("By acquisition", "by_acquisition"),
+                           ("By licence check", "by_licence")):
+            if s.get(key):
+                st.markdown(f"**{title}:** " + "; ".join(f"{k}: {v}" for k, v in s[key].items()))
+        inl = s.get("inline")
+        if inl:
+            st.markdown(f"**New search for this question:** {inl['status']}")
+            st.caption(f"Answer-eligible documents: {inl['answer_eligible']}; stored: {inl['stored']}; "
+                       f"reused from the collection: {inl['reused']}."
+                       + ("" if not inl.get("documents") else " Per document: "
+                          + "; ".join(f"{k}: {v}" for k, v in inl["documents"].items()) + "."))
+        rs = rep.get("research")
+        if rs:  # FRESH-1023 C3: fixed labels only; portal names, reason codes and candidate URLs never rendered
+            st.markdown("**Research services and candidates**")
+            if rs.get("triggers"):
+                st.caption("Research was run because: " + r("; ".join(rs["triggers"])) + ".")
+            if rs.get("portals"):
+                shown_ok = all(p.get("status") == "completed" for p in rs["portals"])
+                st.caption("Search services: " + r("; ".join(group_services(rs["portals"])))
+                           + (". All completed." if shown_ok else ". Not all completed."))
+                if shown_ok and rs.get("complete_reported") and not rs.get("complete"):
+                    st.caption("The service reported incomplete.")
+            pa, pc = rs.get("portals_attempted"), rs.get("portals_completed")
+            if pa is not None and pc is not None:
+                st.caption(f"Search services completed: {pc} of {pa}.")
+            if rs.get("candidates"):
+                st.table([{"Source": r(c["identifier"]), "Outcome": r(c["outcome"]), "Why": r(c["reason"])}
+                          for c in rs["candidates"]])
+        cc = rep.get("no_answer_cause")
+        if cc and cc.get("code"):
+            st.caption("Non-answer cause code: " + r(cc["code"]))
+        st.markdown("**Cost and latency**")
+        u = rep.get("usage") or {}
+        a, b, c = st.columns(3)
+        a.metric("Tokens used", f"{int(u.get('tokens') or 0):,}")
+        b.metric("Cost (USD)", f"${float(u.get('cost_usd') or 0):.6f}")
+        c.metric("Latency (s)", f"{float(u.get('latency_s') or 0):.2f}")
+        st.caption("Latency is the round trip measured by this page. Cost is as reported by the service; calls to the free-tier provider are recorded at $0.")
+        if s.get("stages_ms"):
+            st.table([{"Stage": k, "Time (ms)": v} for k, v in s["stages_ms"].items()])
+
+
+def render_live_report(st, rep: dict, r=None, public=None) -> None:
+    """Draw one projected live report. `r` is the redactor (applied to every rendered string). `public=None` resolves the
+    process mode and fails closed: dev sections render only when the resolved value is exactly False."""
+    r = r or redactor()
+    pub = is_public(public)
+    st.success(LIVE_BANNER)
+    st.subheader("Question")
+    st.info(_md(r, rep.get("question")))
+
+    st.header("Answer")
+    label = rep.get("status_label") or ("Partial answer" if rep.get("partial") else "")
+    if label:
+        st.caption(r(label))
+    if rep.get("is_answer"):
+        (st.warning if rep.get("partial") or rep.get("status_label") else st.success)(_md(r, rep.get("answer")))
+        if rep.get("partial"):
+            st.caption("Partial answer: some parts of the question were not answered.")
+    else:
+        cause = rep.get("no_answer_cause") or {}
+        st.info(r(cause.get("text") or rep.get("no_answer_reason")))
+
+    _render_evidence(st, rep, r)
+    _render_trace(st, rep, r, pub)
+    _render_verification(st, rep, r)
+    if not pub:
+        _render_technical(st, rep, r)
 
 
 def remember(session: dict, rep: dict) -> list:

@@ -152,16 +152,30 @@ def test_live_report_renders_all_sections_and_leaks_nothing(monkeypatch, public_
     _assert_clean(text)
     assert "LIVE REPORT" in text and "EXAMPLE REPORT" not in text
     heads = [h.value for h in at.header]
-    assert heads == ["1. Answer", "2. Claim check", "3. Sources and short excerpts, by document", "4. Evidence scope",
-                     "5. Search and acquisition", "6. Cost and latency"]
+    assert heads == ["Answer", "Evidence and limitations"]  # public: layers 1-2 as on Ask; no numeric prefixes
+    assert not [e for e in at.expander if e.label == "Technical details"]
     assert "Evidence scope: 1 document inspected; 2 passages from 1 document selected as possible evidence." in text
-    assert "scholarly index: 2" in text and "licence unclear (held): 1" in text
     assert "Q" * ui_evidence._quote_cap() in text
     assert "](https://example.org/one)" in text
     assert "(javascript" not in text and "<b>" not in text
-    assert any(m.label == "Latency (s)" for m in at.metric) and any(m.value == "1,234" for m in at.metric)
+    assert not at.metric and "scholarly index: 2" not in text  # tokens, cost, latency and counts are dev-only (L-d, L-e)
     for w in at.text_input:
         assert S_KEY not in str(w.value) and S_URL not in str(w.value)
+
+
+def _dev_app(rep):
+    import streamlit
+    from vera.m7 import live_report
+    live_report.render_live_report(streamlit, rep, None, False)
+
+
+def test_dev_mode_technical_details_keep_the_old_content():
+    rep = lr.build_live_report(_body(), "Q?", 2.0)
+    at = AppTest.from_function(_dev_app, kwargs={"rep": rep}, default_timeout=30).run()
+    assert not at.exception
+    text = _tree_text(at)
+    assert "scholarly index: 2" in text and "licence unclear (held): 1" in text
+    assert any(m.label == "Latency (s)" for m in at.metric) and any(m.value == "1,234" for m in at.metric)
 
 
 def test_non_answer_report_is_clean(monkeypatch, public_env):
@@ -281,7 +295,7 @@ def test_b2_scope_policy_and_stage_lines():
 def test_b2_render_shows_grouped_entry_and_policy(monkeypatch, public_env):
     text = _tree_text(_run(monkeypatch, _ok(_b2_body(), [])))
     assert "[1, 2, 3]" in text and "Coverage policy: VERA-DAR's collection could not answer" in text  # OD-1028(6) wording
-    assert "Evidence authorized for answer generation: yes." in text
+    assert "Evidence authorized for answer generation" not in text  # pipeline lines are dev-only (NONASK-1103 L-e)
 
 
 def test_b2_in_scope_admitted_but_no_answer_is_still_authorized():

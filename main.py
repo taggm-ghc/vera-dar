@@ -35,6 +35,7 @@ from vera.pricing.config import latest_pricing_for, load_model_pricing, load_mod
 from vera.env_files import load_vera_env
 from vera import trace_viz
 from vera import progress
+from vera import live_stats
 
 logging.basicConfig(level=logging.INFO)  # before load_vera_env so its names-only audit line is emitted
 load_vera_env()  # PLAN-ENV: R/config/env/.env-vera (explicit, preflighted); the file wins over inherited values
@@ -550,6 +551,27 @@ def trace_public():
         return {"schema": trace_viz.SCHEMA, "status": "error", "stages": [], "run": None, "check_validation": None}
 
 
+@app.get("/trace/live")
+def trace_live(days: int = 7):
+    """WP-L: public, cached, day-bucketed anonymous aggregates (small and complementary cells suppressed). No key, no
+    tokens, no cost. Disabled (flag off) returns {"enabled": false}."""
+    try:
+        return live_stats.read_aggregates(days, owner=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace live failed (%s)", type(exc).__name__)
+        return {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+
+
+@app.get("/trace/live/owner", dependencies=[Depends(verify_owner_key)])
+def trace_live_owner(days: int = 7):
+    """WP-L: owner-key only; adds token and cost totals."""
+    try:
+        return live_stats.read_aggregates(days, owner=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace live owner failed (%s)", type(exc).__name__)
+        return {"enabled": True, "total": 0, "by_result_kind": {}, "by_day": {}, "typical_latency_ms": {}}
+
+
 @app.get("/trace/private", dependencies=[Depends(trace_viz.verify_viz_key)])
 def trace_private():
     """TRACEVIZ-1022: per-trace detail. Needs X-Viz-Key == VERA_TRACE_VIZ_KEY; unset key disables the route (403)."""
@@ -639,6 +661,15 @@ def _fulldoc_sources(result) -> list[dict]:
     return out
 
 
+def _schedule_live_stats(bg, resp, t0: float) -> None:
+    """WP-L (E4): queue ONE anonymous aggregate write as a background task. Never raises, never runs inline."""
+    try:
+        if live_stats.enabled():
+            bg.add_task(live_stats.record, jsonable_encoder(resp), int((time.monotonic() - t0) * 1000))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("live stats not scheduled (%s)", type(exc).__name__)
+
+
 @app.post("/ask", response_model=AskResponse, dependencies=[Depends(verify_api_key), Depends(enforce_caps)])  # W2 caps (public mode)
 def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
     """PROG-1027 wrapper: today's handler is `_ask_impl`. Progress records are opt-in (flag + both headers); a
@@ -649,10 +680,12 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
         if rec is not None:
             token = progress.SINK.set(rec)
             progress.emit(progress.Stage.RECEIVED, progress.State.DONE)
+        _t0 = time.monotonic()
         resp = _ask_impl(req, request, background_tasks)
         if rec is not None:
             st = progress.outcome(resp)
             progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, rec))
+        _schedule_live_stats(background_tasks, resp, _t0)  # WP-L: after the response; no-op while the flag is off
         return resp
     except BaseException:
         if rec is not None:
@@ -804,14 +837,25 @@ def _stream_error(exc: BaseException) -> tuple[int, str]:
     return 500, "error"
 
 
+def _ctx_cancelled(ctx) -> bool:
+    try:
+        c = getattr(ctx, "cancelled", False)
+        return bool(c() if callable(c) else c)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _stream_worker(sink: _StreamSink, ctx, req, request, bg) -> None:
     from vera import stream_ctx
     stream_ctx.CTX.set(ctx)
     progress.SINK.set(sink)
     try:
+        _t0 = time.monotonic()
         resp = _ask_impl(req, request, bg)
         st = progress.outcome(resp)
         progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, sink))
+        if not _ctx_cancelled(ctx):
+            _schedule_live_stats(bg, resp, _t0)  # WP-L: BEFORE the terminal put; success only, once (abort/error never reach here)
         sink.put_result(200, body=jsonable_encoder(resp))
     except stream_ctx.StreamCancelled:
         sink.put_result(0)  # silent stop: nothing is written
@@ -871,7 +915,8 @@ async def _stream_lines(sink: _StreamSink, ctx, thread, hb_s: float):
 @app.post("/ask/stream", dependencies=[Depends(_require_stream), Depends(verify_api_key), Depends(enforce_caps)])
 async def ask_stream(req: AskRequest, request: Request):
     """STREAM-1031 / OD-1031-STREAM-ON: NDJSON progress lines then exactly one result line. Auth (401) and caps (429)
-    run as dependencies, before any streaming; one POST = one cap slot. Nothing is stored beyond the request."""
+    run as dependencies, before any streaming; one POST = one cap slot. Nothing about the question or answer is stored; when the owner-gated live-stats flag is on,
+    one anonymous aggregate row (enums and counts only) is written after a successful result."""
     from vera import stream_ctx
     try:
         ctx = stream_ctx.StreamCtx(stall_s=_stream_stall_s())

@@ -31,9 +31,17 @@ On the reading-list path the service handles index records and links, not full d
 
 Accordingly, reading-list source records do not include definitive document content hashes, immutable full-text versions or precise examined passages, and a reading list should not be described as verification of any original paper.
 
-## Status note (as of 2026-10-29)
+## Status note (as of 2026-10-29) - Superseded 2026-11-03
+
+*Superseded 2026-11-03: `POST /ask/stream` exists (see [API and data use](api.md#streaming-request-post-askstream)). The text below is kept as history.*
 
 On the main branch there is no `/ask/stream` or `/ingest` route and no progressive stage updates; the interface is a single blocking `/ask` plus `/health`, `/health/dar`, `/version`, `/corpus-summary`, `/trace/*` and owner-key `/memory/*` routes (`main.py`). Progressive updates and the staged retrieval switches are planned or shipped off on branches ahead of main. For the deployment timeline and host plan see the Status section of the [project overview](../README.md).
+
+## Additions of 2026-11-03 (offline-tested, not deployed, live unverified)
+
+- **arXiv acquisition.** arXiv is an acquisition provider called once per job, separately from OpenAlex, with its own search-call slot (`config/auto_acquire.json`). The licence is still decided at fetch.
+- **Handle recognition.** `hdl.handle.net/<prefix>/<suffix>` and `hdl:` identifiers (prefix not starting `10.`) are recognised as persistent identifiers. No automatic fetch route exists for them.
+- **Live statistics (flag-off).** When `config/live_stats.json` `enabled` is true, one anonymous row of enums and counts is written in a background task after a successful result; no question text. `GET /trace/live` (public) and `GET /trace/live/owner` (owner key) read day-bucketed aggregates. It ships off and needs the owner-run draft migration 013, which is not applied.
 
 ## Reliability and limitations
 

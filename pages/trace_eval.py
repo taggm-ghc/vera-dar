@@ -1,4 +1,4 @@
-"""Streamlit multipage entry: VERA-DAR Trace Eval (Week 4). All logic lives in vera/trace_eval/ui.py."""
+"""Streamlit multipage entry: VERA-DAR Trace Eval. All logic lives in vera/trace_eval/ui.py."""
 import sys
 from pathlib import Path
 

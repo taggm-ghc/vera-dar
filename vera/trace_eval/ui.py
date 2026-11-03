@@ -170,7 +170,7 @@ def _context(res: dict, cfg: dict | None = None) -> None:
     descs = (cfg or {}).get("variant_descriptions") or {}
     parts = [f"{v} ({descs[v]})" if v in descs else v for v in res.get("variants", {})]
     run = res.get("run") or {}
-    kind = "frozen agent-authored" if run.get("checks_validated", True) else "un-frozen, adapted"
+    kind = "frozen, written by the project's own AI agents" if run.get("checks_validated", True) else "un-frozen, adapted"
     st.markdown(f"**Context.** {n_q} {kind} questions, each answered by: {'; '.join(parts)}. "
                 "Rule-based checks score every answer; the system may have changed since capture.")
     st.caption(f"Snapshot captured {captured} (UTC); re-running the evaluation replaces these results and this date.")
@@ -197,7 +197,7 @@ def _tldr(res: dict, overall, checks, trust, cfg: dict) -> None:
     from vera.trace_eval import guidance as g
     text = g.tldr(overall, checks, trust, cfg)
     n_q = len({t.get("id") for t in res.get("traces", []) if t.get("id")})
-    st.info(f"**TL;DR (computed from the results below)**\n\n{text}\n\n**Main caveat:** {n_q} agent-authored "
+    st.info(f"**TL;DR (computed from the results below)**\n\n{text}\n\n**Main caveat:** {n_q} questions written by the project's own AI agents "
             "questions (small n, self-preference risk); checks are heuristics. " + " ".join(_run_caveats(res)))
     st.caption("Assembled from the paired tests and check validation on this page; not a new model judgement.")
 
@@ -259,7 +259,7 @@ def _elaboration(cfg, val: dict | None, res: dict | None = None) -> None:
         st.info("Check validation not yet available")
     else:
         _validation(val)
-    st.warning(" ".join(["Caveats: questions are agent-authored (self-preference risk); a single agent coded the checks "
+    st.warning(" ".join(["Caveats: questions were written by the project's own AI agents (self-preference risk); a single agent coded the checks "
                          "and labelled the validation set, both from the same model family; n is small; checks are "
                          "heuristics validated on dev only."] + _run_caveats(res or {})))
 
@@ -496,10 +496,91 @@ def _pv(x, fmt="{:.0%}") -> str:
     return "n/a" if x is None else fmt.format(x)
 
 
-def _render_public(view: dict) -> None:
+# NONASK-1103 WP2 / R-030: two tabs and fixed texts. Public text carries the date only (no build SHA, no model names).
+TAB_HISTORICAL, TAB_LIVE = "Historical", "Live aggregate"
+BANNER_HISTORICAL = "HISTORICAL: evaluation run dated {date} on an earlier build; it does not describe the current service."
+BANNER_CURRENT = "Evaluation run dated {date} on the build deployed now."
+LIVE_NOT_COLLECTING_TEXT = "Live statistics: not yet collecting."
+LIVE_INTRO_TEXT = "Anonymous aggregate usage counts. No question text and no identifier is kept. Small counts are hidden."
+LIVE_TIMEOUT_S = 5
+_LIVE_HIDDEN_KEYS = {"tokens", "cost", "cost_usd", "total_tokens", "total_cost", "token_total", "tokens_total",
+                     "cost_usd_total"}
+# WP6: labels for the sections GET /trace/live returns (vera/live_stats.read_aggregates); unknown keys show as-is.
+_LIVE_SECTION_LABELS = {"by_result_kind": "Questions by result", "by_day": "Questions by day (UTC)",
+                        "typical_latency_ms": "Typical response time (ms)"}
+
+
+def run_banner(view: dict, public: bool | None = None) -> str | None:
+    """Three branches: historical (run known older), unknown build (also historical wording), same build (no change claimed).
+    Public: date only. Dev: adds run build, deployed build and models."""
+    run = view.get("run")
+    if not run:
+        return None
+    if public is None:
+        from vera.public_mode import is_public_mode
+        public = is_public_mode()
+    date = view.get("run_file_date") or "date unknown"
+    current = view.get("historical") is False
+    text = (BANNER_CURRENT if current else BANNER_HISTORICAL).format(date=date)
+    if not public:
+        text += (f" [dev] Run build {view.get('run_build') or 'unknown'}, deployed build {view.get('build', 'unknown')}."
+                 + ("" if current else f" {historical_label(run)}."))
+    return text
+
+
+def fetch_live(base_url: str, timeout: int = LIVE_TIMEOUT_S):
+    """(status_code, body or None) for GET /trace/live. No key. Any failure gives (0, None); nothing is logged."""
+    import requests
+    try:
+        r = requests.get(f"{base_url.rstrip('/')}/trace/live", timeout=timeout)
+        return r.status_code, (r.json() if r.status_code == 200 else None)
+    except (requests.exceptions.RequestException, ValueError):
+        return 0, None
+
+
+def _live_cell(v):
+    return v if isinstance(v, str) and len(v) < 12 else (str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None)
+
+
+def _render_live(base_url: str | None = None) -> None:
+    """Live tab: aggregates from GET /trace/live, or the honest 'not yet collecting' state. Never tokens or cost."""
+    if base_url is None:
+        from vera.public_mode import upstream_base_url
+        base_url = upstream_base_url()
+    status, body = fetch_live(base_url)
+    if status != 200 or not isinstance(body, dict) or not body.get("enabled") or not body.get("total"):
+        st.info(LIVE_NOT_COLLECTING_TEXT)
+        return
+    st.caption(LIVE_INTRO_TEXT)
+    rows = []
+    for k, v in body.items():
+        if str(k).lower() in _LIVE_HIDDEN_KEYS or k in ("enabled", "total"):
+            continue
+        name = _LIVE_SECTION_LABELS.get(k, str(k))
+        if isinstance(v, dict):
+            for kk, vv in v.items():
+                c = _live_cell(vv)
+                if c is not None and str(kk).lower() not in _LIVE_HIDDEN_KEYS:
+                    rows.append({"measure": f"{name}: {kk}", "value": c})
+        else:  # a scalar section (e.g. one typical latency for the whole window) is one row
+            c = _live_cell(v)
+            if c is not None:
+                rows.append({"measure": name, "value": c})
+    total = _live_cell(body.get("total"))
+    if total:
+        st.markdown(f"**Answered questions in the window:** {total}")
+    if rows:
+        st.table(pd.DataFrame(rows).set_index("measure"))
+
+
+def _render_public(view: dict, public: bool | None = None) -> None:
     """TRACEVIZ-1022 public tier: aggregates and structure from vera.trace_viz.public_view. No key, never blank."""
-    st.caption(f"Build {view.get('build', 'unknown')}. This section shows aggregates only: no individual questions, "
-               "answers or sources. Detail needs a viz key (bottom of the page).")
+    if public is None:
+        from vera.public_mode import is_public_mode
+        public = is_public_mode()
+    st.caption((f"[dev] Build {view.get('build', 'unknown')}. " if not public else "")
+               + "This section shows aggregates only: no individual questions, answers or sources. "
+               "Detail needs a viz key (bottom of the page).")
     st.subheader("Evaluation flow")
     st.markdown(" then ".join(f"{r['stage']}. {r['check']}" for r in view.get("stages", [])) or "(unavailable)")
     run = view.get("run")
@@ -509,12 +590,11 @@ def _render_public(view: dict) -> None:
                 "do not depend on a run.")
     else:
         meta = run.get("run_meta") or {}
-        if view.get("historical"):
-            st.warning(((historical_label(run) + ". ") if (meta.get("mode") == "historical") else "") + HISTORICAL_TEXT)
-        same = "" if view.get("historical") or view.get("run_build") == view.get("build") else "; application code unchanged since the run build"
-        st.caption(f"Run build {view.get('run_build') or 'unknown'} (deployed build {view.get('build', 'unknown')}{same}); "
-                   f"run date {view.get('run_file_date') or 'unknown'} (UTC); scoring {meta.get('scoring_version') or 'unknown'}; "
-                   f"eval set {(meta.get('eval_set_sha256') or 'unknown')[:12]}.")
+        st.warning(run_banner(view, public))
+        if not public:
+            same = "" if view.get("historical") or view.get("run_build") == view.get("build") else "; application code unchanged since the run build"
+            st.caption(f"[dev] Run build {view.get('run_build') or 'unknown'} (deployed build {view.get('build', 'unknown')}{same}); "
+                       f"scoring {meta.get('scoring_version') or 'unknown'}; eval set {(meta.get('eval_set_sha256') or 'unknown')[:12]}.")
         st.markdown(f"**{run.get('n_questions')}** questions, **{run.get('n_traces')}** answers, "
                     f"**{run.get('n_errors')}** capture errors.")
         rows = [{"variant": v, "check": c, "passed/applies": f"{_pv(x.get('passed'), '{:g}')}/{_pv(x.get('applies'), '{:g}')}",
@@ -622,6 +702,17 @@ def render_trace_eval(results_path=None, validation_path=None, public_path=None,
     """TRACEVIZ-1022: public tier first (always), then the computed analysis when a results file exists, then the
     key-gated detail. Any exception in a section shows one fixed line (no type, text or traceback)."""
     st.title("VERA-DAR Trace Eval")
+    tab_hist, tab_live = st.tabs([TAB_HISTORICAL, TAB_LIVE])
+    with tab_live:
+        try:
+            _render_live(base_url)
+        except Exception:  # noqa: BLE001
+            st.info(LIVE_NOT_COLLECTING_TEXT)
+    with tab_hist:
+        _render_historical(results_path, validation_path, public_path, base_url)
+
+
+def _render_historical(results_path, validation_path, public_path, base_url) -> None:
     from vera import trace_viz
     public_has_run = False
     try:

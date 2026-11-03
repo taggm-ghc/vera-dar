@@ -1,0 +1,14 @@
+{
+  "_comment": "WP-L live aggregate statistics. Ships OFF (R-030). Stream B3 reads the `enabled` key. Only the owner flips it, after the 013 migration is applied.",
+  "enabled": false,
+  "min_count": 5,
+  "_min_count_note": "Calibration note: PROVISIONAL. No real traffic exists yet, so 5 is a conventional small-cell floor, not a measured value. Revisit after the first week of live counts (what would change it: share of suppressed cells in /trace/live).",
+  "cache_ttl_s": 60,
+  "window_days_max": 30,
+  "connect_timeout_s": 2,
+  "statement_timeout_ms": 2000,
+  "hard_timeout_s": 3,
+  "db_url_env_wo": "VERA_DB_URL_WO",
+  "db_url_env_ro": "VERA_DB_URL_RO",
+  "table": "vera_vjay.live_ask_stats"
+}

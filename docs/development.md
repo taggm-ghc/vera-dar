@@ -35,19 +35,19 @@ To select a different port:
 ./run.sh 8000
 ```
 
-## Run the Streamlit demonstration
+## Run the Streamlit app (multipage: Ask, Report, Trace Eval, How to use, About)
 
 ```bash
 ./run_demo.sh
 ```
 
-The demo script serves on port 8502. For the labelled fixture view of the demonstration reports:
+The script serves on port 8502. For the labelled fixture view of the Report page:
 
 ```bash
 VERA_DEMO_SOURCE=fixture ./run_demo.sh
 ```
 
-**Note:** The fixture selector applies to a demonstration report page; it does not replace the `/ask` research backend with fixture responses.
+**Note:** The fixture selector applies to the Report page; it does not replace the `/ask` research backend with fixture responses.
 
 ## Tests
 

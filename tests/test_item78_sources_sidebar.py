@@ -469,3 +469,36 @@ def test_corpus_failed_fetch_short_cache_success_long_cache(monkeypatch):
     clock[0] += 2
     sb._corpus(st)
     assert len(calls) == 3
+
+
+def test_trace_eval_line_is_marked_historical(tmp_path, monkeypatch):
+    import json
+    from unittest import mock
+    from vera import sources_sidebar as sb
+    snap = tmp_path / "trace_eval_v1.json"
+    snap.write_text(json.dumps({"traces": [{"id": "q1", "sources": [{"url": "https://arxiv.org/abs/2401.00001"}]}],
+                                "generated_at": "2026-01-02T00:00:00Z"}), encoding="utf-8")
+    monkeypatch.setattr(sb, "_public_snapshot", lambda: None)
+    monkeypatch.setattr(sb, "SNAPSHOT_PATH", snap)
+    monkeypatch.setattr(sb, "_corpus", lambda st: None)
+    monkeypatch.setattr(sb, "how_answers_text", lambda: "how")
+    st = mock.MagicMock()
+    sb.render_sources_sidebar(st)
+    captions = [str(c.args[0]) for c in st.caption.call_args_list]
+    line = next(c for c in captions if "Trace Eval sources" in c)
+    assert "historical" in line and "1 distinct sources" in line
+
+
+def test_trace_eval_aggregate_only_line_is_marked_historical(monkeypatch):
+    """WP6 (issue c): the aggregate-only (no per-source count) branch is marked historical too."""
+    from unittest import mock
+    from vera import sources_sidebar as sb
+    monkeypatch.setattr(sb, "snapshot_summary", lambda: {"count": None, "questions": 26, "captured": "2026-10-23",
+                                                         "years": None})
+    monkeypatch.setattr(sb, "_corpus", lambda st: None)
+    monkeypatch.setattr(sb, "how_answers_text", lambda: "how")
+    st = mock.MagicMock()
+    sb.render_sources_sidebar(st)
+    captions = [str(c.args[0]) for c in st.caption.call_args_list]
+    line = next(c for c in captions if "Trace Eval sources" in c)
+    assert "historical" in line and "per-source counts are not published" in line and "26 test questions" in line

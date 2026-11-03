@@ -312,3 +312,13 @@ def _no_shipped_fallbacks(tmp_path, monkeypatch):
     from vera import trace_viz as _tv
     monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
     monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")
+
+
+import pytest as _pytest_live
+
+
+@_pytest_live.fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """The Live tab fetches /trace/live over HTTP; tests are offline, so the fetch reports an unreachable endpoint."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))

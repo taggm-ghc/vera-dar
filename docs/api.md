@@ -11,6 +11,8 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 | `GET /health` | Basic service health; returns only `status` and a coarse `dar` readiness field (`ready`, `degraded`, `unavailable`, `disabled` or `unknown`) | None |
 | `GET /health/dar` | Detailed readiness, including a `fulldoc` block for the full-document path | `VERA_API_KEY` |
 | `GET /version` | Exposes build commit identifier (`commit`, `short`) | None |
+| `GET /trace/live` | Anonymous live aggregate statistics (flag-off; see [Live statistics](#live-statistics-trace-live)) | None |
+| `GET /trace/live/owner` | Same aggregates plus token and cost totals | Owner key |
 | `GET /trace/public` | Public TRACE evaluation view (historical aggregate, no secrets) | None |
 | `GET /trace/private` | Private TRACE evaluation view | Separate trace-viz key (`VERA_TRACE_VIZ_KEY`) |
 | `POST /ask` | Research question: grounded answer from admitted full-document passages, otherwise a reading list or decline (see [Default behaviour](#default-behaviour)) | `VERA_API_KEY` |
@@ -66,6 +68,15 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 - `process_notes`: list of short plain-language statements of the research and verification steps taken. Empty when there are none.
 
 `limitations` and `process_notes` are kept out of `answer` only when `answer_notes_separate` is on (the shipped setting). With it on, `answer` holds the answer text and the notes appear in those two lists. Notes of an unrecognised kind appear in neither list and do not appear in `answer` either (fail closed). On a result that is not an evidentiary answer (for example a reading list), the notice explaining why is the answer itself and stays in `answer` in both modes; only a separate background-search note is moved to `process_notes` when the flag is on. With the flag off, the legacy text is restored: notes are concatenated into `answer` and both lists are empty. `answer_notes_separate` is a top-level key in `config/ask-provider-chain.json`; only the JSON boolean `true` turns it on, and any other value, a missing key or an unreadable file means off. The file is read on each request.
+
+### Additional contract fields (2026-11-03; offline-tested, not deployed, live unverified)
+
+- `contract.no_answer_cause`: `{code, text}` (text at most 300 characters), present only on a non-answer result. Codes seen in code: `no_passages`, `corpus_unusable`, `verification_unavailable`, `premise_unverified`, `no_supported_answer`, `reading_list`.
+- `contract.research.portals_attempted` and `contract.research.portals_completed`: integers counting acquisition portals tried (not skipped) and completed, on a non-answer result.
+
+## Live statistics (`/trace/live`)
+
+Ships off (`config/live_stats.json`, `enabled: false`); with the flag off `GET /trace/live` returns `{"enabled": false, "total": 0}`. When on, it needs the owner-run draft migration 013 (not applied). The query parameter `days` (default 7) is capped by `window_days_max`. The public shape is `enabled`, `total`, `by_result_kind`, `by_day` and `typical_latency_ms`. Counts below the minimum cell size (`min_count`, provisional value 5, not yet calibrated on real traffic) are shown as `"<5"`, with complementary suppression of other cells where needed. Results are cached for `cache_ttl_s` seconds. Rows hold enums and counts only: no question text, client id or IP. `GET /trace/live/owner` (owner key) adds `tokens_total` and `cost_usd_total`.
 
 ### The `outcome` field
 

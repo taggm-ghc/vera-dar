@@ -1,7 +1,7 @@
 {
   "about": {
     "title": "About VERA-DAR",
-    "intro": "This page holds the full disclosure for VERA-DAR. The short notice on every page is a subset of it.",
+    "intro": "This page holds the full disclosure for VERA-DAR. Other pages show a one-line notice that links here.",
     "after_disclosure": [
       {
         "heading": "What the sidebar entry shows",
@@ -27,15 +27,15 @@
         "heading": "What you get back",
         "paragraphs": [
           "An answer, marked Answer, cites the documents it is written from with numbers such as [1]. {answer_sources} An answer marked Partial answer does not cover every part of the question.",
-          "Under an answer, Cited passages lists a short quoted excerpt for each number, with whether the claim was supported or partly supported.",
+          "Evidence and limitations lists the limits of the answer and a short quoted excerpt for each cited number, with whether the claim was supported or partly supported. Research and verification holds the process notes and the claim check.",
           "When VERA-DAR cannot answer from its documents it says so and shows a reading list: documents that may be relevant, with links, that VERA-DAR has not read. Declining to answer is a valid outcome, not an error; read the listed documents yourself."
         ]
       },
       {
         "heading": "How to read the citations",
         "paragraphs": [
-          "A number in the answer matches the same number under Cited passages and in the source list. Where no excerpt is shown, the line says so and gives the passage reference instead.",
-          "The Evidence scope line says how many documents were inspected and how many passages were selected as possible evidence. The Claim check line says how many cited claims a model checked against the passages, and how many were supported, partly supported or removed.",
+          "A number in the answer matches the same number in the cited passages under Evidence and limitations and in the source list. Where no excerpt is shown, the line says so and gives the passage reference instead.",
+          "Under Research and verification, the Evidence scope line says how many documents were inspected and how many passages were selected as possible evidence. The Claim check line says how many cited claims a model checked against the passages, and how many were supported, partly supported or removed.",
           "Where a licence requires it, an attribution line names the creator, title and licence of the cited document."
         ]
       },
@@ -44,8 +44,7 @@
         "paragraphs": [
           "The checks are automated, not human review, and can be wrong. Quotes are short excerpts, not whole documents. Open the sources and read them before relying on a claim.",
           "Requests are rate-limited; if you reach the limit, wait and try again later.",
-          "If the service has been idle it may need up to about {wake_minutes} minutes to start; your question is kept while it starts.",
-          "The Metrics block under a result shows counted tokens and cost for that request. It excludes the checker's tokens and any background indexing. 0 tokens means no counted model call ran."
+          "If the service has been idle it may need up to about {wake_minutes} minutes to start; your question is kept while it starts."
         ]
       },
       {
@@ -58,13 +57,13 @@
         "heading": "The other pages",
         "paragraphs": [
           "Report: either a live report from asking VERA-DAR, or an offline example labelled \"illustrative, not a real run\".",
-          "Trace Eval: results of the project's evaluation runs."
+          "Trace Eval: a dated evaluation run (Historical) and, once collection is switched on, live aggregate statistics (Live). The Historical figures describe that earlier run, not the current service."
         ]
       },
       {
         "heading": "Privacy",
         "paragraphs": [
-          "{privacy} Full details are on the About page."
+          "{privacy} The About page says which outside AI and search services receive your question and how they handle it."
         ]
       }
     ]

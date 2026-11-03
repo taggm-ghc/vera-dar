@@ -287,3 +287,70 @@ def _no_shipped_fallbacks(tmp_path, monkeypatch):
     from vera import trace_viz as _tv
     monkeypatch.setattr(_tv, "HISTORICAL_PATH", tmp_path / "no-historical.json")
     monkeypatch.setattr(_tv, "OFFLINE_PATH", tmp_path / "no-offline.json")
+
+
+import pytest as _pytest_live
+
+
+@_pytest_live.fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """The Live tab fetches /trace/live over HTTP; tests are offline, so the fetch reports an unreachable endpoint."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))
+
+
+# ---- NONASK-1103 WP2 / H4: banner branches, public vs dev, Live tab states ----
+def _view(**kw):
+    return {"run": {"run_meta": {"models": ["secret-model-x"]}}, "run_file_date": "2026-10-20", "build": "abcdef1",
+            "run_build": "abcdef1", "historical": False, **kw}
+
+
+def test_banner_three_branches_public_date_only():
+    from vera.trace_eval.ui import run_banner
+    for v in (_view(historical=True), _view(historical=True, run_build=""), _view()):
+        t = run_banner(v, True)
+        assert "2026-10-20" in t and "abcdef1" not in t and "secret-model-x" not in t
+    assert run_banner(_view(historical=True), True).startswith("HISTORICAL")
+    assert run_banner(_view(historical=True, run_build=""), True).startswith("HISTORICAL")
+    cur = run_banner(_view(), True)
+    assert "HISTORICAL" not in cur and "earlier build" not in cur and "build deployed now" in cur
+    assert run_banner({"run": None}, True) is None
+
+
+def test_banner_dev_shows_build_and_never_claims_change_when_current():
+    from vera.trace_eval.ui import run_banner
+    d = run_banner(_view(), False)
+    assert "abcdef1" in d and "HISTORICAL" not in d
+    assert "abcdef1" in run_banner(_view(historical=True, run_build="1234567"), False)
+
+
+def _live_app(base_url):
+    from vera.trace_eval.ui import _render_live
+    _render_live(base_url)
+
+
+def _live(monkeypatch, status, body):
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (status, body))
+    at = AppTest.from_function(_live_app, args=("http://x.invalid:9",), default_timeout=30).run()
+    assert not at.exception
+    return _page_text(at) + "\n".join(t.value.to_string() for t in at.table)
+
+
+@pytest.mark.parametrize("status,body", [(0, None), (404, None), (200, {"enabled": False, "total": 40}),
+                                          (200, {"enabled": True, "total": 0}), (200, [])])
+def test_live_tab_not_yet_collecting(monkeypatch, status, body):
+    assert "not yet collecting" in _live(monkeypatch, status, body)
+
+
+def test_live_tab_shows_counts_never_tokens_or_cost(monkeypatch):
+    t = _live(monkeypatch, 200, {"enabled": True, "total": 120, "outcomes": {"answer": 100, "declined": "<5"},
+                                  "tokens": {"in": 999777}, "cost": {"usd": 4242.5}, "cost_usd": 4242.5})
+    assert "120" in t and "answer" in t and "<5" in t and "not yet collecting" not in t
+    assert "999777" not in t and "4242" not in t
+
+
+def test_no_course_era_wording_and_caveats_kept():
+    src = (ROOT / "vera" / "trace_eval" / "ui.py").read_text() + (ROOT / "pages" / "trace_eval.py").read_text()
+    assert "Week 4" not in src and "agent-authored" not in src
+    assert "self-preference" in src and "single agent coded the checks" in src and "n is small" in src

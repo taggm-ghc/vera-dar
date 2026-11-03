@@ -208,14 +208,14 @@ def render_sources_sidebar(st) -> None:
         snap = snapshot_summary()
         if snap and snap["count"] is None:  # aggregate-only run summary: no per-source count is published
             when = f", captured {snap['captured']}" if snap["captured"] else ""
-            st.caption(f"**Trace Eval sources:** per-source counts are not published; the latest posted run covered {snap['questions']} test questions{when}.")
+            st.caption(f"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered {snap['questions']} test questions{when}.")
             return
         if not snap or not snap["count"]:
             st.caption("**Trace Eval sources:** not available")
             return
         span = f", first posted {snap['years'][0]} to {snap['years'][1]}" if snap["years"] else ""
         when = f", captured {snap['captured']} (UTC; replaced when the evaluation is re-run)" if snap["captured"] else ""
-        st.caption(f"**Trace Eval sources:** {snap['count']} distinct sources "
+        st.caption(f"**Trace Eval sources:** historical snapshot: {snap['count']} distinct sources "
                    f"retrieved for {snap['questions']} test questions{span}{when}.")
 
 

@@ -98,7 +98,7 @@ def test_evidence_findings_sentence_only_when_recall_on(tmp_path):
 def test_render_calls_caption_with_text():
     st = mock.MagicMock()
     disclosure.render_disclosure(st)
-    st.caption.assert_called_once_with(disclosure.required_notice_text())  # OD-1029-UI: required groups; full text is on About
+    st.caption.assert_called_once_with(disclosure.SHORT_NOTICE)  # R-031: one short line; full text is on About only
     assert [c.args[0] for c in st.page_link.call_args_list] == [t for t, _ in disclosure.ABOUT_LINKS]
 
 
@@ -108,7 +108,10 @@ def test_every_page_calls_render_disclosure_once():
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Name) and n.func.id == "render_disclosure"]
         imported = any(isinstance(n, ast.ImportFrom) and n.module == "vera.disclosure" for n in ast.walk(tree))
-        assert imported and len(calls) == 1, rel
+        if rel.endswith("about.py"):  # R-031: About renders the full sections once and no short line
+            assert not calls, rel
+        else:
+            assert imported and len(calls) == 1, rel
 
 
 def test_pages_do_not_hardcode_the_text():
@@ -211,3 +214,9 @@ def test_p17_flag_reader_is_the_shipped_config_flag(tmp_path, monkeypatch):
     assert disclosure.auto_acquire_enabled() is True  # shipped config enables it (owner 2026-10-21)
     monkeypatch.setattr(acq_config, "load_config", lambda *a, **k: None)  # unreadable config = feature off
     assert disclosure.auto_acquire_enabled() is False
+
+
+def test_short_notice_text():
+    assert "AI system" in disclosure.SHORT_NOTICE and "may be wrong" in disclosure.SHORT_NOTICE
+    assert "your question is sent to third-party ai and search services" in disclosure.SHORT_NOTICE.lower()
+    assert disclosure.required_notice_text() not in disclosure.SHORT_NOTICE

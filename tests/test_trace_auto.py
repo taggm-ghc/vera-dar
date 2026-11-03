@@ -229,3 +229,11 @@ def test_base_url_must_be_loopback(monkeypatch, capsys):
             "--timeout-s", "60", "--total-timeout-s", "300"]
     assert m.main(argv) == 2
     assert "loopback" in capsys.readouterr().err
+
+
+@pytest.fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """NONASK-1103 WP6: the Trace Eval page's Live tab fetches /trace/live over HTTP; tests are offline, so the fetch
+    reports an unreachable endpoint (same patch as tests/test_teval_1023.py)."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))

@@ -121,3 +121,13 @@ def test_no_request_codes_not_attempted(code):
 def test_guard_deadline_without_evidence_is_search_not_run():
     s = _steps("deadline", [])
     assert s["search"] == "not_run" and s["search_reason"] == "deadline" and s["acquisition"] == "not_attempted"
+
+
+import pytest as _pytest_live
+
+
+@_pytest_live.fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """The Live tab fetches /trace/live over HTTP; tests are offline, so the fetch reports an unreachable endpoint."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))

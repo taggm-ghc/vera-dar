@@ -1,0 +1,121 @@
+-- 013_vera_live_ask_stats.sql -- DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007/012 drafts); rename only at approval.
+-- WP-L (NONASK-1103, R-030): anonymous live aggregate statistics for /ask. One append-only row per successful answer, enums and
+-- integers only: NO question text, client id, IP or free text. The app flag (config/live_stats.json `enabled`) ships false.
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py
+-- --dry-run (HZ-DAR-1). Use the owner script work/NONASK-1103/wpL/owner/apply_live_stats.sh (dry run by default).
+-- NUMBERING: 008 bootstrap (reserved), 009 portal discovery, 010 dynamic state (gap, reserved), 011 topic registry, 012 classifier
+-- categories, 013 = this file (next free number, verified in L.0).
+-- ROLES: grants go to the GROUP roles vera_vjay_wo (INSERT) and vera_vjay_ro (SELECT) on schema vera_vjay, as in 012. The LOGIN roles
+-- are named by psql variables (defaults from db/accounts/create_vera_accounts.sql): app_wo_login=vera_pipeline_wo, app_ro_login=vera_eval_ro.
+-- The preflight RAISEs unless each group and login exists and each login inherits its group (pg_has_role USAGE).
+-- No role is created or altered; GRANT/REVOKE on the new table is part of this owner-run DDL, not a privilege change to any role.
+-- APPEND-ONLY: UPDATE/DELETE/TRUNCATE are revoked from everyone and a BEFORE UPDATE OR DELETE trigger (plus a TRUNCATE trigger) RAISEs.
+-- UNTESTED against a real PostgreSQL: the CHECKs and triggers have never been executed.
+-- Rollback (destructive, separate approval): db/migrations/rollback/013-DRAFT-vera-live-ask-stats-rollback.sql.draft
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_wo_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SELECT set_config('vera013.wo', :'app_wo_login', true), set_config('vera013.ro', :'app_ro_login', true);
+
+-- Collision preflight (strictly additive): schema must exist; nothing this file creates may exist.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '013 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.live_ask_stats') IS NOT NULL
+     OR pg_catalog.to_regtype('vera_vjay.live_ask_stats') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                 WHERE ns.nspname = 'vera_vjay' AND p.proname IN ('live_ask_stats_append_only_trgfn','live_ask_stats_no_truncate_trgfn')) THEN
+    RAISE EXCEPTION '013 already applied or name collision';
+  END IF;
+END $$;
+
+-- Role preflight: groups and logins exist; each login inherits its group.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_wo', current_setting('vera013.wo')],
+                                              ['vera_vjay_ro', current_setting('vera013.ro')]];
+BEGIN
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '013 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '013 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '013: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+END $$;
+
+CREATE TABLE vera_vjay.live_ask_stats (
+    stat_id           BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT live_ask_stats_pk PRIMARY KEY,
+    ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    result_kind       TEXT NOT NULL CONSTRAINT live_ask_stats_result_kind_chk
+        CHECK (result_kind IN ('answer','partial_answer','decline','reading_list','self_description','other')),
+    research_outcome  TEXT NOT NULL CONSTRAINT live_ask_stats_research_outcome_chk
+        CHECK (research_outcome IN ('answered_with_new','qualified_older_only','no_valuable_source','incomplete_search','abstain','none','other')),
+    claims            INTEGER NOT NULL CONSTRAINT live_ask_stats_claims_chk CHECK (claims >= 0),
+    citations         INTEGER NOT NULL CONSTRAINT live_ask_stats_citations_chk CHECK (citations >= 0),
+    evidence_passages INTEGER NOT NULL CONSTRAINT live_ask_stats_evidence_chk CHECK (evidence_passages >= 0),
+    latency_ms        INTEGER NOT NULL CONSTRAINT live_ask_stats_latency_chk CHECK (latency_ms >= 0),
+    tokens            INTEGER NOT NULL CONSTRAINT live_ask_stats_tokens_chk CHECK (tokens >= 0),
+    cost_usd          NUMERIC(12,6) NOT NULL CONSTRAINT live_ask_stats_cost_chk CHECK (cost_usd >= 0)
+);
+CREATE INDEX live_ask_stats_ts_idx ON vera_vjay.live_ask_stats (ts);
+
+-- Append-only: any UPDATE or DELETE raises, for every role.
+CREATE FUNCTION vera_vjay.live_ask_stats_append_only_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION 'live_ask_stats is append-only: % not allowed', TG_OP;
+END $f$;
+CREATE FUNCTION vera_vjay.live_ask_stats_no_truncate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION 'live_ask_stats is append-only: TRUNCATE not allowed';
+END $f$;
+CREATE TRIGGER live_ask_stats_append_only_trg BEFORE UPDATE OR DELETE ON vera_vjay.live_ask_stats
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.live_ask_stats_append_only_trgfn();
+CREATE TRIGGER live_ask_stats_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.live_ask_stats
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.live_ask_stats_no_truncate_trgfn();
+
+REVOKE ALL ON vera_vjay.live_ask_stats FROM PUBLIC, vera_vjay_wo, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.live_ask_stats FROM %I, %I',
+                            current_setting('vera013.wo'), current_setting('vera013.ro'));
+END $$;
+GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo, vera_vjay_ro;
+GRANT INSERT ON vera_vjay.live_ask_stats TO vera_vjay_wo;
+GRANT SELECT ON vera_vjay.live_ask_stats TO vera_vjay_ro;
+
+-- Final privilege check against the actual logins (a RAISE rolls everything back).
+DO $$
+DECLARE t constant text := 'vera_vjay.live_ask_stats'; p text;
+BEGIN
+  IF NOT (pg_catalog.has_table_privilege(current_setting('vera013.wo'), t, 'INSERT')
+          AND pg_catalog.has_table_privilege(current_setting('vera013.ro'), t, 'SELECT')) THEN
+    RAISE EXCEPTION '013 grant check failed: wo login needs INSERT and ro login needs SELECT.';
+  END IF;
+  FOREACH p IN ARRAY ARRAY['UPDATE','DELETE','TRUNCATE'] LOOP
+    IF pg_catalog.has_table_privilege(current_setting('vera013.wo'), t, p)
+       OR pg_catalog.has_table_privilege(current_setting('vera013.ro'), t, p) THEN
+      RAISE EXCEPTION '013 grant check failed: an app login holds % on the table.', p;
+    END IF;
+  END LOOP;
+  IF pg_catalog.has_table_privilege(current_setting('vera013.ro'), t, 'INSERT') THEN
+    RAISE EXCEPTION '013 grant check failed: ro login holds INSERT.';
+  END IF;
+END $$;
+
+COMMIT;

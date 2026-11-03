@@ -218,13 +218,18 @@ DISCLOSURE_TEXT = disclosure_text()
 DISCLOSURE_TEXT_UNCONFIRMED = DISCLOSURE_TEXT  # identical while evidence recall is off
 
 
+# R-031 / H8: the one short line shown on every page except About; the full disclosure lives on About only (N1: the
+# third-party clause is settled and stays in the short line).
+SHORT_NOTICE = ("VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and "
+                "search services.")
+
 ABOUT_LINKS = (("pages/about.py", "About: how VERA-DAR answers, licences, data"),
                ("pages/how_to_use.py", "How to use VERA-DAR"))
 
 
 def render_disclosure(st) -> None:
-    """Required notice on every page (OD-1029-UI), then links to the About and How to use pages."""
-    st.caption(required_notice_text())
+    """R-031: the one short notice, then links to the About and How to use pages. The full disclosure is on About only."""
+    st.caption(SHORT_NOTICE)
     for target, label in ABOUT_LINKS:
         try:
             st.page_link(target, label=label)

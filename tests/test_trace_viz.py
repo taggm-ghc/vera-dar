@@ -155,7 +155,17 @@ def _app(results_path, validation_path, public_path):
 
 
 def _page(at) -> str:
-    return "\n".join(repr(el.proto) for el in list(at.main) + list(at.sidebar)) + repr(at.session_state.filtered_state)
+    """Every element's proto, descending into tab containers (at.main lists only top-level nodes)."""
+    out = []
+
+    def walk(n):
+        if getattr(n, "proto", None) is not None:
+            out.append(repr(n.proto))
+        kids = getattr(n, "children", None)
+        for ch in (kids.values() if isinstance(kids, dict) else []):
+            walk(ch)
+    walk(at._tree)
+    return "\n".join(out) + repr(at.session_state.filtered_state)
 
 
 def _at(r, v, p):
@@ -284,7 +294,8 @@ def _eq_app(pub, marker, root):
         tv.public_view = orig
 
 
-def test_page_results_only_commit_current_with_build_lines(tmp_path):
+def test_page_results_only_commit_current_with_build_lines(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERA_PUBLIC_MODE", "0")  # WP2: build lines are dev-only; mode boundary "0" = dev
     t = _tree(tmp_path / "t")
     pub = {"schema": trace_viz.SCHEMA, "variants": {"baseline": {"per_check": {}}}, "n_questions": 1, "n_traces": 1,
            "n_errors": 0, "run_meta": {"mode": "live", "offline": False, "deployed_version": RUN, "commit": RUN}}
@@ -302,3 +313,13 @@ def test_page_results_only_commit_current_with_build_lines(tmp_path):
     text = "\n".join([*(c.value for c in at.caption), *(w.value for w in at.warning)])
     assert not at.exception and "HISTORICAL" not in text
     assert f"Run build {RUN[:7]} (deployed build {LATER[:7]}; application code unchanged since the run build)" in text
+
+
+import pytest as _pytest_live
+
+
+@_pytest_live.fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """The Live tab fetches /trace/live over HTTP; tests are offline, so the fetch reports an unreachable endpoint."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))

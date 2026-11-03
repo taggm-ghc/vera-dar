@@ -10,7 +10,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -162,7 +162,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -184,7 +184,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -336,7 +336,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -358,7 +358,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -494,7 +494,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -516,7 +516,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -664,7 +664,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -686,7 +686,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -798,7 +798,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -820,7 +820,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -924,7 +924,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",
@@ -946,7 +946,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system. Answers and lists are not neutral or complete and may be wrong. Check the sources and read them yourself before relying on any claim. VERA-DAR keeps no profile of you and does not tailor answers to you. When it answers from its own collection, your question, the selected passages with their titles and links, and the draft answer sentences are sent to third-party AI services. Some requests are refused for safety reasons. Your question is sent to third-party AI and search services to generate a response. These services have their own data-handling and retention policies. VERA-DAR does not save your question or information identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text documents found while searching for your question, after automated licence and content checks, recording each document\\'s source, licence and the time it was added; it does not store your question.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -1050,7 +1050,7 @@
   ],
   [
    "Caption",
-   "body: \"**Trace Eval sources:** per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "Subheader",

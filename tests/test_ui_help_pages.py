@@ -87,7 +87,8 @@ def test_how_to_use_page_renders_sections_and_uses_config_scope():
         assert h in heads, h
     t = _text(at)
     assert "{scope}" not in t and "{privacy}" not in t and "{" not in t
-    assert (disclosure._THIRD_PARTY + disclosure._NO_SAVE).strip() in _NORM(t)
+    assert disclosure._NO_SAVE.strip() in _NORM(t) and disclosure._THIRD_PARTY.strip() not in _NORM(t)
+    assert "The About page says which outside AI and search services receive your question" in _NORM(t)
 
 
 def test_unreadable_config_shows_fallback(tmp_path):
@@ -148,9 +149,8 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
         assert el in src, el
 
 
-def test_tokens_note_mentions_checker_exclusion_and_wake_time_comes_from_config(monkeypatch):
+def test_wake_time_comes_from_config(monkeypatch):
     text, _ = _howto_text()
-    assert "excludes the checker's tokens" in text and "counted tokens" in text
     assert "3 minutes" not in text and "{wake_minutes}" in text
     from vera import ui_wake
     assert help_pages.wake_minutes() == max(1, round(ui_wake.load_config().max_total_s / 60))
@@ -168,7 +168,12 @@ def test_guardrail_and_report_paragraphs_describe_code_behaviour():
     text, cfg = _howto_text()
     assert "No model call is made" in text and "malformed reply" in text and "sends your question" not in text
     assert "illustrative, not a real run" in text
-    import pages.vera_demo  # noqa: F401  (labels live in the page: OFFLINE text must contain the quoted label)
+    # labels live in the page: its OFFLINE label must contain the quoted text. Read the source rather than importing
+    # the page: a bare-mode import executes its st.form outside any ScriptRunContext and leaves that form on the
+    # shared delta-generator stack, so every later AppTest of a page with a form fails "Forms cannot be nested"
+    # (NONASK-1103 WP6 root cause of the order-dependent test_ui_progress / test_ui_wake / test_ui_wake_page failures).
+    src = (ROOT / "pages" / "vera_demo.py").read_text(encoding="utf-8")
+    assert '"Offline example (illustrative, not a real run)"' in src and "mode == OFFLINE" in src
 
 
 @pytest.mark.parametrize("fd,off,corp,auto,layers,recall", list(__import__("itertools").product(
@@ -212,3 +217,41 @@ def test_answer_sources_follows_flags(monkeypatch, fd, answering):
     assert ("open-access documents found in the same request" in t) == (fd and answering)
     assert ("Those documents are in VERA-DAR's collection." == t) == (fd and not answering)
     assert ("switched off" in t) == (not fd)
+
+
+def test_about_intro_and_no_subset_claim():
+    cfg = json.loads((ROOT / "config" / "ui_help_pages.json").read_text())
+    intro = cfg["about"]["intro"]
+    assert "Other pages show a one-line notice that links here." in intro and "subset" not in intro
+
+
+def test_how_to_use_text_matches_the_layered_ui():
+    raw = (ROOT / "config" / "ui_help_pages.json").read_text()
+    how = json.dumps(json.loads(raw)["how_to_use"])
+    assert "Metrics" not in how and "tokens" not in how and "Under an answer" not in how
+    assert "Research and verification" in how and "historical" in how.lower()
+
+
+def test_live_stats_line_only_when_flag_on(tmp_path):
+    f = tmp_path / "ls.json"
+    assert help_pages.live_stats_enabled(tmp_path / "absent.json") is False
+    f.write_text(json.dumps({"enabled": False}))
+    assert help_pages.live_stats_enabled(f) is False
+    f.write_text(json.dumps({"enabled": True}))
+    assert help_pages.live_stats_enabled(f) is True
+
+    class St:
+        def __init__(self): self.md = []
+        def title(self, x): pass
+        def info(self, x): pass
+        def subheader(self, x): pass
+        def markdown(self, x): self.md.append(x)
+    for on in (False, True):
+        s = St()
+        orig = help_pages.live_stats_enabled
+        help_pages.live_stats_enabled = lambda *a, **k: on
+        try:
+            help_pages.render_about(s)
+        finally:
+            help_pages.live_stats_enabled = orig
+        assert s.md.count(help_pages.LIVE_STATS_LINE) == (1 if on else 0)

@@ -27,6 +27,8 @@ render_disclosure(st)  # item #74
 
 LIVE, OFFLINE = "Live report (ask VERA-DAR)", "Offline example (illustrative, not a real run)"
 PUBLIC = public_mode.is_public_mode()
+INFLIGHT_KEY = "vera_report_inflight_since"  # monotonic start of the request in flight (cleared in a finally)
+INFLIGHT_MAX_S = 150.0  # a stale marker older than this no longer blocks a new submit
 _LOCAL_URL_FILE = Path(__file__).resolve().parent.parent / ".vera-local-url"
 
 mode = st.radio("Report source", (LIVE, OFFLINE), horizontal=True)
@@ -44,10 +46,15 @@ else:
     base_url, api_key = lr.resolve_api(PUBLIC, local_url_file=_LOCAL_URL_FILE, typed_key=typed)  # never rendered
     r = lr.redactor(base_url)
     recent = st.session_state.get(lr.RECENT_KEY, [])
-    question = st.text_input("Research question for a live report:", placeholder="What is VERA-DAR?",
-                             help=ask_help_text())
+    # C7: Enter submits. Question and button share one form; a submit while a run is queued or in flight is ignored.
+    with st.form("report_form", clear_on_submit=False):
+        question = st.text_input("Research question for a live report:", placeholder="What is VERA-DAR?",
+                                 help=ask_help_text())
+        submitted = st.form_submit_button("Run report", type="primary")
+    busy = bool(st.session_state.get(ui_wake.PENDING_KEY)) or \
+        (time.monotonic() - float(st.session_state.get(INFLIGHT_KEY, -1e9))) < INFLIGHT_MAX_S
     # UIWAKE-1022: queue the question, wake the API (GET /health with backoff), then send it.
-    if st.button("Run report", type="primary"):
+    if submitted and not busy:
         if not question:
             st.warning("Please enter a question.")
         elif not api_key:
@@ -59,12 +66,15 @@ else:
         question = pending["question"]  # the queued text, sent after the wake-up
         with st.spinner("Running VERA-DAR..."):
             t0 = time.monotonic()
+            st.session_state[INFLIGHT_KEY] = t0
             try:
                 resp = public_mode.post_ask(base_url, question, "normal", api_key)
             except requests.exceptions.RequestException as e:
                 resp = None
                 st.error("The service is unavailable. Please try again later." if PUBLIC
                          else f"Request failed: {type(e).__name__}")
+            finally:
+                st.session_state.pop(INFLIGHT_KEY, None)
             latency = time.monotonic() - t0
         if resp is not None:
             if resp.status_code == 200:

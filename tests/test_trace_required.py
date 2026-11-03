@@ -51,7 +51,8 @@ def test_page_no_secrets_no_run_shows_shipped_historical_aggregates():
                  ROOT / "eval_results" / "trace_eval_offline_public.json", ROOT / "eval_results" / "trace_eval_v1_validation.json")
     text = _page(at)
     assert not at.exception
-    assert "HISTORICAL (TRACE v1, 2026-10-04, earlier abstract-grounded variant, build not recorded, superseded)" in text
+    # NONASK-1103 WP2/R-030: public text carries the dated HISTORICAL banner only; the detailed label is dev-only
+    assert "HISTORICAL: evaluation run dated" in text and "it does not describe the current service" in text
     assert "Method and limitations" in text and "Check accuracy, not answer pass rates" in text
     # the offline summary is optional: shown only when its static file ships (asserted in test_trace_auto.py)
     assert ("Offline suite" in text) == (ROOT / "eval_results" / "trace_eval_offline_public.json").is_file()
@@ -90,7 +91,16 @@ def test_shipped_historical_file_is_sanitized_and_ignore_safe():
 
 def test_shipped_historical_label_on_page_has_no_model_name():
     text = _page(_render("/nonexistent/p.json", HIST, val=VAL))
-    assert "HISTORICAL (TRACE v1, 2026-10-04, earlier abstract-grounded variant, build not recorded, superseded)" in text
+    # NONASK-1103 WP2/R-030: public text carries the dated HISTORICAL banner only; the detailed label is dev-only
+    assert "HISTORICAL: evaluation run dated" in text and "it does not describe the current service" in text
     assert "nano" not in text.lower() and "gpt" not in text.lower()
     for q in QUESTION_TEXTS:
         assert q not in text
+
+
+@__import__("pytest").fixture(autouse=True)
+def _no_live_fetch(monkeypatch):
+    """NONASK-1103 WP6: the Trace Eval page's Live tab fetches /trace/live over HTTP; tests are offline, so the fetch
+    reports an unreachable endpoint (same patch as tests/test_teval_1023.py)."""
+    from vera.trace_eval import ui as _ui
+    monkeypatch.setattr(_ui, "fetch_live", lambda *a, **k: (0, None))

@@ -42,8 +42,22 @@ def answer_sources() -> str:
     return "Those documents are in VERA-DAR's collection."
 
 
+LIVE_STATS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "live_stats.json"
+LIVE_STATS_LINE = "VERA-DAR keeps anonymous aggregate usage counts (no question text, no identifier)."
+
+
+def live_stats_enabled(path: Path = LIVE_STATS_CONFIG_PATH) -> bool:
+    """config/live_stats.json key `enabled` is exactly true; absent, unreadable or anything else is False."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")).get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def _fill(text: str) -> str:
-    privacy = (disclosure._THIRD_PARTY + disclosure._NO_SAVE).strip()
+    # WP6 (orchestrator decision): the third-party point appears once on non-About pages, in the short notice; the
+    # Privacy section keeps the no-save point and points to About for the services that receive the question.
+    privacy = disclosure._NO_SAVE.strip()
     scope = scope_text()
     return (text.replace("{privacy}", privacy)
             .replace("{answer_sources}", answer_sources())
@@ -72,6 +86,8 @@ def render_about(st, cfg=_UNSET) -> None:
         st.markdown(text)
     for sec in page.get("after_disclosure") or []:
         _section(st, sec)
+    if live_stats_enabled():
+        st.markdown(LIVE_STATS_LINE)
 
 
 def render_how_to_use(st, cfg=_UNSET) -> None:
