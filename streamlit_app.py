@@ -13,6 +13,7 @@ from vera.m7.live_report import INLINE_STATUS
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera import progress, progress_ui, ui_wake
+from vera.evidence_trace_ui import render_trace
 from vera.public_mode import (get_progress, is_public_mode, iter_ask_stream, post_ask, post_ask_tracked,
                               upstream_base_url)
 from vera.sources_sidebar import cited_numbers, plain, render_nav, render_sources, render_sources_sidebar
@@ -114,11 +115,18 @@ def _layer2_heading(data: dict, answer: bool) -> None:
         st.markdown("#### Evidence and limitations")
 
 
+def _trace_of(data: dict):
+    c = data.get("contract") if isinstance(data, dict) else None
+    return (c or {}).get("trace") if isinstance(c, dict) else None
+
+
 def _layer3_answer(data: dict, full: bool) -> None:
     cc_text = claim_check_text(data.get("claim_check"), None, full, layered=True)
-    if _note_texts(data.get("process_notes")) or cc_text:  # need-to-know: omit when nothing to explain
+    _tr = _trace_of(data)
+    if _note_texts(data.get("process_notes")) or cc_text or _tr:  # need-to-know: omit when nothing to explain
         with st.expander("Research and verification", expanded=False):
             render_process_notes(st, data)
+            render_trace(st, _tr, public=PUBLIC)  # NONASK-1103 E5: no-op when absent
             if cc_text:
                 st.caption(cc_text)
 
@@ -132,9 +140,11 @@ def _research_outcome_text(data: dict) -> str:
 
 def _layer3_other(data: dict) -> None:
     _ro = _research_outcome_text(data)  # need-to-know: explains the user's own experience, so shown in public mode too
-    if _note_texts(data.get("process_notes")) or _ro or not PUBLIC:
+    _tr = _trace_of(data)
+    if _note_texts(data.get("process_notes")) or _ro or not PUBLIC or _tr:
         with st.expander("Research and verification", expanded=False):
             render_process_notes(st, data)
+            render_trace(st, _tr, public=PUBLIC)  # NONASK-1103 E5: no-op when absent
             if _ro:
                 st.caption("**Research outcome:** " + _ro)  # FRESH-1023 C3
             if not PUBLIC:  # counts/steps are owner-mode detail, not end-user explanation

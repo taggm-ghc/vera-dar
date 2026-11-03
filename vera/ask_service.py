@@ -158,6 +158,14 @@ REQUEST_BUDGET: contextvars.ContextVar = contextvars.ContextVar("cmf_request_bud
 _QUESTION: contextvars.ContextVar = contextvars.ContextVar("port_p2_question", default=None)  # PORT-P2: query hash only
 # DDFIX-1023/INTEG item 6: this request's inline-acquisition outcome (its R-ACQ-IRRELEVANT marks), reset per request
 _INLINE_OUT: contextvars.ContextVar = contextvars.ContextVar("ddfix_inline_outcome", default=None)
+# NONASK-1103 E4m: the public evidence trace of the latest full-document attempt that produced no answer (response-only,
+# never logged or stored). _fulldoc sets it; the no-answer contracts merge it. Reset at the start of every attempt.
+_FD_TRACE: contextvars.ContextVar = contextvars.ContextVar("nonask_fd_trace", default=None)
+
+
+def _fd_trace_contract() -> dict:
+    t = _FD_TRACE.get()
+    return {"trace": t} if t else {}
 
 
 # Post-inline LLM calls that can follow an inline search, per the auto_acquire.json _calibration_note: one answer writer,
@@ -360,7 +368,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _a, _n = _nonanswer_note(text, res.notes, inline_note, strip=False)
     out = replace(res, answer=_a, notes=_n, evidence=ev,
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
-                            **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
+                            **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {}),
+                            **_fd_trace_contract()}, **trig,
                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
     out = _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
     return _with_cause(out, _CAUSE_CODE.get(token, "no_supported_answer"), text)
@@ -811,6 +820,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     from vera import answer_contract as contract
     from vera import fulldoc_corpus
 
+    _FD_TRACE.set(None)  # NONASK-1103 E4m: a stale trace of an earlier attempt never reaches this attempt's body
     try:
         cfg = fulldoc_corpus.load_config()
         # DAR-1021-ASKDIAG: the acquired-only branch never reads the base corpus, so it must not wait on its load
@@ -861,6 +871,9 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     texts, tokens_ = cfg["answer"], cfg["fallback_tokens"]
     if contract.result_kind_for((ev,)) != "answer":
         unusable = ev.status == "corpus_unusable"
+        from vera import fulldoc_answer as _fda
+
+        _FD_TRACE.set(_fda._trace(ev, None, None, None, _fda.sources_from(ev) if getattr(ev, "admitted", None) else None))
         return (ev, tokens_["corpus_unusable" if unusable else "insufficient"], decision.tokens_used,
                 decision.cost_usd, texts["corpus_unusable_text"] if unusable else _with_count(texts["insufficient_text"], ev))
     from vera import fulldoc_answer
@@ -874,6 +887,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     if out.result is not None and out.result.result_kind == "answer":
         return replace(out.result, evidence=ev, accepted=True,
                        contract={**(out.result.contract or {}), "layers": contract.layers(), "fallback": None})  # NONASK-1103: MERGE; only layers+fallback are overridden (all other keys, e.g. trace, kept)
+    _FD_TRACE.set(getattr(out, "trace", None))  # NONASK-1103 E4m: no answer, so the body carries the reasons
     if getattr(out, "premise", None) and out.fallback:  # DAR-PREMISE-1022: flagged premise, correction unverifiable
         from vera.fulldoc_answer import PREMISE_UNVERIFIED_TEXT
 
@@ -1426,4 +1440,7 @@ def complete_after_exhaustion(question: str, grounding, state: dict) -> AskResul
     except Exception as exc:  # noqa: BLE001  (search seam unavailable: the correct no-answer result)
         logging.getLogger("vera").warning("exhaustion grace: reading list unavailable (%s)", type(exc).__name__)
         res = contract.reading_list_result((), tokens, cost)
+    _t = _fd_trace_contract() if isinstance(fd, tuple) else {}
+    if _t:  # NONASK-1103 E4m: merge, never replace
+        res = replace(res, contract={**(res.contract or {}), **_t})
     return finish(res, "reading_list" if res.candidates else "no_answer", "notice_fallback")

@@ -31,6 +31,23 @@ class FullDocOutcome:
     tokens_used: int = 0
     cost_usd: float = 0.0
     premise: dict | None = None  # DAR-PREMISE-1022: {"status": false|unsupported|ill_posed, "verified": bool}
+    trace: dict | None = None  # NONASK-1103 E4: public evidence trace (also on non-answers, where result is None)
+
+
+def _trace(ev, records=None, citations=None, adequacy=None, sources=None):
+    """NONASK-1103 E4: the PUBLIC evidence trace (the only view /ask carries). None on any failure or when labels are off."""
+    try:
+        from vera import evidence_trace
+
+        return evidence_trace.project(ev, records, citations, adequacy, None, True, sources=sources)
+    except Exception:  # noqa: BLE001  (fail closed: no trace, never an error in the answer path)
+        return None
+
+
+def _gate(declared, supported, labels, resp_partial):
+    from vera import adequacy_gate
+
+    return adequacy_gate.evaluate(declared, supported, labels, resp_partial)
 
 
 def sources_from(ev) -> list[dict]:
@@ -180,20 +197,12 @@ def _trim(text: str, cap: int) -> str:
 
 
 def pick_quote(span_text: str, claim_sentence: str, cap: int) -> str:
-    """Short verbatim substring of span_text: the sentence with the highest word overlap with the claim, trimmed to
-    cap characters at a word boundary. Never the whole span when the span is longer than cap."""
-    claim_w = _words(_CITE.sub(" ", claim_sentence))
-    best, best_score = None, -1
-    pos = 0
-    for part in _SENT.split(span_text):
-        i = span_text.find(part, pos)
-        if i < 0 or not part.strip():
-            continue
-        pos = i + len(part)
-        score = len(claim_w & _words(part))
-        if score > best_score:
-            best, best_score = part, score
-    quote = _trim(best if best is not None else span_text, cap)
+    """Short verbatim substring of span_text: the sentence with the highest word overlap with the claim, snapped to a
+    sentence (or, for a sentence longer than cap, the last clause) boundary inside cap; with no boundary inside cap it
+    falls back to today's word-boundary trim. Never the whole span when the span is longer than cap (NONASK-1103 E4)."""
+    from vera.evidence_trace import snap_excerpt
+
+    quote = snap_excerpt(span_text, claim_sentence, cap)
     if not quote:
         quote = span_text.strip()[:cap].rstrip()
     assert quote in span_text
@@ -221,7 +230,7 @@ def build_citations(records, sources: list[dict], cap: int, total_cap: int | Non
             out.append({"claim_id": r["id"], "n": n, "span_id": s["span_id"], "document_id": s["document_id"],
                         "canonical_source_id": s["canonical_source_id"], "licence": s["licence"], "span": s["span"],
                         "verdict": r["verdict"], "quote": q, "quote_span": f"chars={at}-{at + len(q)}",
-                        "attribution": dict(s["attribution"]), "_rank": (r["verdict"] != "supported",
+                        "attribution": dict(s["attribution"]), "supports": r["sentence"], "_rank": (r["verdict"] != "supported",
                                                                          -float(s.get("relevance") or 0.0), r["id"], n)})
     if total_cap is not None and profiles is not None:
         from vera.fulldoc_verbatim import combined_total
@@ -482,7 +491,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     add_cost(usage)
     if checked is None:
         return fall(fb["checker_unavailable"] if summary.get("outcome") == "checker_unavailable"
-                    else _resp_token(fb, summary, fb["claim_check_insufficient"]))
+                    else _resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     for r in records:  # tag every claim record with its part (records of unanswered parts stay internal)
         sent = r["sentence"]
         r["part"] = next((k for k in sorted(fixed) if sent in fixed[k]), None)
@@ -495,16 +504,18 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         checker = VerbatimChecker(ref_texts, meta, vcfg)
     cand = [r for r in records if r.get("part") is not None and not _off_question(r)]  # RESP-1022: off-question out
     dropped = 0
+    keep_partial = pp.get("keep_partial_parts") is True  # NONASK-1103 E4 A(i): config switch, default false (R-027 D8)
     while True:
         kept, profs, d = enforce_verbatim(cand, sources, checker, cfg)
         dropped += d
-        answered = {r["part"] for r in kept if r["verdict"] == "supported"}
+        answered = {r["part"] for r in kept if r["verdict"] == "supported"
+                    or (keep_partial and r["verdict"] == "partial")}
         narrowed = [r for r in kept if r["part"] in answered]
         if len(narrowed) == len(kept):
             break
         cand = narrowed
     if not require_supported_claim(kept):  # D7, enforced by C2 itself
-        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
+        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     order = [k for k, _ in parts]
     ptext = dict(parts)
     blocks, uncited, unchecked, multi = [], 0, 0, len(parts) > 1
@@ -522,14 +533,22 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         unchecked += sm.get("unchecked_dropped", 0)
         blocks.append((k, t))
     unanswered = [k for k in order if k not in {k2 for k2, _ in blocks}]
+    full_parts = {r["part"] for r in kept if r["verdict"] == "supported"}
+    partial_only = [k for k, _ in blocks if k not in full_parts]  # only with keep_partial_parts (their claims carry the marker)
+    qline = ((cfg.get("adequacy") or {}).get("qualify_text") or "") if (cfg.get("adequacy") or {}).get("qualify_line", True) else ""
     if not blocks:
-        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
+        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     if not multi:
         text, summary = blocks[0][1], dict(summary, uncited_dropped=uncited, unchecked_dropped=unchecked)
+        if partial_only and qline:
+            text += "\n\n" + qline
     else:
         lines = {k: pp["part_heading"].format(n=k, part=_clip(ptext[k])) + "\n" + t for k, t in blocks}
         for k in unanswered:
             lines[k] = pp["unanswered_line"].format(n=k, part=_clip(ptext[k]))
+        for k in partial_only:  # A(ii): a part is never named twice (partial parts have no unanswered_line)
+            if qline:
+                lines[k] += "\n" + qline
         body = [lines[k] for k in order]
         extra = []
         if summary.get("removed"):
@@ -562,7 +581,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
             notes.append(("removed_citation", cite_note))
         else:
             text += "\n\n" + cite_note
-    complete = not unanswered and not resp_partial
+    complete = not unanswered and not resp_partial and not partial_only
     summary = dict(summary, verbatim_dropped=dropped, answer_completeness="complete" if complete else "partial",
                    parts={"total": len(parts), "answered": [k for k, _ in blocks], "unanswered": unanswered})
     total = a.get("max_total_quote_chars")
@@ -579,12 +598,14 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         tot, gen, quoted = combined_total(profiles, [c["quote"] for c in citations if c["quote"]])
         summary["verbatim_budget"] = {"quoted": quoted, "generated_verbatim": gen, "total": tot, "cap": total}
     kind = "answer" if complete else (pp.get("partial_result_kind") or "answer")
+    adequacy = _gate(considered, [k for k, _ in blocks if k not in partial_only], {k: _clip(ptext[k]) for k in considered}, resp_partial)
+    trace = _trace(ev, records, citations, adequacy, sources)
     tokens, cost = totals()
     result = AskResult(answer=text, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind,
-                       contract=None, evidence=ev, citations=tuple(citations),
+                       contract=({"trace": trace} if trace else None), evidence=ev, citations=tuple(citations),
                        notes=tuple({"kind": k, "text": t} for k, t in notes))
-    return FullDocOutcome(result, None, tokens, round(cost, 6))
+    return FullDocOutcome(result, None, tokens, round(cost, 6), None, trace)
 
 
 def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_cfg: dict | None, cfg: dict,
@@ -631,9 +652,10 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
         from dataclasses import replace
 
         return FullDocOutcome(replace(r, answer=prefix + r.answer, claim_check=cc), None, out.tokens_used,
-                              out.cost_usd, {"status": status, "verified": True})
+                              out.cost_usd, {"status": status, "verified": True}, out.trace)
     _count_premise(status, False)
-    return FullDocOutcome(None, PREMISE_FALLBACK, out.tokens_used, out.cost_usd, {"status": status, "verified": False})
+    return FullDocOutcome(None, PREMISE_FALLBACK, out.tokens_used, out.cost_usd, {"status": status, "verified": False},
+                          out.trace)
 
 
 def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_cfg: dict | None, cfg: dict,
@@ -642,8 +664,9 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     fb = cfg["fallback_tokens"]
     tokens, cost = base_tokens, base_cost
 
-    def fall(token):
-        return FullDocOutcome(None, token, tokens, round(cost, 6))
+    def fall(token, records=None):
+        tr = _trace(ev, records, None, None, sources_from(ev) if getattr(ev, "admitted", None) else None)
+        return FullDocOutcome(None, token, tokens, round(cost, 6), None, tr)
 
     if not ev.grounded:
         return fall(fb["corpus_unusable"] if ev.status == "corpus_unusable" else fb["insufficient"])
@@ -698,7 +721,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     add_cost(usage)
     if checked is None:
         return fall(fb["checker_unavailable"] if summary.get("outcome") == "checker_unavailable"
-                    else _resp_token(fb, summary, fb["claim_check_insufficient"]))
+                    else _resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     draft = text[: text.rfind(cite_note)] if bad_cites else text  # the fix_citations note is not a draft claim
     vcfg = cfg["answer"].get("verbatim") or {}
     checker = None
@@ -712,7 +735,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         from vera.fulldoc_policy import require_supported_claim
 
         if not require_supported_claim(kept):
-            return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
+            return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     notes: list = []  # ANS-LAYERS-1101
     checked, summary = checked_only(draft, records, sources, cc_cfg, cfg, summary, keep_ids={r["id"] for r in kept},
                                     dropped=dropped, notes_out=notes)
@@ -722,7 +745,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         else:
             checked += "\n\n" + cite_note
     if checked is None:  # nothing verified survived (step 4)
-        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
+        return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     if _resp_partial(kept, rcfg):  # RESP-1022: no kept claim fully addresses the question -> labelled partial
         statement = rcfg.get("partial_statement") or (cfg["answer"].get("per_part") or {}).get("partial_statement")
         if statement and _separate():
@@ -739,11 +762,13 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
 
         tot, gen, quoted = combined_total(profiles, [c["quote"] for c in citations if c["quote"]])
         summary = dict(summary, verbatim_budget={"quoted": quoted, "generated_verbatim": gen, "total": tot, "cap": total})
+    adequacy = _gate([1], [1], {1: _clip(question)}, _resp_partial(kept, rcfg))
+    trace = _trace(ev, records, citations, adequacy, sources)
     result = AskResult(answer=checked, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind="answer",
-                       contract=None, evidence=ev, citations=tuple(citations),
+                       contract=({"trace": trace} if trace else None), evidence=ev, citations=tuple(citations),
                        notes=tuple({"kind": k, "text": t} for k, t in notes))
-    return FullDocOutcome(result, None, tokens, round(cost, 6))
+    return FullDocOutcome(result, None, tokens, round(cost, 6), None, trace)
 
 
 def public_evidence(ev, citations=()) -> dict:

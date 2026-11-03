@@ -76,7 +76,7 @@ def test_success_path_and_citation_binding():
     out, stub = run("Beta caching doubles throughput under heavy load [1]. Gamma results are short [2].",
                     ("supported", "supported"))
     r = out.result
-    assert out.fallback is None and r.accepted and r.result_kind == "answer" and r.contract is None
+    assert out.fallback is None and r.accepted and r.result_kind == "answer" and set(r.contract or {}) <= {"trace"}  # NONASK-1103 E4: only the public trace
     assert r.tokens_used == 105 and r.cost_usd == pytest.approx(0.51) and out.tokens_used == 105
     assert len(r.sources) == 2 and r.evidence.status == "admitted" and r.claim_check["outcome"] == "checked"
     passages = json.loads(stub.messages[1]["content"])["passages"]
@@ -84,7 +84,7 @@ def test_success_path_and_citation_binding():
     assert "Beta caching" not in stub.messages[0]["content"]  # S3: passage text never in the system message
     c = r.citations[0]
     assert set(c) == {"claim_id", "n", "span_id", "document_id", "canonical_source_id", "licence", "span", "verdict", "quote",
-                      "quote_span", "attribution"}
+                      "quote_span", "attribution", "supports"}
     assert c["attribution"] == ATTR(1)
     a, b = (int(x) for x in c["quote_span"][6:].split("-"))
     assert b - a == len(c["quote"])

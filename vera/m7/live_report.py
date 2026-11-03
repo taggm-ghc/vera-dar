@@ -367,6 +367,7 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
         "research": _research(contract),
         "usage": {"tokens": ui_evidence._count(data.get("tokens_used")), "cost_usd": _num(data.get("cost_usd")),
                   "latency_s": round(_num(latency_s), 2)},
+        "trace": contract.get("trace") if isinstance(contract.get("trace"), dict) and contract.get("trace") else None,  # NONASK-1103 E6
     }
 
 
@@ -400,9 +401,22 @@ def group_services(portals: list) -> list:
     return [f"{lab}: " + ", ".join(f"{n} {st}" for st, n in sorted(d.items())) for lab, d in sorted(by.items())]
 
 
-def _render_trace(st, rep: dict, r, pub: bool) -> None:
-    """Seam for the evidence-policy trace section (stream E). Intentionally empty."""
-    return None
+def _trace_renderable(trace, pub: bool) -> bool:
+    """True when render_trace would draw something (so the expander is worth opening); never raises."""
+    try:
+        from vera import evidence_trace
+        return (isinstance(trace, dict) and bool(trace) and evidence_trace.load_labels() is not None
+                and not (pub and trace.get("view") != "public"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _render_trace(st, rep: dict, r, pub: bool) -> bool:
+    """NONASK-1103 E6: the shared evidence-trace renderer, called INSIDE the "Research and verification" expander with the
+    same resolved `public` and this page's redactor `r` (applied to every dynamic string before rendering)."""
+    from vera.evidence_trace_ui import render_trace
+
+    return bool(render_trace(st, rep.get("trace"), public=pub, redact=r))
 
 
 def _render_sources(st, rep: dict, r) -> None:
@@ -464,13 +478,14 @@ def _render_evidence(st, rep: dict, r) -> None:
             st.caption(r(rep["scope_source"]))
 
 
-def _render_verification(st, rep: dict, r) -> None:
+def _render_verification(st, rep: dict, r, pub: bool = True) -> None:
     """Layer 3 (as on Ask): plain-language process notes, research outcome text and claim-check summary."""
     notes, ro = rep.get("process_notes") or [], rep.get("research_user_text") or ""
     cc = rep.get("claim_check") if rep.get("is_answer") else ""
-    if not (notes or ro or cc):
+    if not (notes or ro or cc or _trace_renderable(rep.get("trace"), pub)):
         return
     with st.expander("Research and verification", expanded=False):
+        _render_trace(st, rep, r, pub)
         for t in notes:
             st.caption(plain(r(t)))
         if ro:
@@ -565,8 +580,7 @@ def render_live_report(st, rep: dict, r=None, public=None) -> None:
         st.info(r(cause.get("text") or rep.get("no_answer_reason")))
 
     _render_evidence(st, rep, r)
-    _render_trace(st, rep, r, pub)
-    _render_verification(st, rep, r)
+    _render_verification(st, rep, r, pub)
     if not pub:
         _render_technical(st, rep, r)
 

@@ -1,0 +1,28 @@
+{
+  "_doc": "NONASK-1103 E1: plain-language labels for the evidence trace (vera/evidence_trace.py). No numbers and no thresholds. A missing or invalid file means NO trace is built (fail closed, never raw codes). DB-table target is owner-gated DDL.",
+  "enabled": true,
+  "categories": {
+    "not_matching": {
+      "text": "did not match the question closely enough",
+      "codes": ["low_relevance", "question_coverage", "salient_stem", "selector_mismatch", "pointer_only"]
+    },
+    "repeated": {
+      "text": "repeated another passage",
+      "codes": ["overlap"]
+    },
+    "limit_reached": {
+      "text": "passage limit reached",
+      "codes": ["cap_doc", "cap_total"]
+    },
+    "source_unusable": {
+      "text": "source not usable",
+      "codes": ["not_acquired", "licence", "attribution_incomplete", "excluded_section", "not_body_section", "span_mismatch"]
+    }
+  },
+  "other": {"text": "other reason"},
+  "not_cited": {
+    "removed_by_check": "the sentence that used it did not pass the citation check",
+    "unused": "not used by the answer; no reason recorded"
+  },
+  "verdicts": {"supported": "supported", "partial": "partly supported"}
+}

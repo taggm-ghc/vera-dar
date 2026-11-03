@@ -69,6 +69,7 @@ Enabled in code:
 - Report page layer order, development-only internals hidden, and Enter-to-submit on the Ask page.
 - Trace Eval Historical and Live aggregate tabs; short notice on non-About pages; full disclosure on About only.
 - Truthful no-answer causes and plural-correct counts in status text; `contract.no_answer_cause`.
+- Evidence trace in `contract.trace` (plain-language reasons passages were selected or not used; fails closed when its label file is missing).
 - arXiv as an acquisition provider (own call, own budget slot).
 - Recognition of Handle identifiers (`hdl.handle.net/...`, `hdl:`), shown as persistent identifiers; no automatic fetch route.
 
@@ -76,6 +77,7 @@ Prepared but flag-off (shipped disabled; thresholds are uncalibrated placeholder
 
 - Topic anchor admission rule (`fulldoc_answer.json`, `topic_anchor.enabled=false`).
 - Reading-list relevance floor (`domain_routing.json`, `reading_list_floor.enabled=false`).
+- `answer.per_part.keep_partial_parts` (default false).
 - Live aggregate statistics (`config/live_stats.json`, `enabled=false`); needs the owner-run draft migration 013, which is not applied.
 
 ## Try it

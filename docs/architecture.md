@@ -39,6 +39,7 @@ On the main branch there is no `/ask/stream` or `/ingest` route and no progressi
 
 ## Additions of 2026-11-03 (offline-tested, not deployed, live unverified)
 
+- **Evidence trace.** `contract["trace"]` carries a plain-language projection of which passages were selected, cited or not used, built from an allowlist (`vera/evidence_trace.py`, labels in `config/evidence_trace.json`). It is omitted when the label file is missing or invalid. A dev-only view with raw codes exists only when public mode is off.
 - **arXiv acquisition.** arXiv is an acquisition provider called once per job, separately from OpenAlex, with its own search-call slot (`config/auto_acquire.json`). The licence is still decided at fetch.
 - **Handle recognition.** `hdl.handle.net/<prefix>/<suffix>` and `hdl:` identifiers (prefix not starting `10.`) are recognised as persistent identifiers. No automatic fetch route exists for them.
 - **Live statistics (flag-off).** When `config/live_stats.json` `enabled` is true, one anonymous row of enums and counts is written in a background task after a successful result; no question text. `GET /trace/live` (public) and `GET /trace/live/owner` (owner key) read day-bucketed aggregates. It ships off and needs the owner-run draft migration 013, which is not applied.
