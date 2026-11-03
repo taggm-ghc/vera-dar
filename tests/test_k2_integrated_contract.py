@@ -155,7 +155,7 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
     raw, body, reader = _post(monkeypatch, case)
     at = _page(monkeypatch, body)
     page = "\n".join(_texts(at, *ALL))
-    answer_heading = any("✅ Answer" in t for t in _texts(at, "markdown"))
+    answer_heading = any(t in ("### ✅ Answer", "### Answer") for t in _texts(at, "markdown"))  # ANS-LAYERS-1101: neutral heading for "unassessed"
     # (c) no abstract/snippet text, and no evidence recall rows (V3 off), in any case
     assert ABS not in raw and ABS not in page and RECALL not in raw and RECALL not in page
     assert body["recalled"] == [] and reader.recall_calls == 0
@@ -177,7 +177,9 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
     if case == "answer":  # (f) the gate is a kind check, not a deletion
         assert body["result_kind"] == "answer" and body["candidates"] == []
         assert body["sources"] and body["traced_sources"] and body["claim_check"]["detail"] == CHECK
-        assert at.success and answer_heading and "Reading list" not in page
+        # ANS-LAYERS-1101: no completeness signal -> answer_status "unassessed" -> neutral info box, never green "verified"
+        assert body["answer_status"] == "unassessed" and not at.success and body["answer"] in _texts(at, "info")
+        assert answer_heading and "Reading list" not in page
         return
     # (b) C-F2 API: no prohibited evidence field on any non-answer path
     assert body.get("result_kind", "missing") != "answer"
@@ -208,12 +210,12 @@ def test_kind_matrix_api_fields_and_page_heading():
             _, body, _ = _post(mp, case)
             at = _page(mp, body)
         md = _texts(at, "markdown")
-        heading = "Answer" if any("✅ Answer" in t for t in md) else \
+        heading = "Answer" if any(t in ("### ✅ Answer", "### Answer") for t in md) else \
             "Reading list" if "### Reading list" in md else "decline text" if at.info else "none"
         rows[case] = (bool(body["sources"]), bool(body["traced_sources"]), body["claim_check"] is not None,
                       bool(body["candidates"]), heading, bool(at.success))
     assert rows == {
-        "answer": (True, True, True, False, "Answer", True),
+        "answer": (True, True, True, False, "Answer", False),  # ANS-LAYERS-1101: "unassessed" = neutral box, not st.success
         "reading_list": (False, False, False, True, "Reading list", False),
         "discovery": (False, False, False, True, "Reading list", False),
         "decline": (False, False, False, False, "decline text", False),

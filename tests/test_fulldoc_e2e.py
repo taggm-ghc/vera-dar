@@ -343,3 +343,11 @@ def test_int_fully_supported_two_parts_is_complete(h, monkeypatch):
     res = _in_process(h, monkeypatch, Q_TWO, PARTS_REPLY)
     assert res.result_kind == "answer" and res.claim_check["answer_completeness"] == "complete"
     assert "partial answer" not in res.answer.lower()
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

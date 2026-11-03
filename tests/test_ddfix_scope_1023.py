@@ -143,3 +143,11 @@ def test_notice_unchanged_when_all_checked_or_no_records():
     o = _o(["discovered_not_selected"])
     o.status = "deadline"
     assert ask_service._inline_notice(acq, o) == acq["scope_expansion"]["inline_notice_deadline"]
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

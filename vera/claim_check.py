@@ -248,10 +248,12 @@ def apply(answer: str, claims: list[dict], verdicts: dict[int, dict], cfg: dict)
         else:
             counts["supported"] += 1
     text = re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]{2,}", " ", text)).strip()
-    if counts["removed"]:
-        text += "\n\n" + cfg["removed_note"]
-    if guard and counts["nonresponsive_removed"] and (cfg.get("responsiveness") or {}).get("removed_note"):
-        text += "\n\n" + cfg["responsiveness"]["removed_note"]
+    from vera import answer_contract  # lazy; ANS-LAYERS-1101-FC: flag on = the removed notes travel as notes, not answer text
+    if not answer_contract.notes_separate():  # flag off: byte-identical legacy text (callers build notes from the counts)
+        if counts["removed"]:
+            text += "\n\n" + cfg["removed_note"]
+        if guard and counts["nonresponsive_removed"] and (cfg.get("responsiveness") or {}).get("removed_note"):
+            text += "\n\n" + cfg["responsiveness"]["removed_note"]
     return text, counts
 
 

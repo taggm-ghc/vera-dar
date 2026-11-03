@@ -180,3 +180,11 @@ def test_ask_response_non_answer_kind_has_no_sources_or_traced(monkeypatch):
     body = r.json()
     assert body["sources"] == [] and body["traced_sources"] == [] and body["claim_check"] is None
     assert "secret abstract" not in r.text
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

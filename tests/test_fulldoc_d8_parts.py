@@ -181,3 +181,11 @@ def test_switch_off_keeps_whole_draft_behaviour():
     msgs = fa.messages_for("q", fa.sources_from(bundle()), cfg)
     assert msgs[0]["content"].startswith("legacy")
     assert fa.messages_for("q", fa.sources_from(bundle()), CFG)[0]["content"].startswith("Parts then answers. Max 4.")
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: these tests pin the pre-layering answer text (notes inside `answer`); the separated mode is
+    covered by tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

@@ -86,9 +86,9 @@
     "rank_prefer_recent": true,
     "sufficiency": {"partial_is_insufficient": true},
     "texts": {
-      "fresh_new": "Freshness: {n_new} cited document(s) were found by a new search for this question; cited documents published within the last 24 hours: {n_fresh}; published earlier: {n_stale}; publication time not precise enough to tell: {n_unknown}. Documents are dated by publication, not by when VERA-DAR added them to its corpus.",
+      "fresh_new": "Freshness: {n_new} cited document(s) were found by a new search for this question; cited documents published within the last 24 hours: {n_fresh}; published earlier: {n_stale}; publication time not precise enough to tell: {n_unknown}. Documents are dated by publication, not by when VERA-DAR added them to its collection.",
       "mixed_ages": "Older and newly found sources are both cited and labelled by publication date; where they differ, the more recent publication is not automatically correct, and an older publication is not current because VERA-DAR obtained it today.",
-      "new_evidence_unanswered": "A new search found admissible full-text sources, but no checked answer could be written from the combined evidence, so the answer below uses the earlier evidence only."
+      "new_evidence_unanswered": "A new search found full-text sources, but no checked answer could be written from them, so this answer uses the earlier sources only."
     }
   },
   "bounds": {

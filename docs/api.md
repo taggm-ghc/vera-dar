@@ -57,6 +57,15 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 - Evidence fields for the full-document path (`evidence_status`, `corpus_source`, `examined_full_documents`, `admitted_evidence`, `citations`), omitted otherwise. `corpus_source` is `{"kind": "db"}` or `{"kind": "bundle"}` and is present only when the full-document corpus loaded successfully (it says where the corpus was loaded from); it is omitted on failure and on web-only responses.
 - Research fields (`triggers`, `freshness`, `research_outcome`), present only when the freshness or research step ran. `triggers` lists which research triggers fired (`insufficient`, `stale` or `freshness_unknown`); `research_outcome` reports what was tried, what was admitted and why candidates were not.
 - On source and candidate entries, `acquisition` is `full_document_acquired` for stored full documents.
+- `answer_status`: how complete the answer is. One of `complete`, `partial`, `unassessed`, `not_answered` or `declined`.
+  - `complete` is reported only on a positive completeness signal from the answer checker. A passed citation check alone never makes an answer `complete`.
+  - `partial` means the answer covers only part of the question, or is an off-topic answer. A completeness value the server does not recognise is also reported as `partial`.
+  - `unassessed` means an answer exists but no completeness signal was recorded.
+  - `not_answered` means no evidentiary answer was given (for example, a reading list). `declined` means the request was declined.
+- `limitations`: list of short plain-language statements of limits on the evidence and coverage (for example, that some candidate documents were not acquired). Empty when there are none.
+- `process_notes`: list of short plain-language statements of the research and verification steps taken. Empty when there are none.
+
+`limitations` and `process_notes` are kept out of `answer` only when `answer_notes_separate` is on (the shipped setting). With it on, `answer` holds the answer text and the notes appear in those two lists. Notes of an unrecognised kind appear in neither list and do not appear in `answer` either (fail closed). On a result that is not an evidentiary answer (for example a reading list), the notice explaining why is the answer itself and stays in `answer` in both modes; only a separate background-search note is moved to `process_notes` when the flag is on. With the flag off, the legacy text is restored: notes are concatenated into `answer` and both lists are empty. `answer_notes_separate` is a top-level key in `config/ask-provider-chain.json`; only the JSON boolean `true` turns it on, and any other value, a missing key or an unreadable file means off. The file is read on each request.
 
 ### The `outcome` field
 

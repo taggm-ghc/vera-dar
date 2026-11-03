@@ -27,7 +27,7 @@ ID_KEYS = ("doi", "pmcid", "openalex_id", "arxiv_id", "url")
 KINDS = ("answered_with_new", "qualified_older_only", "no_valuable_source",
          "incomplete_search", "abstain")
 
-NO_VALUABLE_SENTENCE = "No sufficiently valuable source was found across the portals searched."
+NO_VALUABLE_SENTENCE = "No sufficiently valuable source was found in the sources searched."
 BACKGROUND_SENTENCE = ("Further sources found by this search may be acquired in the background on a best-effort basis; "
                        "any that are added must first pass the licence, content and relevance checks.")
 
@@ -213,13 +213,13 @@ class ResearchOutcome:
 
 
 _CAUSE_TEXT = {
-    "timeout": "a portal timed out",
-    "quota": "a portal's request limit was reached",
-    "error": "a portal had a service failure",
+    "timeout": "a search service timed out",
+    "quota": "a search service's request limit was reached",
+    "error": "a search service had a failure",
     "budget": "the search budget ran out",
     "awaiting_route": "some sources found have no usable identifier yet",  # CONT-1023: URL-only, queued to follow
     "deadline_reached": "the time limit for this search was reached",
-    "candidate_cap": "more candidates were found than one request can check",
+    "candidate_cap": "more documents were found than one request can check",
     "doc_budget_reached": "the limit on documents read per request was reached",
     "job_quota": "the limit on new searches was reached",
     "busy": "the service was busy with other searches",
@@ -310,8 +310,8 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                    else " because " + _cause_phrase(extra) + "." if extra else "."))
     elif older_evidence_available:
         kind = "qualified_older_only"
-        text = ("This answer rests on older sources; freshness research found no qualifying "
-                "newer evidence." + why)
+        text = ("This answer rests on older sources; a search for newer sources found none that could be used."
+                + why)
     elif not complete:
         kind = "incomplete_search"
         if causes and causes != ["none_searched"]:
@@ -319,7 +319,7 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                     + _cause_phrase([c for c in causes if c in _CAUSE_TEXT])
                     + ", so no conclusion about available evidence can be drawn.")
         else:
-            text = "No portal was searched, so no conclusion about available evidence can be drawn."
+            text = "No search could be run, so no conclusion about available evidence can be drawn."
     else:
         acq = sum(1 for c in candidates if c.terminal_reason in _ACQ_FAILURES)
         if acq:
@@ -335,10 +335,9 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
                         + ("its passages answered" if n_pass == 1 else "their passages answered")
                         + " the question well enough.")
             elif candidates:
-                text = (NO_VALUABLE_SENTENCE + " Candidates were found but did not meet "
-                        "the admission criteria.")
+                text = (NO_VALUABLE_SENTENCE + " Some documents were found but did not pass VERA-DAR's checks.")
             else:
-                text = NO_VALUABLE_SENTENCE + " No candidates were found."
+                text = NO_VALUABLE_SENTENCE + " No documents were found."
     if any(c.terminal_reason == "queued_background" for c in candidates):  # CONT-1023: no claim they will succeed
         text = f"{text} {BACKGROUND_SENTENCE}".strip()
     return ResearchOutcome(kind=kind, user_text=text, complete=complete,

@@ -360,7 +360,7 @@ def test_a2_news_article_doi_only_in_text(world, spy):
     assert spy["ddg_counts"][0]["ddg_url_only"] == 1 and spy["ddg_counts"][0]["ddg_landing_get"] == 0  # news: no GET
     c = cands(body)
     assert len(c) == 1 and c[0]["route"] == "follow_url" and c[0]["reason"] == "R-ACQ-NODOI"  # DF-3: a discovery
-    assert "No candidates were found" not in _ro(body)["user_text"]
+    assert "No documents were found" not in _ro(body)["user_text"]
     assert "no usable identifier yet" in _ro(body)["user_text"]  # the unsupported route is stated
     assert not any("reuters.com" in u for u in world.rig.web.urls)  # never fetched
 
@@ -473,7 +473,7 @@ def test_e_page_without_identifier(world, spy):
     c = [c for c in cands(body) if (c.get("ids") or {}).get("url") == url]
     assert c and c[0]["route"] == "follow_url" and c[0]["terminal_reason"] == "queued_background"
     assert [q.get("url") for q in queued()] == [url] and world.rig.store.plans == []
-    assert _ro(body)["kind"] != "no_valuable_source" and "No candidates were found" not in _ro(body)["user_text"]
+    assert _ro(body)["kind"] != "no_valuable_source" and "No documents were found" not in _ro(body)["user_text"]
 
 
 # ================================================================================================ (f) Wikipedia

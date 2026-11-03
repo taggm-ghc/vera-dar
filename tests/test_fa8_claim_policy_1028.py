@@ -27,6 +27,13 @@ def _key(monkeypatch):
     monkeypatch.setenv("KEY_A", "k")
 
 
+@pytest.fixture(autouse=True)
+def _notes_separate_on(monkeypatch):
+    """ANS-LAYERS-1101: pin the layered mode explicitly so these tests do not depend on the shipped config."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: True)
+
+
 def _run(cfg):
     seen, recs = [], []
     text, summary = cc.check_answer(ANS, SRC, cfg, call=_call(seen), records=recs)
@@ -36,7 +43,7 @@ def _run(cfg):
 def test_defaults_reproduce_current_output():
     base = _run(CC)
     explicit = _run(dict(CC, context_title=False, keep_partial=True))
-    assert base[0] == "Alpha [1]. Beta [2]. (partly)\n\nREMOVED"
+    assert base[0] == "Alpha [1]. Beta [2]. (partly)"  # ANS-LAYERS-1101: removed note leaves the answer text (callers build notes)
     assert base[1] == {"checked": 3, "supported": 1, "partial": 1, "removed": 1, "checker": "a:first", "outcome": "checked"}
     assert base[:2] == explicit[:2] and base[3] == explicit[3]
     user = json.loads(base[3][1]["content"])
@@ -98,7 +105,7 @@ def test_context_title_with_responsiveness():
 
 def test_keep_partial_false_removes_partial():
     text, summary, recs, _ = _run(dict(CC, keep_partial=False))
-    assert text == "Alpha [1].\n\nREMOVED"
+    assert text == "Alpha [1]."  # removed note no longer appended to the answer
     assert summary["partial"] == 0 and summary["removed"] == 2 and summary["supported"] == 1
     assert recs[1]["verdict"] == "partial" and recs[1]["partial_removed"] is True  # kept for measurement
     assert "partial_removed" not in recs[0] and "partial_removed" not in recs[2]
@@ -115,7 +122,7 @@ def test_keep_partial_false_with_responsiveness_counts():
     rep = json.dumps({"claims": [{"id": 0, "verdict": "supported", "reason": "r", "responsive": "yes"},
                                  {"id": 1, "verdict": "partial", "reason": "r", "responsive": "no"}]})
     text, summary = cc.check_answer("A [1]. B [2].", SRC, cfg, call=lambda c, m: rep, records=[], question="q?")
-    assert text == "A [1].\n\nREMOVED" and summary["removed"] == 1 and summary["nonresponsive_removed"] == 0
+    assert text == "A [1]." and summary["removed"] == 1 and summary["nonresponsive_removed"] == 0
 
 
 def test_fulldoc_checked_only_and_enforce_skip_removed_partials():

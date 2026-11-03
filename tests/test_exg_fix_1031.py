@@ -134,3 +134,4 @@ def test_d3_claim_checker_makes_no_call_after_disconnect(monkeypatch):
             cc.judge([], [], cfg)
     finally:
         stream_ctx.CTX.reset(tok)
+

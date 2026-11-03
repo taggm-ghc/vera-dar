@@ -287,3 +287,11 @@ def test_reuse_check_stops_at_the_deadline(rig):
                                               question=OFF_Q, fdcfg=aa._fd_cfg(), icfg={}, clock=lambda: 10.0,
                                               deadline=5.0)
     assert reused[0] == [] and codes.get("R-ACQ-DEADLINE") == 1
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

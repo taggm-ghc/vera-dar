@@ -65,6 +65,8 @@ Python, FastAPI and Uvicorn (API service), Streamlit (UI service), Pydantic, SQL
 
 Endpoints: the main route is `POST /ask` (API key in the `X-API-Key` header). The full endpoint list, keys and response semantics are in [API and data use](docs/api.md).
 
+The `/ask` answer is shown in layers: **Answer**; **Evidence and limitations**; **Research and verification** (collapsed by default, shown when there is something to explain); and **Technical details**, which appear in owner/dev mode only. The layers draw on the response fields `answer`, `answer_status`, `limitations`, `process_notes` and the evidence fields described in [API and data use](docs/api.md). The layered output (2026-11-03) is tested offline only and may not be in the deployed build.
+
 ## Evaluation: what has been measured
 
 Numbers below are small-sample and not comparable with each other.

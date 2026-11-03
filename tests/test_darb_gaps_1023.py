@@ -70,3 +70,4 @@ def test_whole_draft_guard_uncited_answer_with_per_part_off_config_copy():
     assert o.result is None and o.fallback == tok
     ok = _ask(cfg, "Alpha systems reduce latency by forty percent in field trials [1].")  # control: a valid citation passes the guard
     assert ok.fallback != tok
+

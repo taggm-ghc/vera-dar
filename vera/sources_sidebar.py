@@ -258,7 +258,7 @@ def _ranges(items) -> str:
 
 
 def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dict | None = None,
-                   fulldoc: bool | None = None, cited=None) -> None:
+                   fulldoc: bool | None = None, cited=None, claim_check_layer: str | None = None) -> None:
     """Sources under an Ask answer (main answer area, not the sidebar): numbered (used) and traced originals without a
     free abstract (not used). Abstract wording only for abstract-grounded rows; full-document rows say inspected passages."""
     from vera import ui_evidence
@@ -294,7 +294,8 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
                 st.caption(meta)
         if any(s.get("licence_decision") for s in sources):
             st.caption(LICENCE_UNDER_ANSWER)
-    ui_evidence.render_claim_check(st, claim_check, cap, fulldoc)
+    if claim_check_layer != "deferred":  # ANS-LAYERS-1101: layered UI renders the citation check in its own expander
+        ui_evidence.render_claim_check(st, claim_check, cap, fulldoc)
     if traced:
         st.caption(("Also found as a published record, but its full text was not acquired for this answer, so not used: "
                     if fulldoc else

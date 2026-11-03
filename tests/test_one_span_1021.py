@@ -236,3 +236,11 @@ def test_answer_note_is_truthful_for_every_mix(docs, reused, stored, failed, key
     o = inline_acquire.Outcome("ok", admitted=len(docs), stored=stored, persist_failed=failed, reused=reused,
                                documents=docs)
     assert inline_acquire.answer_note(cfg, o) == cfg["scope_expansion"][key]
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

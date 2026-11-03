@@ -2,6 +2,7 @@
   "description": "Item #77 (2026-10-07): free-tier-first providers for /ask only (scope router + answer). Tried in order; an entry whose api_key_env is unset is skipped; OpenAI (config/model-selection.json, priced from config/model-pricing.json) is the last resort ONLY when openai_fallback.enabled is true (shipped false). Evaluation paths (TRACE capture, M6 baseline and judge, Gate A, pipeline) never read this file and stay on the selected OpenAI model.",
   "checked_at": "2026-10-07",
   "timeout_s": 20,
+  "answer_notes_separate": true,
   "openai_fallback": {
     "enabled": false,
     "note": "G7 option (b), 2026-10-21: false = the /ask API process never makes an OpenAI call and does not need OPENAI_API_KEY (chain and claim checkers are Groq-only; the default OpenAI client is blocked at runtime). true restores the OpenAI last-resort entry and checker, needs a valid key, and is a reviewed config change plus deploy. Missing block, missing key, non-boolean or unreadable file means off. No env override. Eval and script paths do not read this file."
@@ -11,8 +12,8 @@
     "grace": {
       "openai_completion": true,
       "note": "OD-1031-EXHAUST-GRACE (owner 2026-10-31): the exhaustion stop applies to a FRESH prompt (nothing started: legacy 429 / stream 503 'unavailable', never paid inference). When every free provider is exhausted AFTER work has started on an active Ask, no further free-provider calls are made and the response is completed with what exists. openai_completion: true = the steps that still need inference (answer writer, claim check) may use the OpenAI model (config/model-selection.json, priced from config/model-pricing.json; needs OPENAI_API_KEY in the environment) for THIS completion only; the verification standard is unchanged (the draft still goes through the claim check) and the existing per-client and per-day cost caps stay the safety net. Free first, paid only as the recorded fallback (owner rule). It does NOT change openai_fallback.enabled, so fresh prompts never use OpenAI. false, a missing or non-boolean value, a missing key, or an OpenAI failure = the completion is the non-LLM reading list (or the correct no-answer text when nothing was found). DEFAULT ON per owner addendum; value is a decision, not a calibrated threshold.",
-      "notice_openai": "Note: the inference services this answer depends on were rate-limited while it was being prepared, so the remaining steps were completed with a backup service. The answer below was checked against the sources as usual.",
-      "notice_fallback": "Note: the inference services this answer depends on were rate-limited while it was being prepared, so VERA-DAR could not write or verify an answer. It is showing what it had gathered so far."
+      "notice_openai": "Note: VERA-DAR was very busy while preparing this answer. The answer was still checked against its sources as usual.",
+      "notice_fallback": "Note: VERA-DAR was too busy to write and check an answer just now, so it is showing what it had gathered so far."
     },
     "note": "STREAM-1031 / OD-1031-TOKENS (owner: token use is rate limited by providers; no app-side token caps; when every provider is exhausted, active token-using processes stop). recheck_s is the wait before one probe when a 429/quota error carries no numeric Retry-After header (the header wins when present). PROVISIONAL prior, UNCALIBRATED: no measured Groq 429 recovery distribution yet. Would change on: logged Retry-After values showing a different typical reset (per-minute vs per-day limits), or probes that keep failing (raise) or recover far sooner (lower). State is process-local (accepted divergence, plan s3.7 item 5)."
   },

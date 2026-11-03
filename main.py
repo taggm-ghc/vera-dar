@@ -335,6 +335,14 @@ class AskResponse(BaseModel):
     # decline), derived by answer_contract.outcome_for. Differs from claim_check.outcome (the checker's internal
     # summary). Always serialized; additive.
     outcome: str = "insufficient_evidence"
+    # ANS-LAYERS-1101 (additive, always serialized): answer_status = complete | partial | unassessed | not_answered |
+    # declined (derived from result_kind / outcome / claim_check.answer_completeness only); limitations = user-language
+    # evidence and coverage limits; process_notes = research / verification process text. Notes are separated only when
+    # config/ask-provider-chain.json answer_notes_separate is literally JSON true. Otherwise the legacy behaviour applies:
+    # notes are concatenated into `answer` and both lists are empty.
+    answer_status: str = "not_answered"  # complete | partial | unassessed | not_answered | declined
+    limitations: list[str] = []
+    process_notes: list[str] = []
     candidates: list[AskCandidate] = []  # K2: reading-list candidates (non-answer kinds only)
     contract: dict | None = None  # K2: {"layers": [...], "fallback": None | token}
     recalled_discovery: list[RecalledNote] = []  # K2 L2: earlier discovery notes (never evidence)
@@ -1041,8 +1049,24 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
         # admission so first-time sources are already in the corpus when their claims are saved.
         background_tasks.add_task(_after_response, admit_args, memory, result, req.question, discovery=discovery)
     evidence = _public_evidence(result)
+    _outcome = answer_contract.outcome_for(result.result_kind, (result.contract or {}).get("fallback"),
+                                           len(result.candidates or ()))
+    _limits, _proc = answer_contract.split_notes(getattr(result, "notes", ()))
+    if answer_contract.notes_separate():  # acquisition shortfall (counts only, no sources) is a user-relevant limit
+        try:
+            from vera.ui_evidence import acquisition_notice_line
+            _line = acquisition_notice_line({"contract": result.contract})
+        except Exception:  # noqa: BLE001
+            _line = None
+        if _line and _line not in _limits:
+            _limits.append(_line)
     return AskResponse(
         **evidence,
+        answer_status=answer_contract.answer_status(
+            result.result_kind, _outcome, (result.claim_check or {}).get("answer_completeness"),
+            bool((result.contract or {}).get("offtopic"))),
+        limitations=_limits,
+        process_notes=_proc,
         recalled=recalled,
         memory_written=memory_written,
         memory_submitted=memory_submitted,

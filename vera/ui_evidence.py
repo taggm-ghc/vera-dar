@@ -170,9 +170,14 @@ def acquisition_notice_line(data: dict | None) -> str | None:
     return None
 
 
+def _shortfall_in_limitations(data, note) -> bool:
+    """ANS-LAYERS-1101-FC: with the layered fields present and the line already in limitations, show it once there."""
+    return bool(note) and has_layers(data) and note in _note_texts(data.get("limitations"))
+
+
 def render_evidence_scope(st, data) -> None:
     note = acquisition_notice_line(data)
-    if note:
+    if note and not _shortfall_in_limitations(data, note):
         st.caption(note)
     line = evidence_scope_line(data)
     if line:
@@ -189,7 +194,7 @@ def render_fallback_reason(st, data) -> None:
     token = contract.get("fallback")
     if token is None and data.get("evidence_status") is None:
         note = acquisition_notice_line(data)  # SA-FIX: a plain reading-list non-answer still shows the acquisition notice
-        if note:
+        if note and not _shortfall_in_limitations(data, note):
             st.caption(note)
         return
     st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents"))))
@@ -238,13 +243,22 @@ def render_citations(st, data) -> None:
                 st.caption(f"[{n}] " + line)
 
 
-def claim_check_text(cc, cap: int | None = None, fulldoc: bool = False) -> str | None:
+CITATION_CHECK_DISCLAIMER = ("This checks whether the cited claims are supported by their cited sources, "
+                             "not whether the question was answered.")
+
+
+def claim_check_text(cc, cap: int | None = None, fulldoc: bool = False, layered: bool = False) -> str | None:
     """Caption text for the claim check. Legacy abstract wording is kept for non-full-document answers."""
     if not isinstance(cc, dict):
         return None
     if cc.get("outcome") != "checked":
         return NOT_CHECKED_NOTE if cc else None
     checked, supported, partial, removed = (_count(cc.get(k)) for k in ("checked", "supported", "partial", "removed"))
+    if layered:  # ANS-LAYERS-1101: grounding statement only; never implies the question was answered
+        text = (f"Citation check: {supported} of {checked} cited claims are supported by their cited sources "
+                f"({partial} partly supported, {removed} removed). " + CITATION_CHECK_DISCLAIMER)
+        left = _count(cc.get("uncited_dropped")) + _count(cc.get("unchecked_dropped"))
+        return text + (f" {left} further claims were left out because they could not be checked." if left else "")
     if fulldoc:
         head = f"Claim check: {checked} cited claims checked by a model against the cited passages (full span text; excerpts shown may be abridged)"
     else:
@@ -263,11 +277,44 @@ def claim_check_text(cc, cap: int | None = None, fulldoc: bool = False) -> str |
     return text + (" " + "; ".join(extra) + "." if extra else "")
 
 
-def render_claim_check(st, cc, cap: int | None = None, fulldoc: bool = False) -> None:
-    text = claim_check_text(cc, cap, fulldoc)
+def render_claim_check(st, cc, cap: int | None = None, fulldoc: bool = False, layered: bool = False) -> None:
+    text = claim_check_text(cc, cap, fulldoc, layered)
     if text:
         st.caption(text)
 
 
 def render_answer_scope_note(st) -> None:
     st.caption(ANSWER_SCOPE_NOTE)
+
+
+def _note_texts(items) -> list[str]:
+    """ANS-LAYERS-1101: list[str] or list[{kind,text}] -> plain non-empty strings; anything else is ignored."""
+    out = []
+    for it in items if isinstance(items, list) else []:
+        t = it.get("text") if isinstance(it, dict) else it
+        if isinstance(t, str) and t.strip():
+            out.append(t.strip())
+    return out
+
+
+STATUS_LABELS = {"partial": "Partial answer", "not_answered": "Limited evidence"}
+
+
+def has_layers(data) -> bool:
+    """True when the API sent the layered fields; absent = older API, render today's way."""
+    return isinstance(data, dict) and isinstance(data.get("answer_status"), str)
+
+
+def answer_status_label(data) -> str | None:
+    """Short label above the answer; None for complete or unknown values (unknown is not styled as partial)."""
+    return STATUS_LABELS.get(data.get("answer_status")) if isinstance(data, dict) else None
+
+
+def render_limitations(st, data) -> None:
+    for t in _note_texts(data.get("limitations") if isinstance(data, dict) else None):
+        st.markdown("- " + safe_markdown(t))
+
+
+def render_process_notes(st, data) -> None:
+    for t in _note_texts(data.get("process_notes") if isinstance(data, dict) else None):
+        st.caption(plain(t))

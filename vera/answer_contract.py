@@ -163,3 +163,62 @@ def reading_list_result(candidates, tokens_used: int, cost_usd: float, *, source
                      tokens_used=tokens_used, cost_usd=cost_usd, sources=tuple(sources), claim_check=None,
                      accepted=accepted, claims=(), result_kind="reading_list", candidates=cands,
                      contract={"layers": layers(path), "fallback": fallback})
+
+
+# ---------------------------------------------------------------------------------------------- ANS-LAYERS-1101 S1B
+# Process / limitation text is kept out of `answer` and reported as structured notes. Rollback: set
+# config/ask-provider-chain.json `answer_notes_separate` to false (notes are concatenated into the answer as before).
+LIMITATION_KINDS = ("partial", "offtopic_warning", "removed", "unchecked", "removed_citation", "coverage")
+PROCESS_KINDS = ("acquisition", "background", "freshness", "research_outcome")
+
+
+def notes_separate(path: Path = CHAIN_CONFIG_PATH) -> bool:
+    """True only when the config value is literally JSON true; any other value (including the string "false"),
+    a missing key or an unreadable config = the old concatenation."""
+    try:
+        return json.loads(path.read_text()).get("answer_notes_separate") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def add_note(answer: str, notes: tuple, kind: str, text: str, where: str = "suffix", sep: str = " ") -> tuple:
+    """(answer, notes). Flag on: the answer is unchanged and (kind, text) is recorded. Flag off: concatenated."""
+    if not text:
+        return answer, tuple(notes)
+    if notes_separate():
+        return answer, tuple(notes) + ({"kind": kind, "text": text},)
+    if where == "prefix":
+        return f"{text}{sep}{answer}", tuple(notes)  # legacy: unconditional, so an empty answer keeps the separator
+    return (f"{answer}{sep}{text}" if answer else text), tuple(notes)
+
+
+def split_notes(notes) -> tuple[list[str], list[str]]:
+    """(limitations, process_notes) texts, de-duplicated in order. Fails closed (ANS-LAYERS-1101-FC): a kind in neither
+    allowlist reaches neither public list; it stays only in the result's own notes (owner/contract side)."""
+    lim, proc = [], []
+    for n in notes or ():
+        t = n.get("text") if isinstance(n, dict) else None
+        if not t:
+            continue
+        k = n.get("kind")
+        tgt = lim if k in LIMITATION_KINDS else proc if k in PROCESS_KINDS else None
+        if tgt is not None and t not in tgt:
+            tgt.append(t)
+    return lim, proc
+
+
+def answer_status(result_kind: str, outcome: str, completeness, offtopic: bool = False) -> str:
+    """complete | partial | unassessed | not_answered | declined, from existing signals only.
+    "complete" only when the completeness signal says complete; an answer with no signal is "unassessed"; an
+    off-topic (scope-override) answer is "partial"; any other value fails closed to "partial"."""
+    if result_kind == "decline" or outcome == "decline":
+        return "declined"
+    if result_kind == "answer":
+        if offtopic:
+            return "partial"
+        if completeness == "complete":
+            return "complete"
+        return "unassessed" if completeness is None else "partial"
+    if result_kind == "partial_answer" or completeness == "partial":
+        return "partial"
+    return "not_answered"

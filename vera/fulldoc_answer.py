@@ -349,7 +349,12 @@ def enforce_verbatim(records, sources, checker, cfg):
     return kept, profs, dropped
 
 
-def checked_only(draft: str, records, sources, cc_cfg: dict, cfg: dict, summary: dict, keep_ids=None,
+def _separate() -> bool:
+    from vera import answer_contract
+    return answer_contract.notes_separate()
+
+
+def checked_only(draft: str, records, sources, cc_cfg: dict, cfg: dict, summary: dict, keep_ids=None, notes_out=None,
                  dropped: int | None = None) -> tuple[str | None, dict]:
     """The published answer is rebuilt from VERIFIED claims only (supported, or partial with its marker), in draft
     order. claim_check judges only sentences that cite a passage, so any uncited sentence of the draft (an unchecked
@@ -375,12 +380,15 @@ def checked_only(draft: str, records, sources, cc_cfg: dict, cfg: dict, summary:
         return None, summary
     uncited = max(0, len(segments) - len(claims))
     unchecked = max(0, len(claims) - len(records))  # cited but beyond max_claims: not checked, not shown
-    notes = [cc_cfg["removed_note"]] if summary.get("removed") else []
+    notes = [("removed", cc_cfg["removed_note"])] if summary.get("removed") else []
     if summary.get("nonresponsive_removed") and (cc_cfg.get("responsiveness") or {}).get("removed_note"):
-        notes.append(cc_cfg["responsiveness"]["removed_note"])
+        notes.append(("removed", cc_cfg["responsiveness"]["removed_note"]))
     if uncited or unchecked:
-        notes.append(cfg["answer"]["unchecked_note"])
-    text = "\n\n".join(kept + notes)
+        notes.append(("unchecked", cfg["answer"]["unchecked_note"]))
+    if notes_out is not None and _separate():  # ANS-LAYERS-1101: notes leave the answer text
+        notes_out.extend(notes)
+        notes = []
+    text = "\n\n".join(kept + [t for _, t in notes])
     return text, dict(summary, uncited_dropped=uncited, unchecked_dropped=unchecked)
 
 
@@ -500,12 +508,14 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     order = [k for k, _ in parts]
     ptext = dict(parts)
     blocks, uncited, unchecked, multi = [], 0, 0, len(parts) > 1
+    notes: list = []  # ANS-LAYERS-1101: (kind, text) kept out of the answer when answer_notes_separate is on
+    sep = _separate()
     for k in order:
         if k not in answered:
             continue
         pr = [r for r in records if r.get("part") == k]
         t, sm = checked_only(fixed[k], pr, sources, cc_cfg, cfg, {"removed": False} if multi else summary,
-                             keep_ids={r["id"] for r in kept if r["part"] == k}, dropped=0)
+                             keep_ids={r["id"] for r in kept if r["part"] == k}, dropped=0, notes_out=notes)
         if t is None:
             continue
         uncited += sm.get("uncited_dropped", 0)
@@ -521,22 +531,37 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         for k in unanswered:
             lines[k] = pp["unanswered_line"].format(n=k, part=_clip(ptext[k]))
         body = [lines[k] for k in order]
+        extra = []
         if summary.get("removed"):
-            body.append(a["removed_note"])
+            extra.append(("removed", a["removed_note"]))
         if summary.get("nonresponsive_removed") and (rcfg or {}).get("removed_note"):
-            body.append(rcfg["removed_note"])
+            extra.append(("removed", rcfg["removed_note"]))
         if uncited or unchecked:
-            body.append(a["unchecked_note"])
+            extra.append(("unchecked", a["unchecked_note"]))
+        if sep:
+            notes.extend(extra)
+        else:
+            body.extend(t for _, t in extra)
         text = "\n\n".join(body)
         summary = dict(summary, uncited_dropped=uncited, unchecked_dropped=unchecked)
         if unanswered:
-            text = pp["partial_statement"] + "\n\n" + text
+            if sep:
+                notes.insert(0, ("partial", pp["partial_statement"]))
+            else:
+                text = pp["partial_statement"] + "\n\n" + text
     shown = [r for r in kept if r["part"] in {k for k, _ in blocks}]
     resp_partial = _resp_partial(shown, rcfg)
     if resp_partial and not (multi and unanswered):  # RESP-1022: no shown claim fully addresses the question
-        text = (rcfg.get("partial_statement") or pp["partial_statement"]) + "\n\n" + text
+        st = rcfg.get("partial_statement") or pp["partial_statement"]
+        if sep:
+            notes.insert(0, ("partial", st))
+        else:
+            text = st + "\n\n" + text
     if bad:
-        text += "\n\n" + cite_note
+        if sep:
+            notes.append(("removed_citation", cite_note))
+        else:
+            text += "\n\n" + cite_note
     complete = not unanswered and not resp_partial
     summary = dict(summary, verbatim_dropped=dropped, answer_completeness="complete" if complete else "partial",
                    parts={"total": len(parts), "answered": [k for k, _ in blocks], "unanswered": unanswered})
@@ -557,7 +582,8 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     tokens, cost = totals()
     result = AskResult(answer=text, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind,
-                       contract=None, evidence=ev, citations=tuple(citations))
+                       contract=None, evidence=ev, citations=tuple(citations),
+                       notes=tuple({"kind": k, "text": t} for k, t in notes))
     return FullDocOutcome(result, None, tokens, round(cost, 6))
 
 
@@ -687,15 +713,22 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
 
         if not require_supported_claim(kept):
             return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
+    notes: list = []  # ANS-LAYERS-1101
     checked, summary = checked_only(draft, records, sources, cc_cfg, cfg, summary, keep_ids={r["id"] for r in kept},
-                                    dropped=dropped)
+                                    dropped=dropped, notes_out=notes)
     if checked is not None and bad_cites:
-        checked += "\n\n" + cite_note
+        if _separate():
+            notes.append(("removed_citation", cite_note))
+        else:
+            checked += "\n\n" + cite_note
     if checked is None:  # nothing verified survived (step 4)
         return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]))
     if _resp_partial(kept, rcfg):  # RESP-1022: no kept claim fully addresses the question -> labelled partial
         statement = rcfg.get("partial_statement") or (cfg["answer"].get("per_part") or {}).get("partial_statement")
-        checked = (statement + "\n\n" + checked) if statement else checked
+        if statement and _separate():
+            notes.insert(0, ("partial", statement))
+        else:
+            checked = (statement + "\n\n" + checked) if statement else checked
         summary = dict(summary, answer_completeness="partial")
     total = cfg["answer"].get("max_total_quote_chars")
     total = int(total) if total is not None else (700 if checker is not None else None)
@@ -708,7 +741,8 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         summary = dict(summary, verbatim_budget={"quoted": quoted, "generated_verbatim": gen, "total": tot, "cap": total})
     result = AskResult(answer=checked, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind="answer",
-                       contract=None, evidence=ev, citations=tuple(citations))
+                       contract=None, evidence=ev, citations=tuple(citations),
+                       notes=tuple({"kind": k, "text": t} for k, t in notes))
     return FullDocOutcome(result, None, tokens, round(cost, 6))
 
 

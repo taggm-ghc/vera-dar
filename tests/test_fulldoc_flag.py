@@ -108,3 +108,4 @@ def test_enabled_makes_no_writes_and_flag_is_what_switches_it(monkeypatch, tmp_p
     cfg["fulldoc"]["enabled"] = False
     fulldoc_corpus.reset_for_tests()
     assert fulldoc_corpus.get_corpus(cfg) is None
+

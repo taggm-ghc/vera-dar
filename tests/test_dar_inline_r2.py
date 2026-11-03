@@ -253,3 +253,11 @@ def test_b3_inline_fresh_docs_accessor_defaults_and_fails_closed():
     assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": "x"})) == 0
     assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": True})) == 0
     assert acq_config.inline_fresh_docs(ON({"inline_fresh_docs": -3})) == 0
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

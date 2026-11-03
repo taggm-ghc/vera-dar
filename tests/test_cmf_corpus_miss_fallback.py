@@ -489,3 +489,4 @@ def test_deadline_elapsed_carries_over_between_providers(wired, monkeypatch):
     monkeypatch.setattr(ask_service.time, "monotonic", lambda: 1000.0 - 104.0)  # 104 s left < 105 s
     r = ask_service.answer_in_scope("What is X?", "m", _pr(), budget=b)
     assert wired["acquire"] == 0 and r.contract["inline_acquisition"] == {"status": "deadline"}
+

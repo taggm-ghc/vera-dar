@@ -91,7 +91,7 @@ def test_mid_acquisition_exhaustion_completes_with_fallback_without_key(monkeypa
     assert by == "exhaustion_grace" and res.result_kind == "reading_list"
     assert res.contract["exhaustion_grace"]["mode"] == "reading_list"
     assert res.contract["inline_acquisition"]["stored"] == 1  # acquisition outcome carried
-    assert "rate-limited" in res.answer and seams["fulldoc"] == []  # OpenAI never touched without the key
+    assert "too busy" in res.answer and seams["fulldoc"] == []  # V1-V4 wording; OpenAI never touched without the key
 
 
 def test_mid_writing_unverified_draft_gives_fallback_not_claims(monkeypatch, seams):
@@ -111,7 +111,7 @@ def test_verified_answer_via_openai_returned_once(monkeypatch, seams):
     monkeypatch.setattr(svc, "_fulldoc", _fd(seams, ans))
     res = svc.complete_after_exhaustion("q", None, {"work": True, "decision": DEC, "ephemeral": eph})
     assert res.result_kind == "answer" and res.cost_usd == 0.002 and res.claim_check == {"outcome": "ok"}
-    assert res.contract["exhaustion_grace"]["mode"] == "openai_completed" and "checked against the sources" in res.answer
+    assert res.contract["exhaustion_grace"]["mode"] == "openai_completed" and "still checked against its sources" in res.answer  # V1-V4 wording
     assert len(seams["fulldoc"]) == 1 and seams["fulldoc"][0]["model"] == "gpt-x" and seams["fulldoc"][0]["grace"]
     assert seams["fulldoc"][0]["ephemeral"] is eph and px.GRACE.get() is None
 
@@ -133,7 +133,7 @@ def test_no_evidence_is_the_no_answer_path(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY")
     res = svc.complete_after_exhaustion("q", None, {"work": True, "decision": DEC})  # grounding None: real L0 no-sources result
     assert res.result_kind == "reading_list" and not res.candidates
-    assert res.contract["exhaustion_grace"]["mode"] == "no_answer" and "rate-limited" in res.answer
+    assert res.contract["exhaustion_grace"]["mode"] == "no_answer" and "too busy" in res.answer  # V1-V4 wording
 
 
 def test_config_ships_grace_on_and_openai_fallback_off():
@@ -205,10 +205,18 @@ def test_stream_mid_response_exhaustion_final_result_is_completed(monkeypatch, s
     assert ls[-1]["type"] == "result" and ls[-1]["status"] == 200, ls[-1]
     body = ls[-1]["body"]
     assert body["result_kind"] == "reading_list" and body["contract"]["exhaustion_grace"]["mode"] == "no_answer"
-    assert "rate-limited" in body["answer"]
+    assert "too busy" in body["answer"]  # V1-V4 wording
 
 
 def test_stream_fresh_exhaustion_is_still_503_unavailable(monkeypatch, stream_env):
     _wire(monkeypatch, False)
     ls = lines(post(client()))
     assert ls[-1]["status"] == 503 and ls[-1]["kind"] == "unavailable"
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

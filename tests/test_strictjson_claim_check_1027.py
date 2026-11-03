@@ -108,7 +108,12 @@ def test_t6b_fixed_log_line_no_reply_text(caplog, txt, code):
     assert not any(SECRET in m or "supported" in m for m in msgs)
 
 
-def test_t7_clean_reply_unchanged():
+def test_t7_clean_reply_unchanged(monkeypatch):
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: True)
+    text, summary = cc.check_answer(ANSWER, SRC, CC, call=lambda ch, m: CLEAN)
+    assert text == "Faster [1]. Shorter [1]. (partly)" and "REMOVED" not in text and summary["removed"] == 1
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
     text, summary = cc.check_answer(ANSWER, SRC, CC, call=lambda ch, m: CLEAN)
     assert text == "Faster [1]. Shorter [1]. (partly)\n\nREMOVED"
     assert summary == {"checked": 3, "supported": 1, "partial": 1, "removed": 1, "checker": "a:first",

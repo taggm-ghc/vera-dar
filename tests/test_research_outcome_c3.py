@@ -7,7 +7,7 @@ from vera import research_outcome as ro
 from vera.research_outcome import (CandidateOutcome, PortalAttempt, reason_from_code,
                                    summarize_outcome)
 
-NV = "No sufficiently valuable source was found across the portals searched."
+NV = "No sufficiently valuable source was found in the sources searched."
 
 
 def P(name, status="completed", n=0):
@@ -55,11 +55,11 @@ def test_acquisition_failure_distinguished():
 def test_admission_rejection_vs_zero(r):
     o = run([P("a", n=1)], [C("x", r)])
     assert o.kind == "no_valuable_source" and NV in o.user_text
-    assert "admission criteria" in o.user_text
+    assert "did not pass VERA-DAR's checks" in o.user_text
     assert o.report_detail["terminal_reason_counts"] == {r: 1}
     assert o.report_detail["zero_discoveries"] is False
     z = run([P("a")])
-    assert "No candidates were found" in z.user_text and z.report_detail["zero_discoveries"]
+    assert "No documents were found" in z.user_text and z.report_detail["zero_discoveries"]
 
 
 def test_budget_exhaustion_is_incomplete():
@@ -71,7 +71,7 @@ def test_budget_exhaustion_is_incomplete():
 def test_qualified_older_only_discloses_freshness():
     o = run([P("a")], older=True)
     assert o.kind == "qualified_older_only"
-    assert "freshness research found no qualifying newer evidence" in o.user_text
+    assert "a search for newer sources found none that could be used" in o.user_text
 
 
 def test_answered_with_new():
@@ -153,9 +153,9 @@ def test_relevance_passed_but_unused_candidates_get_accurate_sentence():
     assert "A document passed the initial relevance check, but none of its passages answered" in o.user_text
     o3 = run([P("a", n=2)], [C("1", "admitted"), C("2", "admitted")], new=False)
     assert "Some documents passed the initial relevance check, but none of their passages answered" in o3.user_text
-    assert "admission criteria" not in o.user_text
+    assert "did not pass VERA-DAR's checks" not in o.user_text
     o2 = run([P("a", n=1)], [C("1", "relevance_rejected")], new=False)
-    assert "admission criteria" in o2.user_text
+    assert "did not pass VERA-DAR's checks" in o2.user_text
 
 
 def test_candidate_labels_use_shortlisted_not_selected():

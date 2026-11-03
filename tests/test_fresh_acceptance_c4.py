@@ -357,7 +357,7 @@ def test_H_new_evidence_contradicts_old_both_kept_and_marked(world):
     assert len(set(marks.values())) == 2 and all(v != "{}" for v in marks.values()), f"feature missing: no older/recent marker per source: {marks}"
     ro = _need(body, "research_outcome")
     assert ro["kind"] == "answered_with_new"
-    assert re.search(r"contradict|conflict|disagree|differ", json.dumps(ro) + body["answer"], re.I), "contradiction not represented"
+    assert re.search(r"contradict|conflict|disagree|differ", json.dumps(ro) + body["answer"] + json.dumps(body.get("process_notes")) + json.dumps(body.get("limitations")), re.I), "contradiction not represented"  # ANS-LAYERS-1101: notes left `answer`
     assert not (body.get("contract") or {}).get("fallback")
 
 
@@ -373,7 +373,7 @@ def test_I1_no_eligible_full_text_older_evidence_only_is_qualified(world):
     assert world.rig.store.plans == []  # nothing new admitted
     _grounded(body)  # grounded partial answer from the older stored chunks
     assert _doc_ids(body) and all(i.startswith("acq-") for i in _doc_ids(body))
-    assert ro["user_text"] in body["answer"] or ro["user_text"] == body.get("research_notice")
+    assert ro["user_text"] in body["limitations"] and ro["user_text"] not in body["answer"]  # ANS-LAYERS-1101: limitation (qualifies the answer), not answer text
 
 
 def test_I2_no_eligible_full_text_and_nothing_stored_abstains(world):

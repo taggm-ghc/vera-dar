@@ -456,3 +456,11 @@ def test_askdiag_ui_timeout_covers_server_bounds(monkeypatch):
     monkeypatch.setattr(public_mode.requests, "post", lambda url, **k: seen.update(k) or "R")
     assert public_mode.post_ask("http://x.invalid", "q", "normal", "k") == "R"
     assert seen["timeout"] == public_mode.ASK_TIMEOUT_S
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

@@ -1,4 +1,5 @@
 """Item #79: R1's grounded-default criteria: per-citation provenance, insufficient-evidence reply, claim check."""
+import pytest
 import json
 
 from vera import ask_service, claim_check as cc, grounded_ask as ga
@@ -42,7 +43,13 @@ def test_split_claims_only_valid_citations():
 
 
 def test_apply_removes_unsupported_and_marks_partial(monkeypatch):
+    from vera import answer_contract
     monkeypatch.setenv("KEY_A", "k")
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: True)
+    text, summary = cc.check_answer("Faster [1]. Quality improved [2]. Shorter [1].", SRC, CC,
+                                    call=_verdicts({0: "supported", 1: "unsupported", 2: "partial"}))
+    assert text == "Faster [1]. Shorter [1]. (partly)" and "REMOVED" not in text and summary["removed"] == 1
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
     text, summary = cc.check_answer("Faster [1]. Quality improved [2]. Shorter [1].", SRC, CC,
                                     call=_verdicts({0: "supported", 1: "unsupported", 2: "partial"}))
     assert text == "Faster [1]. Shorter [1]. (partly)\n\nREMOVED"
@@ -195,3 +202,4 @@ def test_out_of_range_range_cleaned_like_grounded_ask(monkeypatch):
 
 def test_clean_input_output_is_byte_identical(monkeypatch):
     assert _ok("Faster [1]. Quality [2].", monkeypatch, 2) == "Faster [1]. Quality [2]."
+

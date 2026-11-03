@@ -275,5 +275,5 @@ def test_replication_question_stale_unknown_qualified_older_only(rig, monkeypatc
     _grounded(body)
     ids = _doc_ids(body)
     assert ids and all(i.startswith("acq-") for i in ids) and ids <= {a["document_id"] for a in body["admitted_evidence"]}
-    assert ro["user_text"] in body["answer"] or ro["user_text"] == body.get("research_notice"), "freshness limitation not disclosed"
+    assert ro["user_text"] in body["limitations"] and ro["user_text"] not in body["answer"], "freshness limitation not disclosed"  # ANS-LAYERS-1101: limitation, not answer text
     assert not (body.get("contract") or {}).get("fallback")

@@ -40,6 +40,8 @@ class AskResult:
     # WED-ACQ2 (P1.7): None, or "decline" / "insufficient" when this result should start ONE background acquisition.
     # Set only while the feature is effectively on; main.py enqueues once, after the provider chain succeeded.
     acquire_trigger: str | None = None
+    # ANS-LAYERS-1101: ({"kind", "text"}, ...) process/limitation notes kept out of `answer` (answer_contract.add_note)
+    notes: tuple = ()
 
 
 _CHAIN_CONFIG = Path(__file__).resolve().parent.parent / "config" / "ask-provider-chain.json"
@@ -255,8 +257,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                     used: dict = {}  # R2: the served acquired corpus this attempt actually tried (None = not loaded yet)
                     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, used=used)
                     if isinstance(out, AskResult):  # DAR-1021 SEC M1: scope notice first; no memory (accepted=False)
-                        pre = acq_config.override_answer_prefix(acq)
-                        return replace(out, answer=f"{pre} {out.answer}" if pre else out.answer, accepted=False,
+                        from vera import answer_contract as _ac
+                        ans, nts = _ac.add_note(out.answer, out.notes, "offtopic_warning",
+                                                acq_config.override_answer_prefix(acq), "prefix")
+                        return replace(out, answer=ans, notes=nts, accepted=False,
                                        contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
                     info: dict = {}
                     inl = None
@@ -280,11 +284,13 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                 if acq is None:  # PATHA-1028 CT-2: say plainly that automatic search is off (neutral, no topic text)
                     from vera import scope_router as _sr
                     note = _sr.acquisition_off_note()
+                    # non-answer notices ARE the answer (ANS-LAYERS-1101 B): kept in `answer` whatever the flag
                     off = replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, **offline_spent)
                 return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
             from vera import acq_config
             note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
-            return replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer,
+            _a, _n = _nonanswer_note(off.answer, off.notes, note)
+            return replace(off, answer=_a, notes=_n,
                            contract={**(off.contract or {}), **_inline_trace(inline_note), **iac} if (_inline_trace(inline_note) or iac) else off.contract,
                            acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
                            **_spent(inline_note))
@@ -350,7 +356,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
-    out = replace(res, answer=f"{text} {inline_note}" if inline_note else text, evidence=ev,
+    _a, _n = _nonanswer_note(text, res.notes, inline_note, strip=False)
+    out = replace(res, answer=_a, notes=_n, evidence=ev,
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
                             **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {})}, **trig,
                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
@@ -372,6 +379,18 @@ class _Note(_InlineNotice):
         o = super().__new__(cls, text)
         o.tokens, o.cost = int(tokens or 0), float(cost or 0.0)
         return o
+
+
+def _nonanswer_note(answer: str, notes: tuple, note, strip: bool = True) -> tuple:
+    """(answer, notes) for a non-answer notice. The notice IS the user's answer, so it stays in `answer` whatever the
+    flag (legacy strings exactly, including trailing spaces); only a separate background note is filed as notes."""
+    n = str(note or "")
+    if strip:
+        a = f"{answer} {n}".strip() if n else answer
+    else:
+        a = f"{answer} {n}" if n else answer
+    from vera import answer_contract as _ac
+    return _ac.add_note(a, notes, "background", getattr(note, "bg_note", "") or "", "suffix")
 
 
 def _spent(note, base_tokens=None, base_cost=None, classifier_tokens=0, classifier_cost=0.0) -> dict:
@@ -422,10 +441,17 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
+    from vera import answer_contract as contract
     bg = inline_acquire.background_note(acq, o)  # CONT-1023: "" unless candidates were queued for background acquisition
     if o.corpus is None:
         t = _inline_notice(acq, o)
-        return f"{t} {bg}".strip() if t is not None and bg else t
+        if t is not None and bg:
+            if contract.notes_separate():  # ANS-LAYERS-1101 A: the background note travels separately (kind "background")
+                t = t if isinstance(t, _InlineNotice) else _InlineNotice(t)
+                t.bg_note = bg
+                return t
+            return f"{t} {bg}".strip()
+        return t
     out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
@@ -442,11 +468,19 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         note.token = tok
         return note
     if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer
-        note = " ".join(t for t in (inline_acquire.answer_note(acq, o), bg) if t)
-        return replace(out, answer=f"{note} {out.answer}" if note else out.answer,
+        ans, nts = out.answer, out.notes
+        items = (("acquisition", inline_acquire.answer_note(acq, o)), ("background", bg))
+        for kind, t in (items if contract.notes_separate() else reversed(items)):  # same recorded order as off-topic; legacy text order ACQ, BG, answer
+            ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
+        return replace(out, answer=ans, notes=nts,
                        contract={**(out.contract or {}), "acquired_only": True, "inline_acquisition": o.public()})
-    lead = " ".join(t for t in (acq_config.override_answer_prefix(acq), inline_acquire.answer_note(acq, o), bg) if t)
-    return replace(out, answer=f"{lead} {out.answer}" if lead else out.answer, accepted=False,
+    ans, nts = out.answer, out.notes
+    # prefix order preserved when concatenating: warning, acquisition note, background note
+    items = (("offtopic_warning", acq_config.override_answer_prefix(acq)),
+             ("acquisition", inline_acquire.answer_note(acq, o)), ("background", bg))
+    for kind, t in (items if contract.notes_separate() else reversed(items)):  # recorded order warning, acquisition, background
+        ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
+    return replace(out, answer=ans, notes=nts, accepted=False,
                    contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
                              "inline_acquisition": o.public()})
 
@@ -868,6 +902,11 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
     result = complete(messages_for(question, sources), model, pricing, **chained)
     _progress.emit("write", "done")
     text, _ = fix_citations(result.answer or "", len(sources), cfg["removed_citation_note"])
+    notes: list = []  # ANS-LAYERS-1101: (kind, text) kept out of the answer when answer_notes_separate is on
+    if contract.notes_separate() and cfg["removed_citation_note"] and cfg["removed_citation_note"] in text:
+        i = text.rfind(cfg["removed_citation_note"])
+        text = text[:i].rstrip()
+        notes.append(("removed_citation", cfg["removed_citation_note"]))
     tokens = result.tokens_used + decision.tokens_used
     cost = round(result.cost_usd + decision.cost_usd, 6)
     if count_valid_citations(text, len(sources)) == 0:  # R1 criterion: no valid citation -> no answer
@@ -890,10 +929,19 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
             token = "checker_unavailable" if summary["outcome"] == "checker_unavailable" else "claim_check_insufficient"
             return contract.reading_list_result(public_candidates(sources), tokens, cost, sources=sources,
                                                 fallback=token)  # C-F1
+        if contract.notes_separate():  # ANS-LAYERS-1101-FC: the checker leaves its removed notes out; build them from the counts
+            for k, t, n in (("removed", (cc.get("responsiveness") or {}).get("removed_note"), summary.get("nonresponsive_removed")),
+                            ("removed", cc.get("removed_note"), summary.get("removed"))):
+                if t and checked.endswith(t):  # a checker that still appended its note: strip it as before
+                    checked = checked[: -len(t)].rstrip()
+                    notes.append((k, t))
+                elif t and n:
+                    notes.append((k, t))
         return AskResult(answer=checked, tokens_used=tokens, cost_usd=cost, sources=tuple(sources),
-                         claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind)
+                         claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind,
+                         notes=tuple({"kind": k, "text": t} for k, t in notes))
     return AskResult(answer=text, tokens_used=tokens, cost_usd=cost, sources=tuple(sources), accepted=True,
-                     result_kind=kind)
+                     result_kind=kind, notes=tuple({"kind": k, "text": t} for k, t in notes))
 
 
 # ---------------------------------------------------------------------------------------------- FRESH-1023
@@ -934,12 +982,13 @@ def _record_discovery(rec, res, question=None) -> None:
         pass
 
 
-def _with_research(res, rec: dict, suffix: str | None = None):
+def _with_research(res, rec: dict, suffix: str | None = None, kind: str | None = None):
+    from vera import answer_contract as contract
+    if kind is None:  # "older evidence only" qualifies the answer the user sees: a limitation (need-to-know), not a process note
+        kind = "coverage" if rec.get("kind") == "qualified_older_only" else "research_outcome"
     _record_discovery(rec, res, _QUESTION.get())
-    text = res.answer
-    if suffix:
-        text = f"{text}\n\n{suffix}" if text else suffix
-    return replace(res, answer=text, contract={**(res.contract or {}), "research": rec})
+    text, notes = contract.add_note(res.answer, res.notes, kind, suffix or "", "suffix", "\n\n")
+    return replace(res, answer=text, notes=notes, contract={**(res.contract or {}), "research": rec})
 
 
 def _backfill(fcfg, at, acq, *frs):
@@ -1184,8 +1233,9 @@ def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
     if out.result is None or out.result.result_kind != "answer":
         logging.getLogger("vera").info("combined answer fallback token=%s", out.fallback)
         return None, _Spend(out.tokens_used, out.cost_usd)
-    note = inline_acquire.answer_note(acq, o)
-    return replace(out.result, answer=f"{note} {out.result.answer}" if note else out.result.answer, evidence=merged,
+    ans, nts = contract.add_note(out.result.answer, out.result.notes, "acquisition",
+                                 inline_acquire.answer_note(acq, o), "prefix")
+    return replace(out.result, answer=ans, notes=nts, evidence=merged,
                    accepted=True, contract={"layers": contract.layers(), "fallback": None,
                                             "inline_acquisition": o.public()}), False
 
@@ -1297,6 +1347,9 @@ def complete_after_exhaustion(question: str, grounding, state: dict) -> AskResul
         ctr = {**(res.contract or {}), "exhaustion_grace": dict(info)}
         if info.get("inline_acquisition") and "inline_acquisition" not in ctr:
             ctr["inline_acquisition"] = info["inline_acquisition"]
+        if res.result_kind == "answer" and contract.notes_separate():  # a real answer: the grace notice is a process note, not answer text
+            _a, _n = contract.add_note(res.answer, res.notes, "research_outcome", note, "suffix")
+            return replace(res, answer=_a.strip(), notes=_n, contract=ctr)
         return replace(res, answer=f"{res.answer} {note}".strip() if note else res.answer, contract=ctr)
 
     if decision is None or not decision.accepted:  # nothing LLM-dependent was pending; the unchanged decline text

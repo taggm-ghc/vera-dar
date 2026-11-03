@@ -2,6 +2,7 @@
 text only, no network, no DB."""
 import json
 
+import pytest
 from tests import test_fulldoc_answer as legacy
 from tests.test_fulldoc_d8_parts import CFG as PCFG, GCFG, bundle, key, reply  # noqa: F401  (key: autouse env)
 from vera import claim_check as cc
@@ -182,3 +183,11 @@ def test_shipped_config_has_switch_and_calibration_note():
     r = cfg["answer"]["responsiveness"]
     assert r["enabled"] is True and "UNCALIBRATED" in r["_calibration_note"]
     assert fa.responsiveness_cfg(cfg) is r and cfg["fallback_tokens"]["nonresponsive"] == fa.RESP_FALLBACK
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: these tests pin the pre-layering answer text (notes inside `answer`); the separated mode is
+    covered by tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

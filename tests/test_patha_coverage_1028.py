@@ -339,3 +339,11 @@ def test_q1_safety_refusals_stay_with_acquisition_on(rig, q, reply):
 
 def test_q1_programming_task_is_still_a_refusal_category():
     assert "programming_task" in sr.REFUSE_CATEGORIES and "programming_task" in ask_service._NO_LIST_CATEGORIES
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

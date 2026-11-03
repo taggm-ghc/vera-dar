@@ -32,7 +32,7 @@ from vera import search_providers as sp
 
 NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=timezone.utc)
 HOURS = lambda h_: NOW - timedelta(hours=h_)  # noqa: E731
-NO_VALUABLE = "No sufficiently valuable source was found across the portals searched."
+NO_VALUABLE = "No sufficiently valuable source was found in the sources searched."
 DDG, OA, AX, EPMC = sp.DDG_NAME, "openalex", "arxiv", "europepmc"
 STATUSES = {"completed", "timeout", "quota", "error", "skipped", "not_attempted"}
 CC0 = {"metadata": {"id": "CC0-1.0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}}

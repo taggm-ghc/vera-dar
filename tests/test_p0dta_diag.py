@@ -100,7 +100,7 @@ def test_terminal_reasons_are_distinct_not_budget_exhausted():
 
 @pytest.mark.parametrize("cand,phrase", [
     ({"outcome": "not_evaluated", "reason": R["deadline"]}, "time limit for this search was reached"),
-    ({"outcome": "not_evaluated", "reason": R["cap"]}, "more candidates were found than one request can check"),
+    ({"outcome": "not_evaluated", "reason": R["cap"]}, "more documents were found than one request can check"),
     ({"outcome": "not_evaluated", "reason": R["docb"]}, "limit on documents read per request"),
     ({"outcome": "not_evaluated", "reason": R["daily"]}, "limit on new searches was reached"),
     ({"outcome": "queued_background", "reason": R["ft"], "unfinished": "rejected"}, "took too long to respond"),

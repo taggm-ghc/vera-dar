@@ -289,7 +289,7 @@ _LEGACY_ASK_PAGE_MODULES = frozenset({
     "test_tab_title", "test_disclosure", "test_p0_2_ask_inline_status", "test_ui_fulldoc_display", "test_metrics_scope_note",
     "test_k2_integrated_contract", "test_item78_sources_sidebar", "test_version_marker", "test_startup_smoke_darint",
     "test_fulldoc_d8_surfaces", "test_g23_owner_scenario_ui", "test_dar_pipeline_audit_gaps", "test_discovery_panel",
-    "test_discovery_reasons", "test_selfref_1028"})
+    "test_discovery_reasons", "test_selfref_1028", "test_ans_layers_ui_1101"})
 
 
 @pytest.fixture(autouse=True)

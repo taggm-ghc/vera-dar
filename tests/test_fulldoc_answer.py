@@ -236,3 +236,11 @@ def test_passage_without_attribution_is_never_cited():
     srcs = fa.sources_from(bundle(admitted=(dict(span(1, LONG), attribution=None),)))
     recs = [{"id": 0, "sentence": "Beta [1].", "citations": [1], "verdict": "supported"}]
     assert fa.build_citations(recs, srcs, 60, 700) == []
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: these tests pin the pre-layering answer text (notes inside `answer`); the separated mode is
+    covered by tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

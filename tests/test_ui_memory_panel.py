@@ -384,7 +384,7 @@ def test_ask_memory_written_still_present_and_zero(monkeypatch):
 
 def test_ask_response_has_no_ids_text_or_global_count_fields(monkeypatch):
     body = _ask(monkeypatch, _Mem(), claims=_claims(S))
-    assert set(body) - HEAD_KEYS == {"memory_submitted"}
+    assert set(body) - HEAD_KEYS == {"memory_submitted", "answer_status", "limitations", "process_notes"}  # ANS-LAYERS-1101 additive fields
     assert type(body["memory_submitted"]) is int
 
 

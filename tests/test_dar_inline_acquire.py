@@ -455,3 +455,11 @@ def test_main_does_not_refresh_when_nothing_was_stored(rig, monkeypatch):
     rig.setup(topic="clim")
     body, refreshed, acquired = _main_ask(rig.h, monkeypatch)
     assert body["result_kind"] == "reading_list" and refreshed == [] and acquired == []
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)

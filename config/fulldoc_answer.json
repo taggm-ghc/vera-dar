@@ -335,5 +335,26 @@
     "enabled": true,
     "_warm_note": "WED-P161: true (or absent) = load the DB-backed corpus and its evidence index in one startup daemon thread; false = load lazily on the first request, as before. Ignored when enabled is false or no DB source is configured.",
     "warm_at_startup": true
+  },
+  "answer_adequacy": {
+    "_doc": "ANS-LAYERS-1101 stage 2 (work/ANS-LAYERS-1101/stage2-plan.md §2a, §2b, §4): zero-LLM adequacy label for full-document answers (vera/answer_adequacy.py, job J1). Every flag is off, so shipping this block changes no behaviour. The lexicon is a seed/fallback; its DB-table target is owner-gated DDL.",
+    "_calibration_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D)",
+    "enabled": false,
+    "_enabled_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D). false = no assessment, no triggers, status byte-identical to today (rollback lever).",
+    "widen": false,
+    "_widen_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D). Gates the coverage-triggered widening attempt (plan §2 B); requires enabled=true.",
+    "cc_scope": {
+      "enabled": false,
+      "_enabled_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D). Plan §2b per-claim scope judgement in the existing claim-check call; only if the rule-based path measures too low on real data (J6)."
+    },
+    "min_docs_general_ref": "config/auto_acquire.json#acq_round_target_new_docs",
+    "_min_docs_general_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D). A reference, not a new number: the value is the owner floor acq_round_target_new_docs (auto_acquire.json, currently 6, FLOOR6-1028/OD-1031-CEIL31). No new cap is introduced.",
+    "form_lexicon": {
+      "_note": "uncalibrated: synthetic eval-cases only; real calibration pending (stage2-plan.md §D). Seed phrases for the M1 question-form rule (R-FORM), to be matched by J1 on lowercased question text.",
+      "specific": ["the paper", "the study", "the article", "the section", "the appendix", "the figure", "the table", "this paper", "this study"],
+      "comparative": ["compare", "comparison", "versus", " vs ", "difference between", "differences between"],
+      "definitional": ["what is", "what are", "define", "definition of", "meaning of"],
+      "broad": ["all types", "types of", "kinds of", "all the", "every type"]
+    }
   }
 }

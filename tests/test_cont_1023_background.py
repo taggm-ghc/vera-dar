@@ -275,7 +275,9 @@ def test_offtopic_notice_discloses_background_acquisition(h, monkeypatch, bg):
     r = rig.run()
     assert rig.outcomes[0].status == "deadline" and rig.store.plans == []
     assert rig.cfg["scope_expansion"]["inline_notice_deadline"] in r.answer
-    assert inline_acquire.BACKGROUND_NOTE in r.answer
+    # ANS-LAYERS-1101: the notice is the answer; the background disclosure travels as a "background" note, not answer text
+    assert inline_acquire.BACKGROUND_NOTE not in r.answer
+    assert {"kind": "background", "text": inline_acquire.BACKGROUND_NOTE} in list(r.notes)
     # INTEG-1023: with the ARX-A2 route enabled the fixture's arXiv record is a candidate too (formerly held by
     # acq_discovered); unfinished at the deadline, it is queued like the other (its job still meets every gate).
     qc = _queued_cands()

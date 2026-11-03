@@ -134,5 +134,15 @@ def test_c_claim_check_caption_does_not_hide_partial_state(monkeypatch):
     checked/supported/partial/removed and is silent on unanswered parts; recorded as a gap, not a completeness claim."""
     at = _render(monkeypatch, _ui_body(monkeypatch))
     caps = [c.value for c in at.caption]
-    cc = [c for c in caps if c.startswith("Claim check:")]
+    cc = [c for c in caps if c.startswith("Citation check:")]  # ANS-LAYERS-1101: layered UI wording
     assert len(cc) == 1 and "complete" not in cc[0].lower() and "all " not in cc[0].lower()
+    from vera.ui_evidence import CITATION_CHECK_DISCLAIMER
+    assert CITATION_CHECK_DISCLAIMER in cc[0]
+
+
+@pytest.fixture(autouse=True)
+def _legacy_concatenated_notes(monkeypatch):
+    """ANS-LAYERS-1101: pins the pre-layering answer text (notes inside `answer`); the separated mode is covered by
+    tests/test_ans_layers_s1.py."""
+    from vera import answer_contract
+    monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
