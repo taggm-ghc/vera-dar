@@ -57,7 +57,7 @@ def test_resource_limited_only_with_full_budget_and_working_search():
 
 @pytest.mark.parametrize("status,words", [
     ("resource_limited", "supply was limited"), ("incomplete_deadline", "time limit"),
-    ("search_failed", "could not be completed"), ("capped", "limit on new sources")])
+    ("search_failed", "could not be completed"), ("capped", "limit on new acquisition runs")])
 def test_notice_states_each_cause_counts_only(status, words):
     line = ue.acquisition_notice_line({"contract": {"inline_acquisition": {"acquisition": {
         "status": status, "stored": 1, "target": 6}}}})

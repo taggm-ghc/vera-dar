@@ -16,7 +16,7 @@ from vera import progress, progress_ui, ui_wake
 from vera.evidence_trace_ui import render_trace
 from vera.public_mode import (get_progress, is_public_mode, iter_ask_stream, post_ask, post_ask_tracked,
                               upstream_base_url)
-from vera.sources_sidebar import cited_numbers, plain, render_nav, render_sources, render_sources_sidebar
+from vera.sources_sidebar import plain, render_nav, render_sources, render_sources_sidebar
 from vera.ui_evidence import (answer_status_label, has_layers, is_fulldoc, render_answer_scope_note,
                               render_citations, claim_check_text, _note_texts, evidence_scope_line, acquisition_notice_line, render_evidence_scope, render_fallback_reason,
                               render_limitations, render_process_notes)
@@ -189,16 +189,18 @@ def render_result(data: dict) -> None:
     # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other
     # value (missing, unknown, reading_list, decline, ...) renders the reading-list branch.
     if data.get("result_kind") == "answer":
+        from vera import references_ui  # NONASK-1103 C5a: cited set from [n] first, display-only substitution after
+        _view = references_ui.answer_view(data)
         _lbl = _partial_label(data)
         if _lbl:  # D8: never styled as complete
             st.markdown(f"### ⚠️ {_lbl}")
-            st.warning(safe_markdown(data.get("answer")))
+            st.warning(safe_markdown(_view["display"]))
         elif not layered or data.get("answer_status") == "complete":
             st.markdown("### ✅ Answer")
-            st.success(safe_markdown(data.get("answer")))
+            st.success(safe_markdown(_view["display"]))
         else:  # unassessed or unknown: neutral, never green-as-verified
             st.markdown("### Answer")
-            st.info(safe_markdown(data.get("answer")))
+            st.info(safe_markdown(_view["display"]))
         if layered:
             _layer2_heading(data, True)
             render_limitations(st, data)
@@ -206,8 +208,9 @@ def render_result(data: dict) -> None:
         render_evidence_scope(st, data)  # AE-1020 D3: N documents inspected, M passages admitted
         render_sources(st, data.get("sources") or [], data.get("traced_sources") or [],
                        data.get("claim_check"), fulldoc=full,
-                       cited=cited_numbers(data.get("answer")),
+                       cited=_view["cited"],
                        claim_check_layer="deferred" if layered else None)
+        references_ui.render_references(st, _view["references"])
         render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
         if full:
             render_answer_scope_note(st)

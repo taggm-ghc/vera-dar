@@ -1,0 +1,15 @@
+{
+  "_doc": "NONASK-1103 S7: flag for the current-reporting lane (vera/reporting_lane.py). Ships OFF. Do not enable before SD.1 (disclosure update) is recorded done and SEC has passed. Fallback order: gdelt then hn.",
+  "enabled": false,
+  "fallback_order": ["gdelt", "hn"],
+  "_todo_gate": "TODO gate: confirm the GDELT DOC 2.0 JSON artlist field names against a live 200 response before enable (both 2026-11-03 probes returned 429).",
+  "outlets": [],
+  "_outlets_doc": "Owner decision 2026-11-03 (R-042, honour site terms): outlet pages linked from GDELT or HN are fetched ONLY for an exact host listed here as {\"host\", \"terms_verdict\": \"allow\", \"terms_evidence\"} AND where robots.txt permits (vera/public_fetch.py). Unknown or unlisted outlets give links only. HN Algolia terms are unknown (no official API terms found): gate in docs/lanes-enable-checklist.md.",
+  "user_agent": "VERA-DAR/1.0 (+https://github.com/taggm-ghc/vera-dar)",
+  "backoff_s": [60, 120, 240],
+  "jitter_frac": 0.2,
+  "max_retries": 3,
+  "circuit_open_s": 900,
+  "gdelt": {"maxrecords": 50, "timespan": "3months", "connect_timeout_s": 5, "read_timeout_s": 20},
+  "hn": {"hitsPerPage": 20, "window_days": 90, "connect_timeout_s": 5, "read_timeout_s": 10}
+}

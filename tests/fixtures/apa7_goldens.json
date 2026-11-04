@@ -1,0 +1,781 @@
+{
+  "schema": "apa7_goldens/v1",
+  "task": "NONASK-1103-C-GOLD",
+  "created": "2026-11-03",
+  "sources": {
+    "evidence": "work/NONASK-1103/citation-v1-evidence.md (sections V-1 and V-1b)",
+    "house_rules": "work/NONASK-1103/citation-plan.md section 7 (identifier precedence, version-read-first, validation, safe links)"
+  },
+  "house_caption": "APA 7 (VERA-DAR house variant: identifiers appended)",
+  "fixed_today": "2026-11-03",
+  "comparison": "See apa7_goldens_README.md: visible() text, exact vs structure gates, links, assertions.",
+  "cases": [
+    {
+      "id": "G1", "plan_ref": "G1",
+      "desc": "journal article, 2 structured authors, DOI + PMCID (secondary id reaches open full text)",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Rivera", "given": "Luz"}, {"family": "Okafor", "given": "Tobi"}],
+        "issued": {"date-parts": [[2021]]},
+        "title": "Sleep and recall",
+        "container-title": "Journal of Memory",
+        "volume": "14", "issue": "2", "page": "101-118",
+        "DOI": "10.1234/jm.2021.014",
+        "ids": {"pmcid": "PMC7654321"},
+        "vera_class": "research"
+      },
+      "expected": {
+        "reference": "Rivera, L., & Okafor, T. (2021). Sleep and recall. *Journal of Memory*, *14*(2), 101–118. https://doi.org/10.1234/jm.2021.014 PMCID: PMC7654321",
+        "in_text": "(Rivera & Okafor, 2021)",
+        "in_text_narrative": "Rivera and Okafor (2021)",
+        "links": ["https://doi.org/10.1234/jm.2021.014", "https://pmc.ncbi.nlm.nih.gov/articles/PMC7654321/"],
+        "characterisation_contains": ["Journal article", "Journal of Memory", "2021"],
+        "assertions": {"elements_in_order": ["Rivera, L.", "& Okafor, T.", "(2021).", "Sleep and recall.", "*Journal of Memory*", "*14*(2)", "101", "118", "https://doi.org/10.1234/jm.2021.014", "PMCID: PMC7654321"], "must_not_end_with": "."}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 3 (journal + DOI, V2)", "V-1 row 1b (2 authors in-text, V2)", "V-1 row 9a (DOI form, no trailing period)", "plan s7 secondary ids: DOI + PMCID"]
+    },
+    {
+      "id": "G2", "plan_ref": "G2",
+      "desc": "3 structured authors: et al. from first citation",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Chen", "given": "Yu"}, {"family": "Duarte", "given": "Paulo"}, {"family": "Holm", "given": "Karin"}],
+        "issued": {"date-parts": [[2019]]},
+        "title": "Wave height and shoreline change",
+        "container-title": "Coastal Letters", "volume": "3", "issue": "1", "page": "1-9"
+      },
+      "expected": {
+        "reference": "Chen, Y., Duarte, P., & Holm, K. (2019). Wave height and shoreline change. *Coastal Letters*, *3*(1), 1–9.",
+        "in_text": "(Chen et al., 2019)",
+        "links": [],
+        "assertions": {"elements_in_order": ["Chen, Y.,", "Duarte, P.,", "& Holm, K.", "(2019)."], "in_text_must_not_contain": ["Duarte", "Holm", "&"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 1c (3+ authors, V2 + SNIPPET)", "V-1 row 3 (journal pattern, V2)"]
+    },
+    {
+      "id": "G3", "plan_ref": "G3",
+      "desc": "22 structured authors: first 19, ellipsis, final author, no ampersand",
+      "input": {
+        "type": "article-journal",
+        "author": [
+          {"family": "Abbott", "given": "Ana"}, {"family": "Baker", "given": "Ben"}, {"family": "Cruz", "given": "Carla"},
+          {"family": "Dahl", "given": "Dan"}, {"family": "Eze", "given": "Ebere"}, {"family": "Fong", "given": "Fay"},
+          {"family": "Gupta", "given": "Gita"}, {"family": "Hale", "given": "Hugo"}, {"family": "Ivanova", "given": "Ira"},
+          {"family": "Jansen", "given": "Jo"}, {"family": "Kaur", "given": "Kiran"}, {"family": "Lund", "given": "Lars"},
+          {"family": "Mbeki", "given": "Mosa"}, {"family": "Novak", "given": "Nina"}, {"family": "Ortiz", "given": "Omar"},
+          {"family": "Pires", "given": "Paula"}, {"family": "Quinn", "given": "Quentin"}, {"family": "Ruiz", "given": "Rosa"},
+          {"family": "Sato", "given": "Sora"}, {"family": "Tran", "given": "Tuan"}, {"family": "Uddin", "given": "Umar"},
+          {"family": "Vance", "given": "Vera"}
+        ],
+        "issued": {"date-parts": [[2022]]},
+        "title": "A large survey of tidal gauges",
+        "container-title": "Ocean Records", "volume": "9", "issue": "4", "page": "300-340"
+      },
+      "expected": {
+        "reference": "Abbott, A., Baker, B., Cruz, C., Dahl, D., Eze, E., Fong, F., Gupta, G., Hale, H., Ivanova, I., Jansen, J., Kaur, K., Lund, L., Mbeki, M., Novak, N., Ortiz, O., Pires, P., Quinn, Q., Ruiz, R., Sato, S., . . . Vance, V. (2022). A large survey of tidal gauges. *Ocean Records*, *9*(4), 300–340.",
+        "in_text": "(Abbott et al., 2022)",
+        "links": [],
+        "assertions": {
+          "elements_in_order": ["Abbott, A.,", "Sato, S.,", "Vance, V.", "(2022)."],
+          "ellipsis_between": ["Sato, S.,", "Vance, V."],
+          "ellipsis_forms_accepted": [". . .", "..."],
+          "must_not_contain": ["Tran", "Uddin", "&"]
+        }
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "CONFIRMED-SECONDARY(rule)"],
+      "evidence": ["V-1 row 2 (21+ authors, V2 moderate)", "V-1b row '21+ authors' (CONFIRMED-SECONDARY; ellipsis spacing differs across guides, APA text not seen -> structure)"]
+    },
+    {
+      "id": "G4", "plan_ref": "G4",
+      "desc": "arXiv text read; arXiv id first, same-record journal DOI second (version read first)",
+      "input": {
+        "type": "article",
+        "genre": "preprint",
+        "author": [{"family": "Sato", "given": "Kenji"}, {"family": "Haddad", "given": "Lina"}],
+        "issued": {"date-parts": [[2024]]},
+        "title": "Sparse tide models",
+        "publisher": "arXiv",
+        "DOI": "10.1234/ml.2024.7",
+        "ids": {"arxiv": "2401.01234v2"},
+        "provider": "arxiv",
+        "fulltext_url": "https://arxiv.org/abs/2401.01234v2",
+        "_same_record": {"DOI": true, "arxiv": true}
+      },
+      "expected": {
+        "reference": "Sato, K., & Haddad, L. (2024). *Sparse tide models*. arXiv. arXiv:2401.01234v2 https://doi.org/10.1234/ml.2024.7",
+        "in_text": "(Sato & Haddad, 2024)",
+        "links": ["https://arxiv.org/abs/2401.01234v2", "https://doi.org/10.1234/ml.2024.7"],
+        "assertions": {"elements_in_order": ["Sato, K.,", "(2024).", "Sparse tide models", "arXiv.", "arXiv:2401.01234v2", "https://doi.org/10.1234/ml.2024.7"], "must_not_contain": ["10.48550"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "U"],
+      "evidence": ["V-1b row 'arXiv/preprint' (pattern Author. (Year). Title. Repository. URL CONFIRMED-PRIMARY; arXiv example and [Preprint] tag UNVERIFIED)", "V-1 row 4 (U)", "plan s7 version read first + arXiv rendering"],
+      "open_questions": ["[Preprint] label: APA example has none, V-1 blogs add it; not asserted either way", "title italics: not observable in pdftotext; italics here follow V-1 row 4 (U); not gated"]
+    },
+    {
+      "id": "G4b", "plan_ref": "G4b",
+      "desc": "arXiv read; DOI comes from another provider record: not attached; arXiv DOI never derived",
+      "input": {
+        "type": "article", "genre": "preprint",
+        "author": [{"family": "Sato", "given": "Kenji"}],
+        "issued": {"date-parts": [[2024]]},
+        "title": "Dense tide models",
+        "publisher": "arXiv",
+        "DOI": "10.1234/ml.2024.9",
+        "ids": {"arxiv": "2401.05678"},
+        "provider": "arxiv",
+        "fulltext_url": "https://arxiv.org/abs/2401.05678",
+        "_same_record": {"DOI": false, "arxiv": true}
+      },
+      "expected": {
+        "reference": "Sato, K. (2024). *Dense tide models*. arXiv. arXiv:2401.05678",
+        "in_text": "(Sato, 2024)",
+        "links": ["https://arxiv.org/abs/2401.05678"],
+        "assertions": {"must_not_contain": ["doi.org", "10.1234/ml.2024.9", "10.48550"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "U"],
+      "evidence": ["plan s7 same-work rule and 'arXiv DOI (10.48550) shown only when a provider supplied it'", "V-1b row 'arXiv/preprint'"]
+    },
+    {
+      "id": "G4c", "plan_ref": "s7 validation (old-style arXiv)",
+      "desc": "old-style arXiv id accepted and linked",
+      "input": {
+        "type": "article", "genre": "preprint",
+        "author": [{"family": "Moretti", "given": "Paolo"}],
+        "issued": {"date-parts": [[1999]]},
+        "title": "Notes on string tension",
+        "publisher": "arXiv",
+        "ids": {"arxiv": "hep-th/9901001"},
+        "provider": "arxiv", "fulltext_url": "https://arxiv.org/abs/hep-th/9901001"
+      },
+      "expected": {
+        "reference": "Moretti, P. (1999). *Notes on string tension*. arXiv. arXiv:hep-th/9901001",
+        "in_text": "(Moretti, 1999)",
+        "links": ["https://arxiv.org/abs/hep-th/9901001"],
+        "assertions": {"elements_in_order": ["Moretti, P.", "(1999).", "arXiv.", "arXiv:hep-th/9901001"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "U"],
+      "evidence": ["plan s7 validation: old-style ^[a-z\\-]+(\\.[A-Z]{2})?/\\d{7}(v\\d+)?$", "V-1b row 'arXiv/preprint'"]
+    },
+    {
+      "id": "G5", "plan_ref": "G5",
+      "desc": "edited-book chapter, no DOI, valid ISBN-13 appended (house)",
+      "input": {
+        "type": "chapter",
+        "author": [{"family": "Armand", "given": "Delphine"}],
+        "editor": [{"family": "Leitner", "given": "Maria Grace"}, {"family": "Rush", "given": "Colin James"}],
+        "issued": {"date-parts": [[2019]]},
+        "title": "Harbors and character",
+        "container-title": "A new companion to harbors",
+        "page": "144-163",
+        "publisher": "Quayside Press",
+        "ISBN": "978-0-306-40615-7"
+      },
+      "expected": {
+        "reference": "Armand, D. (2019). Harbors and character. In M. G. Leitner & C. J. Rush (Eds.), *A new companion to harbors* (pp. 144–163). Quayside Press. ISBN 9780306406157",
+        "in_text": "(Armand, 2019)",
+        "links": [],
+        "assertions": {"elements_in_order": ["Armand, D.", "(2019).", "Harbors and character.", "In M. G. Leitner & C. J. Rush (Eds.),", "*A new companion to harbors*", "(pp. 144", "163)", "Quayside Press.", "ISBN"], "isbn_digits_after_strip": "9780306406157"}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 7 (edited-book chapter, V2)", "V-1 row 9b (ISBN U; house variant appends ISBN)", "plan s7 ISBN plain text, mod-10 checksum"]
+    },
+    {
+      "id": "G5a", "plan_ref": "V-1b chapter with DOI",
+      "desc": "edited-book chapter with DOI (APA-confirmed form; no house departure)",
+      "input": {
+        "type": "chapter",
+        "author": [{"family": "Okonkwo", "given": "Rita"}],
+        "editor": [{"family": "Laine", "given": "Mikko"}, {"family": "Brandt", "given": "Sofia"}],
+        "issued": {"date-parts": [[2020]]},
+        "title": "Tidal mixing in estuaries",
+        "container-title": "Coastal processes: A primer",
+        "page": "11-26",
+        "publisher": "Harbor Press",
+        "DOI": "10.1234/cp.2020.002"
+      },
+      "expected": {
+        "reference": "Okonkwo, R. (2020). Tidal mixing in estuaries. In M. Laine & S. Brandt (Eds.), *Coastal processes: A primer* (pp. 11–26). Harbor Press. https://doi.org/10.1234/cp.2020.002",
+        "in_text": "(Okonkwo, 2020)",
+        "links": ["https://doi.org/10.1234/cp.2020.002"]
+      },
+      "gate": "exact", "gate_in_text": "structure", "tags": ["CONFIRMED-PRIMARY"],
+      "evidence": ["V-1b row 'chapter with DOI' (CONFIRMED-PRIMARY, APA PDF mirror Sec 10.3)", "V-1 row 7 (italic book title, V2)"]
+    },
+    {
+      "id": "G6", "plan_ref": "G6",
+      "desc": "chapter with ISBN failing the mod-10 checksum: ISBN omitted, reason code, never repaired",
+      "input": {
+        "type": "chapter",
+        "author": [{"family": "Armand", "given": "Delphine"}],
+        "editor": [{"family": "Leitner", "given": "Maria"}],
+        "issued": {"date-parts": [[2018]]},
+        "title": "Piers at dusk",
+        "container-title": "Harbor essays",
+        "page": "1-20",
+        "publisher": "Quayside Press",
+        "ISBN": "9780306406158"
+      },
+      "expected": {
+        "reference": "Armand, D. (2018). Piers at dusk. In M. Leitner (Ed.), *Harbor essays* (pp. 1–20). Quayside Press.",
+        "in_text": "(Armand, 2018)",
+        "links": [],
+        "reason_code_prefix": "R-CIT-",
+        "assertions": {"must_not_contain": ["ISBN", "9780306406158", "9780306406157"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 7 (chapter, V2)", "plan s7 validation: ISBN-13 mod-10; fail = omit and log, never repair"],
+      "open_questions": ["single-editor '(Ed.)' singular is not in the evidence record (V-1 row 7 shows 2 editors); not gated"]
+    },
+    {
+      "id": "G7", "plan_ref": "G7",
+      "desc": "news article with byline",
+      "input": {
+        "type": "article-newspaper",
+        "author": [{"family": "Park", "given": "Jiwoo"}],
+        "issued": {"date-parts": [[2026, 10, 30]]},
+        "title": "Chip export rules change",
+        "container-title": "The Daily Ledger",
+        "URL": "https://example.org/a",
+        "vera_class": "news"
+      },
+      "expected": {
+        "reference": "Park, J. (2026, October 30). Chip export rules change. *The Daily Ledger*. https://example.org/a",
+        "in_text": "(Park, 2026)",
+        "links": ["https://example.org/a"],
+        "assertions": {"elements_in_order": ["Park, J.", "(2026, October 30).", "Chip export rules change.", "*The Daily Ledger*.", "https://example.org/a"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 5a (news with author, V2, URL tail not returned)"]
+    },
+    {
+      "id": "G8", "plan_ref": "G8",
+      "desc": "news article, no byline: title moves to author position; capitalisation as supplied",
+      "input": {
+        "type": "article-newspaper",
+        "issued": {"date-parts": [[2026, 10, 30]]},
+        "title": "Chip export rules change",
+        "container-title": "The Daily Ledger",
+        "URL": "https://example.org/b",
+        "vera_class": "news"
+      },
+      "expected": {
+        "reference": "Chip export rules change. (2026, October 30). *The Daily Ledger*. https://example.org/b",
+        "in_text": "(\"Chip export rules change,\" 2026)",
+        "links": ["https://example.org/b"],
+        "assertions": {"must_not_contain": ["Anonymous", "example.org."]}
+      },
+      "gate": "exact", "gate_in_text": "structure", "tags": ["CONFIRMED-SECONDARY"],
+      "evidence": ["V-1b row 'news, no author' (CONFIRMED-SECONDARY: 'Article title. (Year, Month Day). Newspaper title, Page.')", "V-1 row 5a (online news ends with URL, V2)", "V-1 row 1e (in-text quoted title, V2)", "V-1 corrections: supplied capitalisation kept (M2)"]
+    },
+    {
+      "id": "G9", "plan_ref": "G9",
+      "desc": "official docs, group author from provider field, no date, changing page with retrieval date",
+      "input": {
+        "type": "webpage",
+        "author": [{"literal": "Example Cloud"}],
+        "title": "Rate limits",
+        "URL": "https://docs.example.com/limits",
+        "accessed": {"date-parts": [[2026, 11, 3]]},
+        "vera_class": "official"
+      },
+      "expected": {
+        "reference": "Example Cloud. (n.d.). *Rate limits*. Retrieved November 3, 2026, from https://docs.example.com/limits",
+        "in_text": "(Example Cloud, n.d.)",
+        "links": ["https://docs.example.com/limits"]
+      },
+      "gate": "exact", "gate_in_text": "structure", "tags": ["CONFIRMED-PRIMARY"],
+      "evidence": ["V-1b row '(n.d.)' (CONFIRMED-PRIMARY)", "V-1b row 'retrieval date' (CONFIRMED-PRIMARY form)", "V-1 row 6b (group author, n.d., italic title, V2)", "V-1 row 1g (in-text n.d., V2)"]
+    },
+    {
+      "id": "G9b", "plan_ref": "G9b",
+      "desc": "only a domain and a title: domain is never group author or outlet; title-first entry",
+      "input": {
+        "type": "webpage",
+        "title": "Status page",
+        "URL": "https://docs.example.com/status",
+        "vera_class": "web"
+      },
+      "expected": {
+        "reference": "*Status page*. (n.d.). https://docs.example.com/status",
+        "in_text": "(*Status page*, n.d.)",
+        "links": ["https://docs.example.com/status"],
+        "characterisation_contains": ["site: docs.example.com", "n.d."],
+        "assertions": {"reference_must_not_start_with": ["docs.example.com", "Docs.example.com", "example.com"], "domain_only_inside_url": "docs.example.com"}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["U", "HOUSE"],
+      "evidence": ["plan s6 M1: domain never group author or outlet", "V-1 row 1f (standalone no-author in-text, U)", "V-1 row 6b (n.d.)"]
+    },
+    {
+      "id": "G10", "plan_ref": "G10",
+      "desc": "web page with author and a site name distinct from the author",
+      "input": {
+        "type": "webpage",
+        "author": [{"family": "Moreau", "given": "Anne"}],
+        "issued": {"date-parts": [[2025, 3, 2]]},
+        "title": "How tide tables work",
+        "container-title": "Harbor Guides",
+        "URL": "https://example.org/tides",
+        "vera_class": "web"
+      },
+      "expected": {
+        "reference": "Moreau, A. (2025, March 2). *How tide tables work*. Harbor Guides. https://example.org/tides",
+        "in_text": "(Moreau, 2025)",
+        "links": ["https://example.org/tides"]
+      },
+      "gate": "exact", "gate_in_text": "structure", "tags": ["CONFIRMED-PRIMARY"],
+      "evidence": ["V-1b row 'webpage' (CONFIRMED-PRIMARY: 'Chandler, N. (2020, April 9). ... howstuffworks. URL')", "V-1 row 6a (italic page title, V2)"]
+    },
+    {
+      "id": "G11", "plan_ref": "G11",
+      "desc": "dataset with identifier number and [Data set] label, DOI",
+      "input": {
+        "type": "dataset",
+        "author": [{"literal": "Ocean Data Group"}],
+        "issued": {"date-parts": [[2024]]},
+        "title": "Coastal temperature records, 2000-2023",
+        "number": "ODG 4417",
+        "DOI": "10.1234/odg.4417"
+      },
+      "expected": {
+        "reference": "Ocean Data Group. (2024). *Coastal temperature records, 2000-2023* (ODG 4417) [Data set]. https://doi.org/10.1234/odg.4417",
+        "in_text": "(Ocean Data Group, 2024)",
+        "links": ["https://doi.org/10.1234/odg.4417"],
+        "assertions": {"elements_in_order": ["Ocean Data Group.", "(2024).", "*Coastal temperature records, 2000-2023*", "(ODG 4417)", "[Data set].", "https://doi.org/10.1234/odg.4417"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 8a (dataset, V2)", "V-1 row 9a (DOI form)"]
+    },
+    {
+      "id": "G12", "plan_ref": "G12",
+      "desc": "software with version; bracket label not asserted (sources disagree)",
+      "input": {
+        "type": "software",
+        "author": [{"literal": "Tidewright Labs"}],
+        "issued": {"date-parts": [[2025]]},
+        "title": "Tide planner",
+        "version": "3.2.1",
+        "publisher": "Harbor Software Co.",
+        "URL": "https://example.org/tide-planner"
+      },
+      "expected": {
+        "reference": "Tidewright Labs. (2025). *Tide planner* (Version 3.2.1). Harbor Software Co. https://example.org/tide-planner",
+        "in_text": "(Tidewright Labs, 2025)",
+        "links": ["https://example.org/tide-planner"],
+        "assertions": {"elements_in_order": ["Tidewright Labs.", "(2025).", "*Tide planner*", "(Version 3.2.1)", "Harbor Software Co.", "https://example.org/tide-planner"], "label_not_asserted": "[Computer software]"}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "CONFIRMED-SECONDARY(structure)"],
+      "evidence": ["V-1 row 8b (software, no label, V2)", "V-1b row 'software' (CONFIRMED-SECONDARY on structure; DISAGREEMENT on label)"]
+    },
+    {
+      "id": "G13", "plan_ref": "G13",
+      "desc": "report with Handle taken from a hdl.handle.net URL; report number in APA position",
+      "input": {
+        "type": "report",
+        "author": [{"literal": "Coastal Research Institute"}],
+        "issued": {"date-parts": [[2023]]},
+        "title": "Harbor sediment survey",
+        "number": "42",
+        "URL": "https://hdl.handle.net/20.500.12345/678"
+      },
+      "expected": {
+        "reference": "Coastal Research Institute. (2023). *Harbor sediment survey* (Report No. 42). https://hdl.handle.net/20.500.12345/678",
+        "in_text": "(Coastal Research Institute, 2023)",
+        "links": ["https://hdl.handle.net/20.500.12345/678"],
+        "assertions": {"elements_in_order": ["Coastal Research Institute.", "(2023).", "Harbor sediment survey", "(Report No. 42)", "https://hdl.handle.net/20.500.12345/678"], "count": {"42": 1}}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE"],
+      "evidence": ["plan s7 Handle rendering and acceptance only from hdl.handle.net URL or explicit handle field", "plan s7 report number in APA position, not repeated"]
+    },
+    {
+      "id": "G13b", "plan_ref": "G13b",
+      "desc": "fake Handle: '2024/report' in a non-handle URL path is not a Handle; URL shown as itself",
+      "input": {
+        "type": "report",
+        "author": [{"literal": "Coastal Research Institute"}],
+        "issued": {"date-parts": [[2024]]},
+        "title": "Annual dredging summary",
+        "URL": "https://example.org/handle/2024/report"
+      },
+      "expected": {
+        "reference": "Coastal Research Institute. (2024). *Annual dredging summary*. https://example.org/handle/2024/report",
+        "in_text": "(Coastal Research Institute, 2024)",
+        "links": ["https://example.org/handle/2024/report"],
+        "assertions": {"must_not_contain": ["hdl.handle.net"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE"],
+      "evidence": ["plan s7 validation: no free-standing \\d+/\\S+ Handle match (F5)"]
+    },
+    {
+      "id": "G14", "plan_ref": "G14",
+      "desc": "journal article with PMID only",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Ito", "given": "Haruka"}],
+        "issued": {"date-parts": [[2022]]},
+        "title": "Salt marsh recovery",
+        "container-title": "Wetland Studies", "volume": "8", "issue": "4", "page": "200-210",
+        "ids": {"pmid": "12345678"}
+      },
+      "expected": {
+        "reference": "Ito, H. (2022). Salt marsh recovery. *Wetland Studies*, *8*(4), 200–210. PMID: 12345678",
+        "in_text": "(Ito, 2022)",
+        "links": ["https://pubmed.ncbi.nlm.nih.gov/12345678/"]
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 3 (journal, V2)", "plan s7 PMID rendering"]
+    },
+    {
+      "id": "G15", "plan_ref": "G15",
+      "desc": "DOI and Handle on the same record: DOI only (Handle is not a useful secondary)",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Lindqvist", "given": "Eva"}],
+        "issued": {"date-parts": [[2020]]},
+        "title": "Ice cover on small lakes",
+        "container-title": "Northern Waters", "volume": "5", "issue": "2", "page": "33-48",
+        "DOI": "10.1234/nw.2020.5",
+        "ids": {"handle": "20.500.12345/999"}
+      },
+      "expected": {
+        "reference": "Lindqvist, E. (2020). Ice cover on small lakes. *Northern Waters*, *5*(2), 33–48. https://doi.org/10.1234/nw.2020.5",
+        "in_text": "(Lindqvist, 2020)",
+        "links": ["https://doi.org/10.1234/nw.2020.5"],
+        "assertions": {"must_not_contain": ["hdl.handle.net", "20.500.12345/999"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["plan s7 precedence DOI > Handle; secondary ids limited to DOI+PMCID, arXiv+DOI, DOI+ISBN"]
+    },
+    {
+      "id": "G16", "plan_ref": "G16",
+      "desc": "malformed DOI '10.12/x' rejected; next valid id (PMCID) used",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Nair", "given": "Devi"}],
+        "issued": {"date-parts": [[2021]]},
+        "title": "Mangrove roots",
+        "container-title": "Tropical Coasts", "volume": "2", "issue": "3", "page": "10-19",
+        "DOI": "10.12/x",
+        "ids": {"pmcid": "PMC1234567"}
+      },
+      "expected": {
+        "reference": "Nair, D. (2021). Mangrove roots. *Tropical Coasts*, *2*(3), 10–19. PMCID: PMC1234567",
+        "in_text": "(Nair, 2021)",
+        "links": ["https://pmc.ncbi.nlm.nih.gov/articles/PMC1234567/"],
+        "reason_code_prefix": "R-CIT-",
+        "assertions": {"must_not_contain": ["doi.org", "10.12/x"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["plan s7 validation: DOI ^10\\.\\d{4,9}/\\S+$; fail = omit and log", "plan s7 precedence DOI > Handle > arXiv > PMCID"]
+    },
+    {
+      "id": "G17", "plan_ref": "G17",
+      "desc": "no identifier and no URL: entry ends at last APA element, no placeholder",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Varga", "given": "Eszter"}],
+        "issued": {"date-parts": [[2018]]},
+        "title": "Quiet harbors",
+        "container-title": "Port Studies", "volume": "2", "issue": "1", "page": "5-9"
+      },
+      "expected": {
+        "reference": "Varga, E. (2018). Quiet harbors. *Port Studies*, *2*(1), 5–9.",
+        "in_text": "(Varga, 2018)",
+        "links": [],
+        "assertions": {"must_not_contain": ["http", "DOI", "n.d.", "Retrieved", "None", "null", "unknown"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 3 (journal pattern, V2)", "plan s6 missing data rendered, never filled"]
+    },
+    {
+      "id": "G18", "plan_ref": "G18", "kind": "list",
+      "desc": "same author and year: a/b suffix assigned by title order",
+      "input": {
+        "records": [
+          {"type": "webpage", "author": [{"family": "Berg", "given": "Nils"}], "issued": {"date-parts": [[2020]]}, "title": "Beta tides", "URL": "https://example.org/beta"},
+          {"type": "webpage", "author": [{"family": "Berg", "given": "Nils"}], "issued": {"date-parts": [[2020]]}, "title": "Alpha tides", "URL": "https://example.org/alpha"}
+        ]
+      },
+      "expected": {
+        "references_in_order": [
+          "Berg, N. (2020a). *Alpha tides*. https://example.org/alpha",
+          "Berg, N. (2020b). *Beta tides*. https://example.org/beta"
+        ],
+        "in_text_by_title": {"Alpha tides": "(Berg, 2020a)", "Beta tides": "(Berg, 2020b)"}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 1i (same author-year a/b, V2)", "plan s6 'a/b by title', list alphabetical"]
+    },
+    {
+      "id": "G19", "plan_ref": "G19", "kind": "answer",
+      "desc": "[1][3] cite two documents: one parenthetical, alphabetical, locator kept",
+      "input": {
+        "answer": "Tides shape harbors [1][3].",
+        "ns": {
+          "1": {"type": "article-journal", "author": [{"family": "Zeta", "given": "Zoe"}], "issued": {"date-parts": [[2018]]}, "title": "Harbor tides", "container-title": "Port Studies"},
+          "2": {"type": "article-journal", "author": [{"family": "Mid", "given": "Max"}], "issued": {"date-parts": [[2019]]}, "title": "Uncited", "container-title": "Port Studies"},
+          "3": {"type": "article-journal", "author": [{"family": "Alpha", "given": "Ada"}], "issued": {"date-parts": [[2020]]}, "title": "Tide shaping", "container-title": "Port Studies"}
+        }
+      },
+      "expected": {
+        "display": "Tides shape harbors (Alpha, 2020; Zeta, 2018) [1, 3].",
+        "cited_set": [1, 3],
+        "answer_unchanged": true,
+        "references_in_order_first_tokens": ["Alpha, A.", "Zeta, Z."]
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 1h (multiple works alphabetical, V2)", "plan s6 KC-3 [n] first, display substitution last; locator kept"]
+    },
+    {
+      "id": "G20", "plan_ref": "G20", "kind": "property",
+      "desc": "property test: random subsets of fields from G1-G17 inputs",
+      "input": {"generator": "for each base case in G1..G17, every subset (or >= 200 random subsets) of its top-level fields, keeping 'type'"},
+      "expected": {
+        "properties": [
+          "every visible token of reference() is a substring of some input value, a formatted form of an input value (initials, month name, en dash page range, identifier rendering), or fixed APA/house vocabulary: '(n.d.)', '&', 'et al.', 'In', '(Eds.)', '(Ed.)', '(pp.', '(Version', '[Data set]', '(Report No.', 'Retrieved', 'from', 'arXiv:', 'PMCID:', 'PMID:', 'ISBN', 'https://doi.org/', 'https://hdl.handle.net/', punctuation",
+          "no output contains 'None', 'null', 'undefined', 'Anonymous', 'Unknown'",
+          "no author -> entry starts with the title; no issued -> '(n.d.)'; no container -> no container element",
+          "structured author count and family names in the output equal the input (G24 rule) unless 21+ (G3 rule)",
+          "every link target is https and on the host allowed for its kind (plan s7 safe links)",
+          "reference() and in_text() never raise"
+        ]
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE"],
+      "evidence": ["plan s10 G20", "plan s6 missing data rendered, never filled"]
+    },
+    {
+      "id": "G21", "plan_ref": "G21", "kind": "answer",
+      "desc": "[1][2] are two passages of ONE document: one in-text citation, locator [1, 2], cited set intact",
+      "input": {
+        "answer": "Sleep aids recall [1][2].",
+        "ns": {
+          "1": {"doc_key": "doc-rivera", "type": "article-journal", "author": [{"family": "Rivera", "given": "Luz"}, {"family": "Okafor", "given": "Tobi"}], "issued": {"date-parts": [[2021]]}, "title": "Sleep and recall", "container-title": "Journal of Memory"},
+          "2": {"doc_key": "doc-rivera", "type": "article-journal", "author": [{"family": "Rivera", "given": "Luz"}, {"family": "Okafor", "given": "Tobi"}], "issued": {"date-parts": [[2021]]}, "title": "Sleep and recall", "container-title": "Journal of Memory"}
+        }
+      },
+      "expected": {
+        "display": "Sleep aids recall (Rivera & Okafor, 2021) [1, 2].",
+        "cited_set": [1, 2],
+        "answer_unchanged": true,
+        "reference_count": 1,
+        "assertions": {"display_count": {"Rivera": 1}}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["plan s6 'Several [n] of one document merge into one citation' (F3)", "V-1 row 1b"]
+    },
+    {
+      "id": "G22", "plan_ref": "G22",
+      "desc": "joined author string: one literal author, verbatim, never split or initialised, no et al.",
+      "input": {
+        "type": "article-journal",
+        "author": [{"literal": "Lin, Wei, Chen, Hao"}],
+        "issued": {"date-parts": [[2023]]},
+        "title": "Rainfall and runoff",
+        "container-title": "Hydro Notes", "volume": "7", "issue": "1", "page": "12-20"
+      },
+      "expected": {
+        "reference": "Lin, Wei, Chen, Hao. (2023). Rainfall and runoff. *Hydro Notes*, *7*(1), 12–20.",
+        "in_text": "(Lin, Wei, Chen, Hao, 2023)",
+        "links": [],
+        "reason_code": "R-CIT-AUTHLIT",
+        "assertions": {"must_not_contain": ["et al.", "Lin, W.", "Chen, H.", "&"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE"],
+      "evidence": ["plan s6 Authors KC-2/F2 (joined string = one literal author; R-CIT-AUTHLIT)"]
+    },
+    {
+      "id": "G23", "plan_ref": "G23",
+      "desc": "organisation author not initialised",
+      "input": {
+        "type": "report",
+        "author": [{"literal": "World Ocean Survey Group"}],
+        "issued": {"date-parts": [[2021]]},
+        "title": "Annual tide report"
+      },
+      "expected": {
+        "reference": "World Ocean Survey Group. (2021). *Annual tide report*.",
+        "in_text": "(World Ocean Survey Group, 2021)",
+        "links": [],
+        "assertions": {"must_not_contain": ["W. O.", "Group, W."]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2", "HOUSE"],
+      "evidence": ["V-1 row 1d (group author by name, V2)", "V-1 rows 6a/8a (group author in reference, V2)"]
+    },
+    {
+      "id": "G24", "plan_ref": "G24",
+      "desc": "structure test: author count and family/given initials equal the structured input",
+      "input": {
+        "type": "article-journal",
+        "author": [{"family": "Ortiz", "given": "Mary Ann"}, {"family": "Nakamura", "given": "Ken"}, {"family": "Abebe", "given": "Selam"}],
+        "issued": {"date-parts": [[2017]]},
+        "title": "Reef counts",
+        "container-title": "Marine Tallies", "volume": "1", "issue": "1", "page": "1-4"
+      },
+      "expected": {
+        "reference": "Ortiz, M. A., Nakamura, K., & Abebe, S. (2017). Reef counts. *Marine Tallies*, *1*(1), 1–4.",
+        "in_text": "(Ortiz et al., 2017)",
+        "links": [],
+        "assertions": {"author_families_in_order": ["Ortiz", "Nakamura", "Abebe"], "author_initials": ["M. A.", "K.", "S."]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["V2"],
+      "evidence": ["V-1 row 3 (author list form, V2)", "V-1 row 1c"]
+    },
+    {
+      "id": "G25", "plan_ref": "no-author + no-date",
+      "desc": "web page with neither author nor date, no accessed date: title first, (n.d.), no retrieval line",
+      "input": {
+        "type": "webpage",
+        "title": "Tide basics",
+        "URL": "https://example.org/tide-basics"
+      },
+      "expected": {
+        "reference": "*Tide basics*. (n.d.). https://example.org/tide-basics",
+        "in_text": "(*Tide basics*, n.d.)",
+        "links": ["https://example.org/tide-basics"],
+        "assertions": {"must_not_contain": ["Retrieved", "Anonymous", "example.org."]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["U", "HOUSE"],
+      "evidence": ["V-1 row 1f (standalone no-author in-text, U)", "V-1 row 6b (n.d., V2)", "V-1b row '(n.d.)' (CONFIRMED-PRIMARY for n.d. only)"]
+    },
+    {
+      "id": "H1", "plan_ref": "H1",
+      "desc": "author is a markdown javascript: link",
+      "input": {
+        "type": "webpage",
+        "author": [{"literal": "[x](javascript:alert(1))"}],
+        "issued": {"date-parts": [[2026]]},
+        "title": "Harmless title",
+        "URL": "https://example.org/h1"
+      },
+      "expected": {
+        "visible_contains": ["[x](javascript:alert(1))"],
+        "links": ["https://example.org/h1"],
+        "assertions": {"raw_must_not_match": ["(?<!\\\\)\\]\\(javascript:", "(?<!\\\\)\\[x\\]"], "no_link_containing": ["javascript:"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links (KC-8)", "plan s6 escaping: every metadata string through plain()"]
+    },
+    {
+      "id": "H2", "plan_ref": "H2",
+      "desc": "title with * _ <script>, newline and a control character",
+      "input": {
+        "type": "webpage",
+        "author": [{"literal": "Test Org"}],
+        "issued": {"date-parts": [[2026]]},
+        "title": "Bold *claims* _here_ <script>alert(1)</script>\nsecond\u0007line",
+        "URL": "https://example.org/h2"
+      },
+      "expected": {
+        "visible_contains": ["Bold *claims* _here_"],
+        "links": ["https://example.org/h2"],
+        "assertions": {"raw_must_not_match": ["(?<!\\\\)\\*claims", "(?<!\\\\)_here", "(?<!\\\\)<script", "(?<!\\\\)</script"], "raw_must_not_contain": ["\n", "\u0007"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s6 escaping (KC-8)", "plan s7 no control characters"]
+    },
+    {
+      "id": "H3", "plan_ref": "H3",
+      "desc": "malformed DOI with parentheses and malformed ISBN; no other id",
+      "input": {
+        "type": "chapter",
+        "author": [{"family": "Quill", "given": "Ada"}],
+        "editor": [{"family": "Stone", "given": "Ben"}, {"family": "Reed", "given": "Cara"}],
+        "issued": {"date-parts": [[2021]]},
+        "title": "Edge cases",
+        "container-title": "Odd identifiers",
+        "page": "1-2",
+        "publisher": "Test Press",
+        "DOI": "10.1234/a)(b",
+        "ISBN": "978-0-306-4061X-7"
+      },
+      "expected": {
+        "links": [],
+        "reason_code_prefix": "R-CIT-",
+        "visible_ends_with": "Test Press.",
+        "assertions": {"no_link_containing": ["doi.org"], "must_not_contain": ["ISBN"], "raw_must_not_match": ["(?<!\\\\)\\]\\(", "(?<!\\\\)\\)\\("]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 validation: DOI matches ^10\\.\\d{4,9}/\\S+$ but the link-safety check rejects ( ); ISBN with a non-digit fails the checksum; fail = omit and log"],
+      "open_questions": ["plan s7 'Safe links' says malformed ids are 'rendered as plain text with no link' while 'Validation' says 'omit'; this golden follows Validation (omit). A plain-text rendering would fail visible_ends_with; flag to verifier if the implementation chose plain text."]
+    },
+    {
+      "id": "H4", "plan_ref": "H4",
+      "desc": "data: URL on a web page",
+      "input": {
+        "type": "webpage",
+        "author": [{"literal": "Safe Org"}],
+        "issued": {"date-parts": [[2026]]},
+        "title": "Data page",
+        "URL": "data:text/html,<b>x</b>"
+      },
+      "expected": {
+        "links": [],
+        "reason_code_prefix": "R-CIT-",
+        "visible_contains": ["Safe Org.", "Data page"],
+        "assertions": {"no_link_containing": ["data:"], "raw_must_not_match": ["(?<!\\\\)<b>", "(?<!\\\\)\\]\\("]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links: javascript:, data:, vbscript:, http: rejected, plain text, no link"]
+    },
+    {
+      "id": "H5", "plan_ref": "H5",
+      "desc": "http: URL to a private address",
+      "input": {
+        "type": "webpage",
+        "author": [{"literal": "Safe Org"}],
+        "issued": {"date-parts": [[2026]]},
+        "title": "Internal page",
+        "URL": "http://10.0.0.1/"
+      },
+      "expected": {
+        "links": [],
+        "reason_code_prefix": "R-CIT-",
+        "assertions": {"no_link_containing": ["10.0.0.1"]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links: https only, is_public_url"]
+    },
+    {
+      "id": "H6", "plan_ref": "H6",
+      "desc": "markdown injection in report number",
+      "input": {
+        "type": "report",
+        "author": [{"literal": "Safe Org"}],
+        "issued": {"date-parts": [[2026]]},
+        "title": "Report with odd number",
+        "number": "**42**](https://evil.example)"
+      },
+      "expected": {
+        "links": [],
+        "assertions": {"no_link_containing": ["evil.example"], "raw_must_not_match": ["(?<!\\\\)\\*\\*42", "(?<!\\\\)\\]\\("]}
+      },
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s6 escaping covers report number", "plan s7 report number from metadata only, 60-char display cap"]
+    },
+    {
+      "id": "H7a", "plan_ref": "H7",
+      "desc": "web URL with userinfo",
+      "input": {"type": "webpage", "author": [{"literal": "Safe Org"}], "issued": {"date-parts": [[2026]]}, "title": "Userinfo page", "URL": "https://u:p@example.org/"},
+      "expected": {"links": [], "reason_code_prefix": "R-CIT-", "assertions": {"no_link_containing": ["example.org"]}},
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links: no userinfo"]
+    },
+    {
+      "id": "H7b", "plan_ref": "H7",
+      "desc": "web URL with non-default port",
+      "input": {"type": "webpage", "author": [{"literal": "Safe Org"}], "issued": {"date-parts": [[2026]]}, "title": "Port page", "URL": "https://example.org:8443/"},
+      "expected": {"links": [], "reason_code_prefix": "R-CIT-", "assertions": {"no_link_containing": ["example.org"]}},
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links: default port (none or 443)"]
+    },
+    {
+      "id": "H7c", "plan_ref": "H7",
+      "desc": "web URL with a tab control character",
+      "input": {"type": "webpage", "author": [{"literal": "Safe Org"}], "issued": {"date-parts": [[2026]]}, "title": "Tab page", "URL": "https://example.org/a\tb"},
+      "expected": {"links": [], "reason_code_prefix": "R-CIT-", "assertions": {"no_link_containing": ["example.org"], "raw_must_not_contain": ["\t"]}},
+      "gate": "structure", "gate_in_text": "structure", "tags": ["HOUSE", "HOSTILE"],
+      "evidence": ["plan s7 safe links: no control or whitespace characters"]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "_note": "Guarded public-any fetch mode (NONASK-1103 S6). deny_hosts is owner-curated: exact host or any subdomain.",
+  "user_agent": "VERA-research-fetcher/0.1 (+bounded research; contact via repo owner)",
+  "deny_hosts": [],
+  "max_redirects": 2,
+  "max_compressed_bytes": 2000000,
+  "max_decompressed_bytes": 4000000,
+  "max_robots_bytes": 200000,
+  "timeout_s": 8,
+  "content_types": ["text/html", "application/xhtml+xml", "text/plain"]
+}

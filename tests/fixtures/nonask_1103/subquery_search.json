@@ -1,0 +1,1157 @@
+{
+ "_doc": "NONASK-1103 stream S sub-query search scenarios. SYNTHETIC, self-authored, labels by the implementer only (NOT two-skeptic reviewed, owner spot-check pending). A record is relevant when it is about the part's named entity. kind single_topic = control that must be unchanged by sub-query ranking. Real-data calibration (plan 5b) still required.",
+ "scenarios": [
+  {
+   "id": "sq01",
+   "cluster": "sq01",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "What are AWS, Google, Nvidia, and Azure cloud ai engineering?",
+   "parts": [
+    {
+     "text": "AWS cloud ai engineering",
+     "entities": [
+      "AWS"
+     ]
+    },
+    {
+     "text": "Google cloud ai engineering",
+     "entities": [
+      "Google"
+     ]
+    },
+    {
+     "text": "Nvidia cloud ai engineering",
+     "entities": [
+      "Nvidia"
+     ]
+    },
+    {
+     "text": "Azure cloud ai engineering",
+     "entities": [
+      "Azure"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "AWS cloud ai engineering: an evaluation of platform practices",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Google cloud ai engineering and platform practices in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on cloud ai engineering with AWS case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Google cloud ai engineering: an evaluation of platform practices",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Nvidia cloud ai engineering and platform practices in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on cloud ai engineering with Google case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Nvidia cloud ai engineering: an evaluation of platform practices",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Azure cloud ai engineering and platform practices in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on cloud ai engineering with Nvidia case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 3,
+     "title": "Azure cloud ai engineering: an evaluation of platform practices",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 3,
+     "title": "A survey of AWS cloud ai engineering and platform practices in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 3,
+     "title": "Notes on cloud ai engineering with Azure case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq02",
+   "cluster": "sq02",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "How do AWS, Azure and Google handle cloud security monitoring?",
+   "parts": [
+    {
+     "text": "AWS cloud security monitoring",
+     "entities": [
+      "AWS"
+     ]
+    },
+    {
+     "text": "Azure cloud security monitoring",
+     "entities": [
+      "Azure"
+     ]
+    },
+    {
+     "text": "Google cloud security monitoring",
+     "entities": [
+      "Google"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "AWS cloud security monitoring: an evaluation of service features",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Azure cloud security monitoring and service features in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on cloud security monitoring with AWS case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Azure cloud security monitoring: an evaluation of service features",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Google cloud security monitoring and service features in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on cloud security monitoring with Azure case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Google cloud security monitoring: an evaluation of service features",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of AWS cloud security monitoring and service features in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on cloud security monitoring with Google case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq03",
+   "cluster": "sq03",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "What are Docker, Kubernetes and Terraform deployment practices?",
+   "parts": [
+    {
+     "text": "Docker deployment practices",
+     "entities": [
+      "Docker"
+     ]
+    },
+    {
+     "text": "Kubernetes deployment practices",
+     "entities": [
+      "Kubernetes"
+     ]
+    },
+    {
+     "text": "Terraform deployment practices",
+     "entities": [
+      "Terraform"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Docker deployment practices: an evaluation of configuration patterns",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Kubernetes deployment practices and configuration patterns in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on deployment practices with Docker case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Kubernetes deployment practices: an evaluation of configuration patterns",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Terraform deployment practices and configuration patterns in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on deployment practices with Kubernetes case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Terraform deployment practices: an evaluation of configuration patterns",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Docker deployment practices and configuration patterns in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on deployment practices with Terraform case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq04",
+   "cluster": "sq04",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "Describe Oracle, Salesforce, and SAP enterprise data integration.",
+   "parts": [
+    {
+     "text": "Oracle enterprise data integration",
+     "entities": [
+      "Oracle"
+     ]
+    },
+    {
+     "text": "Salesforce enterprise data integration",
+     "entities": [
+      "Salesforce"
+     ]
+    },
+    {
+     "text": "SAP enterprise data integration",
+     "entities": [
+      "SAP"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Oracle enterprise data integration: an evaluation of connector design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Salesforce enterprise data integration and connector design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on enterprise data integration with Oracle case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Salesforce enterprise data integration: an evaluation of connector design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of SAP enterprise data integration and connector design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on enterprise data integration with Salesforce case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "SAP enterprise data integration: an evaluation of connector design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Oracle enterprise data integration and connector design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on enterprise data integration with SAP case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq05",
+   "cluster": "sq05",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "What do PyTorch, TensorFlow and JAX offer for model training pipelines?",
+   "parts": [
+    {
+     "text": "PyTorch model training pipelines",
+     "entities": [
+      "PyTorch"
+     ]
+    },
+    {
+     "text": "TensorFlow model training pipelines",
+     "entities": [
+      "TensorFlow"
+     ]
+    },
+    {
+     "text": "JAX model training pipelines",
+     "entities": [
+      "JAX"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "PyTorch model training pipelines: an evaluation of framework design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of TensorFlow model training pipelines and framework design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on model training pipelines with PyTorch case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "TensorFlow model training pipelines: an evaluation of framework design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of JAX model training pipelines and framework design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on model training pipelines with TensorFlow case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "JAX model training pipelines: an evaluation of framework design",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of PyTorch model training pipelines and framework design in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on model training pipelines with JAX case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq06",
+   "cluster": "sq06",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "Explain GitHub, GitLab and Bitbucket code review workflows.",
+   "parts": [
+    {
+     "text": "GitHub code review workflows",
+     "entities": [
+      "GitHub"
+     ]
+    },
+    {
+     "text": "GitLab code review workflows",
+     "entities": [
+      "GitLab"
+     ]
+    },
+    {
+     "text": "Bitbucket code review workflows",
+     "entities": [
+      "Bitbucket"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "GitHub code review workflows: an evaluation of pull request tooling",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of GitLab code review workflows and pull request tooling in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on code review workflows with GitHub case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "GitLab code review workflows: an evaluation of pull request tooling",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Bitbucket code review workflows and pull request tooling in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on code review workflows with GitLab case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Bitbucket code review workflows: an evaluation of pull request tooling",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of GitHub code review workflows and pull request tooling in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on code review workflows with Bitbucket case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq07",
+   "cluster": "sq07",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "What are Snowflake, Databricks and BigQuery warehouse performance tuning?",
+   "parts": [
+    {
+     "text": "Snowflake warehouse performance tuning",
+     "entities": [
+      "Snowflake"
+     ]
+    },
+    {
+     "text": "Databricks warehouse performance tuning",
+     "entities": [
+      "Databricks"
+     ]
+    },
+    {
+     "text": "BigQuery warehouse performance tuning",
+     "entities": [
+      "BigQuery"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Snowflake warehouse performance tuning: an evaluation of query optimization",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Databricks warehouse performance tuning and query optimization in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on warehouse performance tuning with Snowflake case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Databricks warehouse performance tuning: an evaluation of query optimization",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of BigQuery warehouse performance tuning and query optimization in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on warehouse performance tuning with Databricks case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "BigQuery warehouse performance tuning: an evaluation of query optimization",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Snowflake warehouse performance tuning and query optimization in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on warehouse performance tuning with BigQuery case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq08",
+   "cluster": "sq08",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "How do Stripe, Adyen and PayPal payment fraud detection work?",
+   "parts": [
+    {
+     "text": "Stripe payment fraud detection",
+     "entities": [
+      "Stripe"
+     ]
+    },
+    {
+     "text": "Adyen payment fraud detection",
+     "entities": [
+      "Adyen"
+     ]
+    },
+    {
+     "text": "PayPal payment fraud detection",
+     "entities": [
+      "PayPal"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Stripe payment fraud detection: an evaluation of risk scoring",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Adyen payment fraud detection and risk scoring in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on payment fraud detection with Stripe case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Adyen payment fraud detection: an evaluation of risk scoring",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of PayPal payment fraud detection and risk scoring in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on payment fraud detection with Adyen case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "PayPal payment fraud detection: an evaluation of risk scoring",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Stripe payment fraud detection and risk scoring in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on payment fraud detection with PayPal case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq09",
+   "cluster": "sq09",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "What are Postgres, MySQL, and MongoDB replication strategies?",
+   "parts": [
+    {
+     "text": "Postgres replication strategies",
+     "entities": [
+      "Postgres"
+     ]
+    },
+    {
+     "text": "MySQL replication strategies",
+     "entities": [
+      "MySQL"
+     ]
+    },
+    {
+     "text": "MongoDB replication strategies",
+     "entities": [
+      "MongoDB"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Postgres replication strategies: an evaluation of failover behaviour",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of MySQL replication strategies and failover behaviour in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on replication strategies with Postgres case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "MySQL replication strategies: an evaluation of failover behaviour",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of MongoDB replication strategies and failover behaviour in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on replication strategies with MySQL case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "MongoDB replication strategies: an evaluation of failover behaviour",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Postgres replication strategies and failover behaviour in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on replication strategies with MongoDB case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq10",
+   "cluster": "sq10",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "Describe Slack, Zoom, and Teams meeting accessibility features.",
+   "parts": [
+    {
+     "text": "Slack meeting accessibility features",
+     "entities": [
+      "Slack"
+     ]
+    },
+    {
+     "text": "Zoom meeting accessibility features",
+     "entities": [
+      "Zoom"
+     ]
+    },
+    {
+     "text": "Teams meeting accessibility features",
+     "entities": [
+      "Teams"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Slack meeting accessibility features: an evaluation of caption support",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of Zoom meeting accessibility features and caption support in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on meeting accessibility features with Slack case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "Zoom meeting accessibility features: an evaluation of caption support",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Teams meeting accessibility features and caption support in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on meeting accessibility features with Zoom case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Teams meeting accessibility features: an evaluation of caption support",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Slack meeting accessibility features and caption support in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on meeting accessibility features with Teams case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq11",
+   "cluster": "sq11",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "What are Intel, AMD and Nvidia chip thermal design approaches?",
+   "parts": [
+    {
+     "text": "Intel chip thermal design",
+     "entities": [
+      "Intel"
+     ]
+    },
+    {
+     "text": "AMD chip thermal design",
+     "entities": [
+      "AMD"
+     ]
+    },
+    {
+     "text": "Nvidia chip thermal design",
+     "entities": [
+      "Nvidia"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Intel chip thermal design: an evaluation of cooling methods",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of AMD chip thermal design and cooling methods in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on chip thermal design with Intel case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "AMD chip thermal design: an evaluation of cooling methods",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Nvidia chip thermal design and cooling methods in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on chip thermal design with AMD case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Nvidia chip thermal design: an evaluation of cooling methods",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Intel chip thermal design and cooling methods in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on chip thermal design with Nvidia case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sq12",
+   "cluster": "sq12",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "Explain Kafka, RabbitMQ and Pulsar message ordering guarantees.",
+   "parts": [
+    {
+     "text": "Kafka message ordering guarantees",
+     "entities": [
+      "Kafka"
+     ]
+    },
+    {
+     "text": "RabbitMQ message ordering guarantees",
+     "entities": [
+      "RabbitMQ"
+     ]
+    },
+    {
+     "text": "Pulsar message ordering guarantees",
+     "entities": [
+      "Pulsar"
+     ]
+    }
+   ],
+   "records": [
+    {
+     "part": 0,
+     "title": "Kafka message ordering guarantees: an evaluation of delivery semantics",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "A survey of RabbitMQ message ordering guarantees and delivery semantics in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 0,
+     "title": "Notes on message ordering guarantees with Kafka case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "RabbitMQ message ordering guarantees: an evaluation of delivery semantics",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 1,
+     "title": "A survey of Pulsar message ordering guarantees and delivery semantics in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 1,
+     "title": "Notes on message ordering guarantees with RabbitMQ case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "Pulsar message ordering guarantees: an evaluation of delivery semantics",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 2,
+     "title": "A survey of Kafka message ordering guarantees and delivery semantics in production systems",
+     "snippet": "",
+     "relevant": false
+    },
+    {
+     "part": 2,
+     "title": "Notes on message ordering guarantees with Pulsar case studies in practice today",
+     "snippet": "",
+     "relevant": true
+    }
+   ]
+  },
+  {
+   "id": "sc01",
+   "cluster": "sc01",
+   "split": "holdout",
+   "kind": "single_topic",
+   "question": "How does sleep deprivation affect memory consolidation?",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "deprivation affect memory consolidation a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  },
+  {
+   "id": "sc02",
+   "cluster": "sc02",
+   "split": "holdout",
+   "kind": "single_topic",
+   "question": "What are the best practices for salt, fat and acid balance in cooking?",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "practices balance cooking a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  },
+  {
+   "id": "sc03",
+   "cluster": "sc03",
+   "split": "holdout",
+   "kind": "single_topic",
+   "question": "Explain pros and cons of cloud migration for small hospitals.",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "Explain migration hospitals a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  },
+  {
+   "id": "sc04",
+   "cluster": "sc04",
+   "split": "calibration",
+   "kind": "single_topic",
+   "question": "How does intermittent fasting influence insulin sensitivity?",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "intermittent fasting influence insulin sensitivity a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  },
+  {
+   "id": "sc05",
+   "cluster": "sc05",
+   "split": "holdout",
+   "kind": "single_topic",
+   "question": "What is the role of mycorrhizal networks in forest regeneration?",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "mycorrhizal networks forest regeneration a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  },
+  {
+   "id": "sc06",
+   "cluster": "sc06",
+   "split": "calibration",
+   "kind": "single_topic",
+   "question": "Compare cross-validation strategies for imbalanced classification.",
+   "parts": [],
+   "records": [
+    {
+     "part": 0,
+     "title": "Compare cross-validation strategies imbalanced classificatio a systematic review of the evidence",
+     "snippet": "",
+     "relevant": true
+    },
+    {
+     "part": 0,
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "relevant": false
+    }
+   ]
+  }
+ ]
+}

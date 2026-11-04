@@ -294,6 +294,7 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
             g = {"n": n, "ns": [], "passages": [], "title": _str(s.get("title") or s.get("url") or "source", 300),
                  "url": _str(s.get("url"), 2000), "published": _str(s.get("published"), 40),
                  "identifier": _str(s.get("identifier"), 120), "licence": _str(s.get("licence"), 120),
+                 "reference": _str(s.get("reference"), 2000), "in_text": _str(s.get("in_text"), 200),  # NONASK-1103 C5
                  "excerpts": [], "attribution": None}
             groups.append(g)
             by_doc[_source_key(s, i)] = g
@@ -357,7 +358,8 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
         "claims": claims, "groups": groups, "inspected": inspected,
         "reading_list": [] if is_answer else [{"n": _int(c.get("n")), "title": _str(c.get("title") or "source", 300),
                                                "url": _str(c.get("url"), 2000),
-                                               "published": _str(c.get("published"), 40)}
+                                               "published": _str(c.get("published"), 40),
+                                               "reference": _str(c.get("reference"), 2000)}
                                               for c in cands[:CANDIDATES_SHOWN_MAX]],
         "scope_policy": _scope_policy(contract, is_answer),
         "pipeline": _pipeline(data, cc, contract, is_answer, len(cands), len(docs_inline(inline))),
@@ -423,10 +425,13 @@ def _render_sources(st, rep: dict, r) -> None:
     for g in rep.get("groups") or []:
         date = f" ({plain(r(g['published']))})" if g.get("published") else ""
         nums = ", ".join(str(x) for x in (g.get("ns") or [g["n"]]))
-        st.markdown(f"**[{nums}]** {_ln(r, g['title'], g['url'])}{date}")
+        if g.get("reference"):  # NONASK-1103 C5: APA 7 reference (answer area; the sidebar carries no per-source field)
+            st.markdown(f"**[{nums}]** {_md(r, g['reference'])}")
+        else:
+            st.markdown(f"**[{nums}]** {_ln(r, g['title'], g['url'])}{date}")
         if len(g.get("ns") or []) > 1 and g.get("passages"):
             st.caption("Selected passages: " + "; ".join(plain(r(p)) for p in g["passages"]))
-        if g.get("identifier"):
+        if g.get("identifier") and not g.get("reference"):  # the reference ends with its identifier
             st.caption(plain(r(g["identifier"])))
         # INT-1022-B disposition: each source's own licence as reported in its record (never a fixed "CC BY"); the
         # cited attribution line below carries it too, so it is shown here only when that line has none.
@@ -468,7 +473,10 @@ def _render_evidence(st, rep: dict, r) -> None:
         st.markdown("**Reading list** (found but not used for an answer)")
         for i, c in enumerate(rep["reading_list"], 1):
             date = f" ({plain(r(c['published']))})" if c.get("published") else ""
-            st.markdown(f"[{c['n'] if c['n'] is not None else i}] {_ln(r, c['title'], c['url'])}{date}")
+            if c.get("reference"):
+                st.markdown(f"[{c['n'] if c['n'] is not None else i}] {_md(r, c['reference'])}")
+            else:
+                st.markdown(f"[{c['n'] if c['n'] is not None else i}] {_ln(r, c['title'], c['url'])}{date}")
     if rows:
         st.markdown("**Claim check**")
         st.table(rows)  # st.table, not st.dataframe: a canvas is not readable text (DDFIX-1023)

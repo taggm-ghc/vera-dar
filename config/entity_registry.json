@@ -1,0 +1,567 @@
+{
+ "_doc": "NONASK-1103 S1b seed/fallback for the proposed vera_entity_registry table (db/migrations/pending/014-DRAFT). Owner-curated; exact hosts only (no wildcards); only state=active rows count. App code never writes rows; no user text becomes a row.",
+ "_terms_note": "Owner decision 2026-11-03 (honour site terms): terms_verdict is allow | links_only | unknown, with terms_evidence pointing at the evidence record. Pages are fetched ONLY where terms_verdict=allow AND robots.txt permits automated access; unknown or missing means links_only. Seeded from work/NONASK-1103/entity-hosts-evidence.md (Google Cloud allow, host docs.cloud.google.com since cloud.google.com/docs 301-redirects there; AWS, Nvidia, Azure links_only).",
+ "_calibration_note": "Curated list, not a tuned number. Seed rows 2026-11-03 are proposals pending owner review: hosts are exact but UNVERIFIED against live sites at this date. match_case=true on common-word names (Azure, Google, AWS) so lowercase everyday use does not match; exclude_next lists lowercase words after which the name is not the entity (e.g. 'Amazon rainforest').",
+ "entities": [
+  {
+   "entity": "AWS",
+   "aliases": [
+    "AWS",
+    "Amazon Web Services"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "aws.amazon.com",
+    "docs.aws.amazon.com"
+   ],
+   "docs_entry_urls": [
+    "https://docs.aws.amazon.com/"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "AWS",
+    "Amazon Web Services"
+   ],
+   "parents": [
+    "Amazon"
+   ],
+   "context_terms": [
+    "ec2",
+    "s3",
+    "lambda",
+    "sagemaker",
+    "bedrock",
+    "amazon cloud",
+    "cloud ai",
+    "cloud computing",
+    "cloud platform",
+    "cloud services"
+   ],
+   "generic_phrases": [
+    "amazon rainforest"
+   ],
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar data mining/robots)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar robots/data mining)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Docs CC BY-SA 4.0)",
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining)"
+  },
+  {
+   "entity": "Google Cloud",
+   "aliases": [
+    "Google Cloud",
+    "GCP",
+    "Google"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [
+    "it",
+    "that",
+    "scholar",
+    "search",
+    "maps"
+   ],
+   "domains": [
+    "docs.cloud.google.com",
+    "cloud.google.com"
+   ],
+   "docs_entry_urls": [
+    "https://docs.cloud.google.com/docs"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Google Cloud",
+    "GCP",
+    "Google Cloud Platform"
+   ],
+   "parents": [
+    "Alphabet"
+   ],
+   "context_terms": [
+    "cloud ai",
+    "cloud platform",
+    "cloud services",
+    "vertex ai",
+    "bigquery",
+    "tpu",
+    "tpus",
+    "gemini",
+    "gke",
+    "kubernetes engine",
+    "compute engine"
+   ],
+   "generic_phrases": [
+    "google it",
+    "googled",
+    "google search",
+    "just google"
+   ],
+   "terms_verdict": "allow",
+   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
+   "access_verdict": "allow",
+   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)",
+   "ingest_verdict": "allow",
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)"
+  },
+  {
+   "entity": "Nvidia",
+   "aliases": [
+    "Nvidia",
+    "NVIDIA"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": false,
+   "exclude_next": [],
+   "domains": [
+    "docs.nvidia.com",
+    "developer.nvidia.com"
+   ],
+   "docs_entry_urls": [
+    "https://docs.nvidia.com/"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [],
+   "parents": [],
+   "context_terms": [
+    "gpu",
+    "gpus",
+    "cuda",
+    "h100",
+    "a100",
+    "tensor core",
+    "dgx",
+    "nim",
+    "ai platform",
+    "ai engineering"
+   ],
+   "generic_phrases": [],
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
+   "derivative_verdict": "forbid",
+   "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial internal use only)",
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial use only)"
+  },
+  {
+   "entity": "Azure",
+   "aliases": [
+    "Azure",
+    "Microsoft Azure"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [
+    "sky",
+    "skies",
+    "blue"
+   ],
+   "domains": [
+    "learn.microsoft.com",
+    "azure.microsoft.com"
+   ],
+   "docs_entry_urls": [
+    "https://learn.microsoft.com/azure/"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Microsoft Azure"
+   ],
+   "parents": [
+    "Microsoft"
+   ],
+   "context_terms": [
+    "microsoft",
+    "cloud ai",
+    "cloud platform",
+    "cloud services",
+    "virtual machines",
+    "azure devops",
+    "openai",
+    "active directory",
+    "platform",
+    "ai engineering",
+    "cloud engineering"
+   ],
+   "generic_phrases": [
+    "azure sky",
+    "azure blue",
+    "azure skies",
+    "azure water",
+    "azure coast"
+   ],
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial; no copying)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial use)",
+   "derivative_verdict": "forbid",
+   "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying or derivatives without consent)",
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying)"
+  },
+  {
+   "entity": "Kubernetes",
+   "aliases": [
+    "Kubernetes",
+    "K8s"
+   ],
+   "entity_class": "product",
+   "volatile": false,
+   "match_case": false,
+   "exclude_next": [],
+   "domains": [
+    "kubernetes.io"
+   ],
+   "docs_entry_urls": [
+    "https://kubernetes.io/docs/"
+   ],
+   "state": "draft",
+   "version": 1,
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "PostgreSQL",
+   "aliases": [
+    "PostgreSQL",
+    "Postgres"
+   ],
+   "entity_class": "product",
+   "volatile": false,
+   "match_case": false,
+   "exclude_next": [],
+   "domains": [
+    "www.postgresql.org"
+   ],
+   "docs_entry_urls": [
+    "https://www.postgresql.org/docs/"
+   ],
+   "state": "draft",
+   "version": 1,
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Amazon",
+   "aliases": [
+    "Amazon"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [
+    "rainforest",
+    "river",
+    "basin",
+    "forest"
+   ],
+   "domains": [
+    "www.aboutamazon.com"
+   ],
+   "docs_entry_urls": [],
+   "state": "suspended",
+   "version": 1,
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Snowflake",
+   "aliases": [
+    "Snowflake"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "docs.snowflake.com"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [],
+   "parents": [
+    "Snowflake Inc"
+   ],
+   "context_terms": [
+    "data warehouse",
+    "warehouse",
+    "data cloud",
+    "cortex",
+    "snowpark",
+    "sql",
+    "virtual warehouse"
+   ],
+   "generic_phrases": [
+    "snowflake schema",
+    "snowflake effect",
+    "snowflake pattern"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Kafka",
+   "aliases": [
+    "Kafka",
+    "Apache Kafka"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "kafka.apache.org"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Apache Kafka"
+   ],
+   "parents": [
+    "Apache"
+   ],
+   "context_terms": [
+    "apache",
+    "broker",
+    "topic partitions",
+    "consumer group",
+    "producer",
+    "streaming",
+    "confluent",
+    "message queue",
+    "message broker"
+   ],
+   "generic_phrases": [
+    "franz kafka",
+    "kafkaesque"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Pulsar",
+   "aliases": [
+    "Pulsar",
+    "Apache Pulsar"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "pulsar.apache.org"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Apache Pulsar"
+   ],
+   "parents": [
+    "Apache"
+   ],
+   "context_terms": [
+    "apache",
+    "broker",
+    "bookkeeper",
+    "streaming",
+    "message queue",
+    "message broker",
+    "topic"
+   ],
+   "generic_phrases": [
+    "pulsar timing",
+    "pulsar star",
+    "millisecond pulsar",
+    "radio pulsar"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Teams",
+   "aliases": [
+    "Teams",
+    "Microsoft Teams"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "support.microsoft.com"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Microsoft Teams"
+   ],
+   "parents": [
+    "Microsoft"
+   ],
+   "context_terms": [
+    "microsoft",
+    "meeting",
+    "video call",
+    "chat app",
+    "channels",
+    "collaboration platform"
+   ],
+   "generic_phrases": [
+    "remote teams",
+    "sports teams",
+    "team members",
+    "teams of"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Slack",
+   "aliases": [
+    "Slack"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "api.slack.com",
+    "slack.com"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [],
+   "parents": [
+    "Salesforce"
+   ],
+   "context_terms": [
+    "workspace",
+    "chat app",
+    "channels",
+    "messaging platform",
+    "integrations",
+    "bots"
+   ],
+   "generic_phrases": [
+    "slack time",
+    "cut some slack",
+    "slack variable"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  },
+  {
+   "entity": "Zoom",
+   "aliases": [
+    "Zoom"
+   ],
+   "entity_class": "vendor",
+   "volatile": true,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "support.zoom.us"
+   ],
+   "docs_entry_urls": [],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [],
+   "parents": [
+    "Zoom Video"
+   ],
+   "context_terms": [
+    "meeting",
+    "video call",
+    "video conferencing",
+    "webinar",
+    "platform"
+   ],
+   "generic_phrases": [
+    "zoom lens",
+    "zoom in",
+    "zoom out",
+    "zoom level"
+   ],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null
+  }
+ ],
+ "_context_note": "NONASK-1103 stream S disambiguation: full_aliases count alone; otherwise a name or parent hit counts only with a context term (curated list, whole-word, phrases allowed) and after generic_phrases are removed. No numeric threshold. Curated data, UNCALIBRATED; extend from reviewed false hits.",
+ "_permissions_note": "Owner decisions R-049/R-050 (2026-11-03): three per-source gates read by vera/source_permissions.py. access_verdict (read), derivative_verdict (use for the answer), ingest_verdict (store), each allow | forbid | unknown with *_evidence. Unknown = allowed for read and use; ingest also needs an explicit storage licence. forbid on access means the host is never fetched. terms_verdict/terms_evidence (I-SL) are unchanged. Seeded from work/NONASK-1103/entity-hosts-evidence.md."
+}

@@ -1,0 +1,407 @@
+{
+ "_doc": "NONASK-1103 stream S ADVERSARIAL sub-query fixtures (new file; subquery_search.json stays as reviewed history). SYNTHETIC, self-authored, implementer-labelled, awaiting two new skeptics. Parts are NOT supplied: the replay runs the real vera.subquery decomposition and attaches each record to the part whose entity it names ('entity' key). label ambiguous = excluded from metrics. Kinds: entity_list, comparison, control (generic uses, must not be split into entities). A comparison record names several entities ('entity' is a list) and is filed under each of them; it is stored once.",
+ "scenarios": [
+  {
+   "id": "adv01",
+   "cluster": "adv01",
+   "split": "calibration",
+   "kind": "entity_list",
+   "question": "What are AWS, Google, Nvidia, and Azure cloud ai engineering?",
+   "records": [
+    {
+     "entity": "AWS",
+     "title": "Building production ML pipelines with AWS SageMaker",
+     "snippet": "A guide to cloud ai engineering practice on Amazon Web Services.",
+     "label": "relevant"
+    },
+    {
+     "entity": "AWS",
+     "title": "Amazon Web Services machine learning operations in practice",
+     "snippet": "Engineering teams ship models using managed cloud services.",
+     "label": "relevant"
+    },
+    {
+     "entity": "AWS",
+     "title": "Amazon rainforest deforestation and cloud cover engineering models",
+     "snippet": "Satellite studies of the Amazon basin.",
+     "label": "off"
+    },
+    {
+     "entity": "AWS",
+     "title": "Cloud ai engineering on Azure and Google platforms",
+     "snippet": "Compares two other vendors.",
+     "label": "off"
+    },
+    {
+     "entity": "Google",
+     "title": "Vertex AI and Google Cloud model deployment engineering",
+     "snippet": "Cloud ai engineering with TPUs and BigQuery.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Google",
+     "title": "Just google it: cloud ai engineering tips for beginners",
+     "snippet": "Search habits of students.",
+     "label": "off"
+    },
+    {
+     "entity": "Google",
+     "title": "Google Cloud Platform reliability patterns for ML services",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Google",
+     "title": "Cloud ai engineering with Nvidia GPUs on AWS",
+     "snippet": "Another vendor's stack.",
+     "label": "off"
+    },
+    {
+     "entity": "Nvidia",
+     "title": "CUDA and Nvidia GPU clusters for ai engineering",
+     "snippet": "Training infrastructure for large models.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Nvidia",
+     "title": "Nvidia GPUs on AWS for cloud ai engineering",
+     "snippet": "Names Nvidia hardware inside another vendor's cloud.",
+     "label": "ambiguous"
+    },
+    {
+     "entity": "Nvidia",
+     "title": "NVIDIA H100 deployment engineering notes",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Nvidia",
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "label": "off"
+    },
+    {
+     "entity": "Azure",
+     "title": "Azure cloud ai engineering: Microsoft Azure OpenAI service patterns",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Azure",
+     "title": "Cloud ai engineering on Microsoft's platform",
+     "snippet": "Microsoft cloud services for machine learning teams.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Azure",
+     "title": "Azure sky photography and cloud formation engineering notes",
+     "snippet": "Colour of the Azure sky at dusk.",
+     "label": "off"
+    },
+    {
+     "entity": [
+      "Azure",
+      "AWS"
+     ],
+     "title": "A comparison of AWS and Azure cloud ai engineering",
+     "snippet": "Both vendors compared side by side.",
+     "label": "relevant"
+    }
+   ]
+  },
+  {
+   "id": "adv02",
+   "cluster": "adv02",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "How do Snowflake, Databricks and BigQuery handle data warehouse performance tuning?",
+   "records": [
+    {
+     "entity": "Snowflake",
+     "title": "Snowflake virtual warehouse performance tuning",
+     "snippet": "Data warehouse sizing and query tuning in Snowflake.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Snowflake",
+     "title": "Snowflake schema design in star and dimensional data warehouse modelling",
+     "snippet": "A modelling pattern, not the vendor.",
+     "label": "off"
+    },
+    {
+     "entity": "Snowflake",
+     "title": "Snowflake Inc data cloud query optimisation",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Databricks",
+     "title": "Databricks lakehouse performance tuning",
+     "snippet": "Data warehouse workloads on Databricks.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Databricks",
+     "title": "Tuning a data warehouse for BigQuery slots",
+     "snippet": "Another vendor.",
+     "label": "off"
+    },
+    {
+     "entity": "BigQuery",
+     "title": "BigQuery data warehouse performance tuning with partitioning",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": [
+      "Snowflake",
+      "BigQuery"
+     ],
+     "title": "Snowflake and BigQuery warehouse tuning compared",
+     "snippet": "Compares the two.",
+     "label": "relevant"
+    }
+   ]
+  },
+  {
+   "id": "adv03",
+   "cluster": "adv03",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "Explain Kafka, Pulsar and RabbitMQ message ordering guarantees.",
+   "records": [
+    {
+     "entity": "Kafka",
+     "title": "Apache Kafka message ordering guarantees per partition",
+     "snippet": "Broker semantics for consumer groups.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Kafka",
+     "title": "Franz Kafka letters: message ordering and guarantees of friendship",
+     "snippet": "Literary correspondence.",
+     "label": "off"
+    },
+    {
+     "entity": "Pulsar",
+     "title": "Apache Pulsar message ordering guarantees with BookKeeper",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Pulsar",
+     "title": "Pulsar timing arrays: message ordering of radio signals",
+     "snippet": "Astronomy.",
+     "label": "off"
+    },
+    {
+     "entity": "RabbitMQ",
+     "title": "RabbitMQ queue message ordering guarantees",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": [
+      "Kafka",
+      "RabbitMQ"
+     ],
+     "title": "Kafka and RabbitMQ message ordering compared",
+     "snippet": "",
+     "label": "relevant"
+    }
+   ]
+  },
+  {
+   "id": "adv04",
+   "cluster": "adv04",
+   "split": "holdout",
+   "kind": "entity_list",
+   "question": "Describe Slack, Zoom, and Teams meeting accessibility features.",
+   "records": [
+    {
+     "entity": "Slack",
+     "title": "Slack workspace huddles accessibility features",
+     "snippet": "Captions in channels.",
+     "label": "relevant"
+    },
+    {
+     "entity": "Slack",
+     "title": "Cut some slack: meeting accessibility features for anxious students",
+     "snippet": "",
+     "label": "off"
+    },
+    {
+     "entity": "Zoom",
+     "title": "Zoom video meeting accessibility features and captions",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Zoom",
+     "title": "Zoom lens optics: accessibility features of camera meeting rooms",
+     "snippet": "",
+     "label": "off"
+    },
+    {
+     "entity": "Teams",
+     "title": "Microsoft Teams meeting accessibility features",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Teams",
+     "title": "How remote teams improve meeting accessibility features",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  },
+  {
+   "id": "adv05",
+   "cluster": "adv05",
+   "split": "calibration",
+   "kind": "comparison",
+   "question": "Compare Azure with AWS for cloud ai engineering.",
+   "records": [
+    {
+     "entity": "Azure",
+     "title": "Microsoft Azure cloud ai engineering services",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "Azure",
+     "title": "Azure sky colours and cloud formation engineering",
+     "snippet": "",
+     "label": "off"
+    },
+    {
+     "entity": "AWS",
+     "title": "AWS cloud ai engineering with SageMaker",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "AWS",
+     "title": "Amazon rainforest cloud ai engineering of climate models",
+     "snippet": "",
+     "label": "off"
+    },
+    {
+     "entity": [
+      "Azure",
+      "AWS"
+     ],
+     "title": "Azure versus AWS cloud ai engineering trade-offs",
+     "snippet": "Compares both.",
+     "label": "relevant"
+    }
+   ]
+  },
+  {
+   "id": "adv_c1",
+   "cluster": "adv_c1",
+   "split": "holdout",
+   "kind": "control",
+   "question": "Amazon rainforest deforestation drivers",
+   "records": [
+    {
+     "entity": "",
+     "title": "Amazon rainforest deforestation drivers: a review",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "",
+     "title": "Amazon Web Services pricing tiers",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  },
+  {
+   "id": "adv_c2",
+   "cluster": "adv_c2",
+   "split": "holdout",
+   "kind": "control",
+   "question": "How do I google it effectively for literature research?",
+   "records": [
+    {
+     "entity": "",
+     "title": "Effective search strategies for literature research",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "",
+     "title": "Google Cloud TPU pricing",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  },
+  {
+   "id": "adv_c3",
+   "cluster": "adv_c3",
+   "split": "calibration",
+   "kind": "control",
+   "question": "What is the Azure sky colour in autumn?",
+   "records": [
+    {
+     "entity": "",
+     "title": "Atmospheric scattering and the azure sky colour in autumn",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "",
+     "title": "Microsoft Azure virtual machines",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  },
+  {
+   "id": "adv_c4",
+   "cluster": "adv_c4",
+   "split": "holdout",
+   "kind": "control",
+   "question": "How does balancing salt, fat and acid shape flavour in cooking?",
+   "records": [
+    {
+     "entity": "",
+     "title": "Salt, fat and acid: balancing flavour in cooking",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "",
+     "title": "Pedestrian archetypes in urban transport planning",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  },
+  {
+   "id": "adv_c5",
+   "cluster": "adv_c5",
+   "split": "holdout",
+   "kind": "control",
+   "question": "What are the pros and cons of cloud migration for small hospitals?",
+   "records": [
+    {
+     "entity": "",
+     "title": "Cloud migration for small hospitals: benefits and risks",
+     "snippet": "",
+     "label": "relevant"
+    },
+    {
+     "entity": "",
+     "title": "Pros and cons of remote teams",
+     "snippet": "",
+     "label": "off"
+    }
+   ]
+  }
+ ]
+}

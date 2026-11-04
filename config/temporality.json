@@ -1,0 +1,10 @@
+{
+  "_doc": "NONASK-1103 S7: lexicon/pattern detector for current-state questions. Deterministic; a model fallback is not implemented (S7b, flag off).",
+  "lexicon": ["current", "currently", "latest", "newest", "now", "today", "this year", "this month", "recent", "recently", "status quo", "state of", "as of", "at the moment", "right now", "these days", "nowadays", "up to date", "up-to-date", "state of the art", "state-of-the-art", "to date"],
+  "negations": ["alternating current", "direct current", "electric current", "ocean current", "current density", "current source", "current mirror", "now that", "state of matter", "state of mind", "state of nature", "state of grace", "state of equilibrium", "state of stress", "state of the union"],
+  "year_pattern": "\\b(?:19|20)\\d{2}\\b",
+  "year_requires_lexicon_cue": true,
+  "volatile_entity_triggers": true,
+  "named_recent_events": [],
+  "_calibration_note": "Curated lists, not tuned numbers (2026-11-03). Targets recall>=0.9 and false-trigger<=0.05 are PRIORS, not measured. named_recent_events is empty until the owner curates it (no invented events). 'state of the art' triggers by design: it asks for the present frontier. Physics/legal senses are handled by the negations list; extend from the S0 confusion matrix, not by ear."
+}

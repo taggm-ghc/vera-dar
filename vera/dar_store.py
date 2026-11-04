@@ -236,7 +236,8 @@ class DarReader:
             "SELECT DISTINCT ON (cs.canonical_source_id) cs.canonical_url, s.source_id, cs.canonical_source_id, "  # nosec B608 - {S}=module SCHEMA constant; literal fragments; values bound
             "s.content, s.provenance->>'url', s.provenance->>'doi', s.provenance->>'title', "
             "s.provenance->>'published', s.provenance->>'source_type', s.provenance->>'retrieved_at', "
-            "s.provenance->>'stored_text_kind', s.provenance->'licence', s.provenance->'licence_decision' "
+            "s.provenance->>'stored_text_kind', s.provenance->'licence', s.provenance->'licence_decision', "
+            "s.provenance->>'authors' "  # NONASK-1103 C2b: appended as r[13]; positions 0-12 never shift
             "FROM {S}.canonical_sources cs JOIN {S}.sources s ON s.canonical_source_id = cs.canonical_source_id "
             "WHERE s.provenance->>'stored_text_kind' IS NOT NULL "
             "AND s.provenance->>'stored_text_kind' = ANY(:kinds) "  # fail-closed allow-list; empty list = no rows
@@ -257,6 +258,7 @@ class DarReader:
                               "canonical_source_id": r[2], "source_id": r[1],
                               "licence": _json_val(r[11]) if len(r) > 11 else None,
                               "licence_decision": _json_val(r[12]) if len(r) > 12 else None,
+                              "authors": r[13] if len(r) > 13 else None,  # literal string, never split (C2b)
                               "admission_passed": True})
         ts_clause = " AND {a}.created_at > CAST(:since_assoc_ts AS timestamptz)" if (delta and ts0 is not None) else ""
         ts_params = {"since_assoc_ts": ts_lo} if (delta and ts0 is not None) else {}

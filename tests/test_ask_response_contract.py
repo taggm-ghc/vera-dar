@@ -167,7 +167,7 @@ def test_candidates_allowlisted_drop_extras(monkeypatch, contract):
     r = ask(monkeypatch, res("reading_list", candidates=dirty), Mem())
     c = r.json()["candidates"][0]
     assert set(c) == {"n", "title", "url", "published", "identifier", "provider", "licence_decision", "acquisition",
-                      "representation", "retrieved_at"} and SENT not in r.text
+                      "representation", "retrieved_at", "reference", "in_text", "characterisation"} and SENT not in r.text
 
 
 # ---- C-F1 ----

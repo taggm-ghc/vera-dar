@@ -47,7 +47,7 @@ def test_replay_runs_and_halves_partition_all():
     for key in ("questions", "scenarios", "identifiers"):
         assert rep["calibration"]["n"][key] + rep["holdout"]["n"][key] == rep["all"]["n"][key]
     a = rep["all"]["flags"]
-    assert set(a) == {"admission", "source_type_router", "handle_identifier"}
+    assert set(a) == {"admission", "source_type_router", "handle_identifier", "subquery_search", "subquery_adversarial"}
     assert rep["all"]["label"] == "offline fixture baseline, not live"
     assert a["admission"]["on_topic_recall"]["n"] >= 9
     cm = a["source_type_router"]["confusion_label_by_route"]

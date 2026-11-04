@@ -171,7 +171,7 @@ def acquisition_notice_line(data: dict | None) -> str | None:
     if aq.get("status") == "search_failed":
         return f"Found {n} of the {t} new sources targeted; the search could not be completed."
     if aq.get("status") == "capped":
-        return f"Found {n} of the {t} new sources targeted; the limit on new sources for this request was reached."
+        return f"Found {n} of the {t} new sources targeted; the limit on new acquisition runs was reached."
     return None
 
 
@@ -217,6 +217,12 @@ def _clean(text, limit: int = 400) -> str:
     return re.sub(r"\s+", " ", str(text)).strip()[:limit]
 
 
+def _src_by_n(data) -> dict:
+    from vera import references_ui
+
+    return references_ui.sources_by_n((data if isinstance(data, dict) else {}).get("sources"))
+
+
 def render_citations(st, data) -> None:
     """Per cited claim: [n] verdict, short quote (or span reference only), then CC BY attribution once per source."""
     cites = _list((data if isinstance(data, dict) else {}).get("citations"))
@@ -224,17 +230,19 @@ def render_citations(st, data) -> None:
         return
     st.markdown("**Cited passages** (short excerpts)")
     shown: set = set()
+    intext = {n: s["in_text"] for n, s in _src_by_n(data).items() if isinstance(s.get("in_text"), str) and s["in_text"].strip()}
     for c in cites:
         n = c.get("n") if isinstance(c.get("n"), int) and not isinstance(c.get("n"), bool) else "?"
         verdict = {"supported": "supported", "partial": "partly supported"}.get(c.get("verdict"), "checked")
         span = _clean(c.get("quote_span") or c.get("span") or "", 80)
         where = f" (passage {plain(span)})" if span else ""
         quote = _clean(c.get("quote"), _quote_cap()) if isinstance(c.get("quote"), str) else ""
+        it = safe_markdown(intext[n]) + " " if n in intext else ""  # NONASK-1103 C4: APA in-text citation after "[n] "
         if quote:
-            st.markdown(f"[{n}] {verdict}: “{plain(quote)}”{where}")
+            st.markdown(f"[{n}] {it}{verdict}: “{plain(quote)}”{where}")
         else:
             ref = _clean(c.get("span") or "", 80)
-            st.markdown(f"[{n}] {verdict}: excerpt not shown{f' (passage {plain(ref)})' if ref else ''}")
+            st.markdown(f"[{n}] {it}{verdict}: excerpt not shown{f' (passage {plain(ref)})' if ref else ''}")
         at = c.get("attribution")
         if isinstance(at, dict) and n not in shown:
             shown.add(n)

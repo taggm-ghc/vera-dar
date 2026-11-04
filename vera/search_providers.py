@@ -648,6 +648,39 @@ def _is_timeout(e: BaseException) -> bool:
         return False
 
 
+# NONASK-1103 F0 follow-up: a record also de-duplicates by normalised title against the PMC/OpenAlex record of the same
+# work (an arXiv preprint and its journal version have different identifiers). A title shorter than MIN_TITLE_WORDS
+# words is never a key ("Introduction" must not merge unrelated works), and two records whose identifiers CONFLICT
+# (different PMCIDs, or different DOIs when neither is an arXiv DataCite DOI) are different works whatever their titles.
+# CALIBRATION NOTE: MIN_TITLE_WORDS is a planner prior, UNCALIBRATED; raise it if distinct works merge, lower it if
+# duplicates of short titles survive (review the found_by lists of merged records).
+MIN_TITLE_WORDS = 4
+_ARXIV_DOI = "10.48550/arxiv."
+
+
+def norm_title(t) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(t or "").lower()))
+
+
+def title_key(c: Mapping) -> str | None:
+    nt = norm_title(c.get("title"))
+    return "title:" + nt if len(nt.split()) >= MIN_TITLE_WORDS else None
+
+
+def _same_work_ids(a: Mapping, b: Mapping) -> bool:
+    """No identifier conflict between two records that share a title."""
+    ia, ib = _cand_ids(a), _cand_ids(b)
+    pa = {i for i in ia if i.startswith("pmc:")}
+    pb = {i for i in ib if i.startswith("pmc:")}
+    if pa and pb and pa != pb:
+        return False
+    da = {i for i in ia if i.startswith("doi:")}
+    db = {i for i in ib if i.startswith("doi:")}
+    if da and db and da != db and not any(i[4:].startswith(_ARXIV_DOI) for i in da | db):
+        return False
+    return True
+
+
 def _cand_ids(c: Mapping) -> set:
     doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(c.get("doi") or "").strip().lower())
     pm = _pmcid_of(c.get("pmcid") or ((c.get("oa") or {}) if isinstance(c.get("oa"), Mapping) else {}).get("pmcid"))
@@ -1026,10 +1059,15 @@ def merge_sources(*lists) -> list:
                 continue
             ids = _cand_ids(c)
             hit = next((index[k] for k in ids if k in index), None)
+            tk = title_key(c)
+            if hit is None and tk and tk in index and _same_work_ids(index[tk], c):
+                hit = index[tk]  # same normalised title, no conflicting identifier: the same work (F0 follow-up)
             if hit is None:
                 out.append(c)
                 for k in ids:
                     index[k] = c
+                if tk:
+                    index.setdefault(tk, c)
                 continue
             oa = dict(hit.get("oa") or {}) if isinstance(hit.get("oa"), Mapping) else {}
             other = c.get("oa") if isinstance(c.get("oa"), Mapping) else {}
@@ -1048,6 +1086,9 @@ def merge_sources(*lists) -> list:
                 if not hit.get(k) and c.get(k):
                     hit[k] = c[k]
             hit["portals"] = list(dict.fromkeys(acq_portals(hit) + acq_portals(c)))  # ROUTE-R3: provenance kept
+            if c.get("part") is not None:  # NONASK-1103 S3: every sub-query that found this work
+                hit["parts"] = sorted(set(hit.get("parts") or ([hit["part"]] if hit.get("part") is not None else []))
+                                      | {c["part"]})
             for k in ids:
                 index.setdefault(k, hit)
     return out
@@ -1108,6 +1149,25 @@ def _wiki_cfg() -> dict:
 ARXIV_ALLOWED: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_allowed", default=True)  # WP-F0: budget slot
 ARXIV_STATUS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_status", default=None)  # [status, n] handoff
 PORTALS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_portals", default=None)
+# NONASK-1103 S3: the request's sub-queries [(query text, entities)], set by inline_acquire; None/one part = unchanged.
+SUBQUERIES: contextvars.ContextVar = contextvars.ContextVar("vera_acq_subqueries", default=None)
+# NONASK-1103 S3: None = today's OpenAlex call (AND profile, then OR retry); "and_only" = the AND call only (one per
+# sub-query); "or_only" = the plain OR query only (the question-level retry).
+OA_MODE: contextvars.ContextVar = contextvars.ContextVar("vera_acq_oa_mode", default=None)
+
+
+def subquery_budget(cfg: Mapping, n_parts: int) -> int:
+    """NONASK-1103 S3: bounds.max_search_calls_per_job scaled for n sub-queries: cap + per_part*(n-1), where per_part is
+    the number of per-part providers (OpenAlex 1, Europe PMC 1 if enabled, arXiv 1 if in search.providers; 3 shipped), so
+    7 -> 16 for n = 4. A RECORDED LOOSENING of an existing budget (OD-1027 p3), not a new cap; the rate gates are
+    unchanged and the question still makes one job reservation and one DDG call."""
+    s = cfg.get("search") or {}
+    cap = int((cfg.get("bounds") or {}).get("max_search_calls_per_job", 0) or 0)
+    if n_parts <= 1 or cap <= 0 or (s.get("subquery") or {}).get("enabled") is not True:
+        return cap
+    per = 1 + (1 if (s.get("europepmc") or {}).get("enabled") is True else 0) \
+        + (1 if "arxiv" in set(s.get("providers") or ()) else 0)
+    return cap + per * (n_parts - 1)
 
 
 def record_portal(name: str, status: str, results: int = 0) -> None:
@@ -1145,6 +1205,50 @@ def _submit_in_order(pool, fn, *a, **kw):
     return f
 
 
+def _search_parts(base_search: Callable, parts: list, B: Mapping, question: str, n: int, t_end: float,
+                  clock: Callable, arx_hand: list) -> list:
+    """NONASK-1103 S3: the OpenAlex/arXiv side for several sub-queries. One OpenAlex AND call per part (the first
+    B["n_oa"] parts), arXiv for the first B["n_arx"] parts, each result tagged part=k; then ONE question-level OpenAlex
+    OR retry (plain OR query, whole question) only when no part found anything. Raises the first error only when every
+    call failed and nothing was found (the caller's all-providers-failed rule then applies)."""
+    out, errs, calls_ok = [], [], 0
+    arx_n, arx_status = 0, []
+    for k, (ptxt, _ents) in enumerate(parts[:max(1, B["n_oa"])]):
+        ta = ARXIV_ALLOWED.set(k < B["n_arx"])
+        ts = ARXIV_STATUS.set(hand := [])
+        tm = OA_MODE.set("and_only")
+        try:
+            got = list(base_search(ptxt, n, max(0.1, t_end - clock())) or [])
+            calls_ok += 1
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+            got = []
+        finally:
+            OA_MODE.reset(tm)
+            ARXIV_ALLOWED.reset(ta)
+            ARXIV_STATUS.reset(ts)
+        if hand:
+            arx_status.append(hand[0])
+            arx_n += int(hand[1])
+        out.extend({**c, "part": k} for c in got if isinstance(c, dict))
+    if not out and B.get("or_retry") and t_end - clock() > 0.1:
+        ta = ARXIV_ALLOWED.set(False)
+        tm = OA_MODE.set("or_only")
+        try:
+            out = list(base_search(question, n, max(0.1, t_end - clock())) or [])
+            calls_ok += 1
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+        finally:
+            OA_MODE.reset(tm)
+            ARXIV_ALLOWED.reset(ta)
+    if arx_status:
+        arx_hand[:] = ["completed" if "completed" in arx_status else arx_status[0], arx_n]
+    if errs and not out and not calls_ok:
+        raise errs[0]
+    return out
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
@@ -1159,20 +1263,50 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     s = cfg.get("search") or {}
     ecfg = s.get("europepmc") or {}
     dcfg = s.get("ddg_first") or {}
-    cap = int((cfg.get("bounds") or {}).get("max_search_calls_per_job", 0) or 0)
-    left = cap - (2 if s.get("openalex_profile") else 1)
-    use_ddg = dcfg.get("enabled") is True and left >= 1
-    left -= 1 if use_ddg else 0
-    use_epmc = ecfg.get("enabled") is True and left >= 1
-    left -= 1 if use_epmc else 0
     from vera import wiki_ref_portal  # WIKIREF-1022 edit 1: Wikipedia as a reference portal (never evidence)
     wcfg = _wiki_cfg()
-    use_wiki = wiki_ref_portal.enabled(wcfg) and left >= 1
-    left -= 1 if use_wiki else 0
-    use_arxiv = "arxiv" in set(s.get("providers") or ()) and left >= 1  # WP-F0: arXiv counted, after DDG/EPMC/Wikipedia
-    left -= 1 if use_arxiv else 0
-    lookup_left = left
-    if use_wiki and wiki_get is None:
+    wiki_on = wiki_ref_portal.enabled(wcfg)
+    prof_on = bool(s.get("openalex_profile"))
+
+    def budget(cap: int, n_parts: int = 1) -> dict:
+        """The slots for `cap` search calls. One part: the legacy order (OpenAlex 2, DDG, Europe PMC, Wikipedia, arXiv,
+        then the id lookup). NONASK-1103 S3, n parts: the QUESTION-level slots first (OpenAlex OR retry, id lookup,
+        Wikipedia, DDG, one each), then one OpenAlex call per part, then Europe PMC per part, then arXiv per part
+        (round-robin: every part gets its OpenAlex call before any gets a second provider)."""
+        if n_parts <= 1:
+            left = cap - (2 if prof_on else 1)
+            u_ddg = dcfg.get("enabled") is True and left >= 1
+            left -= 1 if u_ddg else 0
+            u_epmc = ecfg.get("enabled") is True and left >= 1
+            left -= 1 if u_epmc else 0
+            u_wiki = wiki_on and left >= 1
+            left -= 1 if u_wiki else 0
+            u_arx = "arxiv" in set(s.get("providers") or ()) and left >= 1  # WP-F0: arXiv counted, after DDG/EPMC/Wikipedia
+            left -= 1 if u_arx else 0
+            return {"ddg": u_ddg, "epmc": u_epmc, "wiki": u_wiki, "arxiv": u_arx, "lookup": left,
+                    "n_oa": 1, "n_epmc": 1 if u_epmc else 0, "n_arx": 1 if u_arx else 0, "or_retry": prof_on}
+        left = cap
+        or_retry = prof_on and left >= 1
+        left -= 1 if or_retry else 0
+        lookup = 1 if left >= 1 else 0
+        left -= lookup
+        u_wiki = wiki_on and left >= 1
+        left -= 1 if u_wiki else 0
+        u_ddg = dcfg.get("enabled") is True and left >= 1
+        left -= 1 if u_ddg else 0
+        n_oa = min(n_parts, max(0, left))
+        left -= n_oa
+        n_epmc = min(n_parts, max(0, left)) if ecfg.get("enabled") is True else 0
+        left -= n_epmc
+        n_arx = min(n_parts, max(0, left)) if "arxiv" in set(s.get("providers") or ()) else 0
+        left -= n_arx
+        return {"ddg": u_ddg, "epmc": n_epmc > 0, "wiki": u_wiki, "arxiv": n_arx > 0, "lookup": lookup + max(0, left),
+                "n_oa": n_oa, "n_epmc": n_epmc, "n_arx": n_arx, "or_retry": or_retry}
+
+    cap0 = int((cfg.get("bounds") or {}).get("max_search_calls_per_job", 0) or 0)
+    B0 = budget(cap0)
+    use_wiki = B0["wiki"]
+    if wiki_on and wiki_get is None:
         import requests
         from vera import rate_limit
         wiki_get = rate_limit.limited("wikipedia", requests.get)
@@ -1181,6 +1315,11 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         import concurrent.futures as cf
         t_end = clock() + float(timeout_s)
         futs = {}
+        # NONASK-1103 S3: with several sub-queries the budget is re-planned for this call (question-level slots first)
+        parts = list(SUBQUERIES.get() or ())
+        multi = len(parts) > 1 and (s.get("subquery") or {}).get("enabled") is True
+        B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else B0
+        use_ddg, use_epmc, use_wiki, use_arxiv, lookup_left = B["ddg"], B["epmc"], B["wiki"], B["arxiv"], B["lookup"]
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
@@ -1191,9 +1330,25 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                     terms, profile = (terms_fn or (lambda: _default_terms_and_profile(cfg)))()
                 except Exception:  # noqa: BLE001
                     terms, profile = None, None
-                futs["epmc"] = _submit_in_order(pool, europepmc_search, question,
-                                           int(ecfg.get("page_size", n)), float(timeout_s),
-                                           ecfg, terms_cfg=terms, profile=profile, transport=transport)
+                if multi:  # one Europe PMC call per part (the first n_epmc parts), the entity central in each query
+                    def epmc_parts():
+                        res, errs = [], []
+                        for k, (ptxt, _ents) in enumerate(parts[:B["n_epmc"]]):
+                            try:
+                                got_k = list(europepmc_search(ptxt, int(ecfg.get("page_size", n)), float(timeout_s), ecfg,
+                                                              terms_cfg=terms, profile=profile, transport=transport) or [])
+                            except Exception as e:  # noqa: BLE001  one part failing never loses the others
+                                errs.append(e)
+                                continue
+                            res.extend({**c, "part": k} for c in got_k if isinstance(c, dict))
+                        if errs and not res:
+                            raise errs[0]
+                        return res
+                    futs["epmc"] = _submit_in_order(pool, epmc_parts)
+                else:
+                    futs["epmc"] = _submit_in_order(pool, europepmc_search, question,
+                                               int(ecfg.get("page_size", n)), float(timeout_s),
+                                               ecfg, terms_cfg=terms, profile=profile, transport=transport)
             if use_wiki:
                 futs["wiki"] = _submit_in_order(pool, wiki_ref_portal.make_portal_search(wcfg, http_get=wiki_get),
                                            question, n, timeout_s)
@@ -1212,13 +1367,16 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             tok = OPENALEX_OA_FIELDS.set(True)
             futs_order.append("openalex")  # ROUTE-R3: called after the concurrent portals started
             try:
-                atok = ARXIV_ALLOWED.set(use_arxiv)  # make_search calls arXiv only when the budget left a slot
-                stok = ARXIV_STATUS.set(arx_hand)  # make_search reports the arXiv call here: [status, n]
-                try:
-                    base = list(base_search(question, n, max(0.1, t_end - clock())) or [])  # P0DTA-PRIO D3: capped at t_end
-                finally:
-                    ARXIV_ALLOWED.reset(atok)
-                    ARXIV_STATUS.reset(stok)
+                if multi:
+                    base = _search_parts(base_search, parts, B, question, n, t_end, clock, arx_hand)
+                else:
+                    atok = ARXIV_ALLOWED.set(use_arxiv)  # make_search calls arXiv only when the budget left a slot
+                    stok = ARXIV_STATUS.set(arx_hand)  # make_search reports the arXiv call here: [status, n]
+                    try:
+                        base = list(base_search(question, n, max(0.1, t_end - clock())) or [])  # P0DTA-PRIO D3: capped at t_end
+                    finally:
+                        ARXIV_ALLOWED.reset(atok)
+                        ARXIV_STATUS.reset(stok)
             except Exception as e:  # noqa: BLE001
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"
@@ -1729,8 +1887,10 @@ class DuckDuckGoLiteProvider:
             return False
         return bool(queries) and all(self._cache_get(q) is not None for q in queries)
 
-    def call(self, query: str, n: int, timeout_s: float):
-        queries = build_ddg_queries(query, self.query_terms, self.s)
+    def call(self, query: str, n: int, timeout_s: float, *, queries: list | None = None):
+        # NONASK-1103 S4 (plan 6.3): `queries` = explicit [{"group", "query"}] (the official lane's one site: query);
+        # it goes through the same cache, daily cap, rate gate and transport as every other call.
+        queries = list(queries) if queries else build_ddg_queries(query, self.query_terms, self.s)
         self.last_query = {"query": [q["query"] for q in queries], "mode": "site_groups"}
         tx = self._transport or ddg_default_transport
         headers = {"User-Agent": self.s["user_agent"]}  # never altered, even after a challenge

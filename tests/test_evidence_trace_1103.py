@@ -145,3 +145,19 @@ def test_total_cap_strictly_below_1200_and_each_at_most_200():
 def test_dict_evidence_accepted():
     t = et.project({"admitted": [], "rejected": [], "unusable": []}, None, None, public=True)
     assert t["passages"] == []
+
+
+def test_es2_public_subquery_allowlist_and_reported_label():
+    from vera import adequacy_gate as ag, evidence_trace as et
+    subs = [{"label": "A", "declared": [1], "supported": [1]}, {"label": "B", "declared": [1], "supported": []}]
+    ad = ag.evaluate([1], [1], subqueries=subs)
+    ev = {"admitted": [{"n": 1, "span_id": "s", "text": "Vendor says X. More."}]}
+    recs = [{"id": 0, "sentence": "X [1]", "verdict": "supported", "citations": [1]}]
+    cites = [{"n": 1, "claim_id": 0, "quote": "Vendor says X."}]
+    out = et.project(ev, recs, cites, ad, None, True, sources=[{"n": 1, "snippet": "Vendor says X.", "origin": "reported"}])
+    assert out["adequacy"]["subqueries"] == [{"label": "A", "verdict": "finalize"}, {"label": "B", "verdict": "abstain"}]
+    assert "not_found" not in str(out["adequacy"]) and "parts" not in out["adequacy"]
+    row = out["passages"][0]
+    assert row["epistemic"] == "reported" and "reported" in row["verdict"] and row["verdict"] != "supported"
+    plain = et.project(ev, recs, cites, ad, None, True, sources=[{"n": 1, "snippet": "Vendor says X."}])
+    assert plain["passages"][0]["verdict"] == "supported" and "epistemic" not in plain["passages"][0]

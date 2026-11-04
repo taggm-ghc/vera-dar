@@ -24,5 +24,6 @@
     "removed_by_check": "the sentence that used it did not pass the citation check",
     "unused": "not used by the answer; no reason recorded"
   },
+  "epistemic": {"reported": "reported by the source, not independently verified"},
   "verdicts": {"supported": "supported", "partial": "partly supported"}
 }

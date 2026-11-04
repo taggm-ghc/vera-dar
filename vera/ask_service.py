@@ -447,14 +447,17 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
         kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
+    lanes = inline_acquire.lane_pass(question, acq)  # NONASK-1103: request-local only (never cached); None = flags off
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
     if info is not None:
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
+        if lanes is not None:
+            info["outcome"] = dict(info["outcome"], lanes=lanes.public())  # links and counts only (need-to-know)
     from vera import answer_contract as contract
     bg = inline_acquire.background_note(acq, o)  # CONT-1023: "" unless candidates were queued for background acquisition
-    if o.corpus is None:
+    if o.corpus is None and not (lanes is not None and lanes.pages):
         t = _inline_notice(acq, o)
         if t is not None and bg:
             if contract.notes_separate():  # ANS-LAYERS-1101 A: the background note travels separately (kind "background")
@@ -463,7 +466,9 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
                 return t
             return f"{t} {bg}".strip()
         return t
-    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus)
+    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus,
+                   **({"lanes": lanes} if lanes is not None else {}))
+    lanes = None  # page text is dropped with the request (R-037)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
         # "unanswered" notice except for premise_unverified, which has its own fixed text. INT-1022-B merge: the
@@ -810,7 +815,7 @@ def _log_acquisition_counts(candidates) -> None:
 
 
 def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only: bool = False, ephemeral=None,
-             used: dict | None = None):
+             used: dict | None = None, lanes=None):
     """D-055 Option C: full-document acquisition/verification -> span retrieval -> admission -> generation -> claim
     check. None when the path is not configured (today's behaviour exactly); an AskResult (result_kind "answer") when
     grounded; else (evidence, fallback token, tokens, cost, text) for an explicit insufficient-evidence result.
@@ -841,6 +846,9 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
             if used is not None:
                 used["acq"] = acq_corpus
             ev = admit(question, acq_corpus, cfg) if acq_corpus is not None else None
+            if lanes is not None:  # NONASK-1103 N2: lane spans join this answer only (answer_only, never stored)
+                from vera import lane_evidence
+                ev = lane_evidence.merge(ev, lanes, question, cfg)
             if ev is None or contract.result_kind_for((ev,)) != "answer":
                 if warming:  # in-scope while warming: an explicit insufficient result (the caller may go inline)
                     return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
@@ -1188,11 +1196,18 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
                                                               citations=_source_freshness(fd.sources, fr),
                                                               answer_basis="generated_existing_only"))
     pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
+    from vera import inline_acquire as _ia
+    lanes = _ia.lane_pass(question, acq) if o is not None else None  # NONASK-1103: request-local; None = flags off
+    if lanes is not None and isinstance(pub, dict):
+        pub = dict(pub, lanes=lanes.public())  # links and counts only (need-to-know)
     new_res, failed = None, False
-    if o is not None and getattr(o, "corpus", None) is not None:
-        new_res, failed = _combined_answer(question, model, pricing, chained, grounding, acq, fd, o)
+    if o is not None and (getattr(o, "corpus", None) is not None or (lanes is not None and lanes.pages)):
+        new_res, failed = _combined_answer(question, model, pricing, chained, grounding, acq, fd, o,
+                                           **({"lanes": lanes} if lanes is not None else {}))
+    lanes = None  # page text is dropped with the request (R-037)
     if new_res is not None:
-        new_ids = _new_doc_ids(new_res.evidence.admitted, fd.evidence, held_keys=_acq_held_ids())
+        new_ids = _new_doc_ids([a for a in new_res.evidence.admitted if not (isinstance(a, dict) and a.get("answer_only"))],
+                               fd.evidence, held_keys=_acq_held_ids())  # lane pages are read, not found or held
         fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         found = bool(new_ids)  # newly found = a cited passage from a document not held before this request
@@ -1250,7 +1265,7 @@ class _Spend:
         self.tokens, self.cost = int(tokens or 0), float(cost or 0.0)
 
 
-def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
+def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o, lanes=None):
     """(AskResult or None, failure marker or False): new passages admitted from the inline corpus by the unchanged
     admission, merged with the base passages, then ONE answer through the unchanged writer and claim check."""
     from vera import answer_contract as contract
@@ -1258,13 +1273,20 @@ def _combined_answer(question, model, pricing, chained, grounding, acq, fd, o):
     from vera.fulldoc_admission import admit
     try:
         cfg = fulldoc_corpus.load_config()
-        ev_new = admit(question, o.corpus, cfg)
+        ev_new = admit(question, o.corpus, cfg) if getattr(o, "corpus", None) is not None else None
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("vera").warning("combined admission failed (%s)", type(exc).__name__)
         return None, False
-    if not ev_new.admitted:
+    has_lane = lanes is not None and bool(lanes.pages)
+    if not (ev_new is not None and ev_new.admitted) and not has_lane:
         return None, False
-    merged = _merge_evidence(fd.evidence, ev_new, cfg)
+    merged = _merge_evidence(fd.evidence, ev_new, cfg) if ev_new is not None and ev_new.admitted else fd.evidence
+    if has_lane:  # NONASK-1103 N2: lane spans in their own slots after the research merge (answer only, never stored)
+        from vera import lane_evidence
+        with_lanes = lane_evidence.merge(merged, lanes, question, cfg)
+        if with_lanes is merged and not (ev_new is not None and ev_new.admitted):
+            return None, False  # no lane span admitted and nothing new: unchanged behaviour
+        merged = with_lanes
     base_corpus = None
     if not _base_warming():
         try:

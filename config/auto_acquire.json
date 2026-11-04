@@ -54,6 +54,11 @@
       "and_extra_max": 4,
       "generic_terms": ["key", "main", "major", "differences", "difference", "different", "compare", "compared", "comparison", "similarities", "similar", "versus", "vs", "best", "better", "good", "bad", "common", "important", "types", "type", "kinds", "work", "works", "cause", "causes", "effect", "effects", "role", "impact", "know", "tell", "explain", "describe", "give", "make", "get"]
     },
+    "subquery": {
+      "enabled": false,
+      "_calibration_note": "SHIPS FLAG-OFF (orchestrator decision after round-2 label review, 2026-11-03). The code, the registry disambiguation (config/entity_registry.json full_aliases, parents, context_terms, generic_phrases) and both fixture files (tests/fixtures/nonask_1103/subquery_search.json, subquery_adversarial.json) are kept. Round-2 skeptic probes: 8 of 15 fresh off-entity probes still reached tier 0 and 5 of 13 relevant probes dropped; the registry's generic phrases copy the fixture. Enabling requires ALL of: (1) a holdout written independently of the registry curator; (2) relevant records that use the plain entity name; (3) context terms that are not the question's own words; (4) real-data calibration (plan 5b), not synthetic fixtures. Offline replay figures (adversarial holdout off-entity tier 0 7/7 to 0/7, relevant 12/12 to 12/12) are fitted to the curator's own probes and are NOT evidence for enabling.",
+      "_note": "NONASK-1103 S3 (plan work/NONASK-1103/subquery-plan.md 6.2). Inline acquisition only. When vera.subquery splits the question into n >= 2 parts, OpenAlex, Europe PMC and arXiv run once per part (the named entity central in each query), inside bounds.max_search_calls_per_job scaled to 7 + 3*(n-1) (16 for 4 parts; vera.search_providers.subquery_budget): a RECORDED LOOSENING of an existing budget (OD-1027 p3), not a new cap. The question-level slots (Wikipedia, id lookup, OpenAlex OR retry, the one DDG call) are reserved first. One job reservation per question; rate gates unchanged. Kill switch: false restores the single search. Shipped FALSE (see _calibration_note); live 429 behaviour and latency UNTESTED."
+    },
     "ddg_first": {
       "enabled": true,
       "max_landing_fetches": 3,

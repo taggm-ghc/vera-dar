@@ -1,0 +1,7 @@
+-- 014 rollback -- DRAFT. NOT EXECUTED. Owner-only, destructive (drops both registry tables and their rows); separate approval.
+-- Never expected to run. RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>
+BEGIN;
+DROP TABLE IF EXISTS vera_vjay.entity_registry;
+DROP TABLE IF EXISTS vera_vjay.reporting_portal;
+DROP FUNCTION IF EXISTS vera_vjay.source_registries_immutable_trgfn();
+COMMIT;

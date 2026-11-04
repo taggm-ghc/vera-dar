@@ -1,0 +1,98 @@
+-- 014_vera_source_registries.sql -- DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007/011/012/013 drafts); rename only at approval.
+-- NONASK-1103 S1b (WP I-S1). Proposed registries: entity_registry (authoritative sources per named vendor/product/site) and
+-- reporting_portal (current-reporting search APIs). Seed/fallback: config/entity_registry.json, config/reporting_portals.json.
+-- NUMBERING: 008 bootstrap (reserved), 009 portal discovery, 010 dynamic state (gap, reserved), 011 topic registry, 012 classifier
+-- categories, 013 live ask stats (draft in the WP-L clone, work/NONASK-1103/wpBL), 014 = this file (next free number after 013;
+-- confirm against the owner's sequence before approval).
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py --dry-run (HZ-DAR-1).
+-- ROWS ARE OWNER-CURATED: the app roles get SELECT only. No user text ever becomes a row. Hosts are exact (no wildcards, no paths).
+-- STATES: draft, active, suspended, retired. Only 'active' rows are used by the app; content is immutable once inserted
+-- (a new version is a new row; at most one active row per key).
+-- ROLES: grants go to GROUP roles vera_vjay_ro and vera_vjay_rw (SELECT only); the owner/admin account owns the tables. No role is created or altered.
+-- UNTESTED against a real PostgreSQL: the CHECKs, indexes and triggers have never been executed.
+-- Rollback (destructive, separate approval): db/migrations/rollback/014-DRAFT-source-registries-rollback.sql.draft
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT).
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '014 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.entity_registry') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.reporting_portal') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                 WHERE ns.nspname = 'vera_vjay' AND p.proname = 'source_registries_immutable_trgfn') THEN
+    RAISE EXCEPTION '014 already applied or name collision';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE EXCEPTION '014 requires group roles vera_vjay_ro and vera_vjay_rw (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+END $$;
+
+CREATE TABLE vera_vjay.entity_registry (
+    entity_id        BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT entity_registry_pk PRIMARY KEY,
+    entity_key       TEXT NOT NULL CONSTRAINT entity_registry_key_chk CHECK (entity_key = lower(btrim(entity_key)) AND entity_key <> ''),
+    version          INTEGER NOT NULL DEFAULT 1 CONSTRAINT entity_registry_version_chk CHECK (version >= 1),
+    entity           TEXT NOT NULL CONSTRAINT entity_registry_entity_chk CHECK (btrim(entity) <> ''),
+    aliases          TEXT[] NOT NULL DEFAULT '{}',
+    entity_class     TEXT NOT NULL CONSTRAINT entity_registry_class_chk CHECK (entity_class IN ('vendor','product','site','org')),
+    volatile         BOOLEAN NOT NULL DEFAULT false,
+    match_case       BOOLEAN NOT NULL DEFAULT false,
+    exclude_next     TEXT[] NOT NULL DEFAULT '{}',
+    domains          TEXT[] NOT NULL DEFAULT '{}'
+        CONSTRAINT entity_registry_domains_chk CHECK (array_to_string(domains, ',') !~ '[*/:[:space:]]'),
+    docs_entry_urls  TEXT[] NOT NULL DEFAULT '{}',
+    path_prefixes    TEXT[] NOT NULL DEFAULT '{}',
+    deny             BOOLEAN NOT NULL DEFAULT false,
+    -- owner 2026-11-03 (honour site terms): fetch only where terms_verdict = 'allow' AND robots.txt permits; else links only
+    terms_verdict    TEXT NOT NULL DEFAULT 'unknown' CONSTRAINT entity_registry_terms_chk CHECK (terms_verdict IN ('allow','links_only','unknown')),
+    terms_evidence   TEXT,
+    state            TEXT NOT NULL DEFAULT 'draft' CONSTRAINT entity_registry_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT entity_registry_key_ver_uq UNIQUE (entity_key, version)
+);
+CREATE UNIQUE INDEX entity_registry_one_active_uq ON vera_vjay.entity_registry (entity_key) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.reporting_portal (
+    portal_id        BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT reporting_portal_pk PRIMARY KEY,
+    name             TEXT NOT NULL CONSTRAINT reporting_portal_name_chk CHECK (name = lower(btrim(name)) AND name <> ''),
+    version          INTEGER NOT NULL DEFAULT 1 CONSTRAINT reporting_portal_version_chk CHECK (version >= 1),
+    kind             TEXT NOT NULL CONSTRAINT reporting_portal_kind_chk CHECK (kind IN ('search_api','rss','mediawiki')),
+    endpoint         TEXT NOT NULL CONSTRAINT reporting_portal_endpoint_chk CHECK (endpoint ~ '^https://'),
+    terms_url        TEXT,
+    licence_note     TEXT,
+    disclosure_ok    BOOLEAN NOT NULL DEFAULT false,
+    date_field       TEXT,
+    state            TEXT NOT NULL DEFAULT 'draft' CONSTRAINT reporting_portal_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT reporting_portal_name_ver_uq UNIQUE (name, version)
+);
+CREATE UNIQUE INDEX reporting_portal_one_active_uq ON vera_vjay.reporting_portal (name) WHERE state = 'active';
+
+-- Content immutable after insert; only state (and modified_at) may change; no DELETE/TRUNCATE.
+CREATE FUNCTION vera_vjay.source_registries_immutable_trgfn() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION '% is retire-only: no DELETE', TG_TABLE_NAME;
+  END IF;
+  IF to_jsonb(NEW) - 'state' - 'modified_at' IS DISTINCT FROM to_jsonb(OLD) - 'state' - 'modified_at' THEN
+    RAISE EXCEPTION '% content is immutable; insert a new version', TG_TABLE_NAME;
+  END IF;
+  NEW.modified_at := now();
+  RETURN NEW;
+END $$;
+CREATE TRIGGER entity_registry_immutable_trg BEFORE UPDATE OR DELETE ON vera_vjay.entity_registry
+    FOR EACH ROW EXECUTE FUNCTION vera_vjay.source_registries_immutable_trgfn();
+CREATE TRIGGER reporting_portal_immutable_trg BEFORE UPDATE OR DELETE ON vera_vjay.reporting_portal
+    FOR EACH ROW EXECUTE FUNCTION vera_vjay.source_registries_immutable_trgfn();
+
+REVOKE ALL ON vera_vjay.entity_registry, vera_vjay.reporting_portal FROM PUBLIC, vera_vjay_ro, vera_vjay_rw;
+GRANT SELECT ON vera_vjay.entity_registry, vera_vjay.reporting_portal TO vera_vjay_ro, vera_vjay_rw;
+
+COMMIT;

@@ -44,20 +44,38 @@ def _trace(ev, records=None, citations=None, adequacy=None, sources=None):
         return None
 
 
-def _gate(declared, supported, labels, resp_partial):
+def _gate(declared, supported, labels, resp_partial, subqueries=None):
     from vera import adequacy_gate
 
+    if subqueries:  # E-S2: Gate C per sub-query plus the original question
+        return adequacy_gate.evaluate(declared, supported, labels, resp_partial, subqueries=subqueries)
     return adequacy_gate.evaluate(declared, supported, labels, resp_partial)
+
+
+def _subqueries(question, kept, sources, resp_partial):
+    from vera import lane_evidence
+
+    return lane_evidence.subquery_adequacy(question, kept, sources, resp_partial)
 
 
 def sources_from(ev) -> list[dict]:
     """Numbered sources over the admitted spans. `snippet` is internal (prompt + claim check) and never public."""
     return [{"n": i, "title": a.get("title"), "url": a.get("url"), "published": a.get("published"),
-             "snippet": a["text"], "source_type": "full_text_passage", "stored_text_kind": "full_text",
+             "authors": a.get("authors"), "snippet": a["text"], "source_type": "full_text_passage", "stored_text_kind": "full_text",
              "admission_passed": True, "span": f"chars={a['start']}-{a['end']}", "start": a["start"], "span_id": a["span_id"],
              "document_id": a.get("document_id"), "canonical_source_id": a.get("canonical_source_id"),
              "licence": a.get("licence"), "licence_url": a.get("licence_url"), "attribution": a.get("attribution"),
-             "relevance": a.get("relevance")} for i, a in enumerate(ev.admitted, 1)]
+             "relevance": a.get("relevance"), **_lane_keys(a)} for i, a in enumerate(ev.admitted, 1)]
+
+
+def _lane_keys(a: dict) -> dict:
+    """NONASK-1103 N2 (R-037): a lane passage keeps its lane markers (answer_only, lane, origin, epistemic label) so
+    memory_store skips it and the trace drops its text; never labelled stored. Non-lane passages: no extra key."""
+    if not (a.get("lane") and a.get("answer_only") is True):
+        return {}
+    return {"answer_only": True, "lane": a["lane"], "origin": a.get("origin"), "lane_origin": a.get("lane_origin"),
+            "epistemic": a.get("epistemic"),
+            "stored": False, "source_type": "lane_page_passage", "stored_text_kind": None}
 
 
 def per_part_enabled(cfg: dict) -> bool:
@@ -106,7 +124,8 @@ def _resp_token(fb: dict, summary: dict | None, default: str) -> str:
 def _user_payload(question: str, sources: list[dict]) -> str:
     """Untrusted passage text, titles and URLs travel only as JSON data in the user message (as claim_check does)."""
     passages = [{"n": s["n"], "title": s.get("title"), "url": s.get("url"), "published": s.get("published") or "unknown",
-                 "text": s["snippet"]} for s in sources]
+                 "text": s["snippet"], **({"lane": s["epistemic"]} if s.get("answer_only") is True and s.get("epistemic")
+                                          else {})} for s in sources]
     return json.dumps({"question": question, "passages": passages}, ensure_ascii=False)
 
 
@@ -120,6 +139,9 @@ def messages_for(question: str, sources: list[dict], cfg: dict) -> list[dict]:
     else:
         system = cfg["answer"]["system_prompt"].format(sources=ptr,
                                                        insufficient_marker=cfg["answer"].get("insufficient_marker", ""))
+    if any(s.get("answer_only") is True and s.get("lane") for s in sources):  # NONASK-1103 S8: lane wording
+        from vera import lane_evidence
+        system = lane_evidence.lane_prompt(system, cfg, per_part=per_part_enabled(cfg))
     if premise_enabled(cfg):
         system += PREMISE_INSTRUCTION
     return [{"role": "system", "content": system + _UNTRUSTED},
@@ -230,7 +252,9 @@ def build_citations(records, sources: list[dict], cap: int, total_cap: int | Non
             out.append({"claim_id": r["id"], "n": n, "span_id": s["span_id"], "document_id": s["document_id"],
                         "canonical_source_id": s["canonical_source_id"], "licence": s["licence"], "span": s["span"],
                         "verdict": r["verdict"], "quote": q, "quote_span": f"chars={at}-{at + len(q)}",
-                        "attribution": dict(s["attribution"]), "supports": r["sentence"], "_rank": (r["verdict"] != "supported",
+                        "attribution": dict(s["attribution"]), "supports": r["sentence"],
+                        **({"epistemic": s["epistemic"], "origin": s.get("origin"), "answer_only": True}
+                           if s.get("answer_only") is True and s.get("epistemic") else {}), "_rank": (r["verdict"] != "supported",
                                                                          -float(s.get("relevance") or 0.0), r["id"], n)})
     if total_cap is not None and profiles is not None:
         from vera.fulldoc_verbatim import combined_total
@@ -598,7 +622,8 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         tot, gen, quoted = combined_total(profiles, [c["quote"] for c in citations if c["quote"]])
         summary["verbatim_budget"] = {"quoted": quoted, "generated_verbatim": gen, "total": tot, "cap": total}
     kind = "answer" if complete else (pp.get("partial_result_kind") or "answer")
-    adequacy = _gate(considered, [k for k, _ in blocks if k not in partial_only], {k: _clip(ptext[k]) for k in considered}, resp_partial)
+    adequacy = _gate(considered, [k for k, _ in blocks if k not in partial_only], {k: _clip(ptext[k]) for k in considered}, resp_partial,
+                     _subqueries(question, final, sources, resp_partial))
     trace = _trace(ev, records, citations, adequacy, sources)
     tokens, cost = totals()
     result = AskResult(answer=text, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
@@ -762,7 +787,8 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
 
         tot, gen, quoted = combined_total(profiles, [c["quote"] for c in citations if c["quote"]])
         summary = dict(summary, verbatim_budget={"quoted": quoted, "generated_verbatim": gen, "total": tot, "cap": total})
-    adequacy = _gate([1], [1], {1: _clip(question)}, _resp_partial(kept, rcfg))
+    adequacy = _gate([1], [1], {1: _clip(question)}, _resp_partial(kept, rcfg),
+                     _subqueries(question, kept, sources, _resp_partial(kept, rcfg)))
     trace = _trace(ev, records, citations, adequacy, sources)
     result = AskResult(answer=checked, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind="answer",

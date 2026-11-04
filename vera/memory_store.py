@@ -36,6 +36,13 @@ SKIP_DUPLICATE = "duplicate"
 SKIP_CAP = "cap_reached"
 SKIP_DISABLED = "memory_disabled"
 SKIP_QUEUE_FULL = "pending_queue_full"
+SKIP_ANSWER_ONLY = "answer_only_source"  # NONASK-1103 R-037: lane-derived claims never enter memory_store
+
+
+def answer_only(s) -> bool:
+    """R-037 marker contract (posted on the bus): a source/candidate dict with a truthy `answer_only` (or a `lane`
+    value) was read transiently for one answer under an unclear licence; nothing derived from it is stored."""
+    return isinstance(s, dict) and bool(s.get("answer_only") or s.get("lane"))
 # Operator action outcomes (D6).
 CONFIRMED, REJECTED, NOT_FOUND, NOT_ALLOWED = "confirmed", "rejected", "not_found", "transition_not_allowed"
 STATE_PENDING, STATE_LEGACY, STATE_LIVE, STATE_REJECTED = "pending", "legacy_auto", "confirmed", "rejected"
@@ -336,7 +343,7 @@ class MemoryService:
             if not self._reserve():
                 return 0, {SKIP_CAP: 1}
             reserved = True
-            cands = dm.eligible_candidates(candidates, self.gate_cfg)
+            cands = [c for c in dm.eligible_candidates(candidates, self.gate_cfg) if not answer_only(c)]
             note = dm.build_note(cands, self.cfg, gate_cfg=self.gate_cfg)
             if note is None:
                 skipped["no_candidates"] = 1
@@ -441,6 +448,8 @@ class MemoryService:
 
     def _write_one(self, rec: dict, sources, question: str):
         cited = [sources[n - 1] for n in rec["citations"] if 1 <= n <= len(sources)]
+        if any(answer_only(s) for s in cited):
+            return SKIP_ANSWER_ONLY
         refs = [SourceRef(provider=s.get("provider") or "", licence_decision=s.get("licence_decision") or "",
                           identifier=s.get("identifier") or "", url=s.get("url") or "") for s in cited]
         res = check_memory_write(self.cfg["fact_type"], rec["sentence"], rec["verdict"], refs, question,

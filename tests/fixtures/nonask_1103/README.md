@@ -1,1 +1,2 @@
 Synthetic fixtures; real-data calibration (plan 5b) still required before any flag flip. All text is self-authored; labels are draft, two-skeptic reviewed (work/NONASK-1103/label-review-*.md), owner spot-check pending; items marked "ambiguous": true are excluded from metrics.
+Added: subquery_search.json (18 synthetic scenarios: 12 entity-list, 6 single-topic controls; implementer-labelled, not skeptic-reviewed).

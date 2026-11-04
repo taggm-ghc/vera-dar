@@ -112,6 +112,9 @@ def _acq(monkeypatch, cap, arxiv=True):
 
 
 def test_budget_cap7_with_arxiv_keeps_lookup_left_one(monkeypatch):
+    """F0 pin (single question, one part). AMENDED by NONASK-1103 stream S (plan 6.2, T1 gate): with n >= 2 sub-queries
+    the pins become per sub-query (arXiv once per part; lookup_left == 1 at the scaled cap 7 + 3(n-1)); see
+    tests/test_nonask_1103_subquery_search.py. A question with one part is exactly this test, unchanged."""
     s = _acq(monkeypatch, 7)
     assert s["lookup_left"] == 1 and s["allowed"] is True  # OA 2 + ddg + epmc + wiki + arxiv = 6; 1 left for the id lookup
 

@@ -249,7 +249,7 @@ def test_as_sources_shape_and_cap():
     cap = c.cfg["corpus"]["stored_fill_max"]
     assert 0 < len(srcs) <= cap
     for s in srcs:
-        assert set(s) == {"title", "url", "published", "snippet", "source_type", "doi", "stored_text_kind",
+        assert set(s) == {"title", "url", "published", "snippet", "source_type", "doi", "authors", "stored_text_kind",
                           "discovered_via", "_domain_branches", "retrieved_at", "dar_span", "provider", "licence",
                           "admission_passed", "canonical_source_id", "source_id", "disposition"}
         assert s["provider"] == "stored_corpus" and s["admission_passed"] is True

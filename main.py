@@ -187,6 +187,9 @@ class AskSource(BaseModel):
     identifier: str | None = None
     retrieved_at: str | None = None
     licence_decision: str | None = None
+    reference: str | None = None  # NONASK-1103 C2: formatted APA 7 reference (server-built)
+    in_text: str | None = None  # NONASK-1103 C2: formatted APA 7 in-text citation
+    characterisation: str | None = None  # NONASK-1103 C2: 'Type · outlet · date' from verified metadata only
     span: str | None = None  # DAR stored-corpus provenance: 'chars=<start>-<end>' of the quoted chunk (absent for web sources)
     canonical_source_id: int | None = None  # DAR stored-corpus identity (absent for web sources)
     source_id: int | None = None
@@ -227,6 +230,9 @@ class AskCandidate(BaseModel):
     identifier: str | None = None
     provider: str | None = None
     licence_decision: str | None = None
+    reference: str | None = None  # NONASK-1103 C2
+    in_text: str | None = None  # NONASK-1103 C2
+    characterisation: str | None = None  # NONASK-1103 C2
     acquisition: str | None = None
     representation: str | None = None
     retrieved_at: str | None = None

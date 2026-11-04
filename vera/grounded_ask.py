@@ -183,7 +183,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                "snippet": snippet, "source_type": r.get("source_type")}
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
-        for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus"):  # internal, for the corpus gauntlet (pmcid is published only via public_sources/_pmcid_of, PMCID-PUBLIC-1023)
+        for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus", "authors", "publisher", "container_title", "journal"):  # internal, for the corpus gauntlet (pmcid is published only via public_sources/_pmcid_of, PMCID-PUBLIC-1023)
             if r.get(k):
                 src[k] = r[k]
         src.update(provenance(r))
@@ -289,7 +289,7 @@ def fix_citations(answer: str, n_sources: int, note: str) -> tuple[str, int]:
 
 
 PUBLIC_FIELDS = ("n", "title", "url", "published", "source_type", "provider", "identifier", "retrieved_at",
-                 "licence_decision")
+                 "licence_decision", "reference", "in_text", "characterisation")  # NONASK-1103 C2: reference/in_text = formatted APA 7 strings only
 
 
 # present only for stored-corpus (DAR) sources: the exact character range of the quoted chunk, the stored identity and
@@ -309,12 +309,23 @@ def _licence_id(s: dict):
     return None
 
 
+def _citation_strings(sources: list[dict]) -> list[dict]:
+    """NONASK-1103 C2: the only citation additions to public output ({reference, in_text}, aligned to `sources`).
+    Raw ids, authors, source type and access dates stay dev-only; style flag 'legacy' gives None values."""
+    from vera import references_ui
+
+    return references_ui.citation_strings(sources)
+
+
 def public_sources(sources: list[dict]) -> list[dict]:
     """What the response shows: no abstracts (short-quote rule); id, title, link, date, type and provenance."""
     from vera import answer_contract as contract
 
-    def one(s):
+    cit = _citation_strings(sources)
+
+    def one(s, i):
         out = {k: s.get(k) for k in PUBLIC_FIELDS}
+        out.update(cit[i])
         if _public_pmcid(s):  # PMCID-PUBLIC-1023 (owner 2026-10-23): public identifier, validated, shown when known
             out["pmcid"] = _public_pmcid(s)
         if s.get("span"):  # stored-corpus source: provenance of the quoted chunk and its acquisition state (from stored provenance)
@@ -323,7 +334,7 @@ def public_sources(sources: list[dict]) -> list[dict]:
             if _licence_id(s):
                 out["licence"] = _licence_id(s)
         return out
-    return [one(s) for s in sources]
+    return [one(s, i) for i, s in enumerate(sources)]
 
 
 def count_valid_citations(answer: str, n_sources: int) -> int:
@@ -372,7 +383,8 @@ def drop_irrelevant(sources, inline=None) -> list:
         return srcs
 
 
-PUBLIC_CANDIDATE_FIELDS = ("n", "title", "url", "published", "identifier", "provider", "licence_decision")
+PUBLIC_CANDIDATE_FIELDS = ("n", "title", "url", "published", "identifier", "provider", "licence_decision",
+                           "reference", "in_text", "characterisation")  # NONASK-1103 C2: formatted strings only
 
 
 def public_candidates(sources: list[dict]) -> tuple:
@@ -382,8 +394,10 @@ def public_candidates(sources: list[dict]) -> tuple:
     from vera import answer_contract as contract
 
     out = []
-    for s in sources:
+    cit = _citation_strings(sources)
+    for i, s in enumerate(sources):
         c = {k: s.get(k) for k in PUBLIC_CANDIDATE_FIELDS}
+        c.update(cit[i])
         if _public_pmcid(s):  # PMCID-PUBLIC-1023 (owner 2026-10-23): public identifier, validated, shown when known
             c["pmcid"] = _public_pmcid(s)
         c["acquisition"] = contract.acquisition_state(s)

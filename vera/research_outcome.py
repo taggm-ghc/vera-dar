@@ -221,7 +221,7 @@ _CAUSE_TEXT = {
     "deadline_reached": "the time limit for this search was reached",
     "candidate_cap": "more documents were found than one request can check",
     "doc_budget_reached": "the limit on documents read per request was reached",
-    "job_quota": "the limit on new searches was reached",
+    "job_quota": "the hourly or daily limit on new acquisition runs was reached or reserved for other requests",  # NONASK-1103 S6: the job quota (R-ACQ-RATE/R-ACQ-DAILY), not the search-call budget ("budget")
     "busy": "the service was busy with other searches",
     "budget_unknown": "the time needed for a new search could not be determined",
     "fetch_timeout": "a source took too long to respond",

@@ -32,6 +32,47 @@ FULLDOC_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "fulld
 # are VERA-DAR's own storage claims and are emitted only while the shipped configuration backs them (_demo_no_storage).
 _THIRD_PARTY = (" Your question is sent to third-party AI and search services to generate a response. These services "
                 "have their own data-handling and retention policies.")
+# NONASK-1103 SD.1 (R-038): added at render time only while a lane flag is on (both ship off).
+_LANE_SEARCH = (" Search terms derived from your question may also be sent to GDELT (a news index) and Hacker News "
+                "search (Algolia).")
+_LANE_PAGES = (" VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only "
+               "for your answer, and page text is not saved.")
+_LANE_LICENCE = " Pages read for one answer are not licence-cleared or stored."
+_LANE_GDELT_CREDIT = " News index: [GDELT](https://www.gdeltproject.org/)."
+
+
+def reporting_lane_on() -> bool:
+    try:
+        from vera import reporting_lane
+        return bool(reporting_lane.lane_enabled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _official_on() -> bool:
+    try:
+        from vera import official_lane
+        return bool(official_lane.lane_enabled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def lanes_disclosure_on() -> bool:
+    """True when the Official or Current-reporting lane flag is on (any error -> False)."""
+    return _official_on() or reporting_lane_on()
+
+
+def lane_third_party() -> str:
+    """Extra third-party sentences; empty while both lanes are off."""
+    if not lanes_disclosure_on():
+        return ""
+    return (_LANE_SEARCH if reporting_lane_on() else "") + _LANE_PAGES
+
+
+def third_party_text() -> str:
+    return _THIRD_PARTY + lane_third_party()
+
+
 _NO_SAVE = " VERA-DAR does not save your question or information identifying you."
 _DEMO_NO_STORAGE = (" During this demonstration, VERA-DAR does not save newly discovered documents or research notes from "
                     "your questions.")
@@ -163,7 +204,7 @@ def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
                     chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
     """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
     (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
-    return ((_BASE_FULLDOC if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + _THIRD_PARTY + _NO_SAVE
+    return ((base_fulldoc() if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + third_party_text() + _NO_SAVE
             + _tail(path, contract_path, chain_path))
 
 
@@ -175,12 +216,28 @@ _FD_MARKERS = ("Answers and lists are not", "Licences for documents in its own",
                "VERA-DAR keeps no profile", "When it answers from its own")
 
 
+_LANE_COUNT_OLD = "answer from up to six passages, cites them"
+_LANE_COUNT_NEW = ("answer from up to six passages, plus up to six passages from public vendor or news pages it reads for "
+                   "that answer, cites them")
+_LANE_SENT_OLD = "the selected passages with their titles and links"
+_LANE_SENT_NEW = "the selected passages (including any from public pages read for that answer) with their titles and links"
+
+
+def base_fulldoc() -> str:
+    """NONASK-1103 SD.1: the full-document base text; the passage-count and passages-sent sentences also cover lane
+    passages (their own slots, admission.max_spans_total) only while a lane flag is on. Off: _BASE_FULLDOC exactly."""
+    if not lanes_disclosure_on():
+        return _BASE_FULLDOC
+    return _BASE_FULLDOC.replace(_LANE_COUNT_OLD, _LANE_COUNT_NEW).replace(_LANE_SENT_OLD, _LANE_SENT_NEW)
+
+
 def _fulldoc_parts() -> tuple[str, str, str, str, str, str]:
     """(how answers are produced incl. the AI-system sentence, reliability, own-collection licences, listed-record
     licences, no profile, third-party passage sentence): consecutive slices of _BASE_FULLDOC whose join is _BASE_FULLDOC."""
-    idx = [_BASE_FULLDOC.index(m) for m in _FD_MARKERS]
-    cuts = [0] + idx + [len(_BASE_FULLDOC)]
-    return tuple(_BASE_FULLDOC[a:b] for a, b in zip(cuts, cuts[1:]))  # type: ignore[return-value]
+    base = base_fulldoc()
+    idx = [base.index(m) for m in _FD_MARKERS]
+    cuts = [0] + idx + [len(base)]
+    return tuple(base[a:b] for a, b in zip(cuts, cuts[1:]))  # type: ignore[return-value]
 
 
 def required_notice_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
@@ -193,7 +250,7 @@ def required_notice_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_
         head = how.split(" For each", 1)[0] + " " + reliance.strip() + " " + profile.strip() + " " + passages.strip()
     else:
         head = _BASE
-    return (head + (" " + _REFUSED if offtopic_sentence() else "") + _THIRD_PARTY + _NO_SAVE
+    return (head + (" " + _REFUSED if offtopic_sentence() else "") + third_party_text() + _NO_SAVE
             + _tail(path, contract_path, chain_path))
 
 
@@ -201,16 +258,18 @@ def disclosure_sections(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_P
                         chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH):
     """[(heading, text)] whose texts, joined in order, are exactly disclosure_text() (headings are the only addition)."""
     off = offtopic_sentence()
-    tail = _THIRD_PARTY + _NO_SAVE + _tail(path, contract_path, chain_path)
+    tail = third_party_text() + _NO_SAVE + _tail(path, contract_path, chain_path)
+    on = lanes_disclosure_on()
     if fulldoc_enabled(fulldoc_path):
         how, reliance, own_lic, list_lic, profile, passages = _fulldoc_parts()
         secs = [("What VERA-DAR is and how it answers", how), ("Reliability", reliance),
-                ("Licences", own_lic + list_lic), ("Privacy and data sent to third parties", profile + passages)]
+                ("Licences", own_lic + list_lic + (_LANE_LICENCE if on else "")),
+                ("Privacy and data sent to third parties", profile + passages)]
     else:
         secs = [("What VERA-DAR is and how it answers", _BASE)]
     if off:
         secs.append(("Questions outside the collection, and refused requests", off))
-    secs.append(("Your question and what is stored", tail))
+    secs.append(("Your question and what is stored", tail + (_LANE_GDELT_CREDIT if reporting_lane_on() else "")))
     return [(h, t.strip()) for h, t in secs]
 
 
@@ -223,13 +282,18 @@ DISCLOSURE_TEXT_UNCONFIRMED = DISCLOSURE_TEXT  # identical while evidence recall
 SHORT_NOTICE = ("VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and "
                 "search services.")
 
+def short_notice_text() -> str:
+    """SHORT_NOTICE, plus the lane sentences while a lane flag is on (SD.1)."""
+    return SHORT_NOTICE + lane_third_party()
+
+
 ABOUT_LINKS = (("pages/about.py", "About: how VERA-DAR answers, licences, data"),
                ("pages/how_to_use.py", "How to use VERA-DAR"))
 
 
 def render_disclosure(st) -> None:
     """R-031: the one short notice, then links to the About and How to use pages. The full disclosure is on About only."""
-    st.caption(SHORT_NOTICE)
+    st.caption(short_notice_text())
     for target, label in ABOUT_LINKS:
         try:
             st.page_link(target, label=label)

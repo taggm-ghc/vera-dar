@@ -188,6 +188,36 @@
       ],
       "_note": "INACTIVE in config/ask-provider-chain.json (openrouter_example only). Values are the documented ceilings for :free models with no purchased credits."
     },
+    "gdelt_doc": {
+      "hosts": ["api.gdeltproject.org"],
+      "rate_per_s": 0.166667,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": 2000,
+      "throttle_statuses": [429],
+      "contact_param": null,
+      "proposed": {"min_interval_s": 6, "max_per_hour": 300, "max_per_day": 2000, "maxrecords": 50, "connect_timeout_s": 5, "read_timeout_s": 20, "backoff_s": [60, 120, 240], "jitter_frac": 0.2, "max_retries": 3, "circuit_open_s": 900},
+      "sources": [
+        {"url": "https://www.gdeltproject.org/about.html", "read": "2026-11-03", "inspection": "summarizing fetch (NONASK-1103 news-portals-evidence.md)",
+         "claims": "free use with citation of the GDELT Project; no official rate limit; third-party snippet: one request per 5 s, 429 without Retry-After, ~15 min per-IP block after bursts"}
+      ],
+      "_note": "PROPOSED, UNCALIBRATED (NONASK-1103 S7). 6 s interval = third-party 5 s guidance plus margin. Used by vera/reporting_lane.py, which enforces its own backoff 60/120/240 s and a 15-minute circuit; the lane flag ships OFF. Both live probes on 2026-11-03 returned 429."
+    },
+    "hn_algolia": {
+      "hosts": ["hn.algolia.com"],
+      "rate_per_s": 1.0,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": 10000,
+      "throttle_statuses": [429],
+      "contact_param": null,
+      "proposed": {"min_interval_s": 1, "max_per_hour": 1000, "max_per_day": 10000, "hitsPerPage": 20, "connect_timeout_s": 5, "read_timeout_s": 10},
+      "sources": [
+        {"url": "https://hn.algolia.com/api", "read": "2026-11-03", "inspection": "page returned only its title; 10,000 requests/hour per IP is a secondhand snippet, not verified at source",
+         "claims": "none verified at source"}
+      ],
+      "_note": "PROPOSED, UNCALIBRATED (NONASK-1103 S7). Well under the reported 10k/h per IP. Lane flag ships OFF."
+    },
     "doi_landing": {
       "hosts": ["doi.org", "dx.doi.org"],
       "rate_per_s": 0.5,

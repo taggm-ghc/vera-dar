@@ -53,7 +53,7 @@ def test_loader_level_refusal_codes_emitted_by_acquisition_have_plain_text():
     ({"outcome": "rejected", "reason": CODES["irrelevant"]}, "Not relevant enough to your question."),
     ({"outcome": "link_only", "reason": CODES["no_doi"]}, dp.REASON_TEXT[CODES["no_doi"]]),
     ({"outcome": "rejected", "reason": "R-ZZZ-NEW"}, dp.REASON_GENERIC),
-    ({"outcome": "not_evaluated"}, "Not checked in time."),
+    ({"outcome": "not_evaluated"}, "Not checked: a limit for this request was reached."),
     ({"outcome": "deferred", "reason": CODES["defer_cap"]}, dp.REASON_TEXT[CODES["defer_cap"]]),
 ])
 def test_reason_renders_plain_and_hides_codes(entry, want):

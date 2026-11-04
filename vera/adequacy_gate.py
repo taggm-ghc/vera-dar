@@ -13,7 +13,7 @@ from __future__ import annotations
 FINALIZE, QUALIFY, ABSTAIN = "finalize", "qualify", "abstain"
 
 
-def evaluate(declared, supported, labels=None, resp_partial: bool = False) -> dict:
+def _one(declared, supported, labels, resp_partial) -> dict:
     """declared: iterable of declared part keys; supported: iterable of keys with >= 1 shown supported claim;
     labels: optional {key: short text}; resp_partial: the existing fulldoc_answer._resp_partial result."""
     keys = list(dict.fromkeys(declared or ()))
@@ -30,6 +30,32 @@ def evaluate(declared, supported, labels=None, resp_partial: bool = False) -> di
         verdict = QUALIFY
     return {"verdict": verdict, "all_declared_parts_supported": all_sup, "resp_partial": bool(resp_partial),
             "parts": rows}
+
+
+def evaluate(declared, supported, labels=None, resp_partial: bool = False, subqueries=None) -> dict:
+    """As before for the original question. `subqueries` (optional, from vera.subquery parts) is an iterable of
+    {"label": str, "declared": [...], "supported": [...], "resp_partial": bool}; each is judged by the same rule
+    (coverage of declared parts, no new threshold). With 2+ sub-queries the overall verdict is over the sub-queries:
+    finalize all finalize, abstain none supported, else qualify; each sub-query reports an honest `not_found`.
+    With 0 or 1 sub-query the record is identical to today's (no "subqueries" key)."""
+    rec = _one(declared, supported, labels, resp_partial)
+    subs = [s for s in (subqueries or ()) if isinstance(s, dict)]
+    if len(subs) < 2:
+        return rec
+    out = []
+    for s in subs:
+        r = _one(s.get("declared") or (), s.get("supported") or (), s.get("labels"), bool(s.get("resp_partial")))
+        out.append({"label": str(s.get("label", "")), "verdict": r["verdict"], "not_found": r["verdict"] == ABSTAIN,
+                    "all_declared_parts_supported": r["all_declared_parts_supported"], "parts": r["parts"]})
+    n_found = sum(1 for o in out if not o["not_found"])
+    if n_found == 0:
+        verdict = ABSTAIN
+    elif all(o["verdict"] == FINALIZE for o in out) and rec["verdict"] != QUALIFY:
+        verdict = FINALIZE
+    else:
+        verdict = QUALIFY
+    rec.update(verdict=verdict, subqueries=out, all_declared_parts_supported=all(o["all_declared_parts_supported"] for o in out))
+    return rec
 
 
 def completeness(record: dict):

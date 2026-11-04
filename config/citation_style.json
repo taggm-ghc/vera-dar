@@ -1,0 +1,4 @@
+{
+  "_comment": "NONASK-1103 C1: seed/fallback for the citation style flag (plan section 13). 'apa7' = APA 7 house variant (vera/apa7.py); 'legacy' = current rendering. A DB table may supersede this later (DDL is owner-gated).",
+  "citation_style": "apa7"
+}

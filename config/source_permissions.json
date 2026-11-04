@@ -1,0 +1,35 @@
+{
+ "_doc": "NONASK-1103 I-A6 D4 (owner R-049/R-050): seed/fallback for the shared per-source permission record read by vera/source_permissions.py. Three gates (read, use_for_answer, ingest), each with a dev-trace reason code and a plain public phrase. Public phrases never carry a host or URL. Unknown = allowed for read and use_for_answer; ingest needs an explicit storage licence AND registry ingest_verdict not forbid.",
+ "_deny_note": "deny_hosts is the owner deny-list: ACTIVE, empty by default, owner-editable. An entry is a host (exact host or any subdomain). A listed host is never fetched and never used.",
+ "_kill_switch_note": "No switch lives here. The web-read kill switch is inline.web_read_enabled (ships true); this file only defines permissions. Emptying deny_hosts and loosening registry verdicts are the owner's levers.",
+ "deny_hosts": [],
+ "reason_codes": {
+  "read": ["read_ok", "read_robots_disallow", "read_registry_forbid", "read_deny_list", "read_login_paywall", "read_no_crawl"],
+  "use_for_answer": ["use_ok", "use_nd_licence", "use_no_ai_signal", "use_registry_forbid"],
+  "ingest": ["ingest_ok", "ingest_no_storage_licence", "ingest_registry_forbid", "ingest_not_readable", "ingest_not_usable", "ingest_unevaluated"]
+ },
+ "public_phrases": {
+  "read": {
+   "read_ok": "",
+   "read_robots_disallow": "not read: the site does not permit automated access",
+   "read_registry_forbid": "not read: the site does not permit automated access",
+   "read_deny_list": "not read: the site does not permit automated access",
+   "read_login_paywall": "not read: the page requires a login or payment",
+   "read_no_crawl": "not read: the site does not permit automated access"
+  },
+  "use_for_answer": {
+   "use_ok": "",
+   "use_nd_licence": "not used: the source does not permit reuse",
+   "use_no_ai_signal": "not used: the source does not permit reuse",
+   "use_registry_forbid": "not used: the source does not permit reuse"
+  },
+  "ingest": {
+   "ingest_ok": "",
+   "ingest_no_storage_licence": "not stored: the licence does not allow storage",
+   "ingest_registry_forbid": "not stored: the source does not permit storage",
+   "ingest_not_readable": "not stored: the page was not read",
+   "ingest_not_usable": "not stored: the source does not permit reuse",
+   "ingest_unevaluated": "not stored: storage is decided after the page is read"
+  }
+ }
+}

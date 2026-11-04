@@ -6,6 +6,7 @@ import re
 from vera import answer_contract
 from vera.memory_panel import _as_count
 from vera.sources_sidebar import LICENCE_SIDEBAR, _link, plain, plain_url
+from vera import apa7, references_ui
 from vera.ui_safety import safe_markdown
 
 KIND_ANSWER, KIND_DECLINE, KIND_READING_LIST = "answer", "decline", "reading_list"
@@ -43,6 +44,8 @@ REASON_TEXT = {
     "R-ACQ-UNREACHABLE": "Source unreachable.",
     "R-ACQ-RATELIMITED": "Source temporarily unavailable (too many requests).",
     "R-ACQ-DEADLINE": "Not checked in time.",
+    "R-ACQ-RATE": "Not checked: the limit on new acquisition runs was reached.",  # NONASK-1103 S6: a quota, not a time stop
+    "R-ACQ-DAILY": "Not checked: the limit on new acquisition runs was reached.",
     "R-ACQ-FETCH_TIMEOUT": "Source unreachable.",  # P0DTA-DIAG: the per-fetch wall clock
     "R-ACQ-DOC_BUDGET": "Not checked: the limit on documents read for one request was reached.",
     "R-ACQ-CRAWL_DELAY": "Not checked in time: the source asks crawlers to wait.",
@@ -71,8 +74,10 @@ OUTCOME_TEXT = {  # outcomes that carry no reason code
     "admitted": OBTAINED_TEXT,  # a reading list means no answer was written, so "read for this answer" would be false
     "already_stored": OBTAINED_TEXT,
     "not_used": OBTAINED_TEXT,
-    "not_evaluated": "Not checked in time.",
-    "not_reached": "Not checked in time.",
+    # NONASK-1103 S6: "in time" is for time stops only (R-ACQ-DEADLINE, R-ACQ-CRAWL_DELAY); with no recorded cause the
+    # candidate was left unchecked by a limit of this request (quota, candidate cut or document budget), not by time
+    "not_evaluated": "Not checked: a limit for this request was reached.",
+    "not_reached": "Not checked: a limit for this request was reached.",
     "deferred": "Not checked: too many candidates for one request.",
 }
 
@@ -135,7 +140,9 @@ def _candidates(raw) -> list[dict]:
         out.append({"title": c["title"].strip(), "url": c["url"].strip(), "acquisition": state,
                     "published": c.get("published") if isinstance(c.get("published"), (str, int)) else None,
                     "identifier": c.get("identifier") if isinstance(c.get("identifier"), (str, int)) else None,
-                    "has_licence": bool(c.get("licence_decision"))})
+                    "has_licence": bool(c.get("licence_decision")),
+                    "characterisation": c["characterisation"].strip() if isinstance(c.get("characterisation"), str) and c["characterisation"].strip() else None,
+                    "reference": c["reference"].strip()[:2000] if isinstance(c.get("reference"), str) and c["reference"].strip() else None})
     return out
 
 
@@ -149,7 +156,7 @@ def _render_memory(st, data: dict) -> None:
         for item in notes:
             if not isinstance(item, dict) or not isinstance(item.get("note"), str):
                 continue
-            st.markdown(safe_markdown(plain(item["note"])))
+            st.markdown(safe_markdown(apa7._p(item["note"])))  # C4: _p() already entity-encodes < >; plain() then safe_markdown() showed "&lt;"
             urls = [u for u in (item.get("urls") or []) if isinstance(u, str)] if isinstance(item.get("urls"), list) else []
             links = [_link(u, u) for u in urls]
             if links:
@@ -182,12 +189,16 @@ def render_discovery(st, data: dict) -> None:
             st.warning(" ".join((HEAD_UNMARKED if n_held else HEAD_OTHERS,
                                  HELD_BOTH if n_held else HELD_OBTAINED, BANNER_TAIL)))
         for i, c in enumerate(cands, 1):
-            line = f"{i}. {_link(c['title'] or c['url'], c['url'])}"
-            if c["published"] not in (None, ""):
-                line += f" ({plain(c['published'])})"
-            st.markdown(line)
-            parts = []
-            if c["identifier"] not in (None, ""):
+            if c.get("reference"):  # NONASK-1103 C4: APA 7 entry (server-formatted, escaped) + type/outlet/date line
+                st.markdown(f"{i}. " + safe_markdown(c["reference"]))
+                parts = [safe_markdown(c["characterisation"])] if c.get("characterisation") else []
+            else:
+                line = f"{i}. {_link(c['title'] or c['url'], c['url'])}"
+                if c["published"] not in (None, ""):
+                    line += f" ({plain(c['published'])})"
+                st.markdown(line)
+                parts = []
+            if c["identifier"] not in (None, "") and not c.get("reference"):  # the reference already ends with the identifier
                 parts.append(plain_url(c["identifier"]))
             line_why = whys[i - 1]
             if line_why == REASON_TEXT["R-ACQ-NODOI"] and _is_handle(c["identifier"]):

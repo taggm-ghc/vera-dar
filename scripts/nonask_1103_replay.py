@@ -187,16 +187,113 @@ def run_identifiers(records: list) -> dict:
     return {"handle_recognised": wilson(ok_h, n_h), "non_handle_unchanged": wilson(ok_o, n_o), "misses": miss}
 
 
+def run_subquery_search(scenarios: list) -> dict:
+    """NONASK-1103 S3 (plan 6.2, CTQ-S8): the pre-fetch relevance tiers (vera.search_query.relevance_tiers) of each
+    scenario's records, BEFORE = judged against the whole question's concepts as one pool (today), AFTER = judged
+    against the record's own sub-query with the named entity central (S2/S3). The AFTER metric of a single-topic control
+    is today's (no parts). Metrics: tier-0 recall of relevant records (must not drop), off-entity records kept at tier 0
+    (must fall), and single-topic controls whose tiers changed (must be zero)."""
+    from vera import search_query as sq
+    cfg = sq._default_terms_cfg()
+    gen = json.loads((ROOT / "config" / "auto_acquire.json").read_text(encoding="utf-8"))["search"]["openalex_profile"]["generic_terms"]
+    cnt = {"b_rel0": 0, "a_rel0": 0, "rel": 0, "b_off0": 0, "a_off0": 0, "off": 0, "ctrl_changed": 0, "ctrl": 0}
+    for s in scenarios:
+        recs = s["records"]
+        text = [r["title"] + " " + r.get("snippet", "") for r in recs]
+        before = sq.relevance_tiers(sq.key_concepts(s["question"], cfg, extra_generic=gen), text)
+        if s["parts"]:
+            after = [None] * len(recs)
+            for k, part in enumerate(s["parts"]):
+                idx = [i for i, r in enumerate(recs) if r["part"] == k]
+                kc = sq.key_concepts(part["text"], cfg, extra_generic=gen, central=part["entities"])
+                for i, t in zip(idx, sq.relevance_tiers(kc, [text[i] for i in idx])):
+                    after[i] = t
+        else:
+            after = list(before)
+            cnt["ctrl"] += 1
+            cnt["ctrl_changed"] += 1 if after != before else 0
+        for r, b, a in zip(recs, before, after):
+            key = "rel" if r["relevant"] else "off"
+            if s["parts"]:
+                cnt[key] += 1
+                cnt["b_" + key + "0"] += b == 0
+                cnt["a_" + key + "0"] += a == 0
+    return {"relevant_tier0_before": wilson(cnt["b_rel0"], cnt["rel"]), "relevant_tier0_after": wilson(cnt["a_rel0"], cnt["rel"]),
+            "off_entity_tier0_before": wilson(cnt["b_off0"], cnt["off"]), "off_entity_tier0_after": wilson(cnt["a_off0"], cnt["off"]),
+            "single_topic_controls_changed": wilson(cnt["ctrl_changed"], cnt["ctrl"]),
+            "regression": bool(cnt["a_rel0"] < cnt["b_rel0"] or cnt["ctrl_changed"])}
+
+
+def run_subquery_adversarial(scenarios: list) -> dict:
+    """NONASK-1103 S3, adversarial: parts come from the REAL vera.subquery.decompose (not supplied). BEFORE = today
+    (question-level concepts, one pool). MID = the first S3 version (part concepts, entity central, no disambiguation).
+    AFTER = shipped (part_tiers with registry context: full alias, or name/parent plus a context term, generic phrases
+    removed). Records labelled ambiguous are excluded. Controls run the same code (no split -> unchanged by design;
+    their n_parts is reported, a split of a generic-name question would be a decomposer defect)."""
+    from vera import search_query as sq, subquery
+    cfg = sq._default_terms_cfg()
+    gen = json.loads((ROOT / "config" / "auto_acquire.json").read_text(encoding="utf-8"))["search"]["openalex_profile"]["generic_terms"]
+    reg = subquery.load_entity_registry()
+    ctx_for = lambda e: subquery.entity_context(e, reg)  # noqa: E731
+    cnt = {k: 0 for k in ("rel", "off", "b_rel", "m_rel", "a_rel", "b_off", "m_off", "a_off")}
+    parts_n, unmapped = {}, 0
+    ctrl = {"rel_n": 0, "rel_t0": 0, "off_n": 0, "off_t0": 0, "same": 0}
+    for s in scenarios:
+        plan = subquery.decompose(s["question"])
+        ents_of = [tuple(p.entities) or ((p.label,) if plan.rule == "entity_list" and p.label else ()) for p in plan.parts]
+        parts = [(p.text, e) for p, e in zip(plan.parts, ents_of)]
+        parts_n[s["id"]] = len(parts)
+        recs, part_of = [], []
+        for r in s["records"]:  # a record naming several entities (a list) is filed under each of them
+            names = r["entity"] if isinstance(r.get("entity"), list) else [r.get("entity")]
+            ks = [next((i for i, p in enumerate(plan.parts) if n and any(n.lower() in e.lower() or e.lower() in n.lower()
+                                                                          for e in ents_of[i])), None) for n in names]
+            for k in dict.fromkeys(ks):
+                recs.append(r)
+                part_of.append(k)
+                unmapped += 1 if (len(parts) > 1 and k is None) else 0
+        text = [r["title"] + " " + r.get("snippet", "") for r in recs]
+        before = sq.relevance_tiers(sq.key_concepts(s["question"], cfg, extra_generic=gen), text)
+        after = sq.part_tiers(s["question"], text, part_of, parts, cfg=cfg, extra_generic=gen, ctx_for=ctx_for)
+        mid = list(before)
+        if len(parts) > 1:
+            mid = sq.part_tiers(s["question"], text, part_of, parts, cfg=cfg, extra_generic=gen, ctx_for=None)
+        for r, b, m, a in zip(recs, before, mid, after):
+            if r["label"] == "ambiguous":
+                continue
+            key = "rel" if r["label"] == "relevant" else "off"
+            if s["kind"] == "control":  # no split: same code path both ways, reported apart (not a S3 effect)
+                ctrl[key + "_n"] += 1
+                ctrl[key + "_t0"] += a == 0
+                ctrl["same"] += a == b
+                continue
+            cnt[key] += 1
+            cnt["b_" + key] += b == 0
+            cnt["m_" + key] += m == 0
+            cnt["a_" + key] += a == 0
+    w = lambda k, n: wilson(cnt[k], cnt[n])  # noqa: E731
+    return {"relevant_tier0_before": w("b_rel", "rel"), "relevant_tier0_mid_no_disambiguation": w("m_rel", "rel"),
+            "relevant_tier0_after": w("a_rel", "rel"), "off_tier0_before": w("b_off", "off"),
+            "off_tier0_mid_no_disambiguation": w("m_off", "off"), "off_tier0_after": w("a_off", "off"),
+            "controls_tier0_unchanged_by_design": {"relevant_tier0": f"{ctrl['rel_t0']}/{ctrl['rel_n']}", "off_tier0": f"{ctrl['off_t0']}/{ctrl['off_n']}", "records_with_same_tier": ctrl["same"]},
+            "n_parts": parts_n, "records_not_mapped_to_a_part": unmapped,
+            "regression": bool(cnt["a_rel"] < cnt["b_rel"] or cnt["a_off"] >= cnt["b_off"])}
+
+
 def replay(split: str = "all", overrides: list[str] | None = None) -> dict:
     qs, sc, ids = _pick(_load("questions.json")["questions"], split), _pick(_load("scenarios.json")["scenarios"], split), \
         _pick(_load("identifiers.json")["records"], split)
+    sqs = _pick(_load("subquery_search.json")["scenarios"], split)
+    adv = _pick(_load("subquery_adversarial.json")["scenarios"], split)
     amb_q = [q["id"] for q in qs if q.get("ambiguous")]
     return {"label": "offline fixture baseline, not live", "caveat": CAVEAT, "split": split,
             "ambiguous": {"questions": amb_q, "passages": [a for a in run_admission(sc, load_fulldoc_cfg(overrides))["ambiguous_excluded"]]}, "overrides": overrides or [],
-            "n": {"questions": len(qs), "scenarios": len(sc), "identifiers": len(ids)},
+            "n": {"questions": len(qs), "scenarios": len(sc), "identifiers": len(ids), "subquery_scenarios": len(sqs), "subquery_adversarial": len(adv)},
             "flags": {"admission": run_admission(sc, load_fulldoc_cfg(overrides)),
                       "source_type_router": run_source_type(qs),
-                      "handle_identifier": run_identifiers(ids)}}
+                      "handle_identifier": run_identifiers(ids),
+                      "subquery_search": run_subquery_search(sqs),
+                      "subquery_adversarial": run_subquery_adversarial(adv)}}
 
 
 def _fmt(w: dict) -> str:
@@ -212,7 +309,7 @@ def render(rep: dict) -> str:
                 out.append(f"  {k}: {_fmt(v)}")
             elif k == "confusion_label_by_route":
                 out.append(f"  {k}: {json.dumps(v)}")
-            elif k not in ("per_scenario", "misses", "ambiguous_excluded"):
+            elif k not in ("per_scenario", "misses", "ambiguous_excluded", "n_parts"):
                 out.append(f"  {k}: {v}")
     out.append(f"[ambiguous, excluded from metrics, for owner spot-check] {json.dumps(rep['ambiguous'])}")
     return "\n".join(out)

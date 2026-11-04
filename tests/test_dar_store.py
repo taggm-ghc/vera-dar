@@ -376,3 +376,20 @@ def test_corpus_version():
     assert sql.lstrip().upper().startswith("SELECT") and params == {} and "s1.evidence_spans" in sql
     assert "s1.domain_chunks" in sql and "s1.sources" in sql
     assert DarReader(FakeEngine()).corpus_version() == "0:0:0"
+
+
+def test_dar_store_authors_appended_1103():
+    """NONASK-1103 C2b: provenance->>'authors' is appended as r[13]; positions 0-12 never shift; 13-column rows
+    (older shape) still load with authors None; the joined string is carried as ONE literal."""
+    def eng(row):
+        def ro(sql, p):
+            return [row] if "DISTINCT ON" in sql else []
+        return FakeEngine(ro)
+    base = ("k1", 7, 3, "full text", "u", None, "T", "2024", "journal", None, "full_text", None, None)
+    e = eng(base + ("Smith, J.; Lee, K.",))
+    d = DarReader(e, schema="s1").load_snapshot([])["documents"][0]
+    assert d["authors"] == "Smith, J.; Lee, K." and d["source_key"] == "k1" and d["db_source_id"] == 7
+    assert d["stored_text_kind"] == "full_text" and d["licence"] is None and d["licence_decision"] is None
+    sql = next(c[0] for c in e.calls if "DISTINCT ON" in c[0])
+    assert sql.index("s.provenance->>'authors'") > sql.index("s.provenance->'licence_decision'")
+    assert DarReader(eng(base), schema="s1").load_snapshot([])["documents"][0]["authors"] is None

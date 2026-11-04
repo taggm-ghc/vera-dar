@@ -1,0 +1,8 @@
+{
+  "_doc": "NONASK-1103 S7/S1b seed/fallback for the proposed vera_reporting_portal table. Owner-curated. Only state=active AND disclosure_ok=true portals may be called; both ship false/draft until SD.1 (disclosure update, R-038) and the owner activate them. Portals receive extracted terms only, never the user's sentence.",
+  "_calibration_note": "No numbers here; rate limits live in config/rate_limits.json (a later WP). Endpoints are as relayed in work/NONASK-1103/news-portals-evidence.md and UNVERIFIED live at this date.",
+  "portals": [
+    {"name": "gdelt_doc", "kind": "search_api", "endpoint": "https://api.gdeltproject.org/api/v2/doc/doc", "terms_url": "https://www.gdeltproject.org/about.html", "licence_note": "credit GDELT with a link", "disclosure_ok": false, "date_field": "seendate", "state": "draft", "version": 1},
+    {"name": "hn_algolia", "kind": "search_api", "endpoint": "https://hn.algolia.com/api/v1/search", "terms_url": "https://hn.algolia.com/api", "licence_note": "attribute Hacker News / Algolia", "disclosure_ok": false, "date_field": "created_at", "state": "draft", "version": 1}
+  ]
+}

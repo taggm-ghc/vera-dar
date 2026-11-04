@@ -60,6 +60,7 @@ def doc_from_admitted(cand: dict, outcome: str) -> dict:
     return {"source_key": cand.get("canonical_url"), "db_source_id": cand.get("source_id"),
             "db_canonical_source_id": cand.get("canonical_source_id"), "url": cand.get("url") or cand.get("canonical_url"),
             "doi": cand.get("doi"), "title": cand.get("title"), "published": cand.get("published"),
+            "authors": cand.get("authors"),
             "source_type": cand.get("source_type"), "retrieved_at": prov.get("retrieved_at") or cand.get("retrieved_at"),
             "text": cand.get("snippet") or "", "stored_text_kind": prov.get("stored_text_kind"),
             "admission_passed": outcome == "admitted"}
@@ -184,7 +185,7 @@ class DarCorpus:
 
     def _store_doc(self, doc: dict) -> dict:
         rec = {"source_key": doc["source_key"], "url": doc.get("url"), "doi": doc.get("doi"),
-               "title": doc.get("title"), "text": doc.get("text") or "", "year": _year(doc),
+               "title": doc.get("title"), "authors": doc.get("authors"), "text": doc.get("text") or "", "year": _year(doc),
                "published": doc.get("published"), "source_type": doc.get("source_type"),
                "retrieved_at": doc.get("retrieved_at") or (self._clock() if self._clock else None),
                "stored_text_kind": doc.get("stored_text_kind"),
@@ -694,7 +695,7 @@ class DarCorpus:
             out.append({"title": c["source_title"], "url": c["url"], "retrieved_at": d["retrieved_at"],
                         "dar_span": {"start": c["start"], "end": c["end"], "span_id": c["span_id"]}, "published": d["published"] or (
                 str(c["year"]) if c["year"] else None), "snippet": self._snippet(c["text"]), "source_type": c["source_type"],
-                "doi": c["doi"], "stored_text_kind": d["stored_text_kind"],
+                "doi": c["doi"], "authors": d.get("authors"), "stored_text_kind": d["stored_text_kind"],
                 "provider": self.ccfg["stored_discovered_via"], "licence": d.get("licence"),
                 "admission_passed": d.get("admission_passed") is True,
                 "disposition": c["status"],

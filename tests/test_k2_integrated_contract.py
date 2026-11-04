@@ -22,6 +22,7 @@ from vera import ask_service
 from vera import memory_store as ms
 from vera import sources_sidebar as sb
 from vera.ask_service import AskResult
+from vera import references_ui
 from vera.grounded_ask import public_candidates
 from vera.memory_gate import load_gate_config
 
@@ -178,7 +179,7 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
         assert body["result_kind"] == "answer" and body["candidates"] == []
         assert body["sources"] and body["traced_sources"] and body["claim_check"]["detail"] == CHECK
         # ANS-LAYERS-1101: no completeness signal -> answer_status "unassessed" -> neutral info box, never green "verified"
-        assert body["answer_status"] == "unassessed" and not at.success and body["answer"] in _texts(at, "info")
+        assert body["answer_status"] == "unassessed" and not at.success and references_ui.display_answer(body["answer"], body.get("sources")) in _texts(at, "info")  # NONASK-1103 C5a
         assert answer_heading and "Reading list" not in page
         return
     # (b) C-F2 API: no prohibited evidence field on any non-answer path

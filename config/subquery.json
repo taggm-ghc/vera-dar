@@ -1,0 +1,11 @@
+{
+  "_doc": "NONASK-1103 S1/S1b: deterministic question decomposition. The original question stays authoritative; parts are only extra retrieval handles.",
+  "enabled": true,
+  "max_parts": 4,
+  "max_comparison_side_words": 8,
+  "separators_note": "item separators are ',', ', and', 'and', 'or', '&', '/'; comparison cues are 'vs', 'versus', 'compare X with/and/to Y', 'difference(s) between X and Y'.",
+  "generic_terms": ["i", "ai", "ml", "nlp", "llm", "llms", "gpu", "cpu", "api", "apis", "sql", "it", "us", "uk", "eu", "english", "the", "a", "an", "and", "or"],
+  "model_fallback": {"enabled": false, "_doc": "Stub, ships OFF (S3b). Used only when the rules give one part and a list cue exists; output must pass the drift guard. A decomposer callable must be injected; none is bundled."},
+  "official_lane": {"enabled": false, "site_search": false, "_site_search_doc": "Ships OFF like the lane (enable per docs/lanes-enable-checklist.md). Plan 6.3 step 2: one site:<host> DDG query per allow-verdict entity through the shared DuckDuckGo Lite provider (cache, daily_query_cap, rate gate); links_only/unknown rows never get one. false = entry URLs only.", "_doc": "NONASK-1103 S4 official lane (vera/official_lane.py). Ships OFF; enable only per docs/lanes-enable-checklist.md. Fetches only registry docs_entry_urls of rows with terms_verdict=allow, through vera/public_fetch.py (robots on the pinned path); every other row gives links only. No new number: the display cap is the row count of docs_entry_urls (owner-curated)."},
+  "_calibration_note": "max_parts=4 and max_comparison_side_words=8 are UNCALIBRATED priors (2026-11-03). Parts beyond max_parts are merged into the last part, never dropped. generic_terms is a curated list, not a tuned number. Needs the S0 confusion matrix (>=30 multi-entity and >=30 lexically similar controls) before any claim of rate; tests/test_subquery_1103.py is a unit check, not a calibration."
+}

@@ -38,3 +38,21 @@ def test_parity_with_answer_status_and_resp_partial():
         else:
             assert rec["verdict"] == "abstain"
             assert answer_contract.answer_status("insufficient", "ok", None) == "not_answered"
+
+
+def test_es2_four_vendor_two_supported_qualify():
+    subs = [{"label": f"v{i}", "declared": [1], "supported": [1] if i < 2 else []} for i in range(4)]
+    r = ag.evaluate([1], [1], subqueries=subs)
+    assert r["verdict"] == "qualify"
+    assert [s["not_found"] for s in r["subqueries"]] == [False, False, True, True]
+    assert [s["verdict"] for s in r["subqueries"]] == ["finalize", "finalize", "abstain", "abstain"]
+    assert ag.evaluate([1], [], subqueries=[{"label": "a"}, {"label": "b"}])["verdict"] == "abstain"
+    full = [{"label": "a", "declared": [1], "supported": [1]}, {"label": "b", "declared": [1], "supported": [1]}]
+    assert ag.evaluate([1], [1], subqueries=full)["verdict"] == "finalize"
+
+
+def test_es2_single_part_parity():
+    for d, s_, rp in [([1], [1], False), ([1, 2], [1], False), ([1], [], False), ([1], [1], True)]:
+        base = ag.evaluate(d, s_, resp_partial=rp)
+        one = ag.evaluate(d, s_, resp_partial=rp, subqueries=[{"label": "x", "declared": d, "supported": s_}])
+        assert one == base and "subqueries" not in one

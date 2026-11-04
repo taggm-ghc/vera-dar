@@ -202,6 +202,53 @@ def _cache_key(question: str, served, disc=None) -> tuple:
     return k + ("d:" + acq_discovered.digest(disc[0]),)
 
 
+def _subquery_parts(question: str, acq: dict) -> list | None:
+    """NONASK-1103 S3: [(query text, entities)] for a question that decomposes into 2 or more sub-queries (vera.subquery,
+    deterministic, no model call or network), else None. Off with search.subquery.enabled == false (kill switch).
+    Never raises: a failure means the unchanged single search."""
+    try:
+        if ((acq.get("search") or {}).get("subquery") or {}).get("enabled") is not True:
+            return None
+        from vera import search_query, subquery
+        plan = subquery.decompose(question)
+        if len(plan.parts) < 2:
+            return None
+        out = []
+        for p in plan.parts:  # a part with no registry entity is still centred on its list item (its label)
+            ents = tuple(p.entities) or ((p.label,) if plan.rule == "entity_list" and p.label else ())
+            out.append((search_query.part_query(p.text, ents), ents))
+        return out
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def lane_pass(question: str, acq: dict | None = None):
+    """NONASK-1103 S4/S7 (R-037, R-042): the Official and Current-reporting lanes, per sub-query and, for reporting,
+    per temporality (vera.lane_evidence.collect). Request-local: the result is NEVER put in the inline result cache,
+    the background queue (enqueue_candidates/follow_url never see lane items), a store or a log. None when both lane
+    flags are off (the shipped default: no work at all) or the question is empty; never raises."""
+    try:
+        from vera import lane_evidence
+        if not str(question or "").strip() or not lane_evidence.any_enabled():
+            return None
+        from vera import scope_router
+        if not scope_router.intent_clean(str(question)):
+            return None
+        return lane_evidence.collect(str(question))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lane pass failed (%s)", type(e).__name__)
+        return None
+
+
+def _with_parts(plan, fn, *a):
+    """Run the search with the request's sub-queries visible to acquisition_search, always reset afterwards."""
+    tok = search_providers.SUBQUERIES.set(plan)
+    try:
+        return fn(*a)
+    finally:
+        search_providers.SUBQUERIES.reset(tok)
+
+
 def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, deps_factory=None,
             served=None, discovered=None, prefer_recent: bool = False, topic_key: str = "") -> Outcome:
     """Never raises. See the module docstring for statuses. served (R2): doc keys the caller's stored-corpus attempt
@@ -543,13 +590,17 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         s = acq.get("search") or {}
         t = clock()
         search_failed = False
+        # NONASK-1103 S3: per-sub-query search. ONE reservation (above) and ONE DDG call serve the whole question; only
+        # the OpenAlex/Europe PMC/arXiv calls fan out, inside the scaled budget (search_providers.subquery_budget).
+        sq_plan = _subquery_parts(question, acq)
+        st["n_parts"] = len(sq_plan) if sq_plan else 1
         with search_providers.portal_scope() as portals_l:
             st["portals"] = portals_l
             _emit("search", "start", step=1)
             try:
                 # P0DTA-PRIO D3: the search phase ends a fetch reserve (per_doc_timeout_s) before the inline deadline
                 # (STREAM-1031: no inline deadline, so the search keeps only its own timeout_s)
-                cands = list(deps.search(question, int(s.get("results_per_provider", 10)),
+                cands = list(_with_parts(sq_plan, deps.search, question, int(s.get("results_per_provider", 10)),
                                          float(s.get("timeout_s", 20)) if ctx is not None else
                                          max(1.0, min(float(s.get("timeout_s", 20)),
                                                       deadline - clock() - _b(acq, "per_doc_timeout_s", 25)))) or [])
@@ -593,7 +644,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         route = route_rec["route"] if route_rec else None
         protected = _protected_keys(cands, acq, deps) if aa._topic_fit_active(acq, route) else set()
         ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count, drops=drops, route=route,
-                                    protected=protected)
+                                    protected=protected, parts=[(t, e) for t, e in (sq_plan or ())])
         for cid, why in drops.items():
             if cid in rec_by:
                 rec_by[cid]["outcome"], rec_by[cid]["reason"] = "dropped", why

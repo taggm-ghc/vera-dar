@@ -48,6 +48,9 @@ def load_labels(path=None) -> dict | None:
         v = d["verdicts"]
         if not (isinstance(v, dict) and all(isinstance(v.get(k), str) and v[k].strip() for k in ("supported", "partial"))):
             return None
+        ep = d.get("epistemic")
+        if ep is not None and not (isinstance(ep, dict) and isinstance(ep.get("reported"), str) and ep["reported"].strip()):
+            return None
         return d
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
@@ -139,6 +142,15 @@ def _bool(x):
     return x if isinstance(x, bool) else None
 
 
+def _reference(src) -> str | None:
+    try:
+        from vera import references_ui
+
+        return references_ui.citation_strings([src])[0]["reference"] if src else None
+    except Exception:  # noqa: BLE001  (a formatter fault never breaks the trace)
+        return None
+
+
 def project(evidence, claim_records=None, citations=None, adequacy=None, inline=None, public: bool = True, *,
             sources=None, labels=None, quote_cap: int = QUOTE_CAP, total_cap: int = QUOTE_TOTAL_CAP,
             labels_path=None) -> dict | None:
@@ -171,16 +183,22 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
             row["supports"] = [str(r.get("sentence", "")) for r in kept]
             verdicts = {r.get("verdict") for r in kept}
             row["verdict"] = lab["verdicts"]["supported" if verdicts == {"supported"} else "partial"] if kept else None
+            if (src.get("origin") or a.get("origin")) == "reported":  # E-S1: a reported source is never labelled verified
+                row["verdict"] = (lab.get("epistemic") or {}).get("reported", "reported, not independently verified")
+                row["epistemic"] = "reported"
             first = kept[0].get("sentence", "") if kept else ""
             cq = next((c.get("quote") for c in cites if c.get("n") == n and c.get("quote")), None)
             base = span_text or cq or ""
-            row["excerpt"] = snap_excerpt(base, first, quote_cap) if (cq or span_text) else None
+            row["excerpt"] = snap_excerpt(base, first, quote_cap) if (cq or span_text) and not src.get("answer_only") else None  # R-037: no lane page text
             row["reason"] = None
         else:
             removed = any(r.get("verdict") in ("unsupported", "partial") for r in mine)
             row["reason"] = lab["not_cited"]["removed_by_check" if removed else "unused"]
             row["supports"], row["verdict"], row["excerpt"] = [], None, None
         if dev:
+            ref = _reference(src)  # NONASK-1103 C6: dev record carries the APA 7 reference (public rows stay URL-free: E allowlist)
+            if ref:
+                row["reference"] = ref
             row.update(span_id=a.get("span_id"), relevance=a.get("relevance"), document_id=a.get("document_id"),
                        span=src.get("span"), quote_span=next((c.get("quote_span") for c in cites if c.get("n") == n), None),
                        not_cited_kind=None if cited else ("removed_by_check" if row["reason"] == lab["not_cited"]["removed_by_check"] else "unused"))
@@ -214,10 +232,14 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
         not any(c.get("claim_id") == r.get("id") for c in cites) for r in records if r.get("verdict") != "supported")
     caveat = (verdict in ("qualify", "abstain")) or any(not p["covered"] for p in parts) or removed
 
+    subs = [{"label": str(q.get("label", ""))[:300], "verdict": q.get("verdict") if isinstance(q.get("verdict"), str) else None}
+            for q in _dicts(ad.get("subqueries"))]  # public allowlist: label + verdict only
     out: dict = {"version": 1, "view": "dev" if dev else "public", "passages": rows,
                  "parts": parts,
                  "adequacy": {"verdict": verdict, "all_declared_parts_supported": _bool(ad.get("all_declared_parts_supported"))}
                  if ad else None}
+    if subs:
+        out["adequacy"]["subqueries"] = subs
     if caveat or dev:
         out["claims"] = counts
         out["documents"] = {"inspected": len(examined), "used": len({a.get("document_id") for a in admitted

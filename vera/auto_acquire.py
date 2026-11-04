@@ -365,9 +365,14 @@ def make_search(cfg: dict, chain_fn=None, search_fn=None, clock=time.monotonic):
         tok = search_providers.OPENALEX_PROFILE.set(profile)
         try:
             out = []
-            if provs:
+            mode = search_providers.OA_MODE.get()  # NONASK-1103 S3: per-sub-query AND call / question-level OR retry
+            if provs and mode == "or_only":
+                search_providers.OPENALEX_PROFILE.reset(tok)
+                tok = search_providers.OPENALEX_PROFILE.set(None)
                 out = search_and_clear(fn, provs, question, n, timeout_s)
-                if not out and profile is not None:
+            elif provs:
+                out = search_and_clear(fn, provs, question, n, timeout_s)
+                if not out and profile is not None and mode != "and_only":
                     # DAR-INLINE-1021-R2: the AND profile found nothing -> retry ONCE with the plain OR query (profile None).
                     left = min(float(timeout_s), t_end - clock())  # P0DTA-PRIO D3: the remainder, never a fresh timeout
                     if left > 0:
@@ -924,7 +929,7 @@ def reserve_reads(ranked: list, fresh_budget: int, cfg: dict, route) -> list:
 
 
 def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count, drops: dict | None = None,
-                    route: str | None = None, protected=None) -> list:
+                    route: str | None = None, protected=None, parts=None) -> list:
     # protected: set of doc_key_set keys of candidates already stored (reuse); None = lookup unavailable (no O1 swap)
     """Stage (shared by the background job and DAR-INLINE-1021): DOI or PMCID required (PLAN-NONDOI-1022), not already
     served (DOI/URL/ISBN), deduplicated by identity, ordered by the deterministic pre-rank, capped at max_candidates_resolved."""
@@ -939,8 +944,19 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     kc = search_query.key_concepts(question, extra_generic=((cfg.get("search") or {}).get("openalex_profile")
                                                                    or {}).get("generic_terms") or ())
     pool = [c for c in cands or () if isinstance(c, dict)]
-    tier = dict(zip(map(id, pool), search_query.relevance_tiers(
-        kc, [f"{c.get('title') or ''} {c.get('snippet') or ''}" for c in pool])))
+    _txt = lambda c: f"{c.get('title') or ''} {c.get('snippet') or ''}"  # noqa: E731
+    tier = {}
+    parts = list(parts or ())
+    if len(parts) > 1:
+        # NONASK-1103 S2/S3: see search_query.part_tiers (per-part concepts, entity central AND really present)
+        from vera import subquery
+        gen = ((cfg.get("search") or {}).get("openalex_profile") or {}).get("generic_terms") or ()
+        reg = subquery.load_entity_registry()
+        tl = search_query.part_tiers(question, [_txt(c) for c in pool], [c.get("part") for c in pool], parts,
+                                     extra_generic=gen, ctx_for=lambda e: subquery.entity_context(e, reg))
+        tier = dict(zip(map(id, pool), tl))
+    else:
+        tier = dict(zip(map(id, pool), search_query.relevance_tiers(kc, [_txt(c) for c in pool])))
     for pos, c in enumerate(cands or ()):
         if not isinstance(c, dict):
             continue
@@ -1032,6 +1048,19 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
                 changed = True
             if changed:
                 ranked = sorted(cut_l, key=keyf) + sorted(rest, key=keyf)
+    if len(parts) > 1 and tf is None:
+        # NONASK-1103 S3: the best of each sub-query first (round-robin by rank within the part), so the cut cannot be
+        # filled by one part; the order within a part is unchanged
+        buckets: dict = {}
+        for r in ranked:
+            buckets.setdefault(r[2].get("part"), []).append(r)
+        order, depth = [], 0
+        while len(order) < len(ranked):
+            for b in buckets.values():
+                if depth < len(b):
+                    order.append(b[depth])
+            depth += 1
+        ranked = order
     if drops is not None:  # FRESH-1023 C3: candidates beyond the cut are deferred (not counted)
         for r in ranked[n_cut:]:
             drops[id(r[2])] = acq_config.reason(cfg, "defer_cap")

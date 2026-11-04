@@ -102,7 +102,7 @@ def test_terminal_reasons_are_distinct_not_budget_exhausted():
     ({"outcome": "not_evaluated", "reason": R["deadline"]}, "time limit for this search was reached"),
     ({"outcome": "not_evaluated", "reason": R["cap"]}, "more documents were found than one request can check"),
     ({"outcome": "not_evaluated", "reason": R["docb"]}, "limit on documents read per request"),
-    ({"outcome": "not_evaluated", "reason": R["daily"]}, "limit on new searches was reached"),
+    ({"outcome": "not_evaluated", "reason": R["daily"]}, "limit on new acquisition runs was reached"),
     ({"outcome": "queued_background", "reason": R["ft"], "unfinished": "rejected"}, "took too long to respond"),
     ({"outcome": "queued_background", "reason": R["cd"], "unfinished": "rejected"}, "wait longer than this search could"),
 ])
@@ -117,7 +117,7 @@ def test_job_quota_refusal_is_an_explicit_quota_outcome():
     for st in ("rate", "daily_cap"):
         r = rr.summarize(triggers=["insufficient"], inline={"status": st}, used_new=False, older_available=False,
                          fr_before=None)
-        assert "limit on new searches was reached" in r["user_text"] and "budget ran out" not in r["user_text"]
+        assert "limit on new acquisition runs was reached" in r["user_text"] and "budget ran out" not in r["user_text"]
         assert "job_quota" in r["report_detail"]["incomplete_causes"]
 
 
