@@ -120,6 +120,9 @@ def redactor(base_url: str = "", env=None):
 
 # --- projection (pure; allowlist) ------------------------------------------------------------------------------
 
+S2_CREDIT = "Data source: Semantic Scholar (semanticscholar.org)."
+
+
 def _d(v) -> dict:
     return v if isinstance(v, dict) else {}
 
@@ -295,6 +298,7 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
                  "url": _str(s.get("url"), 2000), "published": _str(s.get("published"), 40),
                  "identifier": _str(s.get("identifier"), 120), "licence": _str(s.get("licence"), 120),
                  "reference": _str(s.get("reference"), 2000), "in_text": _str(s.get("in_text"), 200),  # NONASK-1103 C5
+                 "abstract_source": _str(s.get("abstract_source"), 40),
                  "excerpts": [], "attribution": None}
             groups.append(g)
             by_doc[_source_key(s, i)] = g
@@ -447,10 +451,12 @@ def _render_sources(st, rep: dict, r) -> None:
                      _ln(r, at.get("title") or "source", at.get("source")) if at.get("title") or at.get("source") else None,
                      _ln(r, at["licence"], at.get("licence_url")) if at.get("licence") else None]
             line = ". ".join(p for p in parts if p)
-            if at.get("changes"):
-                line += f". Changes: {plain(r(at['changes']))}"
+            if at.get("changes") or g.get("excerpts"):  # COMP-1103: shown excerpts are marked as excerpts
+                line += f". Changes: {plain(r(at.get('changes') or ui_evidence.EXCERPT_MARK))}"
             if line:
                 st.caption(line)
+        if g.get("abstract_source") == "semanticscholar":  # S2 licence: visible credit wherever its metadata is shown
+            st.caption(S2_CREDIT)
 
 
 def _render_evidence(st, rep: dict, r) -> None:
@@ -583,6 +589,9 @@ def render_live_report(st, rep: dict, r=None, public=None) -> None:
         (st.warning if rep.get("partial") or rep.get("status_label") else st.success)(_md(r, rep.get("answer")))
         if rep.get("partial"):
             st.caption("Partial answer: some parts of the question were not answered.")
+        sa = ui_evidence.share_alike_notice(rep.get("groups"))
+        if sa:
+            st.caption(r(sa))
     else:
         cause = rep.get("no_answer_cause") or {}
         st.info(r(cause.get("text") or rep.get("no_answer_reason")))

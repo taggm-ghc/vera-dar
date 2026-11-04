@@ -235,7 +235,10 @@ def test_cc_by_admitted_with_identity_attribution_and_clean_body(allow_arxiv_htm
     assert a["licence"] == "cc by" and a["licence_url"] == "https://creativecommons.org/licenses/by/4.0/"
     assert a["retrieved_at"] and a["published"] == "2026/05/21" and a["retrieved_at"] != a["published"]
     assert prov["title"] == X.TITLE and "Synthauthor, Alpha" in prov["authors"]
-    assert "arXiv:2605.23989v1" in prov["attribution"] and prov["doi"] == X.DOI
+    at = prov["attribution"]  # COMP-1103: a dict (a string was dropped by the live report), so it renders
+    assert isinstance(at, dict) and "arXiv:2605.23989v1" in at["title"] and prov["doi"] == X.DOI
+    assert at["source"] == X.ABS_URL and at["licence_url"] == a["licence_url"] and at["changes"] == "excerpted"
+    assert "Synthauthor, Alpha" in at["creator"]
     assert prov["url"] == X.ABS_URL and prov["fulltext_url"] == X.HTML_URL and prov["fulltext_format"] == "html"
     assert prov["acquisition"]["resolver"] == "arxiv-html" and prov["acquisition"]["url_chain"] == [X.ABS_URL, X.HTML_URL]
     body = p["source"]["content"] + " ".join(s["text"] for s in p["spans"])

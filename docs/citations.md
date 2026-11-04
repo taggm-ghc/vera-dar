@@ -6,7 +6,7 @@ Status of everything on this page: **offline-tested only; not deployed; live beh
 
 ## APA 7 house variant: identifiers appended
 
-Sources are cited in APA 7 with one house rule: an identifier (a link or ID) is appended to every reference, so a reader can reach the source. The caption shown under a reference list is "APA 7 (VERA-DAR house variant: identifiers appended)". A flag in `config/citation_style.json` selects `apa7` (default) or `legacy`; an unreadable or unknown value means `apa7`, and `legacy` returns no formatted strings.
+Sources are cited in APA 7 with one house rule: an identifier (a link or ID) is appended to every reference, so a reader can reach the source. The caption shown under a reference list is "APA 7 (VERA-DAR house variant: identifiers appended)". Where the source's licence is known (from its attribution record: Europe PMC and arXiv full text), the reference also ends with "Licence: <name>" linked to the licence URL (plain text: "Licence: <name> (<URL>)"); when no licence is known nothing is added. A flag in `config/citation_style.json` selects `apa7` (default) or `legacy`; an unreadable or unknown value means `apa7`, and `legacy` returns no formatted strings.
 
 Principles: metadata is never invented. A missing author moves the title to the author position; a missing date prints "n.d."; a joined author string is kept as one literal author, never split. An invalid identifier is left out, never repaired. If the formatter fails, the answer path is unaffected and the citation fields are empty.
 

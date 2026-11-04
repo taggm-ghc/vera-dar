@@ -23,6 +23,15 @@ from vera import auto_acquire, rate_limit, search_providers, selective_fetch, so
 
 
 @pytest.fixture(autouse=True)
+def _robots_allow_all(monkeypatch):
+    """COMP-1103: these tests pin the URL guard / DNS pin / redirect rules, not robots.txt (covered in
+    tests/test_nonask_1103_compliance.py); robots.txt would add its own GET to every counted sequence."""
+    from vera import selective_fetch
+    monkeypatch.setattr(selective_fetch, "robots_allowed", lambda *a, **k: True)
+
+
+
+@pytest.fixture(autouse=True)
 def _ddgfix_layers_off(monkeypatch):
     """DDGFIX-1023 DF-8: landing_doi now also checks robots.txt before any GET.
     These tests target the SSRF / redirect / pinning layers beneath them, which are unchanged; the new layer is

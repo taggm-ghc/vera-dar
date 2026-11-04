@@ -42,6 +42,7 @@
       "_note": "rate 1.0 = the existing search.openalex.min_interval_s (vera_eval_run.json), max_concurrency 1 = existing; both under the documented 10 req/s. Remaining is a budget unit (credits), so pace=false: only remaining <= 0 sets a cooldown to the reset. base_cooldown_s 900 = the existing search.openalex_quota_cooldown_s (auto_acquire.json), now the no-Retry-After fallback. No mailto (none approved; the page documents none)."
     },
     "europepmc": {
+      "_comp_note": "COMP-1103 (R-050): forum-level evidence only (no official limit read) suggests staying under 10 requests/s per IP; rate_per_s 5 with burst 5 and max_concurrency 4 keeps VERA-DAR well under that.",
       "hosts": ["www.ebi.ac.uk"],
       "rate_per_s": 5.0,
       "burst": 5,

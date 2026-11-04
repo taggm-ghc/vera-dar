@@ -8,6 +8,13 @@
         "paragraphs": [
           "The sidebar entry \"What VERA-DAR draws on\" shows the number of sources in the collection and the date of the newest source, a short licence note, a short description of the collection and its topics, the scope of questions VERA-DAR handles, and a summary of how it answers. When a language model wrote the description, the sidebar says so and gives the date it was written, and the description may be imperfect; otherwise the description is a plain summary and no such line is shown."
         ]
+      },
+      {
+        "heading": "Acknowledgements",
+        "paragraphs": [
+          "Thank you to arXiv for use of its open access interoperability.",
+          "Some bibliographic data and abstracts come from Semantic Scholar (semanticscholar.org), through the Semantic Scholar Academic Graph API."
+        ]
       }
     ]
   },

@@ -62,7 +62,9 @@ def test_ac1_doi_outputs_are_byte_identical_to_the_pre_change_tree():
     # NONASK-1103 WP-F0: moves ONLY for the provenance acquisition.providers list gaining "arxiv" (config search.providers);
     # the golden dump differs in the two "providers" arrays (an "arxiv" element each) and nowhere else. Previous pin:
     # abcfe3010a5e4b19e32fbfc4f2f48948507a9053497f2d3d282440760e20866d
-    assert got == "1615dd535bfd1918fe4bedf552fae7391b855270aaf670ca97e9341bdce0c89e"
+    # NONASK-1103 COMP: moves ONLY because the auto-acquired Europe PMC item now carries the CC BY attribution dict
+    # (auto_acquire.tasl_attribution) instead of None. Previous pin: 1615dd535bfd1918fe4bedf552fae7391b855270aaf670ca97e9341bdce0c89e
+    assert got == "adfdb7f3660a7e32dbafadc1e4bec1f87d83529e3ada46f0db0b8b28942c4652"
 
 
 def test_ac1_doi_item_with_an_identifier_keeps_the_doi_identity():

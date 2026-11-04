@@ -58,6 +58,14 @@ def csl_from_source(s: dict) -> dict:
         host = re.sub(r"^https?://(?:www\.)?([^/:]+).*$", r"\1", str(s.get("url") or "").lower())
         if str(pub).lower().removeprefix("www.") != host:  # a bare domain is not an outlet name (plan 2a)
             rec["publisher"] = pub
+    at = s.get("attribution") if isinstance(s.get("attribution"), dict) else {}
+    lic, lic_url = at.get("licence"), at.get("licence_url")  # NONASK-1103 COMP: licence after the identifier
+    if not lic and s.get("licence") and s.get("licence_url"):
+        lic, lic_url = s.get("licence"), s.get("licence_url")
+    if lic:
+        rec["license"] = str(lic)
+        if lic_url:
+            rec["license_url"] = str(lic_url)
     a = _parts(s.get("retrieved_at"))
     if len(a) == 3:
         rec["accessed"] = {"date-parts": [a]}

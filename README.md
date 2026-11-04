@@ -174,6 +174,8 @@ Records written by earlier configurations are not erased by this configuration.
 
 ## Credit
 
+Thank you to arXiv for use of its open access interoperability. Some bibliographic data and abstracts come from Semantic Scholar (semanticscholar.org), through the Semantic Scholar Academic Graph API. The same acknowledgements appear on the About page.
+
 Built during the AI engineering bootcamp capstone (TAI Labs Agentic AI Engineering Bootcamp, 2026) and published for education, evaluation and portfolio purposes.
 
 Copyright (c) 2026 Tagg Maiwald. All rights reserved. [OWNER: confirm this line]

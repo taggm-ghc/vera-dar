@@ -16,8 +16,8 @@ from vera import progress, progress_ui, ui_wake
 from vera.evidence_trace_ui import render_trace
 from vera.public_mode import (get_progress, is_public_mode, iter_ask_stream, post_ask, post_ask_tracked,
                               upstream_base_url)
-from vera.sources_sidebar import plain, render_nav, render_sources, render_sources_sidebar
-from vera.ui_evidence import (answer_status_label, has_layers, is_fulldoc, render_answer_scope_note,
+from vera.sources_sidebar import cited_numbers, plain, render_nav, render_sources, render_sources_sidebar
+from vera.ui_evidence import (share_alike_notice, answer_status_label, has_layers, is_fulldoc, render_answer_scope_note,
                               render_citations, claim_check_text, _note_texts, evidence_scope_line, acquisition_notice_line, render_evidence_scope, render_fallback_reason,
                               render_limitations, render_process_notes)
 from vera.ui_safety import safe_markdown
@@ -198,6 +198,14 @@ def render_result(data: dict) -> None:
         else:  # unassessed or unknown: neutral, never green-as-verified
             st.markdown("### Answer")
             st.info(safe_markdown(_view["display"]))
+        try:  # COMP-1103: CC BY-SA notice under the answer (cited sources only when the answer cites any)
+            _cited = cited_numbers(data.get("answer"))
+            _sa = share_alike_notice([dict(x, n=x.get("n", i)) for i, x in enumerate(data.get("sources") or [], 1)
+                                      if isinstance(x, dict) and (not _cited or x.get("n", i) in _cited)])
+        except Exception:  # noqa: BLE001  a notice failure never blocks the answer
+            _sa = ""
+        if _sa:
+            st.caption(safe_markdown(_sa))
         if layered:
             _layer2_heading(data, True)
             render_limitations(st, data)

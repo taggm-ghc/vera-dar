@@ -8,8 +8,9 @@ Safety: URLs come from a search engine and are untrusted. Only http(s) to
 public IPs is fetched (redirects re-checked), and fetched text is stored as
 data only - it carries no instruction authority.
 
-Accepted divergence: robots.txt is not consulted (single-URL, low-volume,
-research fetches); PDFs are recorded as unsupported until a parser is added.
+robots.txt (NONASK-1103 COMP, owner rule R-050): every hop's host is checked before any fetch (RFC 9309: 200 ->
+parsed for our User-Agent; 4xx other than 429 -> allowed; 429, 5xx, error or unparseable -> NOT allowed, fail
+closed), cached per host in this process for a short TTL. PDFs are recorded as unsupported until a parser is added.
 """
 import hashlib
 import ipaddress
@@ -293,7 +294,64 @@ class HostPacer:
 _DEFAULT_PACER = HostPacer()
 
 
-def _download(url, *, timeout_s, http_get, url_check, pacer):
+ROBOTS_TTL_S = 300.0       # short per-host in-process cache of a parsed robots.txt (also bounds staleness)
+ROBOTS_FAIL_TTL_S = 60.0   # a failed robots fetch (fail closed) is remembered briefly, not retried per URL
+ROBOTS_MAX_BYTES = 512 * 1024
+_ROBOTS: dict = {}         # host -> (monotonic time, parser | True (allow all) | False (fail closed))
+_ROBOTS_LOCK = threading.Lock()
+
+
+def robots_cache_clear() -> None:
+    with _ROBOTS_LOCK:
+        _ROBOTS.clear()
+
+
+def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock=time.monotonic,
+                   user_agent=None) -> bool:
+    """True only if robots.txt of the URL's host permits USER_AGENT to fetch url. Fails closed. Never raises."""
+    from urllib import robotparser
+    ua = user_agent or USER_AGENT
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if not host:
+        return False
+    now = clock()
+    with _ROBOTS_LOCK:
+        hit = _ROBOTS.get((parts.scheme, host, ua))
+    if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False else ROBOTS_TTL_S):
+        rp = hit[1]
+    else:
+        rp = False
+        try:
+            cur = f"{parts.scheme}://{parts.netloc}/robots.txt"
+            for _hop in range(MAX_REDIRECTS + 1):
+                ok, _why = url_check(cur)
+                if not ok:
+                    break
+                (pacer or _DEFAULT_PACER).wait(cur)
+                resp = http_get(cur, headers={"User-Agent": ua}, timeout=timeout_s,
+                                allow_redirects=False, stream=True)
+                if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                    cur = urljoin(cur, resp.headers["Location"])
+                    continue
+                if resp.status_code == 200:
+                    body = b"".join(resp.iter_content(65536))[:ROBOTS_MAX_BYTES]
+                    p = robotparser.RobotFileParser()
+                    p.parse(body.decode("utf-8", "ignore").splitlines())
+                    rp = p
+                elif 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    rp = True
+                break
+        except Exception:  # noqa: BLE001  any error: fail closed
+            rp = False
+        with _ROBOTS_LOCK:
+            _ROBOTS[(parts.scheme, host, ua)] = (now, rp)
+            while len(_ROBOTS) > 64:
+                _ROBOTS.pop(next(iter(_ROBOTS)))
+    return bool(rp is True or (rp is not False and rp.can_fetch(ua, url)))
+
+
+def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None):
     """Guarded GET shared by fetch_candidate and fetch_html: public-URL check on every hop, per-host pacing,
     manual redirects (at most MAX_REDIRECTS), text content types only, MAX_BYTES cap.
     Returns (raw, ctype, final_url, hops, encoding, error); error is None on success."""
@@ -303,6 +361,9 @@ def _download(url, *, timeout_s, http_get, url_check, pacer):
             ok, why = url_check(current)
             if not ok:
                 return None, None, None, hops, None, f"blocked: {why}"
+            if not (robots_ok or robots_allowed)(current, http_get=http_get, url_check=url_check, pacer=pacer,
+                                                 timeout_s=timeout_s):
+                return None, None, None, hops, None, "blocked: robots.txt disallows or could not be read"
             (pacer or _DEFAULT_PACER).wait(current)
             resp = http_get(current, headers={"User-Agent": USER_AGENT}, timeout=timeout_s,
                             allow_redirects=False, stream=True)
@@ -334,12 +395,12 @@ def _download(url, *, timeout_s, http_get, url_check, pacer):
 
 
 def fetch_html(url: str, *, timeout_s: float = 8.0, http_get=None, url_check=is_public_url,
-               pacer: HostPacer | None = None) -> tuple[str | None, str | None, str | None]:
+               pacer: HostPacer | None = None, robots_ok=None) -> tuple[str | None, str | None, str | None]:
     """Raw decoded body (markup kept, for link and metadata extraction) under the same guards.
     Returns (body, final_url, error). Default transport: pinned_get (CMF-1022-I2, E1/A4)."""
     http_get = http_get or pinned_get
     raw, _ctype, final, _hops, enc, err = _download(url, timeout_s=timeout_s, http_get=http_get,
-                                                     url_check=url_check, pacer=pacer)
+                                                     url_check=url_check, pacer=pacer, robots_ok=robots_ok)
     if err:
         return None, None, err
     return raw.decode(enc, errors="replace"), final, None
@@ -353,10 +414,11 @@ def fetch_candidate(
     url_check=is_public_url,
     ledger: CostLedger | None = None,
     pacer: HostPacer | None = None,
+    robots_ok=None,
 ) -> FetchResult:
     http_get = http_get or pinned_get  # CMF-1022-I2: pinned transport by default
     raw, ctype, current, hops, enc, err = _download(url, timeout_s=timeout_s, http_get=http_get,
-                                                    url_check=url_check, pacer=pacer)
+                                                    url_check=url_check, pacer=pacer, robots_ok=robots_ok)
     if err:
         return _fail(url, err, ledger)
     text = extract_text(raw.decode(enc, errors="replace"), ctype)

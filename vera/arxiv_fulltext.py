@@ -454,8 +454,8 @@ def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.mon
     meta["document_id"] = did
     # the paper's own licence statement (arXiv abs page), re-decided by the acquired-path reader like JATS elements
     meta["jats_licences"] = [{"href": lic_url, "type": None, "ref": None, "text": None}]
-    attribution = (f"{authors or 'Unknown authors'}. {title}. arXiv:{aid}{ver} ({abs_canon}). "
-                   f"Licence: {lic.upper()} ({lic_url}).")
+    attribution = aa.tasl_attribution(f"{title} (arXiv:{aid}{ver})", authors or "Unknown authors", abs_canon,
+                                      lic.upper(), lic_url)
     item = {"document_id": did, "title": title, "doi": doi, "landing_url": abs_canon, "fulltext_url": final,
             "fulltext_format": "html", "text_file": f"acquired/{did}.html", "licence": lic, "licence_url": lic_url,
             "authors": authors, "published_year": (published[:4] if re.match(r"\d{4}", published) else ""),

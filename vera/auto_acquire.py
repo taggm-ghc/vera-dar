@@ -726,6 +726,13 @@ def _family(licence_or_url: str) -> str | None:
 
 
 # ------------------------------------------------------------------------------------------------ the job
+def tasl_attribution(title, authors, source, licence, licence_url, changes: str = "excerpted") -> dict:
+    """COMP-1103 (CC BY s3(a)(1)): title, author, source, licence + licence URL and an indication of changes, built from
+    the verified acquisition record (never the model). Renderers show creator, linked title, linked licence, Changes."""
+    return {"creator": str(authors or "").strip(), "title": str(title or "").strip(), "source": str(source or "").strip(),
+            "licence": str(licence or "").strip(), "licence_url": str(licence_url or "").strip(), "changes": changes}
+
+
 def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url: str, cfg: dict, icfg: dict, job: Job,
                    score: float, now_iso: str, landing_url: str | None = None) -> tuple[dict, dict, dict, str]:
     """(rec, item, meta, text) after conversion and EVERY fulltext_loader filter; raises _Stop / Refused."""
@@ -756,7 +763,9 @@ def build_document(doi: str | None, cand: dict, res: dict, raw: bytes, final_url
             "licence_source": LICENCE_SOURCE_EPMC if res.get("pmcid") else LICENCE_SOURCE_JATS,  # PROVFIX-1028 (c)
             "discovered_via": "europepmc" if res.get("pmcid") else "doi-landing",  # PROVFIX-1028 (f): the route
             "authors": authors, "published_year": year, "fetched_at": now_iso,
-            "attribution": None, "verifier_status": icfg["verified_status"], "read_status": "VERBATIM"}
+            "verifier_status": icfg["verified_status"], "read_status": "VERBATIM"}
+    item["attribution"] = tasl_attribution(item["title"], authors, f"https://doi.org/{doi}" if doi else item["landing_url"],
+                                           res["licence"], res["licence_url"])
     if not doi:  # PLAN-NONDOI-1022: PMCID identity (doi stays None; the loader waives the DOI only for this kind)
         item["identifier"] = {"kind": "pmcid", "id": res["pmcid"], "url": item["landing_url"]}
     # WED-P17-VER v2: EVERY <license> element of the JATS (href, license-type, ali:license_ref, license-p text) is

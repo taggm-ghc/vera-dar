@@ -411,7 +411,25 @@ def reference_ex(rec: dict, *, suffix: str = "", links: bool = True) -> tuple[st
     out = " ".join(s.strip() for s in head if s and s.strip())
     if idtxt:
         out = f"{out} {idtxt}".strip()
+    lic = licence_text(rec, links)
+    if lic:
+        out = f"{out} {lic}".strip()
     return out, codes
+
+
+def licence_text(rec: dict, links: bool = True) -> str:
+    """NONASK-1103 COMP contract (house variant): "Licence: <name> (<licence URL>)" after the identifier, from the
+    record's CSL `license` / `license_url` (filled from the source's attribution dict). Fail soft: no name -> "";
+    a URL that fails safe_source_url is dropped (name only)."""
+    name = str(rec.get("license") or "").strip()
+    if not name or len(name) > 120:
+        return ""
+    url = safe_source_url(rec.get("license_url"))
+    if not url:
+        return f"Licence: {_p(name)}."
+    if links:
+        return f"Licence: [{_p(name)}]({url})."
+    return f"Licence: {_p(name)} ({plain_url(str(rec.get('license_url')))})."
 
 
 def reference(rec: dict, *, suffix: str = "", links: bool = True) -> str:

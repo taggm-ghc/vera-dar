@@ -207,12 +207,19 @@ class ArxivProvider:
     name = "arxiv"
     required_env: tuple[str, ...] = ()
 
-    def __init__(self, settings: Mapping, *, transport: Callable | None = None, query_terms: Mapping | None = None):
+    CACHE_TTL_S = 86400.0  # COMP-1103: the arXiv API manual asks callers to cache results; in-process, 24 h
+    CACHE_MAX = 128
+
+    def __init__(self, settings: Mapping, *, transport: Callable | None = None, query_terms: Mapping | None = None,
+                 wall_clock: Callable[[], float] | None = None):
+        import time
         self.s = settings
         self.endpoint = settings["endpoint"]
         self.max_bytes = int(settings["max_response_bytes"])
         self.gate = RateGate(float(settings["min_interval_s"]))
         self._transport = transport
+        self._wall = wall_clock or time.time
+        self._cache: dict = {}  # (endpoint, search_query, n) -> (stored_at, response); key = the query terms only
         self.query_terms = query_terms
         self.last_query: dict | None = None  # {"query": ..., "mode": ...} of the latest call (route record)
         self.relaxed = False       # set by search_and_fetch for the single zero-hit retry (R72-e)
@@ -228,7 +235,17 @@ class ArxivProvider:
                   "sortBy": "relevance", "sortOrder": "descending"}
         # Resolved at call time so a test patching arxiv_default_transport is honoured.
         tx = self._transport or arxiv_default_transport
-        return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
+        key = (self.endpoint, sq, n)
+        hit = self._cache.get(key)
+        if hit is not None and self._wall() - hit[0] < self.CACHE_TTL_S:
+            self.last_query["cache_hit"] = True
+            return hit[1]
+        resp = tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
+        if getattr(resp, "status_code", None) == 200:
+            if len(self._cache) >= self.CACHE_MAX:
+                self._cache.pop(next(iter(self._cache)), None)
+            self._cache[key] = (self._wall(), resp)
+        return resp
 
     def parse(self, resp, n: int) -> list[dict]:
         body = resp.text or ""
@@ -1798,12 +1815,15 @@ class DuckDuckGoLiteProvider:
     def __init__(self, settings: Mapping, *, transport: Callable | None = None, query_terms: Mapping | None = None,
                  today: Callable[[], str] | None = None, sleep: Callable[[float], None] | None = None,
                  clock: Callable[[], float] | None = None, cache_dir: Path | None = None,
-                 wall_clock: Callable[[], float] | None = None):
+                 wall_clock: Callable[[], float] | None = None, robots_check: Callable[[str, str], bool] | None = None):
         import time
         self.s = settings
         self.endpoint = settings["endpoint"]
         self.max_bytes = int(settings["max_response_bytes"])
         self.gate = RateGate(float(settings["min_interval_s"]))
+        # COMP-1103 (R-050): robots.txt of the host actually queried is checked before each live query (cached per host
+        # in selective_fetch). Injected transports (tests) skip the default network check unless a check is injected.
+        self._robots_check = robots_check if robots_check is not None else (None if transport is not None else self._default_robots)
         self.cache_dir = Path(cache_dir) if cache_dir else None  # None = no cache (tests inject a tmp dir)
         # ROUTE-R3 (D2): with no cache_dir, an in-process cache (url + title only) for memory_cache_ttl_s (0/absent = off)
         self._mem_ttl_s = float(settings.get("memory_cache_ttl_s") or 0) if self.cache_dir is None else 0.0
@@ -1887,6 +1907,11 @@ class DuckDuckGoLiteProvider:
             return False
         return bool(queries) and all(self._cache_get(q) is not None for q in queries)
 
+    @staticmethod
+    def _default_robots(url: str, user_agent: str) -> bool:
+        from vera import selective_fetch as sf
+        return sf.robots_allowed(url, http_get=sf.pinned_get, url_check=sf.is_public_url, user_agent=user_agent)
+
     def call(self, query: str, n: int, timeout_s: float, *, queries: list | None = None):
         # NONASK-1103 S4 (plan 6.3): `queries` = explicit [{"group", "query"}] (the official lane's one site: query);
         # it goes through the same cache, daily cap, rate gate and transport as every other call.
@@ -1894,6 +1919,15 @@ class DuckDuckGoLiteProvider:
         self.last_query = {"query": [q["query"] for q in queries], "mode": "site_groups"}
         tx = self._transport or ddg_default_transport
         headers = {"User-Agent": self.s["user_agent"]}  # never altered, even after a challenge
+        if self._robots_check is not None and any(self._cache_get(q) is None for q in queries):
+            try:
+                allowed = bool(self._robots_check(self.endpoint, self.s["user_agent"]))
+            except Exception:  # noqa: BLE001  fail closed
+                allowed = False
+            if not allowed:
+                self.last_query["cause"] = "R-ACQ-ROBOTS"
+                raise ProviderUnavailable("R-ACQ-ROBOTS: robots.txt of the DuckDuckGo host disallows the query path "
+                                          "or could not be read; DuckDuckGo skipped")
         parts, live = [], 0
         self.last_call_cached = False
         for i, q in enumerate(queries):

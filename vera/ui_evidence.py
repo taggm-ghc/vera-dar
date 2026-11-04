@@ -223,6 +223,26 @@ def _src_by_n(data) -> dict:
     return references_ui.sources_by_n((data if isinstance(data, dict) else {}).get("sources"))
 
 
+EXCERPT_MARK = "excerpted"
+_SA = re.compile(r"\bby[\s\-]*sa\b", re.I)
+
+
+def share_alike_notice(groups) -> str:
+    """COMP-1103 (orchestrator compliance decision, option ii): a short notice when an answer uses a CC BY-SA source.
+    `groups` = dicts with licence / attribution{licence} / title / n. Returns "" when no BY-SA source is used."""
+    refs = []
+    for g in groups if isinstance(groups, list) else []:
+        if not isinstance(g, dict):
+            continue
+        at = g.get("attribution") if isinstance(g.get("attribution"), dict) else {}
+        if _SA.search(str(g.get("licence") or "")) or _SA.search(str(at.get("licence") or "")):
+            refs.append(f"[{g.get('n', '?')}] {_clean(g.get('title') or 'source', 120)}")
+    if not refs:
+        return ""
+    return ("Parts of this answer adapt CC BY-SA material from: " + "; ".join(refs)
+            + "; that material remains under CC BY-SA 4.0.")
+
+
 def render_citations(st, data) -> None:
     """Per cited claim: [n] verdict, short quote (or span reference only), then CC BY attribution once per source."""
     cites = _list((data if isinstance(data, dict) else {}).get("citations"))
@@ -250,8 +270,8 @@ def render_citations(st, data) -> None:
                      _link(at.get("title") or "source", at.get("source")) if at.get("title") or at.get("source") else None,
                      (_link(at["licence"], at.get("licence_url")) if at.get("licence") else None)]
             line = ". ".join(p for p in parts if p)
-            if at.get("changes"):
-                line += f". Changes: {plain(at['changes'])}"
+            if at.get("changes") or quote:  # COMP-1103: a shown excerpt is marked as an excerpt where the licence needs it
+                line += f". Changes: {plain(at.get('changes') or EXCERPT_MARK)}"
             if line:
                 st.caption(f"[{n}] " + line)
 
