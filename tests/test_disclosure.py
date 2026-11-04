@@ -87,7 +87,7 @@ def test_unreadable_contract_config_is_l0_text(tmp_path):
 def test_confirm_flag_does_not_change_text_while_evidence_recall_off(tmp_path):
     cfg = tmp_path / "c.json"
     cfg.write_text(json.dumps({"memory": {"store": {"confirm_required": False}}}))
-    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT.replace(disclosure._web_sentence(), "", 1)
+    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT.replace(disclosure._web_sentence(), "", 1).replace(disclosure._LANE_COUNT_NEW, disclosure._LANE_COUNT_OLD).replace(disclosure._LANE_SENT_NEW, disclosure._LANE_SENT_OLD)
     assert disclosure.DISCLOSURE_TEXT_UNCONFIRMED == disclosure.DISCLOSURE_TEXT
 
 
@@ -241,3 +241,20 @@ def test_short_notice_text():
     assert "AI system" in disclosure.SHORT_NOTICE and "may be wrong" in disclosure.SHORT_NOTICE
     assert "your question is sent to third-party ai and search services" in disclosure.SHORT_NOTICE.lower()
     assert disclosure.required_notice_text() not in disclosure.SHORT_NOTICE
+
+
+def test_web_sentence_exact():
+    assert disclosure._web_sentence() == " Public web pages found by search may be read to answer your question; they are not saved."
+
+
+def test_base_fulldoc_widened_when_only_web_route_on(monkeypatch):
+    monkeypatch.setattr(disclosure, "lanes_disclosure_on", lambda: False)
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
+    assert disclosure.base_fulldoc() == disclosure._BASE_FULLDOC
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: True)
+    t = disclosure.base_fulldoc()
+    assert t != disclosure._BASE_FULLDOC
+    assert "plus up to six passages from public web pages it reads for that answer" in t
+    assert "including any from public pages read for that answer" in t
+    assert "".join(disclosure._fulldoc_parts()) == t
+    monkeypatch.setattr(disclosure, "fulldoc_enabled", lambda *a, **k: True)

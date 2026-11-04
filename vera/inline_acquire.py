@@ -633,7 +633,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     return done(Outcome("search_failed"))
                 cands, search_failed = [], True  # P0-5: the discovered candidates still go through acquisition
         ms["search"] = int((clock() - t) * 1000)
-        _web_read(question, acq, cands, st, ctx, count)  # A6-W: round 0 only (DDG once per question, N3)
+        _web_read(question, acq, cands, st, ctx, count, clock=clock, deadline=deadline,  # A6-W: round 0 only (N3)
+                  max_fetches=max(0, min(budget, acq_config.inline_fresh_docs(acq))))
         if ctx is not None:
             ctx.touch()  # the search rung finished: progress
             _check_stop(ctx, st)  # T10d: a disconnect/stop during the search starts no fetch below
@@ -690,13 +691,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 e = entries.get(id(r[2]))
                 if e is not None and id(r[2]) not in left:
                     e["outcome"] = "already_stored"
-        ranked = aa.reserve_reads(ranked_left, max(0, min(budget, acq_config.inline_fresh_docs(acq))), acq, route)
+        web_n = int(st.get("n_web_fetched", 0) or 0)  # WP6-P2b S2: web fetches count against max_docs_per_prompt
+        ranked = aa.reserve_reads(ranked_left, max(0, min(budget, acq_config.inline_fresh_docs(acq)) - web_n), acq, route)
         ms["reuse"] = int((clock() - t) * 1000)
         _emit("search", "done", found=len(cands), shortlisted=len(ranked))
         # ACQ S4-0 L4b-0 (B3): the fresh budget is separate from reuse; documents answered from stored rows no longer
         # reduce it. The per-prompt value comes from acq_config.inline_fresh_docs (max_docs_per_prompt 31 with the flag on, else
         # max_docs_per_job 2), still bounded by the remaining daily budget.
-        fresh_budget = max(0, min(budget, acq_config.inline_fresh_docs(acq)))
+        fresh_budget = max(0, min(budget, acq_config.inline_fresh_docs(acq)) - web_n)
         t = clock()
         per: dict = {}  # FRESH-1023 C3: always collected (per-candidate records); entries stay disc-only
         sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
@@ -854,20 +856,34 @@ def web_read_enabled(acq: dict | None) -> bool:
     return icfg_of(acq).get("web_read_enabled") is True
 
 
-def _web_read(question, acq, cands, st, ctx, count) -> None:
+def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadline=None, max_fetches=None) -> None:
     """A6-W (R-045/R-047/R-048/R-050, review N3/N4): read the round-0 general-web results (no DOI/PMCID/arXiv id)
     through vera.web_route (read gate before any fetch, vera.public_fetch, use_for_answer gate; always answer-only).
     Their candidate records are marked terminal so CONT-1023 never hands them to enqueue_candidates/run_job (N4).
-    Never raises; counts only reach the log."""
-    if not web_read_enabled(acq) or (ctx is not None and ctx.stop_reason() is not None):
+    Never raises; counts only reach the log.
+    WP6-P2b S2: before EACH fetch the route checks the stop/disconnect signal (streamed path) or the non-stream
+    `deadline` less the existing fetch reserve (per_doc_timeout_s); fetches started are bounded by `max_fetches` (the
+    pass's max_docs_per_prompt budget) and recorded in st["n_web_fetched"], which the caller subtracts from the fresh
+    budget. One call per question (a second call is a no-op), one fetch per host (redirects included)."""
+    if not web_read_enabled(acq) or (ctx is not None and ctx.stop_reason() is not None) or "web" in st:
         return
+    reserve = _b(acq, "per_doc_timeout_s", 25)
+
+    def should_stop():
+        if ctx is not None:
+            return "stopped" if ctx.stop_reason() is not None else None
+        if deadline is not None and deadline - clock() < reserve:
+            return "deadline"
+        return None
     try:
         from vera import web_route
         web = [c for c in cands if isinstance(c, dict) and web_route.is_web_candidate(c)]
         if not web:
             return
-        res = web_route.read_web(question, web)
-        st["web"], st["n_web"] = res, len(res.pages)
+        res = web_route.read_web(question, web, should_stop=should_stop, max_fetches=max_fetches)
+        st["web"], st["n_web"], st["n_web_fetched"] = res, len(res.pages), int(res.fetched)
+        if any((d.get("gate") or {}).get("read") == "read_deadline" for d in res.dev):
+            count(acq_config.reason(acq, "deadline"))
         st["web_ids"] = {id(c) for c in web}  # their records are marked terminal where they are built (N4)
         count("R-ACQ-WEB-READ") if res.pages else None
         if ctx is not None:

@@ -117,10 +117,11 @@ def test_ddg_site_search_uses_shared_provider_with_explicit_query(monkeypatch):
 
 
 def test_passage_count_sentence_flag_gated(monkeypatch):
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
     monkeypatch.setattr(disclosure, "lanes_disclosure_on", lambda: False)
     assert disclosure.base_fulldoc() == disclosure._BASE_FULLDOC
     monkeypatch.setattr(disclosure, "lanes_disclosure_on", lambda: True)
     t = disclosure.base_fulldoc()
-    assert "plus up to six passages from public vendor or news pages it reads for that answer" in t
+    assert "plus up to six passages from public web pages it reads for that answer" in t
     assert "including any from public pages read for that answer" in t
     assert "".join(disclosure._fulldoc_parts()) == t  # the section slices still join to the text

@@ -88,7 +88,7 @@ def test_default_registry_is_consulted_fail_closed():
 
 def test_disclosure_shown_iff_web_route_on(monkeypatch):
     from vera import disclosure
-    s = "Public web pages may be read to answer, and are stored only when their licence allows."
+    s = "Public web pages found by search may be read to answer your question; they are not saved."
     monkeypatch.setattr(disclosure, "web_read_on", lambda: True)
     assert s in disclosure.third_party_text()
     monkeypatch.setattr(disclosure, "web_read_on", lambda: False)

@@ -73,13 +73,16 @@ def web_read_on() -> bool:
         return False
 
 
+_WEB_SENTENCE_TEXT = "Public web pages found by search may be read to answer your question; they are not saved."
+
+
 def _web_sentence() -> str:
     try:
         from vera import web_route
         t = str(web_route.load_config().get("disclosure") or "").strip()
     except Exception:  # noqa: BLE001
         t = ""
-    t = t or "public web pages may be read to answer, and are stored only when their licence allows"
+    t = t or _WEB_SENTENCE_TEXT
     return " " + t[0].upper() + t[1:].rstrip(".") + "."
 
 
@@ -240,7 +243,7 @@ _FD_MARKERS = ("Answers and lists are not", "Licences for documents in its own",
 
 
 _LANE_COUNT_OLD = "answer from up to six passages, cites them"
-_LANE_COUNT_NEW = ("answer from up to six passages, plus up to six passages from public vendor or news pages it reads for "
+_LANE_COUNT_NEW = ("answer from up to six passages, plus up to six passages from public web pages it reads for "
                    "that answer, cites them")
 _LANE_SENT_OLD = "the selected passages with their titles and links"
 _LANE_SENT_NEW = "the selected passages (including any from public pages read for that answer) with their titles and links"
@@ -248,8 +251,8 @@ _LANE_SENT_NEW = "the selected passages (including any from public pages read fo
 
 def base_fulldoc() -> str:
     """NONASK-1103 SD.1: the full-document base text; the passage-count and passages-sent sentences also cover lane
-    passages (their own slots, admission.max_spans_total) only while a lane flag is on. Off: _BASE_FULLDOC exactly."""
-    if not lanes_disclosure_on():
+    passages (their own slots, admission.max_spans_total) only while a lane flag or the web route is on. Off: _BASE_FULLDOC exactly."""
+    if not (lanes_disclosure_on() or web_read_on()):
         return _BASE_FULLDOC
     return _BASE_FULLDOC.replace(_LANE_COUNT_OLD, _LANE_COUNT_NEW).replace(_LANE_SENT_OLD, _LANE_SENT_NEW)
 

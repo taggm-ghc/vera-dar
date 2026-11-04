@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from vera import disclosure, sources_sidebar as sb, ui_evidence as ue
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,12 @@ INSUFFICIENT_NEW = ("VERA-DAR searched {n_docs_phrase} but found no passage that
 BAD = "has not read the full documents"
 
 
+@pytest.fixture(autouse=True)
+def _web_read_off(monkeypatch):
+    """Web route pinned off: these tests compare against the unwidened _BASE_FULLDOC; the web-on wording is tested in test_disclosure.py."""
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
+
+
 def _cfg(tmp_path, enabled):
     p = tmp_path / "fd.json"
     p.write_text(json.dumps({"fulldoc": {"enabled": enabled}} if enabled is not None else {}))
@@ -48,7 +55,7 @@ def test_state1_off_keeps_todays_text(tmp_path, monkeypatch):
     t = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, False))
     assert t.startswith(STATE1_DISCLOSURE_START) and t == (disclosure._BASE + disclosure.offtopic_sentence() + disclosure._THIRD_PARTY + disclosure._NO_SAVE
                                                          + disclosure._DEMO_NO_STORAGE)  # full state-1 text
-    assert disclosure.DISCLOSURE_TEXT.startswith(STATE23_DISCLOSURE_START)  # shipped = state 2/3 (P1.6)
+    assert disclosure.DISCLOSURE_TEXT.startswith(STATE23_DISCLOSURE_START.replace(disclosure._LANE_COUNT_OLD, disclosure._LANE_COUNT_NEW))  # shipped (web route on: widened) = state 2/3 (P1.6)
     assert "has not acquired or read these full documents, so it does not use abstracts or snippets as evidence" in t
     assert PASSAGES_SENTENCE not in t and "passages" not in t
     assert disclosure._THIRD_PARTY.strip() in t  # question-only transmission is true only while off

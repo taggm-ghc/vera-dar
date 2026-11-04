@@ -10,6 +10,12 @@ from streamlit.testing.v1 import AppTest
 from vera import disclosure, help_pages
 
 ROOT = Path(__file__).resolve().parent.parent
+@pytest.fixture(autouse=True)
+def _web_read_off(monkeypatch):
+    """Web route pinned off: these tests compare against the unwidened _BASE_FULLDOC; the web-on wording is tested in test_disclosure.py."""
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
+
+
 _NORM = lambda t: re.sub(r"\s+", " ", t).strip()  # noqa: E731
 
 

@@ -27,8 +27,14 @@ class Fetch:
     def __init__(self, pages=None):
         self.calls, self.pages = [], pages or {}
 
-    def __call__(self, url):
-        self.calls.append(url)
+    def __call__(self, url, hop_gate=None, robots_cache=None):
+        # public_fetch contract: hop_gate runs on every hop BEFORE anything is sent to it; a "url" entry is a redirect
+        for hop in [url] + ([self.pages[url]["url"]] if isinstance(self.pages.get(url), dict)
+                            and self.pages[url].get("url") not in (None, url) else []):
+            refused = hop_gate(hop) if hop_gate is not None else None
+            if refused:
+                raise pf.FetchRefused(refused)
+            self.calls.append(hop)
         r = self.pages.get(url, {"text": "Readable body text about the topic."})
         if isinstance(r, Exception):
             raise r
@@ -92,9 +98,11 @@ def test_nd_registry_derivative_forbid_after_redirect_lists_only():
     assert r.pages == [] and r.dev[0]["gate"]["use"] == "use_registry_forbid"
 
 
-def test_redirect_to_read_forbidden_host_discards_text():
-    r, _ = run([cand("https://a.example/p")], Fetch({"https://a.example/p": {"url": "https://docs.aws.amazon.com/q"}}))
+def test_redirect_to_read_forbidden_host_is_never_requested():
+    # WP6-P2b S1 (R-050): the READ gate runs on the redirect hop before any request; no request reaches docs.aws
+    r, f = run([cand("https://a.example/p")], Fetch({"https://a.example/p": {"url": "https://docs.aws.amazon.com/q"}}))
     assert r.pages == [] and r.dev[0]["gate"]["read"] == "read_registry_forbid"
+    assert f.calls == ["https://a.example/p"] and not any("amazon" in u for u in f.calls)
 
 
 def test_unknown_host_readable_page_fits_lane_contract():
@@ -128,7 +136,7 @@ def test_public_phrases_carry_no_host():
     for e in r.listed:
         assert e["phrase"] and not any(h in e["phrase"] for h in ("aws", "amazon", "a.example", "b.example", "http"))
     cfg = json.loads(wr.CONFIG_PATH.read_text())
-    assert cfg["disclosure"] == "public web pages may be read to answer, and are stored only when their licence allows"
+    assert cfg["disclosure"] == "Public web pages found by search may be read to answer your question; they are not saved."
 
 
 def test_quotes_and_characterisation_bounded():

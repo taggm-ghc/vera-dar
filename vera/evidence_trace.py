@@ -186,6 +186,9 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
             if (src.get("origin") or a.get("origin")) == "reported":  # E-S1: a reported source is never labelled verified
                 row["verdict"] = (lab.get("epistemic") or {}).get("reported", "reported, not independently verified")
                 row["epistemic"] = "reported"
+            elif "web" in (src.get("origin") or a.get("origin"), src.get("lane") or a.get("lane")):  # S3: a web source is never labelled verified
+                row["verdict"] = "web source"
+                row["epistemic"] = "web"
             first = kept[0].get("sentence", "") if kept else ""
             cq = next((c.get("quote") for c in cites if c.get("n") == n and c.get("quote")), None)
             base = span_text or cq or ""

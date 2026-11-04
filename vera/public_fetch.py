@@ -97,6 +97,20 @@ def check_url(url: str, cfg: dict, resolve=None, timeout=None):
 
 MAX_ABANDONED = 8  # safety bound: workers still alive after a transport timeout; past it new fetches are "busy"
 _ABANDONED: list = []
+_ABANDONED_LOCK = threading.Lock()  # WP6-P2b M2: _ABANDONED is shared by transport and DNS workers
+
+
+def _reserve_worker_slot() -> None:
+    """Prune finished workers; refuse as "busy" once MAX_ABANDONED abandoned (transport or DNS) workers are alive."""
+    with _ABANDONED_LOCK:
+        _ABANDONED[:] = [t for t in _ABANDONED if t.is_alive()]
+        if len(_ABANDONED) >= MAX_ABANDONED:
+            raise FetchRefused("busy")
+
+
+def _abandon(t) -> None:
+    with _ABANDONED_LOCK:
+        _ABANDONED.append(t)
 _TLS = threading.local()
 
 
@@ -187,6 +201,7 @@ def _bounded_resolve(resolve, host, port, timeout):
     if timeout is None:
         return fn(host, port)
     box: dict = {}
+    _reserve_worker_slot()  # WP6-P2b M2: abandoned DNS threads count against MAX_ABANDONED too
 
     def run():
         try:
@@ -197,6 +212,8 @@ def _bounded_resolve(resolve, host, port, timeout):
     t.start()
     t.join(max(0.05, timeout))
     if "r" not in box:
+        if "e" not in box and t.is_alive():
+            _abandon(t)
         if "e" in box and isinstance(box["e"], (socket.gaierror, OSError)):
             raise socket.gaierror("dns")
         raise socket.gaierror("dns timeout")
@@ -270,9 +287,7 @@ def _call_transport(transport, args, timeout):
     response that arrives after the deadline is closed and discarded."""
     box: dict = {}
     lock = threading.Lock()
-    _ABANDONED[:] = [t for t in _ABANDONED if t.is_alive()]
-    if len(_ABANDONED) >= MAX_ABANDONED:
-        raise FetchRefused("busy")
+    _reserve_worker_slot()
     abort = _Abort()
 
     def run():
@@ -295,7 +310,7 @@ def _call_transport(transport, args, timeout):
     with lock:
         if "r" not in box:
             box["abandoned"] = True
-            _ABANDONED.append(t)
+            _abandon(t)
             abort.fire()
             raise FetchRefused("timeout") if "e" not in box else FetchRefused("unreachable")
     if box.get("r") is None:
@@ -303,9 +318,12 @@ def _call_transport(transport, args, timeout):
     return box["r"]
 
 
-def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check, cap_c, cap_d, ok_robots=False, meta=None, crawl_check=None):
+def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check, cap_c, cap_d, ok_robots=False, meta=None,
+         crawl_check=None, hop_gate=None):
     """Follow redirects manually; returns (body, final_url, status, content_type). `meta` (optional dict) receives the
-    no-AI response headers of the final 200 response (X-Robots-Tag, Content-Signal only)."""
+    no-AI response headers of the final 200 response (X-Robots-Tag, Content-Signal only). `hop_gate(url)` (WP6-P2b S1,
+    R-050) runs on EVERY hop (the first URL and each redirect target) after check_url and BEFORE robots.txt or the
+    request for that hop: a non-empty return is a refusal code, raised as FetchRefused(code); nothing is sent to it."""
     cur, hops, seen = url, 0, set()
     while True:
         if clock() > end:
@@ -314,6 +332,10 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
         if cur in seen:
             raise FetchRefused("cycle")
         seen.add(cur)
+        if hop_gate is not None:
+            refused = hop_gate(cur)
+            if refused:
+                raise FetchRefused(str(refused))  # read-restricted hop: neither robots.txt nor the page is requested
         if robots_check is not None and not robots_check(cur, host, port):
             raise FetchRefused("robots")
         if crawl_check is not None and not sf.crawl_reserve(host, crawl_check(host, port), clock):
@@ -384,9 +406,11 @@ def crawl_delay_for(cache, host, port, cfg) -> float:
         return 0.0
 
 
-def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=None) -> bool:
+def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=None, hop_gate=None) -> bool:
     """robots.txt over the same pinned path. 200 parsed; other 4xx (not 429) allow; 429, 5xx, error, redirect loop,
-    oversize or ANY exception fails closed. Parsed rules are cached per host for one fetch() call (rules only)."""
+    oversize or ANY exception fails closed. Parsed rules are cached per host (rules only) for one fetch() call, or for
+    one request when the caller passes its own cache (fetch(robots_cache=...)). A robots.txt redirect to a hop refused by
+    `hop_gate` is never requested and fails closed."""
     key = (host, port)
     try:
         if cache is not None and key in cache:
@@ -395,7 +419,7 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
         ru = f"https://{host}{'' if port == 443 else f':{port}'}/robots.txt"
         body, _f, status, _c = _get(ru, cfg, resolve, transport, clock, end, ("text/plain", "text/html", ""),
                                     None, int(cfg.get("max_robots_bytes", 200000)),
-                                    int(cfg.get("max_robots_bytes", 200000)), ok_robots=True)
+                                    int(cfg.get("max_robots_bytes", 200000)), ok_robots=True, hop_gate=hop_gate)
         if status != 200:
             if cache is not None:
                 cache[key] = True
@@ -425,20 +449,24 @@ def _meta_robots(html: str) -> list:
     return out
 
 
-def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only) or raises FetchRefused. Nothing is written anywhere."""
+def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
+          robots_cache: dict | None = None) -> dict:
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only) or raises FetchRefused. Nothing is written anywhere.
+    `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
+    `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
+    one request (rules only, never page text); default a fresh dict per call."""
     cfg = cfg or load_config()
     tr = transport or default_transport
     end = clock() + float(cfg.get("timeout_s", 8))
-    cache: dict = {}
+    cache: dict = robots_cache if robots_cache is not None else {}
     failed = False
     meta: dict = {}
     try:
         body, final, _s, ctype = _get(
             url, cfg, resolve, tr, clock, end, tuple(cfg["content_types"]),
-            lambda u, h, p: robots_allowed(u, h, p, cfg, resolve, tr, clock, end, cache),
+            lambda u, h, p: robots_allowed(u, h, p, cfg, resolve, tr, clock, end, cache, hop_gate),
             int(cfg["max_compressed_bytes"]), int(cfg["max_decompressed_bytes"]), meta=meta,
-            crawl_check=lambda h, p: crawl_delay_for(cache, h, p, cfg))
+            crawl_check=lambda h, p: crawl_delay_for(cache, h, p, cfg), hop_gate=hop_gate)
         decoded = body.decode("utf-8", "replace")
         text = extract_visible_text(decoded, ctype, clock, end)
     except FetchRefused:
