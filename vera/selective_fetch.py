@@ -304,11 +304,13 @@ ROBOTS_FAIL_TTL_S = 60.0   # a failed robots fetch (fail closed) is remembered b
 ROBOTS_MAX_BYTES = 512 * 1024
 _ROBOTS: dict = {}         # host -> (monotonic time, parser | True (allow all) | False (fail closed))
 _ROBOTS_LOCK = threading.Lock()
+_ROBOTS_SIGNAL: dict = {}  # WP6-P2b D2: (scheme, host, ua) -> robots.txt Content-Signal values (signal text only)
 
 
 def robots_cache_clear() -> None:
     with _ROBOTS_LOCK:
         _ROBOTS.clear()
+        _ROBOTS_SIGNAL.clear()
 
 
 def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock=time.monotonic,
@@ -326,7 +328,7 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
     if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False else ROBOTS_TTL_S):
         rp = hit[1]
     else:
-        rp = False
+        rp, signal = False, ""
         try:
             cur = f"{parts.scheme}://{parts.netloc}/robots.txt"
             for _hop in range(MAX_REDIRECTS + 1):
@@ -342,8 +344,11 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                 if resp.status_code == 200:
                     body = b"".join(resp.iter_content(65536))[:ROBOTS_MAX_BYTES]
                     p = robotparser.RobotFileParser()
-                    p.parse(body.decode("utf-8", "ignore").splitlines())
+                    txt = body.decode("utf-8", "ignore")
+                    p.parse(txt.splitlines())
                     rp = p
+                    from vera import source_permissions as _sp
+                    signal = " ".join(_sp.robots_content_signal(txt).split()).lower()[:300]
                 elif 400 <= resp.status_code < 500 and resp.status_code != 429:
                     rp = True
                 break
@@ -351,9 +356,30 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
             rp = False
         with _ROBOTS_LOCK:
             _ROBOTS[(parts.scheme, host, ua)] = (now, rp)
+            _ROBOTS_SIGNAL[(parts.scheme, host, ua)] = signal
             while len(_ROBOTS) > 64:
-                _ROBOTS.pop(next(iter(_ROBOTS)))
+                k = next(iter(_ROBOTS))
+                _ROBOTS.pop(k)
+                _ROBOTS_SIGNAL.pop(k, None)
     return bool(rp is True or (rp is not False and rp.can_fetch(ua, url)))
+
+
+def robots_content_signal(url, user_agent=None) -> str:
+    """WP6-P2b D2: the Content-Signal values of the robots.txt robots_allowed already parsed for this URL's host
+    ("" when none or not cached). Never fetches, never raises."""
+    try:
+        parts = urlsplit(url)
+        with _ROBOTS_LOCK:
+            return _ROBOTS_SIGNAL.get((parts.scheme, (parts.hostname or "").lower(), user_agent or USER_AGENT), "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def robots_no_ai(url, user_agent=None) -> bool:
+    """True when the host's robots.txt carries a no-AI signal (Content-Signal ai-input=no), as source_permissions
+    evaluates it: such a page may not be used for an answer, so it is not requested at all on this path."""
+    from vera import source_permissions as _sp
+    return _sp.robots_no_ai(_sp.robots_entries(robots_content_signal(url, user_agent)))
 
 
 def robots_crawl_delay(url, user_agent=None) -> float:
@@ -410,6 +436,8 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
             if not (robots_ok or robots_allowed)(current, http_get=http_get, url_check=url_check, pacer=pacer,
                                                  timeout_s=timeout_s):
                 return None, None, None, hops, None, "blocked: robots.txt disallows or could not be read"
+            if robots_ok is None and robots_no_ai(current):  # WP6-P2b D2: robots.txt Content-Signal ai-input=no
+                return None, None, None, hops, None, "blocked: robots.txt no-AI signal"
             (pacer or _DEFAULT_PACER).wait(current)
             cd = (crawl_delays or {}).get((urlsplit(current).hostname or "").lower())
             if not cd and robots_ok is None:  # WP6-P2: the Crawl-delay robots_allowed just parsed, same per-host gate

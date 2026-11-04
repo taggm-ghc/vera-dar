@@ -174,8 +174,7 @@ def test_evidence_trace_row_carries_reference_not_page_text(monkeypatch):
     cites = [{"n": 1, "claim_id": 1, "quote": SNIPPET}]
     recs = [{"id": 1, "sentence": "Claim.", "citations": (1,), "verdict": "supported"}]
     tr = evidence_trace.project(Ev, recs, cites, None, None, True, sources=[SRC_A])
-    if tr is None:
-        pytest.skip("labels config unavailable")
+    assert tr is not None, "evidence_trace.project returned None: config/evidence_trace.json missing, invalid or disabled"
     assert "reference" not in tr["passages"][0]  # public rows stay URL-free (E allowlist)
     dev = evidence_trace.project(Ev, recs, cites, None, None, False, sources=[SRC_A])
     assert dev is not None and "Alpha" in dev["passages"][0]["reference"]

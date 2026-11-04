@@ -425,9 +425,12 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
                 cache[key] = True
             return True
         rp = robotparser.RobotFileParser()
-        rp.parse(body.decode("utf-8", "replace").splitlines())
+        txt = body.decode("utf-8", "replace")
+        rp.parse(txt.splitlines())
         if cache is not None:
             cache[key] = rp
+            from vera import source_permissions as _sp  # WP6-P2b D2: robots.txt Content-Signal, signal text only
+            cache[("content_signal",) + key] = signal_value(_sp.robots_content_signal(txt))
         return rp.can_fetch(cfg["user_agent"], url)
     except Exception:  # noqa: BLE001
         return False
@@ -451,7 +454,7 @@ def _meta_robots(html: str) -> list:
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
           robots_cache: dict | None = None) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only) or raises FetchRefused. Nothing is written anywhere.
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
     `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
     `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
     one request (rules only, never page text); default a fresh dict per call."""
@@ -476,8 +479,11 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
     if failed:
         raise FetchRefused("error")
     sig = meta.get("headers", {})  # WP6-P2: only the two signal values, normalised; never the raw header dict
+    fp = urlsplit(final)
+    robots_sig = cache.get(("content_signal", (fp.hostname or "").lower().rstrip("."), fp.port or 443), "")
+    cs = ", ".join(v for v in (str(sig.get("content-signal") or "").strip(), robots_sig) if v)  # header + robots.txt
     return {"text": text, "url": final, "content_type": ctype,
-            "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(sig.get("content-signal")),
+            "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(cs),
             "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else "")}
 
 

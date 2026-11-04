@@ -98,6 +98,7 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
         rl = reporting if reporting is not None else (reporting_lane.ReportingLane() if rep_on else None)
         seen: set = set()
         n_reads = [0]
+        robots_cache: dict = {}  # robots.txt rules per host for this request (rules only)
         for p in parts:
             if ol is not None and p.entities:
                 try:  # the part's extracted terms only (never the user's sentence), for the site: query
@@ -131,9 +132,12 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                 if perm is not None and perm.read and perm.use_for_answer and n_reads[0] < _read_cap():
                     n_reads[0] += 1
                     try:
-                        page = (fetch or _public_fetch)(url)
+                        from vera import web_route
+                        page = web_route.gated_fetch(url, fetch=fetch or _public_fetch, robots_cache=robots_cache)
                         final = str(page.get("url") or url)
-                        if _host(final) == _host(url) and (page.get("text") or "").strip():
+                        post = web_route.evaluate_fetched(final, page)  # WP6-P2b D3: noai, Content-Signal, derivative
+                        if (_host(final) == _host(url) and post.read and post.use_for_answer
+                                and (page.get("text") or "").strip()):
                             pg = LanePage("reporting", "", str(it.get("title") or ""), final, outlet=it.get("outlet") or
                                           _host(final), published=it.get("published"), text=str(page["text"]))
                             pg.part = p.label
@@ -165,9 +169,11 @@ def _read_cap() -> int:
         return 6
 
 
-def _public_fetch(url: str) -> dict:
-    from vera import public_fetch
-    return public_fetch.fetch(url)
+def _public_fetch(url: str, **kw) -> dict:
+    """vera.public_fetch.fetch with the per-hop gate kwargs (dropped only for a stub that cannot take them)."""
+    from vera import public_fetch, web_route
+    f = public_fetch.fetch
+    return f(url, **kw) if web_route._takes_kwargs(f) else f(url)
 
 
 def _chunks(text: str, size: int, min_size: int):

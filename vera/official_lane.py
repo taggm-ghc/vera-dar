@@ -63,9 +63,11 @@ def lane_enabled(cfg: dict | None = None) -> bool:
 
 
 def verdict(row: dict) -> str:
-    """allow | links_only; unknown, missing or malformed verdicts mean links_only (owner 2026-11-03)."""
-    v = row.get("terms_verdict") if isinstance(row, dict) else None
-    return "allow" if v == "allow" and row.get("terms_evidence") else "links_only"
+    """allow | links_only. WP6-P2b (orchestrator decision, R-050 supersedes R-042 here): read unless restricted, so
+    only a registry access restriction (source_permissions.access_verdict forbid, incl. terms_verdict links_only)
+    means links_only; unknown or missing terms mean allow. Used by run() before any fetch or site: query."""
+    from vera import source_permissions
+    return "links_only" if source_permissions.access_verdict(row if isinstance(row, dict) else {}) == "forbid" else "allow"
 
 
 def _host(url: str) -> str:
@@ -97,12 +99,13 @@ class OfficialLane:
         self._rows = _rows(registry)
         self._fetch = fetch
         self._site_search = site_search  # (host, terms) -> [{"url", "title"}]; None = the shared DDG provider
+        self._robots_cache: dict = {}  # robots.txt rules per host for this lane object (one request)
 
     def _do_fetch(self, url: str) -> dict:
-        if self._fetch is not None:
-            return self._fetch(url)
-        from vera import public_fetch
-        return public_fetch.fetch(url)
+        """WP6-P2b D3: the per-hop READ gate (registry, deny list, login path) inside public_fetch on every hop."""
+        from vera import web_route
+        return web_route.gated_fetch(url, fetch=self._fetch, registry=list(self._rows.values()),
+                                     robots_cache=self._robots_cache)
 
     def _site_urls(self, row: dict, terms: list) -> list:
         """Plan 6.3 step 2: ONE "site:<host> <terms>" DDG query per allow-verdict entity, through the shared DDG
@@ -130,7 +133,8 @@ class OfficialLane:
             if row is None:  # no registry hit: the entity is named, no host is assigned (no guessing)
                 continue
             urls = [(u, f"{ent} documentation") for u in row.get("docs_entry_urls") or []]
-            if _gate((row.get("docs_entry_urls") or [""])[0], row).read:  # site: only for readable hosts
+            # R-050: site: only for readable rows; an access-restricted row (verdict links_only) gets links only below
+            if verdict(row) == "allow" and _gate((row.get("docs_entry_urls") or [""])[0], row).read:
                 urls += self._site_urls(row, terms)
             for url, title in urls:
                 if url in seen or not host_ok(url, row):
@@ -147,8 +151,15 @@ class OfficialLane:
                     try:
                         got = self._do_fetch(url)
                         final = str(got.get("url") or url)
+                        from vera import web_route
+                        post = web_route.evaluate_fetched(final, got, registry=list(self._rows.values()),
+                                                          registry_row=row)  # noai, Content-Signal, derivative, login
                         if not host_ok(final, row):
                             link["reason"] = "off_registry"
+                        elif not post.read:
+                            link["reason"] = post.read_reason
+                        elif not post.use_for_answer:
+                            link["reason"] = post.use_reason
                         elif not (got.get("text") or "").strip():
                             link["reason"] = "empty"
                         else:

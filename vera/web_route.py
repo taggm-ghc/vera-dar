@@ -133,6 +133,67 @@ def _login_wall(text: str, cfg: dict) -> bool:
     return any(m in head for m in cfg.get("login_markers", []))
 
 
+# WP6-P2b (verification-push2 D3): shared by the web route and both lanes (official_lane, lane_evidence) so every
+# public-page path applies the same per-hop READ gate and the same post-fetch evaluate().
+def make_hop_gate(start: str, *, registry=None, deny_list=None, cfg=None, hosts=None):
+    """hop_gate for vera.public_fetch.fetch: the READ gate (deny list, registry access_verdict forbid / terms
+    links_only), the pre-request login/paywall path heuristic and, when `hosts` is given, the per-round host cap,
+    on every hop BEFORE robots.txt or the request is sent. Returns a refusal code or None."""
+    cfg = cfg if cfg is not None else load_config()
+
+    def gate(hop: str):
+        g = sp.read_gate(hop, registry=registry, deny_list=deny_list)
+        if not g.read:
+            return g.read_reason
+        if _login_path(hop, cfg):
+            return "read_login_paywall"
+        h = _host(hop)
+        if hosts is not None and h != _host(start):
+            if h in hosts:
+                return "read_host_round_cap"  # S2 pacing: one fetch per host per round, redirects included
+            hosts.add(h)
+        return None
+    return gate
+
+
+def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None, deny_list=None, cfg=None):
+    """source_permissions.evaluate on a public_fetch result: X-Robots-Tag, Content-Signal (header and robots.txt),
+    meta robots, the login/paywall text heuristic and the registry derivative rules. Signal strings only."""
+    cfg = cfg if cfg is not None else load_config()
+    text = str(got.get("text") or "")
+    mr = str(got.get("meta_robots") or "")  # WP6-P2: normalised signal strings only (no raw headers)
+    head = f'<meta name="robots" content="{mr}">' if mr and '"' not in mr else ""
+    sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"))
+           if got.get(f)}
+    return sp.evaluate(final, headers=sig, html_head=head, registry=registry, registry_row=registry_row,
+                       robots_allowed=True, deny_list=deny_list,
+                       page_signals={"login_required": True} if _login_wall(text, cfg) else None)
+
+
+def gated_fetch(url: str, *, fetch=None, registry=None, deny_list=None, cfg=None, robots_cache=None):
+    """One public page for a lane: the pre-request login path check, then fetch with the per-hop gate. Returns the
+    fetch dict; raises public_fetch.FetchRefused (reason = a short code) when a hop is refused."""
+    from vera import public_fetch
+    cfg = cfg if cfg is not None else load_config()
+    f = fetch or public_fetch.fetch
+    if _login_path(url, cfg):
+        raise public_fetch.FetchRefused("read_login_paywall")
+    kw = {"hop_gate": make_hop_gate(url, registry=registry, deny_list=deny_list, cfg=cfg)}
+    if robots_cache is not None:
+        kw["robots_cache"] = robots_cache
+    return f(url, **kw) if _takes_kwargs(f) else f(url)
+
+
+def _takes_kwargs(f) -> bool:
+    """True when an injected fetch accepts hop_gate (public_fetch.fetch, or a stub with **kwargs / hop_gate)."""
+    import inspect
+    try:
+        ps = inspect.signature(f).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(p.kind is p.VAR_KEYWORD or p.name == "hop_gate" for p in ps)
+
+
 def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None, cfg=None, clock=time.monotonic,
              rate=None, should_stop=None, max_fetches=None) -> WebResult:
     """Never raises for a single bad candidate. `fetch` is vera.public_fetch.fetch-compatible
@@ -153,18 +214,7 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
     halted = None  # first stop/deadline/budget code; every later candidate is listed without a fetch
 
     def hop_gate(hop: str, start: str):
-        """S1 (R-050): the full READ gate on one hop, before robots.txt or the request is sent to it."""
-        g = sp.read_gate(hop, registry=registry, deny_list=deny_list)
-        if not g.read:
-            return g.read_reason
-        if _login_path(hop, cfg):
-            return "read_login_paywall"
-        h = _host(hop)
-        if h != _host(start):
-            if h in hosts:
-                return "read_host_round_cap"  # S2 pacing: one fetch per host per round, redirects included
-            hosts.add(h)
-        return None
+        return make_hop_gate(start, registry=registry, deny_list=deny_list, cfg=cfg, hosts=hosts)(hop)
     for c in candidates or ():
         if not is_web_candidate(c):
             continue
@@ -215,13 +265,7 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 continue
             final = str(got.get("url") or url)
             text = str(got.get("text") or "")
-            mr = str(got.get("meta_robots") or "")  # WP6-P2: normalised signal strings only (no raw headers)
-            head = f'<meta name="robots" content="{mr}">' if mr and '"' not in mr else ""
-            sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"))
-                   if got.get(f)}
-            post = sp.evaluate(final, headers=sig, html_head=head, registry=registry,
-                               robots_allowed=True, deny_list=deny_list,
-                               page_signals={"login_required": True} if _login_wall(text, cfg) else None)
+            post = evaluate_fetched(final, got, registry=registry, deny_list=deny_list, cfg=cfg)
             dev["gate"].update(read=post.read_reason, use=post.use_reason, ingest="ingest_answer_only_wp",
                                ingest_evaluated=post.ingest_reason)
             if not post.read:

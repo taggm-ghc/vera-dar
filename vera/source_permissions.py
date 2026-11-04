@@ -150,6 +150,27 @@ def _robots_no_ai(robots_txt_entries) -> bool:
     return False
 
 
+def robots_content_signal(robots_txt: str) -> str:
+    """WP6-P2b D2: the Content-Signal values of a robots.txt (comments dropped), joined by ", ". Signal text only;
+    the caller keeps nothing else of the file. Any group counts (fail-safe: a no-AI line anywhere restricts use)."""
+    vals = []
+    for ln in _robots_lines(robots_txt):
+        k, _, v = ln.split("#", 1)[0].strip().partition(":")
+        if k.strip().lower() == "content-signal" and v.strip():
+            vals.append(v.strip())
+    return ", ".join(vals)
+
+
+def robots_entries(signal: str) -> list[str]:
+    """robots_txt_entries for evaluate() rebuilt from a robots_content_signal() string ([] when empty)."""
+    return [f"Content-Signal: {signal}"] if str(signal or "").strip() else []
+
+
+def robots_no_ai(robots_txt_entries) -> bool:
+    """Public form of the robots.txt no-AI test (Content-Signal ai-input=no)."""
+    return _robots_no_ai(robots_txt_entries)
+
+
 def _lic(licence) -> tuple[str | None, str | None]:
     if isinstance(licence, str):
         return (licence, licence) if licence.startswith("http") else (licence, None)

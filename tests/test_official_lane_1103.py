@@ -56,14 +56,15 @@ def test_registry_seed_facts():
 
 
 def test_verdict_rules():
-    assert ol.verdict({}) == "links_only"
-    assert ol.verdict({"terms_verdict": "unknown", "terms_evidence": "x"}) == "links_only"
-    assert ol.verdict({"terms_verdict": "allow"}) == "links_only"
-    assert ol.verdict({"terms_verdict": "allow", "terms_evidence": ""}) == "links_only"
-    assert ol.verdict({"terms_verdict": "bogus", "terms_evidence": "x"}) == "links_only"
+    # WP6-P2b: R-050 (read unless restricted) governs the Official lane; only an access restriction is links_only
+    assert ol.verdict({}) == "allow"
+    assert ol.verdict({"terms_verdict": "unknown", "terms_evidence": "x"}) == "allow"
+    assert ol.verdict({"terms_verdict": "allow"}) == "allow"
+    assert ol.verdict({"terms_verdict": "bogus", "terms_evidence": "x"}) == "allow"
     assert ol.verdict({"terms_verdict": "links_only", "terms_evidence": "x"}) == "links_only"
+    assert ol.verdict({"terms_verdict": "allow", "access_verdict": "forbid"}) == "links_only"
     assert ol.verdict({"terms_verdict": "allow", "terms_evidence": "x"}) == "allow"
-    assert ol.verdict(None) == "links_only"
+    assert ol.verdict(None) == "allow"
 
 
 # ---- flags off --------------------------------------------------------------------------------------
