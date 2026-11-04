@@ -75,6 +75,8 @@ The response always carries `answer`, `model`, `tokens_used` and `cost_usd`, and
 - `contract.no_answer_cause`: `{code, text}` (text at most 300 characters), present only on a non-answer result. Codes seen in code: `no_passages`, `corpus_unusable`, `verification_unavailable`, `premise_unverified`, `no_supported_answer`, `reading_list`.
 - Citation records built for a full-document answer carry `supports`, the answer sentence each citation backs; the evidence trace uses it. The `/ask` `citations` field keeps its existing keys and does not include it.
 - `contract.research.portals_attempted` and `contract.research.portals_completed`: integers counting acquisition portals tried (not skipped) and completed, on a non-answer result.
+- `sources[]` and `candidates[]` entries carry `reference`, `in_text` and `characterisation` (formatted APA 7 strings; null when the style flag is `legacy`). See [Citations](citations.md).
+- `contract.trace.adequacy.subqueries`: list of `{label, verdict}` when the question was split into two or more sub-queries; absent otherwise. A source reported by a third party is labelled "reported by the source, not independently verified". When a lane is enabled (both ship off), the acquisition record in the response gains a `lanes` object with `links` (each with `lane`, `label`, `title`, `url` and, where known, `published`, `outlet` or `entity`, `read`), `n_read`, `credits` and `scope`. It carries counts and links only, never page text. Lane labels are "Official" and "Reported". See [Citations](citations.md#search-lanes).
 
 ## Live statistics (`/trace/live`)
 

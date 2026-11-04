@@ -43,6 +43,8 @@ On the main branch there is no `/ask/stream` or `/ingest` route and no progressi
 - **arXiv acquisition.** arXiv is an acquisition provider called once per job, separately from OpenAlex, with its own search-call slot (`config/auto_acquire.json`). The licence is still decided at fetch.
 - **Handle recognition.** `hdl.handle.net/<prefix>/<suffix>` and `hdl:` identifiers (prefix not starting `10.`) are recognised as persistent identifiers. No automatic fetch route exists for them.
 - **Live statistics (flag-off).** When `config/live_stats.json` `enabled` is true, one anonymous row of enums and counts is written in a background task after a successful result; no question text. `GET /trace/live` (public) and `GET /trace/live/owner` (owner key) read day-bucketed aggregates. It ships off and needs the owner-run draft migration 013, which is not applied.
+- **Citations (push 2, offline-tested, not deployed, live unverified).** A pure APA 7 formatter produces `reference`, `in_text` and `characterisation` for public sources and candidates; see [Citations](citations.md).
+- **Sub-queries (push 2, same status).** A deterministic decomposer splits multi-entity and comparison questions into parts; adequacy is judged per part and reported in the public trace. Two optional lanes (Official, Current-reporting) run per sub-query. Both ship off; a request does no lane work while they are off. See [Citations](citations.md#search-lanes).
 
 ## Reliability and limitations
 

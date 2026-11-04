@@ -73,6 +73,13 @@ Enabled in code:
 - arXiv as an acquisition provider (own call, own budget slot).
 - Recognition of Handle identifiers (`hdl.handle.net/...`, `hdl:`), shown as persistent identifiers; no automatic fetch route.
 
+Prepared for push 2 (offline-tested, not deployed, live unverified; see [Citations](docs/citations.md)):
+
+- APA 7 house variant "identifiers appended": references in the answer area, reading list and Report page (never the sidebar).
+- Deterministic sub-query decomposition and per-sub-query adequacy verdicts in the public trace.
+- Answer-only, never-stored handling of pages without an open licence (policy in plain words).
+- Two search lanes, the Official lane and the Current-reporting lane. Both ship off. See [Citations](docs/citations.md#search-lanes) and [Lanes enable checklist](docs/lanes-enable-checklist.md).
+
 Prepared but flag-off (shipped disabled; thresholds are uncalibrated placeholders):
 
 - Topic anchor admission rule (`fulldoc_answer.json`, `topic_anchor.enabled=false`).
@@ -158,6 +165,7 @@ Records written by earlier configurations are not erased by this configuration.
 | [API and data use](docs/api.md) | Endpoints, response semantics, privacy |
 | [Development](docs/development.md) | Local setup and tests |
 | [Deployment](docs/deployment.md) | Docker and Render (interim host) |
+| [Citations and storage terms](docs/citations.md) | APA 7 house variant, sub-queries, storage policy |
 | [Architecture](docs/architecture.md) | Conceptual architecture and gaps |
 | [Evaluation](docs/evaluation.md) | TRACE method, results, limits |
 | [Release checks](docs/release-checks.md) | Release gate checks |
