@@ -1,0 +1,4 @@
+{
+  "_comment": "NONASK-1103 L3 synthesis pass (vera/synthesis.py). Ships OFF and is not wired into ask_service, fulldoc_answer or streamlit_app. Only the owner flips it, after the S10 test and the 10-scenario eval (evidence-policy plan L3; owner-flip-packet 'L3 synthesis'). Every output sentence is re-checked against admitted spans only (I1/I2); rejected claims are never reintroduced (F6); any failure falls back to the deterministic assembly. No threshold is introduced.",
+  "enabled": false
+}

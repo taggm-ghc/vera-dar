@@ -1,0 +1,4 @@
+{
+  "_comment": "NONASK-1103 L4 research loop (vera/research_loop.py). Ships OFF and is not wired into ask_service, fulldoc_answer or streamlit_app. Owner-flip-packet option (a): no separate max_rounds; the loop ends on the existing config/auto_acquire.json inline.deadline_s (45 s), a round with no new admitted passage, or a repeated query key, and records an exit_reason. Only extracted search terms reach the search callable. No new threshold or limit is introduced.",
+  "enabled": false
+}
