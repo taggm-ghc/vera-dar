@@ -48,12 +48,6 @@
         ]
       },
       {
-        "heading": "Guardrail demo",
-        "paragraphs": [
-          "In the sidebar of the Ask page, the box Show a rejected-answer demonstration runs a test mode in which VERA-DAR builds a deliberately malformed reply and checks it against its reply format. The check rejects it and an error message is shown. No model call is made and no answer is produced, so the question you typed is not used."
-        ]
-      },
-      {
         "heading": "The other pages",
         "paragraphs": [
           "Report: either a live report from asking VERA-DAR, or an offline example labelled \"illustrative, not a real run\".",

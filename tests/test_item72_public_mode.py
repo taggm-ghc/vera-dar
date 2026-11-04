@@ -172,9 +172,12 @@ def test_ask_route_429_generic(monkeypatch):
     pm.reset_limiter(pm.CapLimiter(_caps(req_per_min_per_client=1)))
     try:
         c = TestClient(main.app)
-        body = {"question": "q", "mode": "force_bad"}
+        def _boom(*a, **k):
+            raise main.HTTPException(status_code=500, detail="x")
+        monkeypatch.setattr(main, "_ask_impl", _boom)
+        body = {"question": "q"}
         h = {"X-API-Key": "k" * 20}
-        assert c.post("/ask", json=body, headers=h).status_code == 500  # force_bad path, counted
+        assert c.post("/ask", json=body, headers=h).status_code == 500  # counted
         r = c.post("/ask", json=body, headers=h)
         assert r.status_code == 429
         assert r.json() == {"detail": pm.load_caps().rate_limit_detail}
@@ -289,3 +292,19 @@ def test_shipped_prompt_limits_od_1031_promptlim():
             c.req_per_day_global) == (6, 30, 180, 400)
     assert c.trust_proxy_headers is False and c.trusted_proxy_hops == 1
     assert (c.cost_usd_per_day_global, c.cost_usd_per_day_per_client) == (2.0, 0.25)
+
+
+def test_ask_old_force_bad_mode_is_422_not_a_crash(monkeypatch):
+    """NONASK-1103-GR: the retired demo mode is rejected by request validation; "normal" is still accepted."""
+    monkeypatch.setenv("VERA_API_KEY", "k" * 20)
+    monkeypatch.delenv("VERA_PUBLIC_MODE", raising=False)
+    import main
+    pm.reset_limiter(pm.CapLimiter(_caps(req_per_min_per_client=100)))
+    try:
+        c = TestClient(main.app)
+        h = {"X-API-Key": "k" * 20}
+        r = c.post("/ask", json={"question": "q", "mode": "force_bad"}, headers=h)
+        assert r.status_code == 422 and "detail" in r.json()
+        assert main.AskRequest(question="q", mode="normal").mode == "normal"
+    finally:
+        pm.reset_limiter(None)

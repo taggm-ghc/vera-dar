@@ -6,13 +6,13 @@ import os
 import queue
 import threading
 import time
-from enum import Enum
+from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AuthenticationError, OpenAIError, RateLimitError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from vera import answer_contract
 from vera.corpus_admission import admit as admit_to_corpus, llm_call_for, store_from_env
@@ -167,14 +167,9 @@ class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DemoMode(str, Enum):
-    normal = "normal"
-    force_bad = "force_bad"
-
-
 class AskRequest(APIModel):
     question: str = Field(..., max_length=4000)
-    mode: DemoMode = DemoMode.normal
+    mode: Literal["normal"] = "normal"  # single-valued; kept for API compatibility, anything else is a 422
 
 
 class AskSource(BaseModel):
@@ -380,28 +375,6 @@ class AskResponse(BaseModel):
         if d.get("corpus_source") is None:
             d.pop("corpus_source", None)
         return d
-
-
-class SyntheticFault(str, Enum):
-    """Deliberately invalid AskResponse payloads, one violation each, used by the
-    force_bad demo mode to prove the real response schema rejects malformed output."""
-
-    non_numeric_tokens = "non_numeric_tokens"
-    non_numeric_cost = "non_numeric_cost"
-    null_answer = "null_answer"
-
-
-_SYNTHETIC_FAULT_BASE = {"answer": "placeholder", "model": MODEL, "tokens_used": 0, "cost_usd": 0.0}
-
-SYNTHETIC_FAULT_PAYLOADS: dict[SyntheticFault, dict] = {
-    SyntheticFault.non_numeric_tokens: {**_SYNTHETIC_FAULT_BASE, "tokens_used": "not-a-number"},
-    SyntheticFault.non_numeric_cost: {**_SYNTHETIC_FAULT_BASE, "cost_usd": "not-a-float"},
-    SyntheticFault.null_answer: {**_SYNTHETIC_FAULT_BASE, "answer": None},
-}
-
-# force_bad always injects this one fault; not selectable via AskRequest — see
-# ask-guardrail-design-prv.md FMEA #9 on not expanding the public request contract casually.
-FORCE_BAD_FAULT = SyntheticFault.non_numeric_tokens
 
 
 @app.exception_handler(Exception)
@@ -943,22 +916,6 @@ async def ask_stream(req: AskRequest, request: Request):
 def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
     from vera.ask_service import REQUEST_BUDGET, request_budget
     budget = request_budget()  # CMF-1022: the request-level deadline starts ONCE, here, at handler entry
-    if req.mode is DemoMode.force_bad:
-        # Guardrail demo: inject one identified synthetic fault, rejected by real
-        # schema validation. No OpenAI call is made — the demo is free and deterministic.
-        fault = FORCE_BAD_FAULT
-        try:
-            AskResponse(**SYNTHETIC_FAULT_PAYLOADS[fault])
-        except ValidationError as exc:
-            logger.info(
-                "force_bad invoked: synthetic fault '%s' rejected by schema validation: %s",
-                fault.value, exc.errors(),
-            )
-            raise HTTPException(
-                status_code=500,
-                detail="Guardrail demo: synthetic malformed output was rejected by schema validation.",
-            ) from exc
-
     key_status = classify_openai_api_key(os.getenv("OPENAI_API_KEY")) if OPENAI_FALLBACK else "ok"
     if key_status != "ok":
         logger.error("Rejected /ask: OPENAI_API_KEY is %s", key_status)

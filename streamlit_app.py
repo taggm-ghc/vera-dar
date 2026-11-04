@@ -77,10 +77,7 @@ else:
         api_key = ""
     render_memory_review(st, api_base_url)  # item #84 D6: operator review, dev mode only (never in public mode)
 
-# Force bad demo toggle
 render_sources_sidebar(st)
-st.sidebar.subheader("Guardrail Demo")
-force_bad = st.sidebar.checkbox("Show a rejected-answer demonstration", value=False)
 
 # Question input
 st.subheader("Ask a Question")
@@ -246,12 +243,12 @@ def render_result(data: dict) -> None:
     st.info("💡 Ask a follow-up question to explore further.")
 
 
-def _send_question(question: str, force_bad: bool) -> None:
+def _send_question(question: str) -> None:
     """Send one /ask (after the wake-up) and render the result."""
     with st.spinner("🤔 Thinking..."):
         try:
             # Make API request
-            response = post_ask(api_base_url, question, "force_bad" if force_bad else "normal", api_key)
+            response = post_ask(api_base_url, question, "normal", api_key)
 
             if response.status_code == 200:
                 data = response.json()
@@ -373,7 +370,7 @@ elif _clicked:
     elif not api_key:
         st.warning("The service is not configured." if PUBLIC else "No API key set. Type one in the sidebar.")
     else:
-        ui_wake.queue_question(st.session_state, {"question": question, "force_bad": bool(force_bad)})
+        ui_wake.queue_question(st.session_state, {"question": question})
 
 if STREAM_ON:
     if _sholder is None and _ses.get(ui_wake.PENDING_KEY):
@@ -384,7 +381,7 @@ if STREAM_ON:
                 _ses, ui_wake.clock,
                 lambda *a, **kw: iter_ask_stream(*a, connect_timeout=_scfg.connect_timeout_s,
                                                  no_data_timeout=_scfg.client_no_data_s, **kw),
-                (api_base_url, _pending["question"], "force_bad" if _pending["force_bad"] else "normal", api_key),
+                (api_base_url, _pending["question"], "normal", api_key),
                 _scfg.orphan_s)
             st.rerun()
     _slast = _ses.get(progress_ui.STREAM_LAST_KEY)
@@ -404,7 +401,7 @@ elif PROGRESS_ON:
         if _pending:
             _inflight = progress_ui.start_tracked(
                 _ses, lambda: secrets.token_hex(16), _ses["vera_ptoken"], ui_wake.clock, post_ask_tracked,
-                (api_base_url, _pending["question"], "force_bad" if _pending["force_bad"] else "normal", api_key),
+                (api_base_url, _pending["question"], "normal", api_key),
                 st, LABELS)
             st.rerun()  # the Sending label was drawn before the worker started; the rerun hands over to the poller
     _lr = _ses.get("vera_last_result")
@@ -420,7 +417,7 @@ else:
     if st.session_state.get(ui_wake.PENDING_KEY):
         _pending = ui_wake.take_ready_question(st, api_base_url, allow_restart_hook=PUBLIC)
         if _pending:
-            _send_question(_pending["question"], _pending["force_bad"])
+            _send_question(_pending["question"])
     elif not _clicked:
         st.info("👆 Click 'Ask' to get started.")
         ui_wake.page_load_check(st, api_base_url, allow_restart_hook=PUBLIC)  # at most once a minute per session

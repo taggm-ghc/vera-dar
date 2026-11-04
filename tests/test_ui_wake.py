@@ -117,7 +117,7 @@ def test_pending_question_survives_and_is_sent_on_next_run(env, monkeypatch):
     _, calls = env
     script_health(monkeypatch, calls, [True])
     at = AppTest.from_file(APP, default_timeout=30).run()
-    at.session_state[ui_wake.PENDING_KEY] = {"question": "kept", "force_bad": False}
+    at.session_state[ui_wake.PENDING_KEY] = {"question": "kept"}
     at.run()
     assert calls["ask"] == ["kept"] and ui_wake.PENDING_KEY not in at.session_state
 

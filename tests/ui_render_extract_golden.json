@@ -163,14 +163,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "partial_answer": [
@@ -337,14 +329,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "legacy_abstract_answer": [
@@ -495,14 +479,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "reading_list_with_contract": [
@@ -665,14 +641,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "decline": [
@@ -799,14 +767,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "answer_dev_mode": [
@@ -925,14 +885,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ],
  "reading_list_dev_mode": [
@@ -1051,14 +1003,6 @@
   [
    "Caption",
    "body: \"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered 26 test questions, captured 2026-10-23.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Subheader",
-   "tag: \"h3\"\nbody: \"Guardrail Demo\"\n"
-  ],
-  [
-   "Checkbox",
-   "id: \"$$ID-<H>-None\"\nlabel: \"Show a rejected-answer demonstration\"\nlabel_visibility {\n}\n"
   ]
  ]
 }

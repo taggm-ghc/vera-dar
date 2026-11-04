@@ -83,7 +83,7 @@ def test_about_page_renders_full_disclosure_once_under_headings():
 def test_how_to_use_page_renders_sections_and_uses_config_scope():
     at = _run("pages/how_to_use.py")
     heads = [s.value for s in at.subheader]
-    for h in ("What to ask", "What you get back", "How to read the citations", "Limits", "Guardrail demo", "Privacy"):
+    for h in ("What to ask", "What you get back", "How to read the citations", "Limits", "Privacy"):
         assert h in heads, h
     t = _text(at)
     assert "{scope}" not in t and "{privacy}" not in t and "{" not in t
@@ -164,9 +164,9 @@ def test_wake_time_comes_from_config(monkeypatch):
     assert out == ["kept"]
 
 
-def test_guardrail_and_report_paragraphs_describe_code_behaviour():
+def test_report_paragraphs_describe_code_behaviour():
     text, cfg = _howto_text()
-    assert "No model call is made" in text and "malformed reply" in text and "sends your question" not in text
+    assert "sends your question" not in text and "Guardrail" not in text and "rejected-answer" not in text
     assert "illustrative, not a real run" in text
     # labels live in the page: its OFFLINE label must contain the quoted text. Read the source rather than importing
     # the page: a bare-mode import executes its st.form outside any ScriptRunContext and leaves that form on the

@@ -42,7 +42,7 @@ def test_submit_queues_question(monkeypatch):
     at.text_input[0].set_value("What is VERA-DAR?")
     at.button[0].click().run()
     assert not at.exception
-    assert queued == [{"question": "What is VERA-DAR?", "force_bad": False}]
+    assert queued == [{"question": "What is VERA-DAR?"}]
 
 
 def test_empty_submit_warns(monkeypatch):
