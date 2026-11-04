@@ -32,7 +32,7 @@ class Fetch:
         r = self.pages.get(url, {"text": "Readable body text about the topic."})
         if isinstance(r, Exception):
             raise r
-        return {"url": url, "content_type": "text/html", "headers": {}, "meta_robots": [], **r}
+        return {"url": url, "content_type": "text/html", "x_robots_tag": "", "content_signal": "", "meta_robots": "", **r}
 
 
 def run(cands, f=None, **kw):
@@ -75,10 +75,10 @@ def test_login_paywall_listed_only(body):
 
 
 @pytest.mark.parametrize("extra,code", [
-    ({"meta_robots": ["noai, noimageai"]}, "use_no_ai_signal"),
-    ({"meta_robots": ["index,noai"]}, "use_no_ai_signal"),
-    ({"headers": {"x-robots-tag": "noai"}}, "use_no_ai_signal"),
-    ({"headers": {"content-signal": "search=yes, ai-input=no"}}, "use_no_ai_signal"),
+    ({"meta_robots": "noai, noimageai"}, "use_no_ai_signal"),
+    ({"meta_robots": "index,noai"}, "use_no_ai_signal"),
+    ({"x_robots_tag": "noai"}, "use_no_ai_signal"),
+    ({"content_signal": "search=yes, ai-input=no"}, "use_no_ai_signal"),
 ])
 def test_no_ai_signals_contribute_no_text(extra, code):
     r, _ = run([cand("https://a.example/p")], Fetch({"https://a.example/p": extra}))
@@ -124,7 +124,7 @@ def test_identifier_candidates_ignored():
 def test_public_phrases_carry_no_host():
     cs = [cand("https://docs.aws.amazon.com/x"), cand("https://a.example/p"), cand("https://a.example/q"),
           cand("https://b.example/p")]
-    r, _ = run(cs, Fetch({"https://b.example/p": {"meta_robots": ["noai"]}}))
+    r, _ = run(cs, Fetch({"https://b.example/p": {"meta_robots": "noai"}}))
     for e in r.listed:
         assert e["phrase"] and not any(h in e["phrase"] for h in ("aws", "amazon", "a.example", "b.example", "http"))
     cfg = json.loads(wr.CONFIG_PATH.read_text())
@@ -140,7 +140,7 @@ def test_never_stored_sentinel():
     s = L.new()
     bad = cand("https://docs.aws.amazon.com/x")
     pages = {"https://a.example/p": {"text": f"Body {s} body"},
-             "https://b.example/p": {"text": f"Body {s}", "meta_robots": ["noai"]},
+             "https://b.example/p": {"text": f"Body {s}", "meta_robots": "noai"},
              "https://c.example/p": {"text": f"Please sign in to continue {s}"},
              "https://d.example/p": pf.FetchRefused("robots")}
     cs = [cand(u) for u in pages] + [bad]

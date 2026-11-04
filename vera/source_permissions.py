@@ -162,11 +162,27 @@ def _verdict(row, key: str) -> str:
     return str((row or {}).get(key) or "unknown").lower()
 
 
+_TERMS_TO_ACCESS = {"links_only": "forbid", "allow": "allow"}
+
+
+def access_verdict(row) -> str:
+    """WP6-P2 (R-050): the row's access verdict; when access_verdict is missing it is derived from terms_verdict
+    (links_only -> forbid, allow -> allow, otherwise unknown). terms_verdict links_only marks a host whose terms are
+    known to forbid automated access, so such a row is forbid even if access_verdict says otherwise (never fetched)."""
+    row = row or {}
+    terms = str(row.get("terms_verdict") or "").lower()
+    if terms == "links_only":
+        return "forbid"
+    if row.get("access_verdict"):
+        return _verdict(row, "access_verdict")
+    return _TERMS_TO_ACCESS.get(terms, "unknown")
+
+
 def _read(url, robots_allowed, page_signals, row, deny_list, cfg_deny) -> str:
     host = _host(url)
     if _deny_hit(host, deny_list if deny_list is not None else cfg_deny):
         return "read_deny_list"
-    if _verdict(row, "access_verdict") == "forbid":
+    if access_verdict(row) == "forbid":
         return "read_registry_forbid"
     if robots_allowed is False:
         return "read_robots_disallow"

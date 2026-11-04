@@ -507,16 +507,18 @@ def test_fetch_returns_noai_header_and_meta_robots_signals_only():
                    "Set-Cookie": "a=b", "Server": "s"}, page)
     net = Net({"s.example": ["93.184.216.34"]}, {("s.example", "/robots.txt"): robots(), ("s.example", "/p"): r})
     out = pf.fetch("https://s.example/p", CFG, resolve=net.resolve, transport=net.transport)
-    assert out["headers"] == {"x-robots-tag": "noai", "content-signal": "ai-input=no"}
-    assert out["meta_robots"] == ["noai, noindex", "noimageai"]
-    assert set(out) == {"text", "url", "content_type", "headers", "meta_robots"} and "hello" in out["text"]
+    # WP6-P2: normalised signal strings only; no raw header dict (Set-Cookie, Server never kept)
+    assert out["x_robots_tag"] == "noai" and out["content_signal"] == "ai-input=no"
+    assert out["meta_robots"] == "noai, noindex, noimageai"
+    assert set(out) == {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"}
+    assert "hello" in out["text"] and "a=b" not in repr(out) and "headers" not in out
 
 
 def test_fetch_signal_keys_empty_when_absent():
     net = Net({"s.example": ["93.184.216.34"]},
               {("s.example", "/robots.txt"): robots(), ("s.example", "/p"): html()})
     out = pf.fetch("https://s.example/p", CFG, resolve=net.resolve, transport=net.transport)
-    assert out["headers"] == {} and out["meta_robots"] == []
+    assert out["x_robots_tag"] == out["content_signal"] == out["meta_robots"] == ""
 
 
 # ---- robots Crawl-delay (NONASK-1103 I-A6 C5)
@@ -563,3 +565,8 @@ def test_no_crawl_delay_no_wait():
     n2 = Net(GOOD, {("a.example", "/robots.txt"): robots(), ("a.example", "/q"): html()})
     assert pf.fetch("https://a.example/q", CFG, resolve=n2.resolve, transport=n2.transport, clock=clk)["text"] == "hello"
     sf.reset_for_tests()
+
+
+def test_signal_value_normalises_and_caps():
+    assert pf.signal_value("  NoAI,\r\n\tNOINDEX ") == "noai, noindex"
+    assert pf.signal_value(None) == "" and len(pf.signal_value("x" * 1000)) == 300

@@ -158,9 +158,11 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 continue
             final = str(got.get("url") or url)
             text = str(got.get("text") or "")
-            head = "".join(f'<meta name="robots" content="{m}">' for m in got.get("meta_robots") or ()
-                           if '"' not in str(m))
-            post = sp.evaluate(final, headers=got.get("headers"), html_head=head, registry=registry,
+            mr = str(got.get("meta_robots") or "")  # WP6-P2: normalised signal strings only (no raw headers)
+            head = f'<meta name="robots" content="{mr}">' if mr and '"' not in mr else ""
+            sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"))
+                   if got.get(f)}
+            post = sp.evaluate(final, headers=sig, html_head=head, registry=registry,
                                robots_allowed=True, deny_list=deny_list,
                                page_signals={"login_required": True} if _login_wall(text, cfg) else None)
             dev["gate"].update(read=post.read_reason, use=post.use_reason, ingest="ingest_answer_only_wp",

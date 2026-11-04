@@ -426,7 +426,7 @@ def _meta_robots(html: str) -> list:
 
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic) -> dict:
-    """Returns {"text", "url", "content_type", "headers", "meta_robots"} (the last two are no-AI signals only) or raises FetchRefused. Nothing is written anywhere."""
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only) or raises FetchRefused. Nothing is written anywhere."""
     cfg = cfg or load_config()
     tr = transport or default_transport
     end = clock() + float(cfg.get("timeout_s", 8))
@@ -447,8 +447,17 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
         failed = True
     if failed:
         raise FetchRefused("error")
-    return {"text": text, "url": final, "content_type": ctype, "headers": meta.get("headers", {}),
-            "meta_robots": _meta_robots(decoded) if ctype != "text/plain" else []}
+    sig = meta.get("headers", {})  # WP6-P2: only the two signal values, normalised; never the raw header dict
+    return {"text": text, "url": final, "content_type": ctype,
+            "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(sig.get("content-signal")),
+            "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else "")}
+
+
+def signal_value(v) -> str:
+    """A no-AI / derivative signal as a normalised string: lower-case, single spaces, control characters dropped,
+    at most 300 characters. Nothing else from the response is kept (need-to-know, never stored)."""
+    s = re.sub(r"[\x00-\x1f\x7f]", " ", str(v or ""))
+    return re.sub(r"\s+", " ", s).strip().lower()[:300]
 
 
 # ------------------------------------------------------------------------------------------ visible-text extraction
