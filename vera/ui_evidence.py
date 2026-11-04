@@ -175,6 +175,19 @@ def acquisition_notice_line(data: dict | None) -> str | None:
     return None
 
 
+def inline_counts_line(data: dict | None) -> str | None:
+    """NONASK-1103 A6-4 (D3): stored and fetched source counts, separately (present only when answer.inline_honest_counts
+    was on for the request). Counts only; None when absent or malformed."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
+    c = ia.get("counts") if isinstance(ia.get("counts"), dict) else {}
+    n, f = c.get("stored"), c.get("fetched")
+    if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in (n, f)):
+        return None
+    return f"Sources used for this answer: {n} stored, {f} fetched for this request only."
+
+
 def _shortfall_in_limitations(data, note) -> bool:
     """ANS-LAYERS-1101-FC: with the layered fields present and the line already in limitations, show it once there."""
     return bool(note) and has_layers(data) and note in _note_texts(data.get("limitations"))
@@ -190,6 +203,9 @@ def render_evidence_scope(st, data) -> None:
         src = evidence_source_line(data)
         if src:
             st.caption(src)
+        cnt = inline_counts_line(data)
+        if cnt:
+            st.caption(cnt)
 
 
 def render_fallback_reason(st, data) -> None:

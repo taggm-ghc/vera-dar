@@ -502,6 +502,13 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         except (KeyError, TypeError, ValueError):
             anchors = set()  # no usable threshold: the rule is inactive (fail open to current behaviour)
 
+    # NONASK-1103 A6-3 (D2): seeded combined re-admission. Only for the ephemeral (inline) corpus (flagged by
+    # inline_acquire.ephemeral_corpus) and only with admission.seed_per_doc_spans exactly true: every document
+    # contributes its OWN top candidates (k per document), ranked by the combined score against the original question,
+    # and the fill below is round-robin by document. max_spans_total is unchanged.
+    seed = adm.get("seed_per_doc_spans") is True and getattr(corpus, "seed_per_doc", False) is True and len(acquired) > 1
+    if seed:
+        k = k * len(acquired)
     try:
         cands = list(_call_retrieve(corpus, question, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
     except Exception:
@@ -623,6 +630,18 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             extra_trace["topical_fit"] = {"bands": [sum(1 for v in band.values() if v == b) for b in (0, 1, 2)]}
         else:
             extra_trace["topical_fit"] = "unset"  # order mode needs calibrated fit_lo and fit_hi (plan s.6)
+    if seed and scored:
+        # round-robin by document: each document's best passage first (document order = its best rank), then second-best...
+        # Only spans that already cleared every admission rule on the original question are in `scored` (N2).
+        order, by_doc = [], {}
+        for t in scored:
+            dk = str(t[3]["document_id"])
+            if dk not in by_doc:
+                by_doc[dk] = []
+                order.append(dk)
+            by_doc[dk].append(t)
+        scored = [by_doc[dk][r] for r in range(max(len(v) for v in by_doc.values())) for dk in order if r < len(by_doc[dk])]
+        extra_trace["seeded_round_robin"] = len(order)
     pa = adm.get("part_allocation") if isinstance(adm.get("part_allocation"), dict) else {}
     parts = _alloc_parts(question, pa, icfg, tg) if pa.get("enabled") is True else []
 

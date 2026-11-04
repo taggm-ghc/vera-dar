@@ -55,7 +55,9 @@ def stub_eval(monkeypatch, calls, clock=None, step=0.0, reject=()):
 
 def run(n=3, clk=None, search=None, cfg=None, store=None, stream=True, stall_s=300, workers=1, deps_mut=None):
     clk = clk or Clock()
-    cfg = cfg or A.cfg()
+    if cfg is None:
+        cfg = A.cfg()
+        cfg["inline"]["acq6_rounds_enabled"] = False  # A6 kill switch off: the pre-A6 single-search contract (rounds: test_acq6_rounds_1103)
     cfg["inline"]["fetch_workers"] = workers
     cands = [A.cand(f"10.9999/sc.{i}") for i in range(n)]
     d = A.deps(cands, A.Web({}, {}), store=store or A.Store())

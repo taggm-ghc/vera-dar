@@ -1,0 +1,22 @@
+{
+ "_doc": "NONASK-1103 I-A6 D5 (A6-W): static labels and notes for vera/web_route.py, the inline answer-only web route. No new thresholds.",
+ "_fetch_cap_note": "At most one fetch per host per call (one round). Further candidates on the same host are listed only, never fetched.",
+ "_crawl_delay_note": "Robots Crawl-delay (VERA-DAR UA, else * group) is enforced in vera.public_fetch via a per-host in-process table (vera.selective_fetch.crawl_reserve); an early request is refused as crawl_delay and listed here (read_crawl_delay), never sent early.",
+ "_calibration_note": "login_markers is an uncalibrated, discard-only heuristic (a hit drops the page text and lists the page; a miss changes nothing). marker_scan_chars bounds the scan; it is a safety bound, not a decision threshold. Accepted by the orchestrator 2026-11-04 as a CONSERVATIVE SKIP: measured on no real pages (synthetic fixtures only); false positives only drop a page to the reading list, false negatives are bounded by the read gate and public_fetch. Calibrate from owner-run dev traces (pages skipped as read_login_paywall vs. readable) before adding or removing markers.",
+ "_role_note": "Role: pure and request-local. Reads only through vera.public_fetch after the READ gate. Page text is held in memory only; this module calls no store, cache, queue or logger with page text. Ingest is always False in this work package.",
+ "label": "web source",
+ "epistemic": "web",
+ "lane": "web",
+ "disclosure": "public web pages may be read to answer, and are stored only when their licence allows",
+ "quote_max_chars": 200,
+ "marker_scan_chars": 600,
+ "login_markers": ["sign in to continue", "log in to continue", "please sign in", "please log in", "subscribe to continue reading", "subscribe to read", "this content is for subscribers", "create a free account to continue"],
+ "phrases": {
+  "host_round_cap": "not read: only one page per site is read per answer",
+  "fetch_failed": "not read: the page could not be read",
+  "crawl_delay": "not read yet: the site asks readers to wait between visits",
+  "empty": "not read: the page had no readable text",
+  "ingest_answer_only": "not stored: web pages are used for this answer only"
+ },
+ "characterisation": {"read": "web source (read for this answer)", "listed": "web source (link only; not used)"}
+}

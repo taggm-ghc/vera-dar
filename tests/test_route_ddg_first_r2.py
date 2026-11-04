@@ -173,6 +173,9 @@ class RouteWorld:
         if isinstance(rig.cfg.get("freshness"), dict):
             rig.cfg["freshness"]["max_age_hours"] = 24
         rig.cfg["scope_expansion"]["override_layer2_declines"] = True
+        # A6 kill switches off: these scenarios pin the pre-A6 single-search / follow_url contract
+        rig.cfg["inline"]["acq6_rounds_enabled"] = False
+        rig.cfg["inline"]["web_read_enabled"] = False
         self.p = Portals()
         self.web = A.Web({}, {})
         self.n_docs = 0

@@ -161,6 +161,7 @@ _INLINE_OUT: contextvars.ContextVar = contextvars.ContextVar("ddfix_inline_outco
 # NONASK-1103 E4m: the public evidence trace of the latest full-document attempt that produced no answer (response-only,
 # never logged or stored). _fulldoc sets it; the no-answer contracts merge it. Reset at the start of every attempt.
 _FD_TRACE: contextvars.ContextVar = contextvars.ContextVar("nonask_fd_trace", default=None)
+_INLINE_COUNTS: contextvars.ContextVar = contextvars.ContextVar("vera_inline_counts", default=None)  # NONASK-1103 A6-4: {stored, fetched} of the inline attempt in progress
 
 
 def _fd_trace_contract() -> dict:
@@ -447,7 +448,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
         kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
-    lanes = inline_acquire.lane_pass(question, acq)  # NONASK-1103: request-local only (never cached); None = flags off
+    lanes = inline_acquire.with_web(o, inline_acquire.lane_pass(question, acq))  # NONASK-1103 (+A6-W web pages): request-local only
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
     if info is not None:
@@ -466,8 +467,21 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
                 return t
             return f"{t} {bg}".strip()
         return t
-    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus,
-                   **({"lanes": lanes} if lanes is not None else {}))
+    from vera import fulldoc_corpus as _fdc
+    _cfg_h = None
+    try:
+        _cfg_h = _fdc.load_config()
+    except Exception:  # noqa: BLE001
+        pass
+    hon = _honest_counts_on(_cfg_h)  # A6-4 (D3): answer.inline_honest_counts (ships true)
+    n_st, n_re, n_ad = (int(getattr(o, "stored", 0) or 0), int(getattr(o, "reused", 0) or 0), int(getattr(o, "admitted", 0) or 0))
+    counts = {"stored": n_st + n_re, "fetched": max(n_ad - n_st, 0)} if hon else None
+    tok_c = _INLINE_COUNTS.set(counts)
+    try:
+        out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus,
+                       **({"lanes": lanes} if lanes is not None else {}))
+    finally:
+        _INLINE_COUNTS.reset(tok_c)
     lanes = None  # page text is dropped with the request (R-037)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
@@ -477,6 +491,9 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         logging.getLogger("vera").info("inline answer fallback token=%s", tok)
         from vera.fulldoc_answer import PREMISE_FALLBACK, PREMISE_UNVERIFIED_TEXT
         text = PREMISE_UNVERIFIED_TEXT if tok == PREMISE_FALLBACK else inline_acquire.notice(acq, "unanswered")
+        if hon and counts is not None and tok != PREMISE_FALLBACK and isinstance(out, tuple) and len(out) == 5 \
+                and tok not in tuple((_cfg_h or {}).get("fallback_tokens", {}).get(x) for x in ("checker_unavailable", "nonresponsive")):
+            text = " ".join(x for x in (text, _honest_text(_cfg_h, counts)) if x)  # A6-4: existing wording kept, split counts appended; never "tried"
         if text is None:
             return None
         note = (_Note(text, out[2], out[3]) if isinstance(out, tuple) and len(out) == 5  # DAR-TRACE-1022: spend kept
@@ -489,7 +506,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         for kind, t in (items if contract.notes_separate() else reversed(items)):  # same recorded order as off-topic; legacy text order ACQ, BG, answer
             ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
         return replace(out, answer=ans, notes=nts,
-                       contract={**(out.contract or {}), "acquired_only": True, "inline_acquisition": o.public()})
+                       contract={**(out.contract or {}), "acquired_only": True,
+                                 "inline_acquisition": {**o.public(), **({"counts": counts} if hon else {})}})
     ans, nts = out.answer, out.notes
     # prefix order preserved when concatenating: warning, acquisition note, background note
     items = (("offtopic_warning", acq_config.override_answer_prefix(acq)),
@@ -498,7 +516,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
     return replace(out, answer=ans, notes=nts, accepted=False,
                    contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
-                             "inline_acquisition": o.public()})
+                             "inline_acquisition": {**o.public(), **({"counts": counts} if hon else {})}})
 
 
 def _research_eligible(decision, question: str, acq) -> bool:
@@ -814,6 +832,18 @@ def _log_acquisition_counts(candidates) -> None:
         pass
 
 
+def _honest_counts_on(cfg) -> bool:
+    """NONASK-1103 A6-4 (D3): answer.inline_honest_counts, exactly true (ships true; absent/false = pre-change)."""
+    return isinstance(cfg, dict) and (cfg.get("answer") or {}).get("inline_honest_counts") is True
+
+
+def _honest_text(cfg, counts: dict) -> str:
+    """The honest insufficient notice with SEPARATE stored and fetched counts (never "tried"; counts only)."""
+    ns, nf = int(counts.get("stored") or 0), int(counts.get("fetched") or 0)
+    t = (cfg.get("answer") or {}).get("inline_honest_text") or "VERA-DAR used {n_stored} stored and {n_fetched} fetched {n_word}."
+    return t.replace("{n_stored}", str(ns)).replace("{n_fetched}", str(nf)).replace("{n_word}", "source" if ns + nf == 1 else "sources")
+
+
 def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only: bool = False, ephemeral=None,
              used: dict | None = None, lanes=None):
     """D-055 Option C: full-document acquisition/verification -> span retrieval -> admission -> generation -> claim
@@ -825,6 +855,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     from vera import answer_contract as contract
     from vera import fulldoc_corpus
 
+    counts = _INLINE_COUNTS.get()
+    qualified = False  # C6: True when the writer runs only because answer.always_attempt promoted an "insufficient" bundle
     _FD_TRACE.set(None)  # NONASK-1103 E4m: a stale trace of an earlier attempt never reaches this attempt's body
     try:
         cfg = fulldoc_corpus.load_config()
@@ -839,6 +871,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
         if warming:
             acquired_only = True  # answer only from acquired documents (their own claim-check reference)
         from vera.fulldoc_admission import admit
+        from vera.fulldoc_evidence import attempt_anyway
 
         if acquired_only:  # WED-ACQ2 scope override (ships off): only acquired documents may answer a declined question
             # DAR-INLINE-1021: `ephemeral` = the in-memory corpus of the documents admitted inline for this request
@@ -849,13 +882,18 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
             if lanes is not None:  # NONASK-1103 N2: lane spans join this answer only (answer_only, never stored)
                 from vera import lane_evidence
                 ev = lane_evidence.merge(ev, lanes, question, cfg)
+            ev, qualified = attempt_anyway(ev, cfg)  # C6 (R-045): >= 1 admitted passage -> the writer runs
             if ev is None or contract.result_kind_for((ev,)) != "answer":
                 if warming:  # in-scope while warming: an explicit insufficient result (the caller may go inline)
                     return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
                             _with_count(cfg["answer"]["insufficient_text"], ev))
+                if counts is not None and ephemeral is not None and _honest_counts_on(cfg):  # A6-4: never silent
+                    return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
+                            _honest_text(cfg, counts))
                 return None
         else:
             ev = admit(question, corpus, cfg)
+            ev, qualified = attempt_anyway(ev, cfg)  # C6 (R-045)
             if contract.result_kind_for((ev,)) != "answer" and ev.status != "corpus_unusable":
                 # WED-ACQ2 (plan V6): base corpus first, exactly as before; the separate acquired corpus is consulted
                 # only when the base corpus cannot answer, so base answers never change.
@@ -864,10 +902,11 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                     used["acq"] = acq_corpus
                 if acq_corpus is not None:
                     ev2 = admit(question, acq_corpus, cfg)
+                    ev2, q2 = attempt_anyway(ev2, cfg)
                     if used is not None:
                         used["ev_acq"] = ev2  # FRESH-1023: the stored acquired documents' retrieval, for freshness
                     if contract.result_kind_for((ev2,)) == "answer":
-                        ev = ev2
+                        ev, qualified = ev2, q2
     except Exception as exc:  # noqa: BLE001  (fail closed: unusable corpus, no answer; class only in the log)
         logging.getLogger("vera").warning("full-document path unavailable (%s)", type(exc).__name__)
         try:
@@ -893,6 +932,10 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
                                 # FIX-CCWAIT-1021: the claim check's verbatim reference is the acquired corpus itself
                                 reference_corpus=acq_corpus if acquired_only else None)
     if out.result is not None and out.result.result_kind == "answer":
+        if qualified:  # C6: coverage shortfall shown as a qualification, never a reason to skip generation
+            _q = texts.get("coverage_qualification_text")
+            _a, _n = contract.add_note(out.result.answer, out.result.notes, "coverage", _q)
+            out = replace(out, result=replace(out.result, answer=_a, notes=_n))
         return replace(out.result, evidence=ev, accepted=True,
                        contract={**(out.result.contract or {}), "layers": contract.layers(), "fallback": None})  # NONASK-1103: MERGE; only layers+fallback are overridden (all other keys, e.g. trace, kept)
     _FD_TRACE.set(getattr(out, "trace", None))  # NONASK-1103 E4m: no answer, so the body carries the reasons
@@ -1197,7 +1240,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
                                                               answer_basis="generated_existing_only"))
     pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
     from vera import inline_acquire as _ia
-    lanes = _ia.lane_pass(question, acq) if o is not None else None  # NONASK-1103: request-local; None = flags off
+    lanes = _ia.with_web(o, _ia.lane_pass(question, acq)) if o is not None else None  # NONASK-1103 (+A6-W): request-local
     if lanes is not None and isinstance(pub, dict):
         pub = dict(pub, lanes=lanes.public())  # links and counts only (need-to-know)
     new_res, failed = None, False

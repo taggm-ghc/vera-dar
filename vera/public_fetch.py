@@ -303,8 +303,9 @@ def _call_transport(transport, args, timeout):
     return box["r"]
 
 
-def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check, cap_c, cap_d, ok_robots=False):
-    """Follow redirects manually; returns (body, final_url, status, content_type)."""
+def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check, cap_c, cap_d, ok_robots=False, meta=None, crawl_check=None):
+    """Follow redirects manually; returns (body, final_url, status, content_type). `meta` (optional dict) receives the
+    no-AI response headers of the final 200 response (X-Robots-Tag, Content-Signal only)."""
     cur, hops, seen = url, 0, set()
     while True:
         if clock() > end:
@@ -315,6 +316,8 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
         seen.add(cur)
         if robots_check is not None and not robots_check(cur, host, port):
             raise FetchRefused("robots")
+        if crawl_check is not None and not sf.crawl_reserve(host, crawl_check(host, port), clock):
+            raise FetchRefused("crawl_delay")  # never sent early; robots.txt itself is not delayed (crawl_check None)
         parts = urlsplit(cur)
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         hdrs = {"User-Agent": cfg["user_agent"], "Accept-Encoding": "identity",
@@ -353,6 +356,8 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype not in allowed_ctypes:
                 raise FetchRefused("format_unsupported")
+            if meta is not None:
+                meta["headers"] = {k: str(resp.headers.get(h)) for k, h in _SIGNAL_HEADERS if resp.headers.get(h)}
             try:
                 return _read_capped(resp, cap_c, cap_d, end, clock), cur, 200, ctype
             except FetchRefused:
@@ -365,6 +370,18 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
                 resp.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def crawl_delay_for(cache, host, port, cfg) -> float:
+    """Crawl-delay (seconds) from the cached parsed robots.txt for this UA, else the * group; 0 if none."""
+    rp = (cache or {}).get((host, port))
+    if rp in (None, True, False):
+        return 0.0
+    try:
+        v = rp.crawl_delay(cfg["user_agent"])
+        return float(v) if v else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=None) -> bool:
@@ -392,26 +409,46 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
         return False
 
 
+_SIGNAL_HEADERS = (("x-robots-tag", "X-Robots-Tag"), ("content-signal", "Content-Signal"))
+_META_TAG = re.compile(r"<meta\b[^>]*>", re.I)
+_META_ATTR = re.compile(r"([a-zA-Z\-:]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
+_META_NAMES = ("robots", "googlebot", "vera-dar", "ai")
+
+
+def _meta_robots(html: str) -> list:
+    """content values (lower-cased) of <meta name=robots|googlebot|vera-dar|ai> in the first 200 kB. Signals only."""
+    out = []
+    for m in _META_TAG.findall(html[:200000]):
+        a = {k.lower(): (v1 or v2 or v3) for k, v1, v2, v3 in _META_ATTR.findall(m)}
+        if a.get("name", "").lower() in _META_NAMES and a.get("content"):
+            out.append(a["content"].lower())
+    return out
+
+
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic) -> dict:
-    """Returns {"text", "url", "content_type"} or raises FetchRefused. Nothing is written anywhere."""
+    """Returns {"text", "url", "content_type", "headers", "meta_robots"} (the last two are no-AI signals only) or raises FetchRefused. Nothing is written anywhere."""
     cfg = cfg or load_config()
     tr = transport or default_transport
     end = clock() + float(cfg.get("timeout_s", 8))
     cache: dict = {}
     failed = False
+    meta: dict = {}
     try:
         body, final, _s, ctype = _get(
             url, cfg, resolve, tr, clock, end, tuple(cfg["content_types"]),
             lambda u, h, p: robots_allowed(u, h, p, cfg, resolve, tr, clock, end, cache),
-            int(cfg["max_compressed_bytes"]), int(cfg["max_decompressed_bytes"]))
-        text = extract_visible_text(body.decode("utf-8", "replace"), ctype, clock, end)
+            int(cfg["max_compressed_bytes"]), int(cfg["max_decompressed_bytes"]), meta=meta,
+            crawl_check=lambda h, p: crawl_delay_for(cache, h, p, cfg))
+        decoded = body.decode("utf-8", "replace")
+        text = extract_visible_text(decoded, ctype, clock, end)
     except FetchRefused:
         raise
     except Exception:  # noqa: BLE001
         failed = True
     if failed:
         raise FetchRefused("error")
-    return {"text": text, "url": final, "content_type": ctype}
+    return {"text": text, "url": final, "content_type": ctype, "headers": meta.get("headers", {}),
+            "meta_robots": _meta_robots(decoded) if ctype != "text/plain" else []}
 
 
 # ------------------------------------------------------------------------------------------ visible-text extraction

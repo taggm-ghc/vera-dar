@@ -293,6 +293,11 @@ class HostPacer:
 
 _DEFAULT_PACER = HostPacer()
 
+# Robots Crawl-delay gate: a request that would arrive before last_request + delay is NEVER sent early (refused instead).
+_CRAWL_LOCK = threading.Lock()
+_CRAWL_LAST: dict = {}  # host -> monotonic time of the last request actually sent (insertion order = oldest first)
+_CRAWL_MAX_HOSTS = 512
+
 
 ROBOTS_TTL_S = 300.0       # short per-host in-process cache of a parsed robots.txt (also bounds staleness)
 ROBOTS_FAIL_TTL_S = 60.0   # a failed robots fetch (fail closed) is remembered briefly, not retried per URL
@@ -351,7 +356,48 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
     return bool(rp is True or (rp is not False and rp.can_fetch(ua, url)))
 
 
-def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None):
+def robots_crawl_delay(url, user_agent=None) -> float:
+    """NONASK-1103 WP6-P2: the Crawl-delay (seconds) of the robots.txt already parsed for this URL's host by
+    robots_allowed (in-process cache; this UA, else the * group). 0 when none or not cached. Never fetches, never raises."""
+    try:
+        ua = user_agent or USER_AGENT
+        parts = urlsplit(url)
+        with _ROBOTS_LOCK:
+            hit = _ROBOTS.get((parts.scheme, (parts.hostname or "").lower(), ua))
+        rp = hit[1] if hit is not None else None
+        if rp in (None, True, False):
+            return 0.0
+        v = rp.crawl_delay(ua)
+        return float(v) if v else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def crawl_reserve(host: str, delay: float, clock=time.monotonic) -> bool:
+    """Atomically: True and record "now" as the host's last request time if >= delay seconds have passed (or delay is
+    falsy); False (nothing recorded) if it would be early. Call immediately before sending a request. Thread-safe."""
+    if not delay or delay <= 0:
+        return True
+    host = (host or "").lower()
+    with _CRAWL_LOCK:
+        now = clock()
+        last = _CRAWL_LAST.get(host)
+        if last is not None and now < last + delay:
+            return False
+        _CRAWL_LAST.pop(host, None)
+        _CRAWL_LAST[host] = now
+        while len(_CRAWL_LAST) > _CRAWL_MAX_HOSTS:
+            _CRAWL_LAST.pop(next(iter(_CRAWL_LAST)))
+        return True
+
+
+def reset_for_tests() -> None:
+    with _CRAWL_LOCK:
+        _CRAWL_LAST.clear()
+
+
+def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, crawl_delays=None,
+              crawl_clock=time.monotonic):
     """Guarded GET shared by fetch_candidate and fetch_html: public-URL check on every hop, per-host pacing,
     manual redirects (at most MAX_REDIRECTS), text content types only, MAX_BYTES cap.
     Returns (raw, ctype, final_url, hops, encoding, error); error is None on success."""
@@ -365,6 +411,11 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None):
                                                  timeout_s=timeout_s):
                 return None, None, None, hops, None, "blocked: robots.txt disallows or could not be read"
             (pacer or _DEFAULT_PACER).wait(current)
+            cd = (crawl_delays or {}).get((urlsplit(current).hostname or "").lower())
+            if not cd and robots_ok is None:  # WP6-P2: the Crawl-delay robots_allowed just parsed, same per-host gate
+                cd = robots_crawl_delay(current)
+            if cd and not crawl_reserve(urlsplit(current).hostname or "", cd, crawl_clock):
+                return None, None, None, hops, None, "crawl_delay"
             resp = http_get(current, headers={"User-Agent": USER_AGENT}, timeout=timeout_s,
                             allow_redirects=False, stream=True)
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
@@ -395,12 +446,14 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None):
 
 
 def fetch_html(url: str, *, timeout_s: float = 8.0, http_get=None, url_check=is_public_url,
-               pacer: HostPacer | None = None, robots_ok=None) -> tuple[str | None, str | None, str | None]:
+               pacer: HostPacer | None = None, robots_ok=None, crawl_delays=None,
+               crawl_clock=time.monotonic) -> tuple[str | None, str | None, str | None]:
     """Raw decoded body (markup kept, for link and metadata extraction) under the same guards.
     Returns (body, final_url, error). Default transport: pinned_get (CMF-1022-I2, E1/A4)."""
     http_get = http_get or pinned_get
     raw, _ctype, final, _hops, enc, err = _download(url, timeout_s=timeout_s, http_get=http_get,
-                                                     url_check=url_check, pacer=pacer, robots_ok=robots_ok)
+                                                     url_check=url_check, pacer=pacer, robots_ok=robots_ok,
+                                                     crawl_delays=crawl_delays, crawl_clock=crawl_clock)
     if err:
         return None, None, err
     return raw.decode(enc, errors="replace"), final, None
@@ -415,10 +468,13 @@ def fetch_candidate(
     ledger: CostLedger | None = None,
     pacer: HostPacer | None = None,
     robots_ok=None,
+    crawl_delays=None,
+    crawl_clock=time.monotonic,
 ) -> FetchResult:
     http_get = http_get or pinned_get  # CMF-1022-I2: pinned transport by default
     raw, ctype, current, hops, enc, err = _download(url, timeout_s=timeout_s, http_get=http_get,
-                                                    url_check=url_check, pacer=pacer, robots_ok=robots_ok)
+                                                    url_check=url_check, pacer=pacer, robots_ok=robots_ok,
+                                                    crawl_delays=crawl_delays, crawl_clock=crawl_clock)
     if err:
         return _fail(url, err, ledger)
     text = extract_text(raw.decode(enc, errors="replace"), ctype)

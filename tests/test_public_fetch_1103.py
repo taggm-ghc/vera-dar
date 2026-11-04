@@ -498,3 +498,68 @@ def test_r3_busy_past_cap():
     finally:
         ev.set()
         pf._ABANDONED[:] = old
+
+
+def test_fetch_returns_noai_header_and_meta_robots_signals_only():
+    page = (b'<html><head><meta name="robots" content="NoAI, noindex"><meta name="description" content="x">'
+            b'<meta name="googlebot" content="noimageai"></head><body><p>hello</p></body></html>')
+    r = Resp(200, {"Content-Type": "text/html", "X-Robots-Tag": "noai", "Content-Signal": "ai-input=no",
+                   "Set-Cookie": "a=b", "Server": "s"}, page)
+    net = Net({"s.example": ["93.184.216.34"]}, {("s.example", "/robots.txt"): robots(), ("s.example", "/p"): r})
+    out = pf.fetch("https://s.example/p", CFG, resolve=net.resolve, transport=net.transport)
+    assert out["headers"] == {"x-robots-tag": "noai", "content-signal": "ai-input=no"}
+    assert out["meta_robots"] == ["noai, noindex", "noimageai"]
+    assert set(out) == {"text", "url", "content_type", "headers", "meta_robots"} and "hello" in out["text"]
+
+
+def test_fetch_signal_keys_empty_when_absent():
+    net = Net({"s.example": ["93.184.216.34"]},
+              {("s.example", "/robots.txt"): robots(), ("s.example", "/p"): html()})
+    out = pf.fetch("https://s.example/p", CFG, resolve=net.resolve, transport=net.transport)
+    assert out["headers"] == {} and out["meta_robots"] == []
+
+
+# ---- robots Crawl-delay (NONASK-1103 I-A6 C5)
+class Clk:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _cd_run(url, robots_txt, clk):
+    pages = {("a.example", "/robots.txt"): robots(robots_txt), ("a.example", "/p"): html(), ("a.example", "/q"): html()}
+    n = Net(GOOD, pages)
+    return n, pf.fetch(url, CFG, resolve=n.resolve, transport=n.transport, clock=clk)
+
+
+def _pages(n):
+    return [c[3] for c in n.calls if c[3] != "/robots.txt"]
+
+
+@pytest.mark.parametrize("txt", [b"User-agent: UA-test\nCrawl-delay: 10\n", b"User-agent: *\nCrawl-delay: 10\n"])
+def test_crawl_delay_ua_and_star_second_fetch_refused_then_allowed(txt):
+    from vera import selective_fetch as sf
+    sf.reset_for_tests()
+    clk = Clk()
+    n, _ = _cd_run("https://a.example/p", txt, clk)
+    clk.t += 5
+    n2 = Net(GOOD, {("a.example", "/robots.txt"): robots(txt), ("a.example", "/q"): html()})
+    with pytest.raises(pf.FetchRefused) as e:
+        pf.fetch("https://a.example/q", CFG, resolve=n2.resolve, transport=n2.transport, clock=clk)
+    assert e.value.reason == "crawl_delay" and _pages(n2) == []  # not sent early
+    clk.t += 6
+    assert pf.fetch("https://a.example/q", CFG, resolve=n2.resolve, transport=n2.transport, clock=clk)["text"] == "hello"
+    assert _pages(n2) == ["/q"]
+    sf.reset_for_tests()
+
+
+def test_no_crawl_delay_no_wait():
+    from vera import selective_fetch as sf
+    sf.reset_for_tests()
+    clk = Clk()
+    n, _ = _cd_run("https://a.example/p", b"User-agent: *\nAllow: /\n", clk)
+    n2 = Net(GOOD, {("a.example", "/robots.txt"): robots(), ("a.example", "/q"): html()})
+    assert pf.fetch("https://a.example/q", CFG, resolve=n2.resolve, transport=n2.transport, clock=clk)["text"] == "hello"
+    sf.reset_for_tests()

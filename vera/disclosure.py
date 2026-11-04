@@ -62,15 +62,38 @@ def lanes_disclosure_on() -> bool:
     return _official_on() or reporting_lane_on()
 
 
+def web_read_on() -> bool:
+    """A6-W: True when the answer-only web route is on (inline.web_read_enabled in config/auto_acquire.json and
+    automatic acquisition on); any error -> False."""
+    try:
+        from vera import acq_config, inline_acquire
+        acq = acq_config.load_config()
+        return bool(acq.get("enabled") is True and inline_acquire.web_read_enabled(acq))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _web_sentence() -> str:
+    try:
+        from vera import web_route
+        t = str(web_route.load_config().get("disclosure") or "").strip()
+    except Exception:  # noqa: BLE001
+        t = ""
+    t = t or "public web pages may be read to answer, and are stored only when their licence allows"
+    return " " + t[0].upper() + t[1:].rstrip(".") + "."
+
+
 def lane_third_party() -> str:
-    """Extra third-party sentences; empty while both lanes are off."""
+    """Extra third-party sentences for the lanes only (also used by the short notice); empty while both lanes are off."""
     if not lanes_disclosure_on():
         return ""
     return (_LANE_SEARCH if reporting_lane_on() else "") + _LANE_PAGES
 
 
 def third_party_text() -> str:
-    return _THIRD_PARTY + lane_third_party()
+    """Full-disclosure third-party text: lane sentences, then (A6-W) the web sentence iff the web route is on. The web
+    sentence is never part of the short notice."""
+    return _THIRD_PARTY + lane_third_party() + (_web_sentence() if web_read_on() else "")
 
 
 _NO_SAVE = " VERA-DAR does not save your question or information identifying you."

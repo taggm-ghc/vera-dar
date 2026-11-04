@@ -83,6 +83,7 @@ def rig(h, monkeypatch):
 
 # ------------------------------------------------------------------------------------------------ 1. answer in request
 def test_inline_answer_in_the_same_request(rig):
+    rig.cfg["inline"]["acq6_rounds_enabled"] = False  # A6 kill switch off: the pre-A6 single-search contract (rounds: test_acq6_rounds_1103)
     r = rig.run()
     assert r.result_kind == "answer" and r.accepted is False and r.acquire_trigger is None
     assert r.evidence is not None and r.evidence.admitted
@@ -307,6 +308,7 @@ def test_max_concurrent_returns_busy_at_once_without_search(direct):
 
 def test_identical_in_flight_questions_search_once_and_share_the_outcome(direct):
     cfg = A.cfg()
+    cfg["inline"]["acq6_rounds_enabled"] = False  # A6 kill switch off: the pre-A6 single-search contract (rounds: test_acq6_rounds_1103)
     started, release, calls = threading.Event(), threading.Event(), []
     d = _blocking_deps(started, release, calls)
     res = {}
@@ -339,6 +341,7 @@ def test_identical_in_flight_questions_search_once_and_share_the_outcome(direct)
 
 def test_finished_outcome_is_reused_within_ttl(direct):
     cfg = A.cfg()
+    cfg["inline"]["acq6_rounds_enabled"] = False  # A6 kill switch off: the pre-A6 single-search contract (rounds: test_acq6_rounds_1103)
     calls = []
     d = A.deps([A.cand("10.9999/acq.epi4")], A.epi_setup()[0])
     inner = d.search

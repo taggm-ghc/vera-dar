@@ -120,6 +120,9 @@ def _ask_with_discovery(world, raws, providers=None):
     rig = world.rig
     if providers is not None:
         rig.cfg["search"]["providers"] = list(providers)
+    # A6 kill switches off: these scenarios pin the pre-A6 single-search / follow_url contract
+    rig.cfg["inline"]["acq6_rounds_enabled"] = False
+    rig.cfg["inline"]["web_read_enabled"] = False
     rig.setup(web=world.web, cands=[])
 
     def no_get(*a, **k):

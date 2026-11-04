@@ -30,3 +30,16 @@ class EvidenceBundle:
     def grounded(self) -> bool:
         """True only when at least one verified document was inspected AND at least one passage was admitted."""
         return bool(self.examined_full_documents) and bool(self.admitted) and self.status == "admitted"
+
+
+def attempt_anyway(ev, cfg) -> tuple:
+    """NONASK-1103 C6 (owner R-045): (ev, qualified). With answer.always_attempt exactly true, a bundle that holds >= 1
+    admitted passage of >= 1 examined document but whose status is "insufficient" for another reason (coverage etc.) is
+    returned as status "admitted" so the writer runs and the claim check decides what survives; qualified is True then.
+    Never promotes a bundle with 0 admitted passages or a corpus_unusable one. Any other input is returned unchanged."""
+    from dataclasses import replace
+
+    if (isinstance(ev, EvidenceBundle) and ev.status == "insufficient" and ev.admitted and ev.examined_full_documents
+            and isinstance(cfg, dict) and (cfg.get("answer") or {}).get("always_attempt") is True):
+        return replace(ev, status="admitted", trace={**(ev.trace or {}), "attempted_despite_insufficient": True}), True
+    return ev, False

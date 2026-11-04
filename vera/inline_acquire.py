@@ -104,6 +104,12 @@ class Outcome:
     # OD-1031-P1 item 4: {"status": met|resource_limited|incomplete_deadline, "stored": n, "target": n}; counts only
     # (no titles, hosts, URLs or provider names). None = no search ran. Observational: changes no cap or gate.
     acquisition: dict | None = None
+    # NONASK-1103 A6 D1 (S5): True when answer-only documents (variant-round or lane pages) are in the corpus; such an
+    # outcome is never put in the result TTL cache (request-local). Not public.
+    no_cache: bool = False
+    # A6-W (inline.web_read_enabled): request-local web route result (vera.web_route.WebResult). NEVER public, cached,
+    # stored, queued or logged: page text lives only for this request; ask_service merges its pages as lane "web".
+    web: object = None
 
     @property
     def n_answer_eligible(self) -> int:
@@ -313,7 +319,7 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         with _I.lock:
             _I.active -= 1
             _I.inflight.pop(key, None)
-            if out.status in SEARCHED:  # VER L1: never cache a cap/busy refusal
+            if out.status in SEARCHED and not out.no_cache:  # VER L1: never cache a cap/busy refusal; A6 S5: nor answer-only text
                 _I.results[key] = (clock(), out)
                 while len(_I.results) > int(_b(acq, "result_cache_max", 8)):
                     _I.results.popitem(last=False)
@@ -491,6 +497,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     ctx = stream_ctx.current()  # STREAM-1031: set only by POST /ask/stream; None = the legacy path, unchanged below
     deadline = INF if ctx is not None else t0 + _b(acq, "deadline_s", 45)  # OD-1031-NODEADLINE
     live = acq_config.live(acq)
+    rounds_on = icfg_of(acq).get("acq6_rounds_enabled") is True  # A6 D1 kill switch (false = the single search)
     ms: dict = {}
     codes: dict = {}
 
@@ -501,6 +508,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     st: dict = {"portals": None, "recs": [], "cands": []}  # FRESH-1023 C3: portal attempts + per-candidate records
 
     def done(o: Outcome) -> Outcome:
+        if st.get("web") is not None:  # A6-W: request-local; an outcome holding page text is never cached (R-037)
+            o.web = st["web"]
+            if o.web.pages:
+                o.no_cache = True
         if st["portals"] is not None:
             o.portals = list(st["portals"])
             late = clock() >= deadline
@@ -509,6 +520,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     r["outcome"] = "not_evaluated"
                     r["reason"] = r.pop("skip", None) or (  # P0DTA-DIAG: the reason recorded at the skip; else legacy flag
                         acq_config.reason(acq, "deadline") if late else acq_config.reason(acq, "defer_cap"))
+            wid = st.get("web_ids") or ()
+            for c, r in zip(st["cands"], st["recs"]):  # A6-W N4: web-route candidates stay terminal (never queued)
+                if id(c) in wid:
+                    r.update(outcome="web_answer_only", reason="web_route", background="terminal")
             # P0DTA-DIAG: one terminal status per candidate (status only)
             for r in st["recs"]:
                 research_outcome.annotate_diag(r)
@@ -534,7 +549,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             tgt = acq_rounds.target_of(acq)
             stop = _stop_reason(ctx, st) if ctx is not None else None
             fb = st.get("fresh_budget")  # the pass's fresh-document budget (None if never reserved)
-            if o.stored >= tgt:
+            if (o.admitted + o.reused + int(st.get("n_web", 0)) >= tgt) if rounds_on else (o.stored >= tgt):  # A6 D1: answer-eligible incl. answer-only
                 aq_status = "met"
             elif ctx is not None and stop == stream_ctx.DISCONNECTED:  # STREAM-1031
                 aq_status = "incomplete_disconnected"
@@ -549,6 +564,9 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             o.acquisition = {"status": aq_status, "stored": int(o.stored), "target": int(tgt),
                              **({"stop": stop} if ctx is not None and aq_status == "resource_limited"
                                 and stop in (stream_ctx.STALLED, stream_ctx.PROVIDERS_EXHAUSTED) else {})}
+            r6 = st.get("acq6")
+            if r6 and r6["rounds"] > 1:  # A6 D1: telemetry/dev only
+                o.acquisition.update({"rounds": int(r6["rounds"]), "stop": r6["stop"]})
             if ctx is not None:
                 _emit_final(o, acq, codes, stop)
         elif ctx is not None and o.status in CAPPED:  # the shared job caps refused: nothing searched
@@ -615,6 +633,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     return done(Outcome("search_failed"))
                 cands, search_failed = [], True  # P0-5: the discovered candidates still go through acquisition
         ms["search"] = int((clock() - t) * 1000)
+        _web_read(question, acq, cands, st, ctx, count)  # A6-W: round 0 only (DDG once per question, N3)
         if ctx is not None:
             ctx.touch()  # the search rung finished: progress
             _check_stop(ctx, st)  # T10d: a disconnect/stop during the search starts no fetch below
@@ -634,6 +653,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         for c in cands:
             if isinstance(c, dict):
                 rec_by[id(c)] = _cand_record(c)
+                if id(c) in st.get("web_ids", ()):  # A6-W N4: read on the answer-only web route; never handed to the queue
+                    rec_by[id(c)].update(outcome="web_answer_only", reason="web_route", background="terminal")
                 st["recs"].append(rec_by[id(c)])
                 st["cands"].append(c)
         drops: dict = {}
@@ -643,7 +664,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             st["route"] = route_rec
         route = route_rec["route"] if route_rec else None
         protected = _protected_keys(cands, acq, deps) if aa._topic_fit_active(acq, route) else set()
-        ranked = aa.rank_candidates(question, cands, acq, skip, fdcfg, count, drops=drops, route=route,
+        ranked = aa.rank_candidates(question, [c for c in cands if id(c) not in st.get("web_ids", ())] if st.get("web_ids")
+                                    else cands, acq, skip, fdcfg, count, drops=drops, route=route,
                                     protected=protected, parts=[(t, e) for t, e in (sq_plan or ())])
         for cid, why in drops.items():
             if cid in rec_by:
@@ -737,6 +759,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         if search_failed and not plans and not reused[0]:
             return done(Outcome("search_failed"))
         ms["evaluate"] = int((clock() - t) * 1000)
+        ao_ids: set = set()  # A6 S5: ids of plans found ONLY by variant queries (answer-only, never stored)
+        if rounds_on and fresh_budget > 0 and not search_failed and len(per) >= len(ranked):
+            t = clock()
+            extra, reused = _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip,
+                                          plans, reused, fresh_budget, route)
+            ao_ids = {id(p) for p in extra}
+            plans = plans + extra
+            ms["rounds"] = int((clock() - t) * 1000)
         if not plans and not reused[0]:
             if budget <= 0:
                 count(acq_config.reason(acq, "daily_cap"))
@@ -751,6 +781,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         for plan in plans:  # one INSERT-only transaction per document (WoStore); DOI dedupe = canonical_state
             e = by_plan.get(id(plan))
             rc = rec_plan.get(id(plan))
+            if id(plan) in ao_ids or plan.get("answer_only") or plan.get("lane") or plan.get("source_lane"):
+                # A6 S5: variant-only documents answer only (no write); like below_persist_min plans they may sit in the
+                # result cache (they passed the licence gate). Lane/web pages (R-037) are never cached either.
+                if plan.get("answer_only") or plan.get("lane") or plan.get("source_lane"):
+                    out.no_cache = True
+                count(acq_config.reason(acq, BELOW_PERSIST_MIN))
+                out.documents.append({"persisted": False, "reason": BELOW_PERSIST_MIN})
+                continue
             if not aa.persist_eligible(plan, acq):  # ONE-SPAN-1021: answers this request only; never written
                 count(acq_config.reason(acq, BELOW_PERSIST_MIN))
                 out.documents.append({"persisted": False, "reason": BELOW_PERSIST_MIN})
@@ -799,6 +837,184 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 deps.close()
         except Exception as e:  # noqa: BLE001
             logger.warning("autoacq close failed (%s)", type(e).__name__)
+
+
+def _ckeys(c: dict) -> set:
+    """A6 D1: the canonical keys of one candidate (doc_key_set plus its DOI/PMCID identity): the `tried` set."""
+    from vera.dar_corpus import doc_key_set
+    doi = aa._doi(c)
+    isbn = aa.candidate_isbn(c)
+    ks = set(doc_key_set(doi, c.get("url"), (isbn or {}).get("isbn")))
+    ks.add("doi:" + doi if doi else "pmc:" + str(aa._pmcid(c) or id(c)))
+    return ks
+
+
+def web_read_enabled(acq: dict | None) -> bool:
+    """A6-W kill switch inline.web_read_enabled (ships true; false = no web route at all, pre-A6-W behaviour)."""
+    return icfg_of(acq).get("web_read_enabled") is True
+
+
+def _web_read(question, acq, cands, st, ctx, count) -> None:
+    """A6-W (R-045/R-047/R-048/R-050, review N3/N4): read the round-0 general-web results (no DOI/PMCID/arXiv id)
+    through vera.web_route (read gate before any fetch, vera.public_fetch, use_for_answer gate; always answer-only).
+    Their candidate records are marked terminal so CONT-1023 never hands them to enqueue_candidates/run_job (N4).
+    Never raises; counts only reach the log."""
+    if not web_read_enabled(acq) or (ctx is not None and ctx.stop_reason() is not None):
+        return
+    try:
+        from vera import web_route
+        web = [c for c in cands if isinstance(c, dict) and web_route.is_web_candidate(c)]
+        if not web:
+            return
+        res = web_route.read_web(question, web)
+        st["web"], st["n_web"] = res, len(res.pages)
+        st["web_ids"] = {id(c) for c in web}  # their records are marked terminal where they are built (N4)
+        count("R-ACQ-WEB-READ") if res.pages else None
+        if ctx is not None:
+            ctx.touch()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("autoacq web route failed (%s)", type(e).__name__)
+
+
+def with_web(o, lanes):
+    """A6-W: the request's lane result with the web route's pages and reading-list links appended (a new LaneResult;
+    None when neither exists). Request-local only, like lane_pass."""
+    web = getattr(o, "web", None) if o is not None else None
+    if web is None or not (web.pages or web.listed):
+        return lanes
+    from vera import lane_evidence
+    keep = ("lane", "label", "title", "url", "published", "read", "reference")
+    links = [{k: d.get(k) for k in keep if d.get(k) is not None} for d in web.listed]
+    links += [{"lane": "web", "label": getattr(p, "label", "web source"), "title": p.title, "url": p.url, "read": True}
+              for p in web.pages]
+    base = lanes if lanes is not None else lane_evidence.LaneResult()
+    return lane_evidence.LaneResult(links=list(base.links) + links, pages=list(base.pages) + list(web.pages),
+                                    attributions=list(base.attributions))
+
+
+# Orchestrator safety bound (2026-11-04): the round loop ends after NO_PROGRESS_ROUNDS consecutive variant rounds that
+# yield ZERO new usable documents (no new answer-eligible document: fresh admitted or reused stored), so an empty-result question does not spend the hourly jobs down to the background floor.
+# Exit reason "no_progress" (Outcome.acquisition["stop"], telemetry only). CALIBRATION NOTE: 2 is a structural choice,
+# not a tuned value: one empty round can be a provider blip, two in a row on different variants indicate the variant
+# list is not reaching new sources; no live distribution of per-round yields exists yet. Re-check against owner-run
+# logs of rounds/stop per question (how often a third empty round would have found something) and change only then.
+NO_PROGRESS_ROUNDS = 2
+
+
+def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip, plans, reused,
+                  fresh_budget, route):
+    """NONASK-1103 A6 D1 (A6-2, A6-5): rounds 2 and later. While fewer than the target (acq_rounds, 6) answer-eligible
+    documents (fresh + reused + answer-only/lane pages) exist and the previous ranked list is exhausted, take the next
+    query variant (vera.query_variants6: finite list V, never the raw sentence) and search again. Every round reserves
+    one job (aa.reserve_job, which also refuses below aa.BG_MIN_FREE_HOURLY_JOBS free hourly jobs); a refusal stops the
+    loop. `tried` canonical keys are never re-evaluated. Documents found only here are ANSWER-ONLY (S5): returned for the
+    caller to answer from, never stored or cached.
+    Bounds: STREAMED path (N1, OD-1031-NODEADLINE unchanged): no wall-clock bound; at most |V| rounds, each
+    <= search timeout_s + one evaluation pass (per-fetch per_doc_timeout_s), a stop/disconnect check before every round
+    and fetch start, the job floor and stall_s. NON-STREAM path: `deadline` (45 s from start) is absolute across all
+    rounds: a round starts only if its search can end per_doc_timeout_s before it, and no fetch starts if one no longer
+    fits (N5), so the worst case is deadline_s + one straggler per_doc_timeout_s.
+    Returns (extra answer-only plans, reused). st["acq6"] = {"rounds": searches incl. round 0, "stop": reason}."""
+    from vera import query_variants6
+    tgt = acq_rounds.target_of(acq)
+    per_doc = _b(acq, "per_doc_timeout_s", 25)
+    s = acq.get("search") or {}
+    tried: set = set()
+    for c in st["cands"]:
+        tried |= _ckeys(c)
+    extra: list = []
+    rounds, stop = 1, "variants_exhausted"
+    r6 = st["acq6"] = {"rounds": 1, "stop": stop}
+    idle, last = 0, None  # consecutive variant rounds that added zero new usable documents (NO_PROGRESS_ROUNDS)
+    try:
+        variants = query_variants6.variants(question)
+    except Exception:  # noqa: BLE001
+        variants = []
+    for q in variants:
+        cur = len(extra) + len(reused[0])  # usable = answer-eligible documents gained (fresh or reused)
+        if last is not None:
+            idle = idle + 1 if cur == last else 0
+            if idle >= NO_PROGRESS_ROUNDS:  # checked BEFORE the next reservation: no job is spent on a third round
+                stop = "no_progress"
+                break
+        last = cur
+        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        remaining = fresh_budget - len(plans) - len(extra)
+        if eligible >= tgt:
+            stop = "met"
+            break
+        if remaining <= 0:
+            stop = "ceiling31"
+            break
+        if ctx is not None and _check_stop(ctx, st):
+            stop = "disconnect" if st.get("stop") == stream_ctx.DISCONNECTED else str(st.get("stop"))
+            break
+        if ctx is None and deadline - clock() - per_doc < 1.0:  # N5: the search must end a fetch reserve before it
+            count(acq_config.reason(acq, "deadline"))
+            stop = "deadline"
+            break
+        why = aa.reserve_job(acq, question, clock=clock, floor=aa.BG_MIN_FREE_HOURLY_JOBS)
+        if why:
+            count(why)
+            stop = "rate"
+            break
+        rounds += 1
+        r6["rounds"] = rounds
+        _emit("search", "start", step=rounds)
+        with search_providers.portal_scope() as pl:
+            try:
+                so_tok = search_providers.SCHOLARLY_ONLY.set(True)  # N3: DDG once per question; no DDG/Wikipedia here
+                try:
+                    cands = list(_with_parts(None, deps.search, q, int(s.get("results_per_provider", 10)),
+                                             float(s.get("timeout_s", 20)) if ctx is not None else
+                                             max(1.0, min(float(s.get("timeout_s", 20)), deadline - clock() - per_doc))) or [])
+                finally:
+                    search_providers.SCHOLARLY_ONLY.reset(so_tok)
+                if not pl:
+                    search_providers.record_portal("acquisition_search", "completed", len(cands))
+            except Exception:  # noqa: BLE001
+                if not pl:
+                    search_providers.record_portal("acquisition_search", "failed", 0)
+                count(acq_config.reason(acq, "search_failed"))
+                stop = "search_failed"
+                st["portals"].extend(pl)
+                break
+        st["portals"].extend(pl)
+        if ctx is not None:
+            ctx.touch()
+        fresh = [c for c in cands if isinstance(c, dict) and not (_ckeys(c) & tried)]
+        for c in cands:
+            if isinstance(c, dict):
+                tried |= _ckeys(c)
+        if not fresh:
+            continue
+        ranked = aa.rank_candidates(question, fresh, acq, set(skip) | tried, fdcfg, count, drops={}, route=route,
+                                    protected=None)
+        reuse_info: dict = {}
+        got_reused, left = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg, clock=clock,
+                                       deadline=deadline, info=reuse_info,
+                                       **({"ctx": ctx, "max_checks": int(acq_config.live(acq)["max_reuse_checks_per_prompt"])}
+                                          if ctx is not None else {}))
+        if got_reused[0]:
+            reused = (list(reused[0]) + list(got_reused[0]), list(reused[1]) + list(got_reused[1]))
+        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + len(reused[0]))))
+        left = aa.reserve_reads(left, need, acq, route)
+        if not left:
+            continue
+        if ctx is not None and _check_stop(ctx, st):
+            stop = "disconnect" if st.get("stop") == stream_ctx.DISCONNECTED else str(st.get("stop"))
+            break
+        if ctx is None and deadline - clock() < per_doc:  # N5: one full fetch no longer fits: nothing starts
+            count(acq_config.reason(acq, "deadline"))
+            stop = "deadline"
+            break
+        extra += _evaluate_parallel(question, left, acq, deps, icfg, fdcfg, clock, deadline, need, count, ms,
+                                    per={}, skips={}, **({"ctx": ctx, "st": st} if ctx is not None else {}))
+    else:
+        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        stop = "met" if eligible >= tgt else "variants_exhausted"
+    r6["stop"] = stop
+    return extra, reused
 
 
 # UNCALIBRATED planner prior: max candidates in the one protect-lookup batch (the discovered/search pool is bounded
@@ -1122,7 +1338,10 @@ def ephemeral_corpus(plans: list, acq: dict, fdcfg: dict, icfg: dict, stored=Non
     if not srcs:
         return None
     c = fulldoc_db.load_acquired_rows(srcs, spans, fdcfg, acq, ingest_cfg=icfg, max_docs=len(srcs))
-    return c if c.status == "ok" and c.acquired else None
+    if c.status == "ok" and c.acquired:
+        c.seed_per_doc = True  # NONASK-1103 A6-3: admit() seeds each document's own candidates (admission.seed_per_doc_spans)
+        return c
+    return None
 
 
 def notice(acq: dict | None, status: str) -> str | None:

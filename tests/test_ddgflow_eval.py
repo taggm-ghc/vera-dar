@@ -90,6 +90,9 @@ def ask(world, *, get=None, url_check=None, providers=(OA,), raws=()):
     """world.ask() with optional landing GET / public-address stubs (the harness default refuses both, offline)."""
     rig = world.rig
     rig.cfg["search"]["providers"] = list(providers)
+    # A6 kill switches off: these scenarios pin the pre-A6 single-search / follow_url contract
+    rig.cfg["inline"]["acq6_rounds_enabled"] = False
+    rig.cfg["inline"]["web_read_enabled"] = False
     rig.setup(web=world.web, cands=[])
 
     def no_get(*a, **k):

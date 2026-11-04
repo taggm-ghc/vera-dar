@@ -1167,6 +1167,10 @@ ARXIV_ALLOWED: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_a
 ARXIV_STATUS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_arxiv_status", default=None)  # [status, n] handoff
 PORTALS: contextvars.ContextVar = contextvars.ContextVar("vera_acq_portals", default=None)
 # NONASK-1103 S3: the request's sub-queries [(query text, entities)], set by inline_acquire; None/one part = unchanged.
+# NONASK-1103 A6 (review N3): set by the inline round loop for variant rounds 2+: DuckDuckGo (and its id lookup) and
+# Wikipedia are skipped, so DDG runs ONCE per question (its daily cap unchanged); variant rounds use OpenAlex, Europe PMC
+# and arXiv only. Default False = unchanged.
+SCHOLARLY_ONLY: contextvars.ContextVar = contextvars.ContextVar("vera_acq_scholarly_only", default=False)
 SUBQUERIES: contextvars.ContextVar = contextvars.ContextVar("vera_acq_subqueries", default=None)
 # NONASK-1103 S3: None = today's OpenAlex call (AND profile, then OR retry); "and_only" = the AND call only (one per
 # sub-query); "or_only" = the plain OR query only (the question-level retry).
@@ -1286,6 +1290,12 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     prof_on = bool(s.get("openalex_profile"))
 
     def budget(cap: int, n_parts: int = 1) -> dict:
+        b = _budget(cap, n_parts)
+        if SCHOLARLY_ONLY.get():  # NONASK-1103 N3: variant rounds never call DDG, its id lookup or Wikipedia
+            b = dict(b, ddg=False, wiki=False, lookup=0)
+        return b
+
+    def _budget(cap: int, n_parts: int = 1) -> dict:
         """The slots for `cap` search calls. One part: the legacy order (OpenAlex 2, DDG, Europe PMC, Wikipedia, arXiv,
         then the id lookup). NONASK-1103 S3, n parts: the QUESTION-level slots first (OpenAlex OR retry, id lookup,
         Wikipedia, DDG, one each), then one OpenAlex call per part, then Europe PMC per part, then arXiv per part
@@ -1335,7 +1345,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         # NONASK-1103 S3: with several sub-queries the budget is re-planned for this call (question-level slots first)
         parts = list(SUBQUERIES.get() or ())
         multi = len(parts) > 1 and (s.get("subquery") or {}).get("enabled") is True
-        B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else B0
+        B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else (budget(cap0) if SCHOLARLY_ONLY.get() else B0)
         use_ddg, use_epmc, use_wiki, use_arxiv, lookup_left = B["ddg"], B["epmc"], B["wiki"], B["arxiv"], B["lookup"]
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")

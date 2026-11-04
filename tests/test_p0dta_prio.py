@@ -139,7 +139,7 @@ def test_D3_inline_search_leaves_a_full_fetch_reserve(env, deadline_s, want):
     d = A.deps([], A.Web({}, {}))
     d.search = lambda q, n, t: seen.append(t) or []
     inline_acquire.acquire(A.Q_EPI, env, env=A.ENV_ON, clock=Clock(), deps_factory=lambda a, e: d)
-    assert seen == [want]
+    assert seen and set(seen) == {want}  # A6 rounds: every extra search also gets the full fetch reserve
 
 
 def test_D3_no_evaluation_starts_without_the_fetch_reserve(env):
@@ -160,6 +160,8 @@ def test_D3_no_evaluation_starts_without_the_fetch_reserve(env):
 
 # ---------------------------------------------------------------------------------------------- D4 quota spend
 def test_D4_url_only_handoff_stops_at_the_reserve_so_the_next_request_still_searches(env):
+    env["inline"]["acq6_rounds_enabled"] = False  # A6 kill switches off: pre-A6 follow_url queueing contract
+    env["inline"]["web_read_enabled"] = False
     urls = [{"url": f"https://example.org/post{i}", "title": "t", "snippet": "", "doi": None, "provider": "ddg",
              "acq_source": "ddg", "ddg_id_kind": "url", "discovered_url": f"https://example.org/post{i}"}
             for i in range(8)]

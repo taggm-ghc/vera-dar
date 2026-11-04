@@ -1,0 +1,6 @@
+{
+  "_status": "SEED / FALLBACK ONLY (owner rule 2026-10-28: a curated table is a DB table; config is seed or fallback). Agent-curated by NONASK-1103 A6P, NOT owner-reviewed. The owner may edit this list; order = the order variants are tried. Target: a DB table (created, modified, version, state draft|active|suspended|retired); its DDL is a later owner-gated step.",
+  "_calibration_note": "UNCALIBRATED prior (no live data). The terms are common practitioner/engineering vocabulary (non-scholarly lanes, H3) chosen by an agent from general knowledge, not measured. Calibrate by replaying recorded questions and counting on-topic full texts reached per added query; until then this is a seed/fallback the owner may edit. Order is also a prior.",
+  "practitioner_terms": ["best practices", "patterns", "architecture", "guide", "reference", "documentation", "design patterns", "framework"],
+  "max_terms_per_query": 4
+}

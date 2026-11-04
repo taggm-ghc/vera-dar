@@ -31,11 +31,11 @@ from vera import official_lane, reporting_lane
 from vera.official_lane import LanePage
 
 INSPECTION_LABEL = "read in full for this answer; not stored"
-ORIGIN = {"official": "official_lane", "reporting": "reporting_lane"}
-EPISTEMIC = {"official": "official", "reporting": "reported"}
+ORIGIN = {"official": "official_lane", "reporting": "reporting_lane", "web": "web_lane"}  # web: A6-W (I-A6)
+EPISTEMIC = {"official": "official", "reporting": "reported", "web": "web"}
 LICENCE_DISPOSITION = "permitted_transient_answer_only"  # S9 / vera-design.md (R-037): licence observation unclear
 LANE_PROMPT_SENTENCE = ("Some passages are marked as public pages read for this answer (\"lane\": \"official\" or "
-                        "\"reported\"); they are not verified and not stored. Describe them in your own words, attribute "
+                        "\"reported\", or \"web\" for a web source); they are not verified and not stored. Describe them in your own words, attribute "
                         "them (\"according to <vendor> documentation\", \"as reported by <outlet>\"), and never present "
                         "them as verified fact.")
 _ROUTING = Path(__file__).resolve().parent.parent / "config" / "domain_routing.json"
@@ -194,7 +194,9 @@ def _chunk_cfg() -> tuple[int, int]:
 
 
 def attribution_for(page: LanePage) -> dict:
-    who = f"{page.entity} documentation" if page.lane == "official" else f"As reported by {page.outlet or _host(page.url)}"
+    who = (f"{page.entity} documentation" if page.lane == "official"
+           else f"Web source: {_host(page.url)}" if page.lane == "web"  # A6-W: a web page, never verified fact
+           else f"As reported by {page.outlet or _host(page.url)}")
     return {"creator": who, "title": page.title or _host(page.url), "source": page.url,
             "lane": EPISTEMIC[page.lane], "scope": INSPECTION_LABEL}
 

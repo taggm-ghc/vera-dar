@@ -12,6 +12,7 @@ Q = e2e.Q_EPI
 
 def test_defect3_cached_none_not_reused_when_tried_set_changes(direct):
     cfg = A.cfg()
+    cfg["inline"]["acq6_rounds_enabled"] = False  # A6 off: this test counts single-search calls
     d = A.deps([], A.epi_setup()[0])
     calls = []
     inner = d.search

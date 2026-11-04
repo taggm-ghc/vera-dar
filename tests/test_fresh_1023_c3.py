@@ -51,6 +51,8 @@ def test_inline_outcome_has_independent_candidate_records_and_portals(monkeypatc
     auto_acquire.reset_for_tests()
     inline_acquire.reset_for_tests()
     cfg = A.cfg()
+    cfg["inline"]["web_read_enabled"] = False  # A6 kill switch off: pre-A6 url-only follow_url queueing contract
+    cfg["inline"]["acq6_rounds_enabled"] = False  # A6 off: one search, one portal record
     monkeypatch.setattr(acq_config, "db_configured", lambda cfg, env: True)
     web = A.epi_setup()[0]
     nodoi = {"title": "no id", "url": "https://example.org/x", "provider": "openalex"}

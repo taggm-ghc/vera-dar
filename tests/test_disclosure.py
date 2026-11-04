@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from vera import disclosure
 from vera.memory_gate import CONFIG_PATH
 
@@ -85,7 +87,7 @@ def test_unreadable_contract_config_is_l0_text(tmp_path):
 def test_confirm_flag_does_not_change_text_while_evidence_recall_off(tmp_path):
     cfg = tmp_path / "c.json"
     cfg.write_text(json.dumps({"memory": {"store": {"confirm_required": False}}}))
-    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT
+    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT.replace(disclosure._web_sentence(), "", 1)
     assert disclosure.DISCLOSURE_TEXT_UNCONFIRMED == disclosure.DISCLOSURE_TEXT
 
 
@@ -151,10 +153,29 @@ EXACT_TAIL_P17 = ("Your question is sent to third-party AI and search services t
                   "recording each document's source, licence and the time it was added; it does not store your question.")
 
 
-def test_exact_owner_text_as_shipped():  # WED-ACQ2 P1.7: automatic acquisition ships switched on (owner 2026-10-21)
-    assert disclosure.DISCLOSURE_TEXT.endswith(" " + EXACT_TAIL_P17)
-    assert "During this demonstration" not in disclosure.DISCLOSURE_TEXT
-    assert "A third-party hosted language model may be used" not in disclosure.DISCLOSURE_TEXT  # folded into the exact text
+@pytest.fixture(autouse=True)
+def _web_read_off(monkeypatch):
+    """A6-W: these tests are about the other switches; the web sentence is pinned off here and checked below."""
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
+
+
+def test_web_sentence_only_in_full_disclosure_iff_flag_on(monkeypatch):
+    web = disclosure._web_sentence()
+    assert web.strip() and web not in disclosure.disclosure_text()
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: True)
+    assert web in disclosure.disclosure_text() and web not in disclosure.short_notice_text()
+    assert " ".join(t for _h, t in disclosure.disclosure_sections()) == disclosure.disclosure_text().strip()
+
+
+def test_exact_owner_text_as_shipped(monkeypatch):  # WED-ACQ2 P1.7: automatic acquisition ships switched on (owner 2026-10-21)
+    # DISCLOSURE_TEXT is built at import with the shipped (web-read on) config: it is the web-off text plus the web sentence
+    web = disclosure._web_sentence()
+    shipped = disclosure.DISCLOSURE_TEXT
+    assert shipped.count(web) == 1
+    shipped = shipped.replace(web, "", 1)
+    assert shipped.endswith(" " + EXACT_TAIL_P17)
+    assert "During this demonstration" not in shipped
+    assert "A third-party hosted language model may be used" not in shipped  # folded into the exact text
 
 
 def test_demo_sentence_only_when_corpus_and_l2_off(tmp_path, monkeypatch):

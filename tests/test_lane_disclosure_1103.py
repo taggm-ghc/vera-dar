@@ -18,6 +18,7 @@ def _all():
 def _set(mp, off, rep):
     mp.setattr(official_lane, "lane_enabled", lambda cfg=None: off)
     mp.setattr(reporting_lane, "lane_enabled", lambda cfg=None: rep)
+    mp.setattr(disclosure, "web_read_on", lambda: False)  # A6-W web sentence: tested in test_acq6_web_wiring_1103
 
 
 def test_flags_off_no_lane_text(monkeypatch):

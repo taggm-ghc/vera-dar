@@ -44,6 +44,7 @@ def test_flag_parsing_fails_closed_for_text_selection(tmp_path):
 
 def test_state1_off_keeps_todays_text(tmp_path, monkeypatch):
     monkeypatch.setattr(disclosure, "auto_acquire_enabled", lambda: False)  # WED-ACQ2: the P1.7-off text is unchanged
+    monkeypatch.setattr(disclosure, "web_read_on", lambda: False)  # A6-W: the web sentence is flag-gated, checked elsewhere
     t = disclosure.disclosure_text(fulldoc_path=_cfg(tmp_path, False))
     assert t.startswith(STATE1_DISCLOSURE_START) and t == (disclosure._BASE + disclosure.offtopic_sentence() + disclosure._THIRD_PARTY + disclosure._NO_SAVE
                                                          + disclosure._DEMO_NO_STORAGE)  # full state-1 text

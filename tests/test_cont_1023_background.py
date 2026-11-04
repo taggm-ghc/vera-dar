@@ -155,6 +155,7 @@ def test_url_only_candidates_are_queued_and_followed_through_the_existing_route(
             "snippet": "transmission incidence outbreak pathogen"}
     web.records["PMC7000000"] = web.records[pmc_doi]  # the PMCID resolve query matches by PMCID
     cfg = A.cfg()
+    cfg["inline"]["web_read_enabled"] = False  # A6 kill switch off: pre-A6 follow_url queueing contract
     d = A.deps([pmc_url, bare], web)
     o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)
     rec = {c["url"]: c for c in o.candidates}
@@ -287,7 +288,9 @@ def test_offtopic_notice_discloses_background_acquisition(h, monkeypatch, bg):
 def test_url_only_queued_cause_is_awaiting_route_not_budget(bg):
     d = A.deps([{"url": "https://example.org/landing", "title": "SYNTHETIC outbreak transmission",
                  "snippet": "transmission incidence outbreak pathogen"}], A.Web({}, {}))
-    o = inline_acquire.acquire(Q, A.cfg(), env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)
+    cfg = A.cfg()
+    cfg["inline"]["web_read_enabled"] = False  # A6 kill switch off: url-only stays queued (pre-A6 contract)
+    o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)
     pub = o.public()
     pub["portals"] = [{"portal": "p", "status": "completed", "results": 1}]
     rec = research_record.summarize(triggers=["insufficient"], inline=pub, used_new=False, older_available=False,

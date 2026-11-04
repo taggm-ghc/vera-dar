@@ -201,6 +201,7 @@ def test_E_every_candidate_gets_exactly_one_terminal_status_with_reason(inline_e
     web = A.Web(recs, jats, overrides={f"{pm[5]}/fullTextXML": A.Resp(ctype="application/pdf", body=b"%PDF-1.4")})
     cands = [A.cand(dois[n]) for n in range(1, 6)] + [A.cand(dois[1]),          # 6 duplicate of 1 (dedup skip)
                                                       {"title": "no identifier", "url": "https://x.org/a", "snippet": "s"}]  # 7 prefilter skip
+    inline_env["inline"]["web_read_enabled"] = False  # A6 kill switch off: row 7 pins the pre-A6 follow_url queue contract
     out, _ = _acquire(inline_env, cands, web)
     pub = out.public()
     listed = pub.get("candidates")

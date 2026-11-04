@@ -57,7 +57,9 @@ def test_incomplete_deadline_when_the_time_limit_stopped_the_search():
 
 def test_block_is_counts_only():
     o = _run()
-    assert set(o.public()["acquisition"]) == {"status", "stored", "target"}
+    blk = o.public()["acquisition"]
+    assert set(blk) == {"status", "stored", "target", "rounds", "stop"}  # A6 adds two counts-only keys
+    assert isinstance(blk["rounds"], int) and isinstance(blk["stop"], str) and len(blk["stop"]) < 40
     assert "http" not in json.dumps(o.public()["acquisition"])
 
 

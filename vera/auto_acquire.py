@@ -1171,16 +1171,20 @@ def error_code(cfg: dict, e: Exception) -> str:
             else f"R-ACQ-ERR-{type(e).__name__}"[:40])
 
 
-def reserve_job(cfg: dict, question: str, clock=time.monotonic) -> str | None:
+def reserve_job(cfg: dict, question: str, clock=time.monotonic, floor: int = 0) -> str | None:
     """DAR-INLINE-1021: count one inline acquisition against the SAME jobs_per_hour / jobs_per_day caps as enqueue.
     None = reserved; else the refusal reason code. Also marks the question as recently acquired (no duplicate
-    background job for it)."""
+    background job for it).
+    NONASK-1103 A6 D1: floor > 0 (inline rounds 2 and later pass BG_MIN_FREE_HOURLY_JOBS) also refuses when fewer than
+    `floor` hourly jobs would remain AFTER this reservation, so extra rounds never starve the background hand-off.
+    floor 0 (default) = the unchanged behaviour."""
     now = clock()
     with _S.lock:
         _prune(_S.jobs_hour, now, 3600.0)
         _prune(_S.jobs_day, now, 86400.0)
         if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
-                len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
+                len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")) or \
+                (floor > 0 and int(acq_config.bound(cfg, "jobs_per_hour")) - len(_S.jobs_hour) - 1 < int(floor)):
             return acq_config.reason(cfg, "rate")
         _S.jobs_hour.append(now)
         _S.jobs_day.append(now)
