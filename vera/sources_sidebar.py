@@ -65,8 +65,19 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
                            "coverage", "topic_shares"})
 ABOUT_LINK_LABEL = "How VERA-DAR answers and its limits → About"
-# D7: the digest sample (corpus_description.stamp_and_profile) never includes full documents stored as passages
+# D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
+# many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
+# topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
 SAMPLE_EXCLUSION = "full documents stored as passages are not in the sample"
+
+
+def _sample_basis(shares: dict, n: int) -> str:
+    """What the share percentages count: the sampled sources, and how many of them are full documents."""
+    if "full_documents_in_sample" not in shares:
+        return f"share of the {n} sampled sources, each counted once under its main topic; {SAMPLE_EXCLUSION}"
+    k = int(shares["full_documents_in_sample"])
+    fd = f", including {k} full document{'s' if k != 1 else ''} stored as passages" if k > 0 else ""
+    return f"share of the {n} sampled sources{fd}, each counted once under its main topic"
 ABOUT_LINK_FALLBACK = "How VERA-DAR answers and its limits: see the About page."
 
 LICENCE_SIDEBAR = ("For listed records, only the indexing services' metadata licence was checked; the articles' own "
@@ -195,8 +206,7 @@ def _share_lines(shares) -> list[str]:
         if not main or n <= 0:
             return []
         reach = f"{int(shares.get('main_pct') or 0)}%"
-        lines = [f"**Main topics** ({reach} of documents; share of the {n} sampled sources, each counted once under "
-                 f"its main topic; {SAMPLE_EXCLUSION}): {main}."]
+        lines = [f"**Main topics** ({reach} of documents; {_sample_basis(shares, n)}): {main}."]
         o = shares.get("other") or {}
         if int(o.get("topics") or 0) > 0:
             k = int(o["topics"])

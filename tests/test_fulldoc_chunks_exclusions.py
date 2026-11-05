@@ -76,14 +76,16 @@ def test_snapshot_documents_exclude_kind_when_contract_kinds_passed():
     assert KIND not in doc[1]["kinds"] and "s.provenance->>'stored_text_kind' = ANY(:kinds)" in doc[0] and "NOT (s.provenance" not in doc[0]
 
 
-def test_corpus_description_title_sample_excludes_kind():
+def test_corpus_description_title_sample_includes_kind_titles_only():
+    """DIGEST-IMPROVE-1105: chunk-stored full documents are in the digest sample (first), by title only: no excerpt."""
     eng = _Eng()
     try:
         corpus_description.stamp_and_profile(eng, 5)
     except Exception:
         pass  # later fake results are not shaped for the rest of the function; only the first calls matter
     sql, p = eng.calls[1] if len(eng.calls) > 1 else eng.calls[0]
-    assert "<> :fd_kind" in sql and "stored_text_kind" in sql and "md5(s.source_id::text)" in sql
+    assert "<> :fd_kind" not in sql and "= :fd_kind) DESC, md5(s.source_id::text)" in sql
+    assert "= 'abstract_metadata' THEN left(s.content" in sql  # excerpts never come from full documents
     assert p["fd_kind"] == KIND and p["n"] == 5
 
 

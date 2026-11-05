@@ -42,22 +42,41 @@ FULLDOC_CHUNKS_KIND = "fulldoc_chunks"  # sources.provenance stored_text_kind of
 
 def stamp_and_profile(engine, max_titles: int, excerpt_chars: int = 0) -> tuple[dict, dict]:
     """(overview, profile) from vera_vjay.sources; read-only SELECTs only. Step 1 of the digest pipeline (grounded
-    facts) plus the step 2 sample: md5-ordered titles and, only when excerpt_chars > 0, the first excerpt_chars of an
-    abstract-metadata source's stored text. Chunk-stored full documents never reach the model (D-B)."""
+    facts) plus the step 2 sample: titles and, only when excerpt_chars > 0, the first excerpt_chars of an
+    abstract-metadata source's stored text. DIGEST-IMPROVE-1105: chunk-stored full documents (the operator-curated
+    documents VERA-DAR answers from first) are in the facts and come first in the title sample, by their sources-row
+    title; the rest of the sample is md5-ordered. Their text never reaches the model (content is empty; titles only)."""
     from sqlalchemy import text
     with engine.connect() as c:
-        n, newest = c.execute(text("SELECT count(*), max(created_at) FROM vera_vjay.sources")).one()
+        head = c.execute(text(  # D5: full documents counted as distinct titles, as the sample de-duplicates them
+            "SELECT count(*), max(created_at), "
+            "(SELECT count(DISTINCT lower(btrim(regexp_replace(coalesce(f.provenance->>'title', g.title), '\\s+', ' ', 'g')))) "
+            "FROM vera_vjay.sources f LEFT JOIN vera_vjay.candidates g ON g.candidate_id = f.candidate_id "
+            "WHERE f.provenance->>'stored_text_kind' = :fd_kind "
+            "AND btrim(coalesce(f.provenance->>'title', g.title, '')) <> '') FROM vera_vjay.sources"),
+            {"fd_kind": FULLDOC_CHUNKS_KIND}).one()
+        n, newest = head[0], head[1]
+        fd_total = int(head[2] or 0) if len(head) > 2 else 0
         rows = c.execute(text(
             "SELECT coalesce(s.provenance->>'title', k.title), "
-            "CASE WHEN :ab > 0 AND s.provenance->>'stored_text_kind' = 'abstract_metadata' THEN left(s.content, :ab) END "
+            "CASE WHEN :ab > 0 AND s.provenance->>'stored_text_kind' = 'abstract_metadata' THEN left(s.content, :ab) END, "
+            "s.provenance->>'stored_text_kind' "
             "FROM vera_vjay.sources s "
-            "JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id "
+            "LEFT JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id "
             "WHERE coalesce(s.provenance->>'title', k.title) IS NOT NULL "
-            "AND coalesce(s.provenance->>'stored_text_kind', '') <> :fd_kind "  # D-B: chunk-stored full documents never reach the model
-            "ORDER BY md5(s.source_id::text) LIMIT :n"), {"n": max_titles, "fd_kind": FULLDOC_CHUNKS_KIND,
-                                                        "ab": max(0, int(excerpt_chars))}).all()
-        titles = [r[0] for r in rows]
-        excerpts = [r[1] or "" for r in rows]
+            "ORDER BY (coalesce(s.provenance->>'stored_text_kind', '') = :fd_kind) DESC, "  # full documents first
+            "md5(s.source_id::text) LIMIT :n"), {"n": max_titles, "fd_kind": FULLDOC_CHUNKS_KIND,
+                                                 "ab": max(0, int(excerpt_chars))}).all()
+        seen: set[str] = set()
+        titles, excerpts, fd_in_sample = [], [], 0
+        for r in rows:  # one entry per title: a document stored in several versioned rows counts once
+            key = re.sub(r"\s+", " ", str(r[0])).strip().casefold()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            titles.append(r[0])
+            excerpts.append(r[1] or "")
+            fd_in_sample += int(len(r) > 2 and r[2] == FULLDOC_CHUNKS_KIND)
 
         def counts(expr):
             return {str(r[0]): int(r[1]) for r in c.execute(text(
@@ -75,7 +94,8 @@ def stamp_and_profile(engine, max_titles: int, excerpt_chars: int = 0) -> tuple[
                    "discovered_via": counts("provenance->>'discovered_via'"),
                    "text_kinds": counts("provenance->>'stored_text_kind'"),
                    "published_years": [years[0], years[1]], "year_counts": year_counts,
-                   "added_last_30_days": int(recent or 0)}
+                   "added_last_30_days": int(recent or 0),
+                   "fulldoc_total": fd_total, "fulldoc_in_sample": fd_in_sample}
     overview = {"source_count": int(n or 0), "corpus_updated_at": newest.isoformat() if newest else None}
     return overview, profile
 
@@ -188,16 +208,19 @@ CHECK_SYSTEM = (
     "may contain. Always mark unsupported any sentence that describes what VERA-DAR answers, allows or is limited to, "
     "or what kind of documents the sources are (for example journal articles or randomized trials): titles cannot "
     "support such claims. For each supported sentence give the ids (the numbers after T) of the titles in its cited clusters "
-    "that support it; a sentence without supporting title ids counts as unsupported. For every number in a sentence "
+    "that support it; a sentence without supporting title ids counts as unsupported. "
+    "For every number in a sentence "
     "that is not inside an approved fact phrase, give a derivation: value as written, op (count, sum, difference, "
-    "ratio, percent, min, max, year_span), operands (approved fact ids such as F3, or title ids such as T12 for count) "
-    "and rounding (integer, 1dp, nearest_5pct). "
+    "ratio, percent, min, max, year_span, percent_of_sum), operands (approved fact ids such as F3, or title ids such as "
+    "T12 for count) and rounding (integer, 1dp, nearest_5pct). For percent_of_sum (a share of a total, e.g. two "
+    'clusters together as a percent of the sample) operands are {"numerator": [fact ids or title ids], '
+    '"denominator": "F2"}. '
     'Reply with JSON only: {"verdicts": [{"n": 1, "supported": true, "title_ids": [12, 40], "derivations": '
     '[{"value": "26%", "op": "percent", "operands": ["F7", "F5"], "rounding": "integer"}]}]}')
 
 # CORPUS-DIGEST-1104 MVP: bumped whenever DRAFT_SYSTEM or the sentence rules change; appended to the configured
 # prompt_version so cached and stored digests from an older prompt are regenerated.
-PROMPT_REV = "claims-evidence-derivations-2"
+PROMPT_REV = "claims-evidence-derivations-3-fulldocs-percent-of-sum"
 
 
 UNAPPROVED_LABEL = "topic without an approved label"
@@ -227,6 +250,8 @@ def grounded_facts(overview: dict, profile: dict) -> dict:
             "stored_text_kinds": dict(profile.get("text_kinds") or {}),
             "published_year_range": [yrs[0], yrs[1]] if yrs[0] and yrs[1] else None,
             "sources_per_published_year": dict(profile.get("year_counts") or {}),
+            "full_documents_stored_as_passages": int(profile.get("fulldoc_total") or 0),
+            "full_documents_in_sample": int(profile.get("fulldoc_in_sample") or 0),
             "sample_size": len(profile.get("titles") or [])}
 
 
@@ -286,10 +311,13 @@ def parse_clusters(obj: dict, n_sample: int, max_clusters: int, titles) -> list[
 TOP_SHARE_TARGET = (4, 5)  # 80% as an exact fraction: integer arithmetic, so exactly 80% reaches the target
 
 
-def topic_shares(clusters: list[dict], n_docs: int, target: tuple[int, int] = TOP_SHARE_TARGET) -> dict:
+def topic_shares(clusters: list[dict], n_docs: int, target: tuple[int, int] = TOP_SHARE_TARGET,
+                 full_documents_in_sample: int | None = None) -> dict:
     """Deterministic: rank clusters by document count (ties by label) and take the smallest prefix whose cumulative
     count reaches target of n_docs. Each document has one primary cluster (parse_clusters assigns a member once), so
-    shares, plus the ungrouped remainder, sum to 100%. Percentages count documents in the sample."""
+    shares, plus the ungrouped remainder, sum to 100%. Percentages count documents in the sample.
+    full_documents_in_sample (DIGEST-IMPROVE-1105): how many sampled documents are chunk-stored full documents; the
+    label states it. None (an older digest) means the sample excluded them."""
     num, den = target
     ranked = sorted(clusters, key=lambda c: (-int(c["count"]), str(c["label"]).casefold()))
     n = max(0, int(n_docs))
@@ -303,7 +331,8 @@ def topic_shares(clusters: list[dict], n_docs: int, target: tuple[int, int] = TO
     rest = ranked[len(main):]
     rest_n = sum(int(c["count"]) for c in rest)
     grouped = cum + rest_n
-    return {"counts": "documents", "basis_documents": n,
+    fd = {} if full_documents_in_sample is None else {"full_documents_in_sample": max(0, int(full_documents_in_sample))}
+    return {"counts": "documents", "basis_documents": n, **fd,
             "main": [{"label": c["label"], "documents": int(c["count"]), "pct": pct(int(c["count"]))} for c in main],
             "main_pct": pct(cum), "target_reached": bool(n) and cum * den >= num * n,
             "other": {"topics": len(rest), "documents": rest_n, "pct": pct(rest_n)},
@@ -347,24 +376,32 @@ def _stem(w: str) -> str:
 
 def approved_facts(facts: dict, clusters: list[dict], n_sample: int) -> list[dict]:
     """Approved facts, each an exact phrase binding a figure to its referent:
-    {"id": "F<k>", "phrase", "cluster": index or None (corpus-wide), "value": number, (y1, y2) or None}."""
+    {"id": "F<k>", "phrase", "cluster": index or None (corpus-wide), "value": number, (y1, y2) or None,
+     "kind": "count" | "percent" | "date" | "range", "population": "corpus" | "sample" | None}.
+    kind and population let code refuse a derivation that mixes unlike figures (percent_of_sum)."""
     raw = []
     if facts.get("source_count") is not None:
-        raw.append((f"the corpus holds {int(facts['source_count'])} sources", None, int(facts["source_count"])))
+        raw.append((f"the corpus holds {int(facts['source_count'])} sources", None, int(facts["source_count"]), "count", "corpus"))
     if facts.get("newest_added"):
-        raw.append((f"newest source {facts['newest_added']}", None, None))
+        raw.append((f"newest source {facts['newest_added']}", None, None, "date", None))
     if facts.get("added_last_30_days") is not None:
-        raw.append((f"{int(facts['added_last_30_days'])} sources added in the last 30 days", None, int(facts["added_last_30_days"])))
+        raw.append((f"{int(facts['added_last_30_days'])} sources added in the last 30 days", None,
+                    int(facts["added_last_30_days"]), "count", "corpus"))
+    if facts.get("full_documents_stored_as_passages"):
+        k = int(facts["full_documents_stored_as_passages"])
+        raw.append((f"{k} full documents stored as passages", None, k, "count", "corpus"))
     yrs = facts.get("published_year_range") or []
     if len(yrs) == 2 and str(yrs[0]).isdigit() and str(yrs[1]).isdigit():
-        raw.append((f"published between {yrs[0]} and {yrs[1]}", None, (int(yrs[0]), int(yrs[1]))))
+        raw.append((f"published between {yrs[0]} and {yrs[1]}", None, (int(yrs[0]), int(yrs[1])), "range", None))
     if n_sample:
-        raw.append((f"{int(n_sample)} sampled sources", None, int(n_sample)))
+        raw.append((f"{int(n_sample)} sampled sources", None, int(n_sample), "count", "sample"))
     for i, c in enumerate(clusters, 1):
-        raw.append((f"{c['label']}: {int(c['count'])} sources", i, int(c["count"])))
+        raw.append((f"{c['label']}: {int(c['count'])} sources", i, int(c["count"]), "count", "sample"))
         if n_sample:
-            raw.append((f"{c['label']}: {round(100 * int(c['count']) / n_sample)}%", i, round(100 * int(c["count"]) / n_sample)))
-    return [{"id": f"F{k}", "phrase": ph, "cluster": ci, "value": v} for k, (ph, ci, v) in enumerate(raw, 1)]
+            raw.append((f"{c['label']}: {round(100 * int(c['count']) / n_sample)}%", i,
+                        round(100 * int(c["count"]) / n_sample), "percent", "sample"))
+    return [{"id": f"F{k}", "phrase": ph, "cluster": ci, "value": v, "kind": kd, "population": po}
+            for k, (ph, ci, v, kd, po) in enumerate(raw, 1)]
 
 
 # --- numeric tokens (owner 2026-11-04: numbers pass inside an approved fact phrase, or with a derivation code re-checks)
@@ -444,64 +481,182 @@ def numeric_tokens(text: str):
     return out
 
 
-def _round_ok(token_value: float, computed: float, rounding) -> bool:
+def _round_ok(token_value: float, computed: float, rounding, written: str = "") -> bool:
     if rounding == "integer":
         return token_value == round(computed)
     if rounding == "1dp":
         return token_value == round(computed, 1)
-    if rounding == "nearest_5pct":
-        return abs(token_value - computed) <= 2.5
+    if rounding == "nearest_5pct":  # a written digit figure must itself be a multiple of 5 (no false precision)
+        return abs(token_value - computed) <= 2.5 and (not re.search(r"\d", str(written)) or token_value % 5 == 0)
     return False
 
 
-def run_derivation(d, cited_ids, clusters, facts_by_id) -> float | None:
-    """Code re-executes one derivation; None on an unknown op, a foreign or invalid id, or too many operands."""
-    if not isinstance(d, dict):
-        return None
-    ops = d.get("operands")
+# DIGEST-IMPROVE-1105 binding: a derived figure is bound to its referent (the clusters the sentence names) and to its
+# population (the sample or the corpus). These are the names of the two populations code computes facts over (code
+# vocabulary for code-built facts, like the fact phrases), not a natural-language word list.
+POPULATION_TERMS = {"sample": frozenset({"sample", "sampled"}), "corpus": frozenset({"corpus", "collection"})}
+
+
+def _named_clusters(sentence: str, clusters) -> set[int]:
+    hay = _norm_words(unicodedata.normalize("NFKC", str(sentence or "")))
+    return {i for i, c in enumerate(clusters, 1) if _norm_words(c["label"]).strip() and _norm_words(c["label"]) in hay}
+
+
+def _bound(sentence: str, clusters, facts_by_id, op_clusters: set[int], population, state_population: bool) -> bool:
+    """The sentence names exactly the clusters the figure is computed over (none for a corpus-wide figure), names no
+    other population than the figure's, and (for a share) names the denominator's population."""
+    if _named_clusters(sentence, clusters) != set(op_clusters):
+        return False
+    text = unicodedata.normalize("NFKC", str(sentence or "")).casefold()
+    words_all = set(re.findall(r"[^\W\d_]+", text))
+    for f in sorted(facts_by_id.values(), key=lambda f: -len(f["phrase"])):  # a corpus-wide fact phrase names its own
+        if f["cluster"] is None:                                              # population; it is not this figure's
+            text = text.replace(f["phrase"].casefold(), " ")
+    words = set(re.findall(r"[^\W\d_]+", text))
+    if any(words & terms for pop, terms in POPULATION_TERMS.items() if pop != population):
+        return False
+    return not state_population or bool(words_all & POPULATION_TERMS.get(population, frozenset()))
+
+
+def _fact_operands(ops, cited_ids, facts_by_id):
+    """Approved facts for fact ids, each once; a cluster fact only for a cited cluster. None = deny."""
     if not isinstance(ops, list) or not ops or len(ops) > MAX_OPERANDS:
         return None
-    op = d.get("op")
+    if any(not isinstance(o, str) for o in ops) or len(set(ops)) != len(ops):
+        return None
+    facts = [facts_by_id.get(o) for o in ops]
+    if any(f is None or f["value"] is None or (f["cluster"] is not None and f["cluster"] not in cited_ids) for f in facts):
+        return None
+    return facts
+
+
+def _uniform(facts, kinds) -> str | None:
+    """The shared population of facts of one kind in `kinds`, or None (deny) for mixed kinds or populations."""
+    ks, pops = {f.get("kind") for f in facts}, {f.get("population") for f in facts}
+    if len(ks) != 1 or not ks <= set(kinds) or len(pops) != 1 or None in pops:
+        return None
+    return next(iter(pops))
+
+
+def _complete_clusters(title_ids, cited_ids, clusters) -> set[int] | None:
+    """D2: title ids must be the union of the COMPLETE member sets of cited clusters; returns those clusters or None."""
+    got = set(title_ids)
+    covered = {i for i in cited_ids if set(clusters[i - 1]["members"]) <= got}
+    if not covered or {m for i in covered for m in clusters[i - 1]["members"]} != got:
+        return None
+    return covered
+
+
+def _percent_of_sum(ops, cited_ids, clusters, facts_by_id):
+    """DIGEST-IMPROVE-1105: 100 * (sum of a numerator set) / (a denominator fact), e.g. "48% of the sample" for two
+    clusters. operands = {"numerator": [ids], "denominator": "F<k>"}. The numerator is EITHER title ids that make up the
+    complete member sets of cited clusters (never an arbitrary subset) OR count facts (each once; a cluster fact only
+    for a cited cluster), never a mix. Every figure must be a count of the denominator's population (sampled titles are
+    the sample) and the numerator may not exceed the denominator. Returns (value, clusters, population) or None."""
+    if not isinstance(ops, dict) or set(ops) != {"numerator", "denominator"}:
+        return None
+    num, den_id = ops["numerator"], ops["denominator"]
+    if not isinstance(num, list) or not num or len(num) > MAX_OPERANDS or not isinstance(den_id, str):
+        return None
+    den = facts_by_id.get(den_id)
+    if (den is None or den.get("kind") != "count" or den.get("population") is None or isinstance(den["value"], bool)
+            or not isinstance(den["value"], int) or den["value"] <= 0
+            or (den["cluster"] is not None and den["cluster"] not in cited_ids)):
+        return None
+    if any(not isinstance(o, str) for o in num) or len(set(num)) != len(num):
+        return None
+    if all(re.fullmatch(r"T\d+", o) for o in num):
+        covered = _complete_clusters([int(o[1:]) for o in num], cited_ids, clusters) if den["population"] == "sample" else None
+        if covered is None:
+            return None
+        total, op_clusters = len(num), covered
+    elif all(re.fullmatch(r"F\d+", o) for o in num):
+        facts = _fact_operands(num, cited_ids, facts_by_id)
+        if facts is None or any(f is den for f in facts) or _uniform(facts + [den], ("count",)) is None:
+            return None
+        if len(facts) > 1 and any(f["cluster"] is None for f in facts):  # corpus-wide totals overlap: one only, alone
+            return None
+        total, op_clusters = sum(int(f["value"]) for f in facts), {f["cluster"] for f in facts if f["cluster"] is not None}
+    else:
+        return None
+    if total > den["value"]:
+        return None
+    return 100 * total / den["value"], op_clusters, den["population"]
+
+
+def _evaluate(d, cited_ids, clusters, facts_by_id):
+    """(value, clusters the figure is computed over, population, whether the sentence must name the population)."""
+    ops, op = d.get("operands"), d.get("op")
+    if op == "percent_of_sum":
+        r = _percent_of_sum(ops, cited_ids, clusters, facts_by_id)
+        return None if r is None else (*r, True)
+    if not isinstance(ops, list) or not ops or len(ops) > MAX_OPERANDS:
+        return None
     if op == "count":
-        members = {m for i in cited_ids for m in clusters[i - 1]["members"]}
+        members = {m: i for i in cited_ids for m in clusters[i - 1]["members"]}
         tids = set()
         for o in ops:
             mm = re.fullmatch(r"T(\d+)", str(o)) if isinstance(o, str) else None
             if not mm or int(mm.group(1)) not in members:
                 return None
             tids.add(int(mm.group(1)))
-        return float(len(tids))
-    vals = []
-    for o in ops:
-        f = facts_by_id.get(o) if isinstance(o, str) else None
-        if f is None or f["value"] is None or (f["cluster"] is not None and f["cluster"] not in cited_ids):
-            return None
-        vals.append(f["value"])
+        return float(len(tids)), {members[t] for t in tids}, "sample", False
+    facts = _fact_operands(ops, cited_ids, facts_by_id)
+    if facts is None:
+        return None
+    vals = [f["value"] for f in facts]
+    fc = {f["cluster"] for f in facts if f["cluster"] is not None}
     try:
         if op == "year_span":
-            return float(vals[0][1] - vals[0][0]) if len(vals) == 1 and isinstance(vals[0], tuple) else None
-        if any(isinstance(v, tuple) for v in vals):
+            ok = len(facts) == 1 and facts[0].get("kind") == "range" and isinstance(vals[0], tuple)
+            return (float(vals[0][1] - vals[0][0]), set(), None, False) if ok else None
+        if any(isinstance(v, tuple) or isinstance(v, bool) for v in vals):
+            return None
+        if op in ("percent", "ratio"):  # D4: two counts of one population; a share also needs num <= den
+            pop = _uniform(facts, ("count",))
+            if pop is None or len(vals) != 2 or not vals[1] or vals[1] < 0:
+                return None
+            if op == "ratio":
+                return vals[0] / vals[1], fc, pop, False
+            if vals[0] > vals[1] or (facts[1]["cluster"] is not None and facts[1]["cluster"] != facts[0]["cluster"]):
+                return None
+            num_c = {facts[0]["cluster"]} if facts[0]["cluster"] is not None else set()
+            return 100 * vals[0] / vals[1], num_c, pop, True
+        pop = _uniform(facts, ("count", "percent"))
+        if pop is None:
             return None
         if op == "sum":
-            return float(sum(vals))
+            return float(sum(vals)), fc, pop, False
         if op == "difference" and len(vals) == 2:
-            return float(vals[0] - vals[1])
-        if op == "ratio" and len(vals) == 2 and vals[1]:
-            return vals[0] / vals[1]
-        if op == "percent" and len(vals) == 2 and vals[1]:
-            return 100 * vals[0] / vals[1]
+            return float(vals[0] - vals[1]), fc, pop, False
         if op == "min":
-            return float(min(vals))
+            return float(min(vals)), fc, pop, False
         if op == "max":
-            return float(max(vals))
+            return float(max(vals)), fc, pop, False
     except (TypeError, IndexError):
         return None
     return None
 
 
-def derivations_confirm(tokens, derivations, cited_ids, clusters, facts_by_id) -> bool:
+def run_derivation(d, cited_ids, clusters, facts_by_id, sentence: str | None = None) -> float | None:
+    """Code re-executes one derivation; None on an unknown op, a foreign or invalid id, too many operands, mixed kinds
+    or populations, or (when `sentence` is given; the pipeline always gives it) a sentence that names other clusters
+    or another population than the figure is computed over."""
+    if not isinstance(d, dict):
+        return None
+    r = _evaluate(d, cited_ids, clusters, facts_by_id)
+    if r is None:
+        return None
+    value, op_clusters, population, state_population = r
+    if sentence is not None and not _bound(sentence, clusters, facts_by_id, op_clusters, population, state_population):
+        return None
+    return float(value)
+
+
+def derivations_confirm(tokens, derivations, cited_ids, clusters, facts_by_id, sentence: str = "") -> bool:
     """Every numeric token outside an approved phrase needs a derivation whose written value parses to the token's
-    value and whose code-computed result matches it under the stated rounding. The model's arithmetic is never used."""
+    value and whose code-computed result matches it under the stated rounding, bound to the sentence's named clusters
+    and population. The model's arithmetic is never used."""
     if not tokens:
         return True
     if not isinstance(derivations, list):
@@ -514,8 +669,8 @@ def derivations_confirm(tokens, derivations, cited_ids, clusters, facts_by_id) -
             dv = numeric_tokens(str(d["value"]))
             if not dv or len(dv) != 1 or dv[0][1] != value:
                 continue
-            computed = run_derivation(d, cited_ids, clusters, facts_by_id)
-            if computed is not None and _round_ok(value, computed, d.get("rounding")):
+            computed = run_derivation(d, cited_ids, clusters, facts_by_id, sentence)
+            if computed is not None and _round_ok(value, computed, d.get("rounding"), written):
                 ok = True
                 break
         if not ok:
@@ -595,7 +750,8 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
         trace[-1]["clusters"] = len(clusters)
         if not clusters:  # reported, never replaced by invented labels
             raise DigestError("cluster: no subject cluster (only generic or invalid labels)")
-        shares = topic_shares(clusters, len(titles))  # grounded fact, computed in code
+        shares = topic_shares(clusters, len(titles),  # grounded fact, computed in code
+                              full_documents_in_sample=facts["full_documents_in_sample"])
         facts["topic_shares_of_sampled_documents"] = shares
         fact_list = approved_facts(facts, clusters, len(titles))  # owner: figures bound to their referent
         facts_by_id = {f["id"]: f for f in fact_list}
@@ -655,7 +811,8 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
                 if (isinstance(n, int) and not isinstance(n, bool) and seen_n.get(n) == 1  # D4; a repeated n is ambiguous
                         and 1 <= n <= len(candidates) and v.get("supported") is True
                         and verified_title_ids(v, cited[n - 1], clusters)
-                        and derivations_confirm(pending[n - 1], v.get("derivations"), cited[n - 1], clusters, facts_by_id)):
+                        and derivations_confirm(pending[n - 1], v.get("derivations"), cited[n - 1], clusters, facts_by_id,
+                                               candidates[n - 1])):
                     supported.add(n)
         dropped = {}
         kept = []

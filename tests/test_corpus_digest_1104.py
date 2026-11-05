@@ -295,9 +295,12 @@ def test_main_topics_line_states_the_real_share():
     lines = sb._share_lines(shares)
     assert lines[0].startswith("**Main topics** (90% of documents; share of the 10 sampled sources")
     assert "dominant subject 90%" in lines[0] and lines[1] == "Other topics: 10% across 1 smaller topic."
-    assert "full documents stored as passages are not in the sample" in lines[0]  # D7: the sample's limit is stated
+    assert "full documents stored as passages are not in the sample" in lines[0]  # D7: an older digest (no key) keeps it
+    fd = sb._share_lines(cd.topic_shares(C(("dominant subject", 9), ("minor subject", 1)), 10, full_documents_in_sample=3))
+    assert "share of the 10 sampled sources, including 3 full documents stored as passages" in fd[0]  # DIGEST-IMPROVE-1105
+    assert "not in the sample" not in fd[0]
     import inspect
-    assert "<> :fd_kind" in inspect.getsource(cd.stamp_and_profile)  # ... and it is the limit the sample query applies
+    assert "<> :fd_kind" not in inspect.getsource(cd.stamp_and_profile)  # the sample query no longer excludes them
 
 
 # --- CORPUS-DIGEST-1104-VERIFY adversarial cases (scratch/CORPUS-DIGEST-1104-VERIFY/adversarial.py) -----------------

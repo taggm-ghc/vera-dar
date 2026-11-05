@@ -81,9 +81,10 @@ def test_d7_label_states_sample_excludes_fulldocs():
     assert "full documents stored as passages" in sb.SAMPLE_EXCLUSION
 
 
-def test_d7_sql_excludes_fulldoc_chunks():
-    src = (ROOT / "vera/corpus_description.py").read_text()
-    assert "fulldoc_chunks" in src and "<> :fd_kind" in src
+def test_d7_sql_includes_fulldoc_chunks_first():  # DIGEST-IMPROVE-1105 (was: excludes)
+    import inspect
+    src = inspect.getsource(cd.stamp_and_profile)
+    assert "<> :fd_kind" not in src and "= :fd_kind) DESC, " in src and "md5(s.source_id::text)" in src
 
 
 def test_r4_no_scope_in_config_or_router():
