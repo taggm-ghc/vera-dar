@@ -881,9 +881,10 @@ TABLE_DOC_ROWS_SQL = (
     "(SELECT max(v.version) FROM vera_vjay.sources v WHERE v.canonical_source_id = s.canonical_source_id) ORDER BY 1, 2")
 TABLE_N_DOCS_SQL = "SELECT count(DISTINCT canonical_source_id) FROM vera_vjay.sources"  # documents, not stored versions
 TABLE_SAMPLE_SQL = (
-    "SELECT s.source_id, coalesce(s.provenance->>'title', k.title) AS title FROM vera_vjay.sources s "
-    "JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id WHERE s.source_id = ANY(:ids) "
-    "AND coalesce(s.provenance->>'stored_text_kind', '') <> :fd_kind ORDER BY 1")  # D-B: chunk-stored full documents never reach the model
+    "SELECT s.source_id, coalesce(s.provenance->>'title', k.title) AS title, "
+    "(coalesce(s.provenance->>'stored_text_kind', '') = :fd_kind) AS is_fulldoc FROM vera_vjay.sources s "
+    "JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id WHERE s.source_id = ANY(:ids) ORDER BY 1")
+# TOPIC-SAMPLES-1105: the tagger tags only full-document parts, so full documents are included and sampled first (titles only)
 # R5 (R5K-3): coverage gate. Table mode needs BOTH the owner's topics_source flip (T12) AND a backfill coverage share (terminal
 # full-document parts of latest versions / all such parts) of at least table_min_coverage; below it the digest shows the
 # no-topics line, never partial topics as collection facts. A document with any non-terminal part is not counted at all.
@@ -1002,7 +1003,7 @@ def topics_from_table(engine, cfg: dict | None = None, tree_reader=None) -> dict
 
 
 def table_title_samples(engine, per_topic: int, primary: dict | None = None) -> dict[str, list[str]]:
-    """{topic_key: a few md5-ordered titles of non-full-document sources whose primary topic it is}; read-only."""
+    """{topic_key: a few md5-ordered titles of sources (full documents first) whose primary topic it is}; read-only."""
     import hashlib
     from sqlalchemy import text
     primary = primary or {}
@@ -1010,10 +1011,11 @@ def table_title_samples(engine, per_topic: int, primary: dict | None = None) -> 
     if not primary or per_topic <= 0:
         return {}
     with engine.connect() as c:
-        for sid, title in c.execute(text(TABLE_SAMPLE_SQL), {"ids": sorted(primary), "fd_kind": FULLDOC_CHUNKS_KIND}):
+        for sid, title, is_fd in c.execute(text(TABLE_SAMPLE_SQL), {"ids": sorted(primary), "fd_kind": FULLDOC_CHUNKS_KIND}):
             if title is not None and int(sid) in primary:
-                out.setdefault(primary[int(sid)], []).append((hashlib.md5(str(int(sid)).encode()).hexdigest(), str(title)))
-    return {k: [t for _, t in sorted(v)[:int(per_topic)]] for k, v in sorted(out.items())}
+                out.setdefault(primary[int(sid)], []).append(
+                    (0 if is_fd else 1, hashlib.md5(str(int(sid)).encode()).hexdigest(), str(title)))  # full documents first
+    return {k: [t for _, _, t in sorted(v)[:int(per_topic)]] for k, v in sorted(out.items())}
 
 
 def table_clusters(tab: dict, samples: dict | None) -> dict:

@@ -80,7 +80,7 @@ class FakeConn:
             return Res([(e.n_docs,)])
         if "ANY(:ids)" in sql:
             e.sample_params = params
-            return Res([(sid, t) for sid, t in sorted(e.samples.items()) if sid in params["ids"]])
+            return Res([(sid, t, sid in getattr(e, "fulldoc_sids", ())) for sid, t in sorted(e.samples.items()) if sid in params["ids"]])
         raise AssertionError("unexpected SQL: " + sql[:80])
 
 
@@ -150,13 +150,29 @@ def test_subtopics_attached_to_top_level_topics():
                                                               table_llm(), CFG)["coverage"]
 
 
-def test_sample_sql_excludes_fulldoc_chunks_and_passes_kind():
+def test_sample_sql_includes_fulldoc_sources_and_prefers_them():
+    eng = FakeEngine()
+    tab = cd.topics_from_table(eng, CFG, TREE_READER)
+    by_topic = {}
+    for sid, k in tab["primary"].items():
+        if sid in eng.samples:
+            by_topic.setdefault(k, []).append(sid)
+    k, sids = max(by_topic.items(), key=lambda kv: len(kv[1]))
+    assert len(sids) >= 2
+    eng.fulldoc_sids = {sorted(sids)[-1]}  # only the last source is chunk-stored full-document
+    fd_title = eng.samples[sorted(sids)[-1]]
+    assert "<> :fd_kind" not in cd.TABLE_SAMPLE_SQL
+    assert cd.table_title_samples(eng, 1, tab["primary"])[k] == [fd_title]
+    assert fd_title in cd.table_title_samples(eng, 3, tab["primary"])[k]
+
+
+def test_sample_sql_passes_kind():
     eng = FakeEngine()
     tab = cd.topics_from_table(eng, CFG, TREE_READER)
     out = cd.table_title_samples(eng, 3, tab["primary"])
     assert {k: sorted(v) for k, v in out.items()} == {k: sorted(v) for k, v in SAMPLES.items()}
     assert eng.sample_params == {"ids": sorted(tab["primary"]), "fd_kind": cd.FULLDOC_CHUNKS_KIND}
-    assert "<> :fd_kind" in cd.TABLE_SAMPLE_SQL and cd.table_title_samples(eng, 3, {}) == {}
+    assert cd.table_title_samples(eng, 3, {}) == {}
 
 
 # ---- table mode pipeline -----------------------------------------------------------------------------------------
