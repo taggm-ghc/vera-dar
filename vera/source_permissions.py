@@ -45,14 +45,29 @@ class PermissionRecord:
 def load_config(path: Path = CONFIG_PATH) -> dict:
     try:
         c = json.loads(Path(path).read_text(encoding="utf-8"))
-        return c if isinstance(c, dict) else {}
+        if not isinstance(c, dict):
+            return {}
+        if Path(path) == CONFIG_PATH:  # LISTS-TO-DB-1104: permissions.deny_hosts (union with the file) when enabled
+            try:
+                from vera import list_tables
+                c = list_tables.overlay("source_permissions.json", c)
+            except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+                pass
+        return c
     except Exception:  # noqa: BLE001  missing/corrupt config: empty deny-list, built-in phrases
         return {}
 
 
 def load_registry(path: Path = REGISTRY_PATH) -> list[dict]:
     try:
-        return _rows(json.loads(Path(path).read_text(encoding="utf-8")))
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if Path(path) == REGISTRY_PATH and isinstance(data, dict):  # LISTS-TO-DB-1104: entity.registry from the DB when enabled
+            try:
+                from vera import list_tables
+                data = list_tables.overlay("entity_registry.json", data)
+            except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+                pass
+        return _rows(data)
     except Exception:  # noqa: BLE001
         return []
 
@@ -61,6 +76,12 @@ def _rows(registry) -> list[dict]:
     if registry is None:  # fail closed: no registry argument means the SHIPPED registry, never "no restrictions"
         try:
             registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+            if isinstance(registry, dict):  # LISTS-TO-DB-1104: entity.registry from the DB when enabled
+                try:
+                    from vera import list_tables
+                    registry = list_tables.overlay("entity_registry.json", registry)
+                except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+                    pass
         except Exception:  # noqa: BLE001
             return []
     rows = registry.get("entities", []) if isinstance(registry, dict) else registry

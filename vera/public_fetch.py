@@ -35,7 +35,14 @@ class FetchRefused(Exception):
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+    if Path(path) == CONFIG_PATH and isinstance(cfg, dict):  # LISTS-TO-DB-1104: fetch.deny_hosts (union with the file)
+        try:
+            from vera import list_tables
+            cfg = list_tables.overlay("public_fetch.json", cfg)
+        except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+            pass
+    return cfg
 
 
 def ip_allowed(ip) -> bool:

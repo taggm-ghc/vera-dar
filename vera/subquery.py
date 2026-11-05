@@ -84,6 +84,12 @@ def load_entity_registry(path: Path | None = None) -> list:
         data = json.loads((path or _REG_PATH).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
+    if path is None:  # LISTS-TO-DB-1104: DB list when enabled, else the file rows
+        try:
+            from vera import list_tables
+            data = {**data, "entities": list_tables.get("entity.registry", data.get("entities", []))}
+        except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+            pass
     rows = [r for r in data.get("entities", []) if isinstance(r, dict) and r.get("state") == "active"
             and r.get("entity")]
     owners: dict = {}

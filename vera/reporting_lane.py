@@ -52,6 +52,12 @@ def load_config(path: Path | str = CONFIG_PATH) -> dict:
         raw = {}
     cfg = {**_DEFAULTS, **{k: v for k, v in raw.items() if not k.startswith("_")}}
     cfg["enabled"] = cfg.get("enabled") is True  # anything but literal true is OFF
+    if Path(path) == CONFIG_PATH:  # LISTS-TO-DB-1104: news.outlets + news.fallback_order from the DB when enabled
+        try:
+            from vera import list_tables
+            cfg = list_tables.overlay("reporting_lane.json", cfg)
+        except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+            pass
     return cfg
 
 

@@ -42,6 +42,12 @@ def load_config(path: Path = CONFIG_PATH) -> dict | None:
         msg = "acquisition config refused: key-like value at path(s) " + ", ".join(bad)
         logging.getLogger("vera").error(msg)
         raise ConfigError(msg)
+    if Path(path) == CONFIG_PATH:  # LISTS-TO-DB-1104: acquire.search_providers from the DB when enabled
+        try:
+            from vera import list_tables
+            cfg = list_tables.overlay("auto_acquire.json", cfg)
+        except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+            pass
     return cfg
 
 

@@ -1166,6 +1166,12 @@ def offtopic_applies(decision: ScopeDecision, cfg: RouterConfig | None = None) -
 
 def offtopic_providers(cfg: RouterConfig | None = None) -> list[str]:
     provs = (cfg or load_config()).raw.get("offtopic_providers")
+    if cfg is None:  # LISTS-TO-DB-1104: scope.offtopic_providers from the DB when enabled (per call; load_config is lru_cached)
+        try:
+            from vera import list_tables
+            provs = list_tables.get("scope.offtopic_providers", provs)
+        except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+            pass
     if not isinstance(provs, list) or not provs or not all(isinstance(p, str) for p in provs):
         raise ScopeConfigError("scope_router.json: offtopic_providers must be a non-empty list of names")
     return list(provs)
