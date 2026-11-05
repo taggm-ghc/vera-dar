@@ -27,6 +27,10 @@ Copy `.env.example` to a gitignored `.env` and fill in only the names you need; 
 - Licence allowlist: `config/licence_allowlist.json` is the seed (Deny All: unlisted licences are not stored); `vera/licence_gate.py` reads it. The planned DB table (draft 016) is not in this tree.
 - Config sanity: `<venv>/bin/python -I scripts/check_config.py`.
 
+## Features that ship off (as of 2026-11-05)
+
+Available in code, off by default, and each needs an owner step before it does anything: `retention_purge.enabled` (`config/request_trace.json`; migration 018 draft), `enabled` in `config/topic_tagging.json` (migrations 017 drafts), `read_from_db` in `config/list_tables.json` (migration 016, staged in `work/LISTS-TO-DB-1104/staged/`). Do not apply migrations from an agent session; status is owned by `db/README.md`. Tests for them are offline (`tests/test_retention_purge_1105.py`, `tests/test_topic_tagging_1104.py`, `tests/test_lists_loader_1105.py`). Parallel `/ask` lookups with per-host serialisation and Crawl-delay are on (`tests/test_ask_parallel_1105.py`, `tests/test_crawl_delay_1105.py`).
+
 ## Run the API
 
 From the repository root:
