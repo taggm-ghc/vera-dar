@@ -339,13 +339,18 @@ def topic_shares(clusters: list[dict], n_docs: int, target: tuple[int, int] = TO
             "ungrouped": {"documents": max(0, n - grouped), "pct": pct(max(0, n - grouped))}}
 
 
-def _context(facts: dict, clusters: list[dict], titles: list, per_cluster: int) -> str:
-    lines = ["Facts (recorded by the store; nothing else is known):", json.dumps(facts, sort_keys=True),
-             f"Clusters found in the sample of {facts['sample_size']} titles (label: sampled sources in it):"]
+def _context(facts: dict, clusters: list[dict], titles: list, per_cluster: int, n_docs: int | None = None) -> str:
+    head = (f"Topics from the document-topics table over all {n_docs} documents in the collection (label: documents whose main "
+            f"topic it is; example titles below are a sample):" if n_docs is not None else
+            f"Clusters found in the sample of {facts['sample_size']} titles (label: sampled sources in it):")  # R1 review m2
+    lines = ["Facts (recorded by the store; nothing else is known):", json.dumps(facts, sort_keys=True), head]
     for i, c in enumerate(clusters, 1):
         lines.append(f"- C{i} {c['label']}: {c['count']}")
         lines += [f"    * T{m} {sanitise(titles[m - 1], 200)}" for m in c["members"][:per_cluster]]
-    unassigned = facts["sample_size"] - sum(c["count"] for c in clusters)
+    if n_docs is not None:
+        lines.append(f"Documents with no topic yet: {max(0, n_docs - sum(c['count'] for c in clusters))}")
+        return "\n".join(lines)
+    unassigned = max(0, facts["sample_size"] - sum(c["count"] for c in clusters))
     lines.append(f"Sampled titles in no cluster: {unassigned}")
     return "\n".join(lines)
 
@@ -374,7 +379,7 @@ def _stem(w: str) -> str:
     return w
 
 
-def approved_facts(facts: dict, clusters: list[dict], n_sample: int) -> list[dict]:
+def approved_facts(facts: dict, clusters: list[dict], n_sample: int, basis: str = "sampled sources") -> list[dict]:
     """Approved facts, each an exact phrase binding a figure to its referent:
     {"id": "F<k>", "phrase", "cluster": index or None (corpus-wide), "value": number, (y1, y2) or None,
      "kind": "count" | "percent" | "date" | "range", "population": "corpus" | "sample" | None}.
@@ -394,7 +399,8 @@ def approved_facts(facts: dict, clusters: list[dict], n_sample: int) -> list[dic
     if len(yrs) == 2 and str(yrs[0]).isdigit() and str(yrs[1]).isdigit():
         raw.append((f"published between {yrs[0]} and {yrs[1]}", None, (int(yrs[0]), int(yrs[1])), "range", None))
     if n_sample:
-        raw.append((f"{int(n_sample)} sampled sources", None, int(n_sample), "count", "sample"))
+        raw.append((f"{int(n_sample)} {basis}", None, int(n_sample), "count",  # R1 (review m2): the referent matches the basis
+                    "sample" if basis == "sampled sources" else "corpus"))
     for i, c in enumerate(clusters, 1):
         raw.append((f"{c['label']}: {int(c['count'])} sources", i, int(c["count"]), "count", "sample"))
         if n_sample:
@@ -731,8 +737,10 @@ def coverage_from_clusters(clusters: list[dict], sample_size: int = 0) -> str:
     return f"The collection currently includes research on {joined}."
 
 
-def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.monotonic) -> dict:
-    """Steps 1-5 (see the module docstring). Raises DigestError (or TitleEchoError) with the trace on `.trace`."""
+def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.monotonic, table: dict | None = None) -> dict:
+    """Steps 1-5 (see the module docstring). Raises DigestError (or TitleEchoError) with the trace on `.trace`.
+    TOPIC-TAGGING-1104: `table` (from table_clusters) replaces the cluster model call: the clusters are the registry
+    topics, shares are over all documents, the model only writes prose and labels need no checker approval."""
     a = agentic_cfg(cfg)
     deadline = now() + float(a["deadline_s"])
     trace: list[dict] = []
@@ -743,19 +751,27 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
             raise DigestError("sample: no titles")
         sample = _sample_lines(profile, int(a["sample_excerpt_chars"]))  # step 2
         k = int(a["max_clusters"])
-        obj = _call(llm, [{"role": "system", "content": CLUSTER_SYSTEM.format(k=k)},
-                          {"role": "user", "content": "Sample:\n" + "\n".join(sample)}],
-                    a["cluster_max_tokens"], deadline, now, "cluster", trace)
-        clusters = parse_clusters(obj, len(titles), k, titles)
-        trace[-1]["clusters"] = len(clusters)
+        n_basis = table["n_docs"] if table else len(titles)
+        if table:  # no cluster model call: the clusters are the table topics
+            clusters = list(table["clusters"])[:2 * k]
+            trace.append({"step": "table", "ok": True, "clusters": len(clusters)})
+        else:
+            obj = _call(llm, [{"role": "system", "content": CLUSTER_SYSTEM.format(k=k)},
+                              {"role": "user", "content": "Sample:\n" + "\n".join(sample)}],
+                        a["cluster_max_tokens"], deadline, now, "cluster", trace)
+            clusters = parse_clusters(obj, len(titles), k, titles)
+            trace[-1]["clusters"] = len(clusters)
         if not clusters:  # reported, never replaced by invented labels
             raise DigestError("cluster: no subject cluster (only generic or invalid labels)")
-        shares = topic_shares(clusters, len(titles),  # grounded fact, computed in code
-                              full_documents_in_sample=facts["full_documents_in_sample"])
+        if table:
+            shares = topic_shares(table["clusters"], n_basis)  # grounded fact, computed in code
+        else:
+            shares = topic_shares(clusters, len(titles),  # grounded fact, computed in code
+                                  full_documents_in_sample=facts["full_documents_in_sample"])
         facts["topic_shares_of_sampled_documents"] = shares
-        fact_list = approved_facts(facts, clusters, len(titles))  # owner: figures bound to their referent
+        fact_list = approved_facts(facts, clusters, n_basis, "documents in the collection" if table else "sampled sources")  # owner: figures bound to their referent
         facts_by_id = {f["id"]: f for f in fact_list}
-        ctx = _context(facts, clusters, titles, int(a["sample_per_cluster"])) + "\nApproved facts (id, exact phrase):\n" + \
+        ctx = _context(facts, clusters, titles, int(a["sample_per_cluster"]), n_basis if table else None) + "\nApproved facts (id, exact phrase):\n" + \
             "\n".join(f"- {f['id']}: {f['phrase']}" + ("" if f["cluster"] is None else f" [C{f['cluster']}]") for f in fact_list)
         m = int(a["max_sentences"])
         obj = _call(llm, [{"role": "system", "content": DRAFT_SYSTEM.format(m=m)}, {"role": "user", "content": ctx}],
@@ -785,7 +801,7 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
             cited.append(every)
             pre.append(deterministic_check(coverage, titles, numeric_words, facts_for(every)))
         n_text = len(candidates)
-        for i, c in enumerate(clusters, 1):  # topic labels are claims too: each needs checker approval with title ids
+        for i, c in enumerate([] if table else clusters, 1):  # topic labels are claims too (table labels are registry rows): each needs checker approval with title ids
             candidates.append(f"Topic label: {c['label']}")
             cited.append([i])
             pre.append((None, []))
@@ -824,21 +840,23 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
                 dropped[why] = dropped.get(why, 0) + 1
             elif i <= len(drafts):
                 kept.append(x)
-        approved_labels = {clusters[i - n_text - 1]["label"] for i in range(n_text + 1, len(candidates) + 1) if i in supported}
+        approved_labels = {c["label"] for c in clusters + table["clusters"]} if table else \
+            {clusters[i - n_text - 1]["label"] for i in range(n_text + 1, len(candidates) + 1) if i in supported}
         trace.append({"step": "verify", "kept": len(kept), "dropped": dropped})
         if not kept:
             if dropped.get("title echo"):  # deterministic at temperature 0: the longer echo cooldown applies
                 raise TitleEchoError("every drafted sentence reproduced a source title or was unsupported")
             raise DigestError("verify: no supported sentence")
         approved_clusters = [c for c in clusters if c["label"] in approved_labels]
-        coverage = coverage_from_clusters(approved_clusters, len(titles)) if approved_clusters else ""
+        scope = table["scope"] if table else approved_clusters  # table: topics ordered by documents carrying them at all
+        coverage = coverage_from_clusters(scope, len(titles)) if scope else ""
         summary = sanitise(" ".join(kept))
         topics = [c["label"] for c in approved_clusters][:MAX_TOPICS]  # step 5: checker-approved subject labels only
         for e in shares["main"]:  # a label the checker did not approve is never shown
             if e["label"] not in approved_labels:
                 e["label"] = UNAPPROVED_LABEL
         trace[-1]["labels_approved"] = len(approved_labels)
-        labels = [c["label"] for c in clusters]  # every label that can reach the page (topics and shares)
+        labels = [c["label"] for c in (clusters + table["clusters"] + table["scope"] if table else clusters)]  # every label that can reach the page (topics and shares)
         if any(echoes_title(x, titles) for x in [summary, coverage, *labels, " ".join([summary, coverage, *labels])]):
             raise TitleEchoError("generated text reproduces a source title")
         return {"summary": summary, "topics": topics, "coverage": coverage, "topic_shares": shares,
@@ -847,6 +865,193 @@ def run_digest_pipeline(overview: dict, profile: dict, llm, cfg: dict, now=time.
     except (DigestError, TitleEchoError) as exc:
         exc.trace = trace
         raise
+
+
+# --- TOPIC-TAGGING-1104: topics and scope from the document-topics table ------------------------------------------
+# Owner design: the Corpus Digest determines its Topics and Scope by scouring the documents-to-topics table. Read-only.
+# Registry topics are the only labels; a document topic whose registry chain is not active is not counted (deny all).
+# R4 (orchestrator, T5 guard tests test_topicreg_1028 / test_topicjudge_1028): this module holds NO SQL on the registry table.
+# The registry is read through vera.micro_topic.registry_active_tree (ACTIVE rows only, via the registry module's owner-checked
+# READ ONLY reader); a non-active topic is simply absent, and the roll-up runs here in Python.
+# One document = the LATEST version of a canonical source (R1 skeptic 1); older versions are not counted.
+TABLE_EXISTS_SQL = "SELECT to_regclass('vera_vjay.toptag_document_topics') IS NULL"
+TABLE_DOC_ROWS_SQL = (
+    "SELECT d.source_id, d.topic_key, d.weight, d.set_version, d.modified_at FROM vera_vjay.toptag_document_topics d "
+    "JOIN vera_vjay.sources s ON s.source_id = d.source_id WHERE d.state = 'active' AND s.version = "
+    "(SELECT max(v.version) FROM vera_vjay.sources v WHERE v.canonical_source_id = s.canonical_source_id) ORDER BY 1, 2")
+TABLE_N_DOCS_SQL = "SELECT count(DISTINCT canonical_source_id) FROM vera_vjay.sources"  # documents, not stored versions
+TABLE_SAMPLE_SQL = (
+    "SELECT s.source_id, coalesce(s.provenance->>'title', k.title) AS title FROM vera_vjay.sources s "
+    "JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id WHERE s.source_id = ANY(:ids) "
+    "AND coalesce(s.provenance->>'stored_text_kind', '') <> :fd_kind ORDER BY 1")  # D-B: chunk-stored full documents never reach the model
+# R5 (R5K-3): coverage gate. Table mode needs BOTH the owner's topics_source flip (T12) AND a backfill coverage share (terminal
+# full-document parts of latest versions / all such parts) of at least table_min_coverage; below it the digest shows the
+# no-topics line, never partial topics as collection facts. A document with any non-terminal part is not counted at all.
+_TABLE_PARTS = ("FROM vera_vjay.evidence_spans e JOIN vera_vjay.sources s ON s.source_id = e.source_id "
+                "LEFT JOIN vera_vjay.toptag_span_status_v st ON st.source_id = e.source_id AND st.span_id = e.span_id "
+                "WHERE e.evidence_type = 'fulldoc_partition' AND s.version = "
+                "(SELECT max(v.version) FROM vera_vjay.sources v WHERE v.canonical_source_id = s.canonical_source_id)")
+TABLE_COVERAGE_SQL = ("SELECT count(*), count(*) FILTER (WHERE st.outcome IN ('tagged', 'no_topic')) " + _TABLE_PARTS)
+TABLE_OPEN_DOCS_SQL = ("SELECT DISTINCT e.source_id " + _TABLE_PARTS +
+                       " AND (st.outcome IS NULL OR st.outcome NOT IN ('tagged', 'no_topic')) ORDER BY 1")
+TABLE_MIN_COVERAGE_DEFAULT = 0.95  # planner default (PROVISIONAL, not an owner-set limit); the owner sets it with the T12 flip
+# R4 (skeptic 2): shown when table mode is on but no active registry topic carries a document (no model-cluster labels then)
+NO_TABLE_TOPICS_LINE = "Topics are not yet available for this collection."
+MAX_TREE_DEPTH = 2  # D3: root = depth 0, at most depth 2
+
+
+def roll_up(tree: dict, key: str):
+    """Top-level ancestor of `key` when every topic on the chain is ACTIVE and a root is reached within MAX_TREE_DEPTH parent
+    steps; else None (deny all: a chain through a non-active topic, an unknown key, a cycle or a deeper chain is not counted)."""
+    cur, seen = key, set()
+    for _ in range(MAX_TREE_DEPTH + 1):
+        t = tree.get(cur)
+        if not t or t.get("state") != "active" or cur in seen:
+            return None
+        seen.add(cur)
+        if not t.get("parent"):
+            return cur
+        cur = t["parent"]
+    return None
+
+
+def registry_signature(tree: dict) -> str:
+    """Moves on any relabel, retire, re-parent or new version (R1 skeptic 17; R4 skeptic 16: content-based, no clock)."""
+    import hashlib
+    body = "|".join(f"{k}:{v.get('version')}:{v.get('state')}:{v.get('parent') or ''}:{v.get('label')}" for k, v in sorted(tree.items()))
+    return f"{len(tree)}:{hashlib.sha256(body.encode()).hexdigest()[:16]}"
+
+
+def _default_tree_reader(cfg: dict | None):
+    """ACTIVE registry rows through vera.micro_topic (owner-checked READ ONLY read). Any registry problem, including a registry
+    with no active row, gives {} (deny all: no topics shown, never model-cluster labels)."""
+    from vera import acq_config, micro_topic
+    mt_cfg = (acq_config.load_config() or {}).get("micro_topic") or {}
+    try:
+        return micro_topic.registry_active_tree(mt_cfg)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("corpus digest: registry unreadable (%s); no table topics shown", type(exc).__name__)
+        return {}
+
+
+TOPICS_SOURCE_DEFAULT = "model_clusters"  # R4: table mode is an explicit owner setting (T12), never the default
+
+
+def paced_llm(llm, pace):
+    """R4 (skeptic 4): the digest's model callable behind the tagging worker's pacer (calls and estimated tokens)."""
+    def wrapped(messages, max_tokens=700, timeout_s=None, **kw):
+        est = sum(len(str(m.get("content") or "")) for m in messages if isinstance(m, dict)) // 4 + int(max_tokens or 0)
+        pace.wait(tokens=est)
+        return llm(messages, max_tokens=max_tokens, timeout_s=timeout_s, **kw)
+    wrapped.supports_avoid = getattr(llm, "supports_avoid", False)
+    return wrapped
+
+
+def topics_from_table(engine, cfg: dict | None = None, tree_reader=None) -> dict | None:
+    """Topics and Scope from vera_vjay.toptag_document_topics. None ONLY when the table does not exist (the caller then keeps the
+    model-cluster method). R4 (skeptic 2, deny-all): once the table exists, no active row or no active registry root gives
+    "topics": [] (never a fallback to model-generated cluster labels). Otherwise {"n_docs": all documents (including chunk-stored
+    full documents), "topics": [{"key","label","primary_docs","any_docs","subtopics"}], "primary": {source_id: top key},
+    "signature": (n_docs, active document-topic rows, newest modified_at, registry signature, sum of set_version, parts, terminal
+    parts), "coverage_share", "gated"}. R5 (R5K-3): below table_min_coverage "topics" is [] and "gated" names the reason. Topics are
+    TOP-LEVEL: each document topic is rolled up to its top-level ancestor before the primary topic is chosen, so shares stay
+    additive; "subtopics" lists the active sub-topics with documents. primary_docs: documents whose highest-weight topic (ties
+    by topic key) is the topic; any_docs: documents carrying the topic at all. `tree_reader() -> {key: {label, state, parent}}` (tests)."""
+    from sqlalchemy import text
+    with engine.connect() as c:
+        if c.execute(text(TABLE_EXISTS_SQL)).scalar():
+            return None
+        rows = [(int(r[0]), str(r[1]), float(r[2]), int(r[3]), r[4]) for r in c.execute(text(TABLE_DOC_ROWS_SQL))]
+        n_docs = int(c.execute(text(TABLE_N_DOCS_SQL)).scalar() or 0)
+        cov = list(c.execute(text(TABLE_COVERAGE_SQL)))
+        n_parts, n_done = (int(cov[0][0] or 0), int(cov[0][1] or 0)) if cov else (0, 0)
+        open_docs = {int(r[0]) for r in c.execute(text(TABLE_OPEN_DOCS_SQL))}
+    tree = (tree_reader or (lambda: _default_tree_reader(cfg)))() or {}
+    newest = max((r[4] for r in rows if r[4] is not None), default=None)
+    sig = (n_docs, len(rows), newest.isoformat() if newest else None, registry_signature(tree), sum(r[3] for r in rows),
+           n_parts, n_done)
+    share = n_done / n_parts if n_parts else 0.0
+    if share < float((cfg or {}).get("table_min_coverage", TABLE_MIN_COVERAGE_DEFAULT)):  # R5 (R5K-3)
+        return {"n_docs": n_docs, "topics": [], "primary": {}, "signature": sig, "coverage_share": round(share, 4),
+                "gated": "coverage_below_min"}
+    rows = [r for r in rows if r[0] not in open_docs]  # R5 (R5K-3): a partly tagged document is not counted
+    topact: dict[tuple, float] = {}
+    subs: dict[tuple, set] = {}
+    for sid, key, w, _sv, _m in rows:
+        top = roll_up(tree, key)
+        if top is None:
+            continue
+        topact[(sid, top)] = max(w, topact.get((sid, top), w))
+        if key != top:
+            subs.setdefault((top, key), set()).add(sid)
+    prim: dict[int, str] = {}
+    for (sid, top), w in sorted(topact.items(), key=lambda kv: (kv[0][0], -kv[1], kv[0][1])):
+        prim.setdefault(sid, top)
+    anyc: dict[str, int] = {}
+    for (_sid, top) in topact:
+        anyc[top] = anyc.get(top, 0) + 1
+    pc: dict[str, int] = {}
+    for top in prim.values():
+        pc[top] = pc.get(top, 0) + 1
+    topics = [{"key": k, "label": str(tree[k]["label"]), "primary_docs": pc.get(k, 0), "any_docs": n, "subtopics": []}
+              for k, n in sorted(anyc.items())]
+    by_key = {t["key"]: t for t in topics}
+    for (top, sub), sids in sorted(subs.items(), key=lambda kv: (kv[0][0], -len(kv[1]), kv[0][1])):
+        by_key[top]["subtopics"].append({"key": sub, "label": str(tree[sub]["label"]), "any_docs": len(sids)})
+    return {"n_docs": n_docs, "topics": topics, "primary": prim, "signature": sig, "coverage_share": round(share, 4), "gated": None}
+
+
+def table_title_samples(engine, per_topic: int, primary: dict | None = None) -> dict[str, list[str]]:
+    """{topic_key: a few md5-ordered titles of non-full-document sources whose primary topic it is}; read-only."""
+    import hashlib
+    from sqlalchemy import text
+    primary = primary or {}
+    out: dict[str, list[tuple]] = {}
+    if not primary or per_topic <= 0:
+        return {}
+    with engine.connect() as c:
+        for sid, title in c.execute(text(TABLE_SAMPLE_SQL), {"ids": sorted(primary), "fd_kind": FULLDOC_CHUNKS_KIND}):
+            if title is not None and int(sid) in primary:
+                out.setdefault(primary[int(sid)], []).append((hashlib.md5(str(int(sid)).encode()).hexdigest(), str(title)))
+    return {k: [t for _, t in sorted(v)[:int(per_topic)]] for k, v in sorted(out.items())}
+
+
+def table_clusters(tab: dict, samples: dict | None) -> dict:
+    """The `table` argument of run_digest_pipeline: one cluster per topic (count = primary documents, members = indexes of
+    its sampled titles), the Scope (labels by documents carrying the topic at all) and the flat sample titles. A label
+    that reproduces a sampled title is left out (title-echo check)."""
+    samples = samples or {}
+    all_titles = [t for ts in samples.values() for t in ts]
+    topics = [t for t in tab["topics"] if not echoes_title(sanitise(t["label"], 60), all_titles)]
+    ranked = sorted((t for t in topics if t["primary_docs"] > 0), key=lambda t: (-t["primary_docs"], t["label"].casefold()))
+    titles, clusters = [], []
+    for t in ranked:
+        mine = list(samples.get(t["key"], []))
+        members = list(range(len(titles) + 1, len(titles) + len(mine) + 1))
+        titles += mine
+        clusters.append({"label": sanitise(t["label"], 60), "members": members, "count": t["primary_docs"]})
+    scope = [{"label": sanitise(t["label"], 60)} for t in
+             sorted(topics, key=lambda t: (-t["any_docs"], t["label"].casefold()))][:MAX_TOPICS]
+    return {"n_docs": int(tab["n_docs"]), "titles": titles, "clusters": clusters, "scope": scope}
+
+
+def run_table_digest(overview: dict, profile: dict, table: dict, llm, cfg: dict, now=time.monotonic) -> dict:
+    """Digest in table mode. Topics, shares and coverage come from the table; the model writes prose only. When the prose
+    fails (model, checker or title echo) the topics/shares/coverage are still returned with the deterministic summary.
+    Adds "prose": "checked" or "fallback"."""
+    prof = {**profile, "titles": list(table["titles"]), "excerpts": []}
+    try:
+        out = run_digest_pipeline(overview, prof, llm, cfg, now, table=table)
+        out["prose"] = "checked"
+        return out
+    except (DigestError, TitleEchoError) as exc:
+        trace = getattr(exc, "trace", [])
+    except Exception as exc:  # noqa: BLE001  a bug or provider fault never hides the table topics
+        trace = [{"step": "table_prose", "ok": False, "why": type(exc).__name__}]
+    shares = topic_shares(table["clusters"], table["n_docs"])
+    return {"summary": fallback_summary(overview, profile), "topics": [c["label"] for c in table["clusters"]][:MAX_TOPICS],
+            "coverage": coverage_from_clusters(table["scope"], 0) if table["scope"] else "", "topic_shares": shares,
+            "model": None, "check_model": None, "trace": trace, "prose": "fallback"}
 
 
 class CorpusDescriber:
@@ -859,19 +1064,24 @@ class CorpusDescriber:
         self.cfg, self.env, self.clock = cfg, env, clock
         self.engine_factory = engine_factory
         self._engine, self._cache, self._last_good, self._retry_at = None, None, None, 0.0
-        self._refreshing = False
+        self._refreshing, self._dirty, self._pace = False, False, None
+        self.tree_reader = None  # R4: () -> registry topic tree (tests inject; default via vera.micro_topic)
+        self._tab_cache = None  # R4 (p3m3 10): (clock, tab) reused for table_cache_s, so a page view does not re-run the CTEs
+        self._llm, self._thread = None, None
         self.last_trace: list[dict] = []
         self._lock = threading.Lock()
         # INTEGRATE-1104 (owner: migration 015 applied): DB persistence of the latest digest, ONLY behind
         # config/request_trace.json digest_store.enabled (vera.digest_store; None = read that config). Tests inject both.
         self.store_cfg, self.store_engine_factory = None, None
 
-    def _store_key(self, overview: dict) -> str:
+    def _store_key(self, overview: dict, sig=None) -> str:
         import re as _re
         k = f"{overview['source_count']}|{overview['corpus_updated_at']}|{self.cfg['prompt_version']}"
+        if sig is not None:  # TOPIC-TAGGING-1104 table mode: keyed by the document-topics signature
+            k = f"t|{'|'.join(str(x) for x in sig)}|{self.cfg['prompt_version']}"
         return _re.sub(r"[^A-Za-z0-9_.:|+-]", "_", k)[:200]
 
-    def _stored(self, overview: dict):
+    def _stored(self, overview: dict, sig=None):
         """(digest, exact): the persisted digest merged with the live overview, and whether it is for exactly this corpus
         state and prompt version (exact) or an older one (stale: DEFERRED-DB-1104, shown at once while a background refresh
         runs). (None, False) when off, empty or on any error. Never raises."""
@@ -883,7 +1093,7 @@ class CorpusDescriber:
             if not row or not isinstance(row.get("digest"), dict) or not row["digest"].get("summary"):
                 return None, False
             d = row["digest"]
-            exact = row.get("cache_key") == self._store_key(overview) and d.get("prompt_version") == self.cfg["prompt_version"]
+            exact = row.get("cache_key") == self._store_key(overview, sig) and d.get("prompt_version") == self.cfg["prompt_version"]
             return {**d, **overview}, exact
         except Exception:  # noqa: BLE001
             return None, False
@@ -916,11 +1126,11 @@ class CorpusDescriber:
 
         threading.Thread(target=run, name="digest-refresh", daemon=True).start()
 
-    def _persist(self, overview: dict, digest: dict) -> None:
+    def _persist(self, overview: dict, digest: dict, sig=None) -> None:
         try:
             from vera import digest_store
             if digest_store.enabled(self.store_cfg):
-                digest_store.save(digest, self._store_key(overview), cfg=self.store_cfg, env=self.env,
+                digest_store.save(digest, self._store_key(overview, sig), cfg=self.store_cfg, env=self.env,
                                   engine_factory=self.store_engine_factory)
         except Exception:  # noqa: BLE001  persistence never breaks the page
             pass
@@ -937,6 +1147,114 @@ class CorpusDescriber:
             self._engine = factory(url, pool_pre_ping=True, hide_parameters=True)
         return self._engine
 
+    # --- TOPIC-TAGGING-1104: table mode (never calls the model inline) -------------------------------------------
+    def _table_digest(self, overview: dict, profile: dict, tab: dict, out: dict | None, now: str) -> dict:
+        """A digest from table topics: model prose `out` when built, else the deterministic fallback summary."""
+        if out is None:
+            t = table_clusters(tab, None)
+            out = {"summary": fallback_summary(overview, profile), "topics": [c["label"] for c in t["clusters"]][:MAX_TOPICS],
+                   "coverage": coverage_from_clusters(t["scope"], 0) if t["scope"] else "",
+                   "topic_shares": topic_shares(t["clusters"], t["n_docs"]), "model": None, "prose": "fallback"}
+        return {**overview, "summary": out["summary"], "topics": out["topics"], "coverage": out["coverage"],
+                "topic_shares": out["topic_shares"], "summary_source": CHECKED if out["prose"] == "checked" else "deterministic_fallback",
+                "summary_generated_at": now, "summary_model": out["model"], "prompt_version": self.cfg["prompt_version"],
+                "topics_source": "table", "table_signature": list(tab["signature"])}
+
+    def _current_table(self, engine, tab: dict, llm) -> dict:
+        sig = tab["signature"]
+        overview, profile = stamp_and_profile(engine, 0, 0)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if not tab["topics"]:  # R4 (skeptic 2): no registry topic to show; no model call, no model-cluster labels
+            return {**self._table_digest(overview, profile, tab, None, now), "coverage": NO_TABLE_TOPICS_LINE}
+        with self._lock:
+            c = self._cache
+            if c and c.get("table_signature") == list(sig) and c.get("prompt_version") == self.cfg["prompt_version"]:
+                return {**c, **overview}
+            stored, exact = self._stored(overview, sig) if overview["source_count"] else (None, False)
+            if stored is not None and exact:
+                self._cache = self._last_good = stored
+                return self._cache
+            if stored is not None:
+                self._last_good = stored
+            if not self._refreshing and self.clock() >= self._retry_at and overview["source_count"]:
+                self._start_table_refresh(engine, tab, paced_llm(llm, self._pace) if self._pace is not None else llm)
+            if self._last_good and overview["source_count"]:  # last stored digest at once (dated by its own line)
+                return {**self._last_good, **overview}
+            return self._table_digest(overview, profile, tab, None, now)  # until the first build finishes
+
+    def _start_table_refresh(self, engine, tab: dict, llm) -> None:
+        """Single-flight daemon thread (caller holds self._lock): rebuild from the table, store, cache."""
+        self._refreshing = True
+
+        def run():
+            try:
+                sig = tab["signature"]
+                overview, profile = stamp_and_profile(engine, 0, 0)
+                a = agentic_cfg(self.cfg)
+                table = table_clusters(tab, table_title_samples(engine, int(a["sample_per_cluster"]), tab.get("primary")))
+                out = run_table_digest(overview, profile, table, llm, self.cfg)
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                digest = self._table_digest(overview, profile, tab, out, now)
+                with self._lock:
+                    self.last_trace = out["trace"]
+                    self._cache = self._last_good = digest
+                    if out["prose"] == "fallback":  # prose failed: topics are shown; retry the prose after the cooldown
+                        self._retry_at = self.clock() + float(self.cfg["retry_s"])
+                self._persist(overview, digest, sig)
+            except Exception as exc:  # noqa: BLE001
+                with self._lock:
+                    self._retry_at = self.clock() + float(self.cfg["retry_s"])
+                logger.warning("corpus digest table refresh failed (%s)", type(exc).__name__)
+            finally:
+                with self._lock:
+                    self._refreshing = False
+                    again, self._dirty = self._dirty, False
+                if again:  # R4 (skeptic 13): a change signalled during this build
+                    self.request_refresh()
+
+        self._thread = threading.Thread(target=run, name="digest-table-refresh", daemon=True)
+        self._thread.start()
+
+    def request_refresh(self, llm=None, pace=None) -> bool:
+        """Non-blocking, never raises: a tagging worker calls this when document_topics changed. Starts the single-flight
+        background rebuild when the table signature differs from the cached digest. True when a build was started.
+        R4 (skeptic 4): `pace` (the tagging worker's _Pace) wraps the prose model calls, so they share the tagging call bound.
+        R4 (skeptic 13): a signal that arrives during a build is remembered and re-checked when that build ends."""
+        try:
+            llm = llm or self._llm
+            engine = self._engine_or_none()
+            if engine is None or llm is None or self.cfg.get("topics_source", TOPICS_SOURCE_DEFAULT) != "table_if_present":
+                return False
+            if pace is not None:
+                self._pace = pace
+            if getattr(self, "_pace", None) is not None:
+                llm = paced_llm(llm, self._pace)
+            tab = topics_from_table(engine, self.cfg, self.tree_reader)
+            if tab is None or not tab["topics"]:
+                return False
+            with self._lock:
+                c = self._cache
+                if self._refreshing:
+                    self._dirty = True
+                    return False
+                if self.clock() < self._retry_at or (
+                        c and c.get("table_signature") == list(tab["signature"])
+                        and c.get("prompt_version") == self.cfg["prompt_version"]):
+                    return False
+                self._start_table_refresh(engine, tab, llm)
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _table_cached(self, engine):
+        now, ttl = self.clock(), float(self.cfg.get("table_cache_s", 60.0))
+        tc = self._tab_cache
+        if tc is not None and now - tc[0] < ttl:
+            return tc[1]
+        tab = topics_from_table(engine, self.cfg, self.tree_reader)
+        self._tab_cache = (now, tab)
+        return tab
+
     def _fresh(self, overview: dict) -> bool:
         c = self._cache
         return bool(c) and (c["source_count"], c["corpus_updated_at"], c["prompt_version"]) == (
@@ -947,6 +1265,17 @@ class CorpusDescriber:
         if engine is None:
             return {"source_count": None, "corpus_updated_at": None, "summary": None, "topics": [], "coverage": None,
                     "topic_shares": None, "summary_source": "not_connected", "summary_generated_at": None, "summary_model": None}
+        self._llm = llm
+        # TOPIC-TAGGING-1104. R4 (p3m3 1, skeptic 3): table mode only when the owner set topics_source "table_if_present" (T12);
+        # the shipped default is the model-cluster method, so a partial or uncalibrated backfill never reaches the public page.
+        if self.cfg.get("topics_source", TOPICS_SOURCE_DEFAULT) == "table_if_present":
+            try:
+                tab = self._table_cached(engine)
+            except Exception as exc:  # noqa: BLE001  table unreadable: the model-cluster method below
+                logger.warning("corpus digest topics table unreadable (%s)", type(exc).__name__)
+                tab = None
+            if tab is not None:
+                return self._current_table(engine, tab, llm)
         overview, profile = stamp_and_profile(engine, int(self.cfg["max_titles"]),
                                               int(agentic_cfg(self.cfg)["sample_excerpt_chars"]))
         if self._fresh(overview):

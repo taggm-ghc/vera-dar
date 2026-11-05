@@ -97,6 +97,14 @@ CORPUS = load_corpus_cfg()  # item #79 phase C: corpus admission settings (None 
 _DESC_CFG = load_corpus_description_cfg()  # item #83
 MEMORY_BLOCK = load_memory_block()  # item #84
 CORPUS_DESCRIBER = CorpusDescriber(_DESC_CFG) if _DESC_CFG else None
+try:  # TOPIC-TAGGING-1104: background chunk topic tagger (config/topic_tagging.json enabled, default false; migration 017)
+    from vera import topic_tagging as _toptag
+    _toptag.install(_toptag.build_worker(_toptag.load_cfg(),
+                                         on_documents_changed=getattr(CORPUS_DESCRIBER, "request_refresh", None)))
+    if _toptag._WORKER is not None:
+        _toptag._WORKER.start()
+except Exception as _exc:  # noqa: BLE001  the tagger never stops the app
+    logging.getLogger("vera").warning("topic tagging not started (%s)", type(_exc).__name__)
 
 if OPENAI_FALLBACK and CURRENT_PRICING is None:
     logger.warning(
@@ -616,6 +624,10 @@ def _after_response(admit_args, memory, result, question: str, discovery=None) -
             memory.write_claims(result.claims, list(result.sources), question)
         if memory is not None and discovery:
             memory.write_discovery_note(list(result.candidates), question)
+        if result.evidence is not None:  # TOPIC-TAGGING-1104: update-if-needed composites of the used documents (queued only)
+            from vera import topic_tagging
+            topic_tagging.schedule_refresh([a.get("text_sha256") for a in (getattr(result.evidence, "admitted", ()) or ())
+                                            if isinstance(a, dict)])
     except Exception as exc:  # noqa: BLE001
         logger.warning("post-response task failed (%s)", type(exc).__name__)
 

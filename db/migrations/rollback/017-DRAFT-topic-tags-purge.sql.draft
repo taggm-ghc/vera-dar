@@ -1,0 +1,28 @@
+-- 017-DRAFT-topic-tags-purge.sql.draft -- DESTRUCTIVE, OWNER-ONLY, PREPARED, NEVER EXPECTED TO RUN. TOPIC-TAGGING-1104 R1.
+-- Purpose (R1 review: SEOS 1, p3m3 P3): the prepared rollback refuses while any 017 row exists, so after a backfill the undo path
+-- is: (1) set config/topic_tagging.json enabled false (non-destructive, first), (2) THIS purge of the derived 017 rows, (3) the
+-- rollback. The rows are derived data (tags recomputable from the stored texts); no corpus table is touched.
+-- Deletes ONLY rows of vera_vjay.toptag_chunk_topics, toptag_document_topics and toptag_attempts. No DROP, no CASCADE, no TRUNCATE.
+-- Identity guard: runs only as the owner of the 017 tables (the delete-guard triggers refuse every other role anyway).
+-- Needs the owner's separate same-turn approval for DELETE (AGENTS.md section 7). NOT EXECUTED; UNTESTED against PostgreSQL.
+-- R3 (SEOS 1, skeptic 6): this file is a FRAGMENT without its own BEGIN/COMMIT. rollback_017.sh --purge-rows runs it and the rollback
+-- in ONE transaction (psql -1 -v purge_in_rollback=1 -f <this> -f <rollback>), after both typed phrases: the ACCESS EXCLUSIVE lock is
+-- held from the purge through the DROPs, so no worker can refill rows in between, and any refusal leaves every row in place.
+-- Every statement sits inside the \if, so a stray standalone run (even without ON_ERROR_STOP) deletes nothing.
+\if :{?purge_in_rollback}
+DO $$ BEGIN
+  IF pg_catalog.to_regclass('vera_vjay.toptag_chunk_topics') IS NULL THEN
+    RAISE EXCEPTION '017 purge: 017 is not applied';
+  END IF;
+  IF NOT vera_vjay.toptag_is_owner_fn() THEN
+    RAISE EXCEPTION '017 purge: run as the owner of the 017 tables';
+  END IF;
+END $$;
+LOCK TABLE vera_vjay.toptag_document_topics, vera_vjay.toptag_chunk_topics, vera_vjay.toptag_attempts IN ACCESS EXCLUSIVE MODE;
+DELETE FROM vera_vjay.toptag_document_topics;
+DELETE FROM vera_vjay.toptag_chunk_topics;
+DELETE FROM vera_vjay.toptag_attempts;
+-- no COMMIT here: the rollback file that follows in the same transaction commits both (R3)
+\else
+  DO $$ BEGIN RAISE EXCEPTION '017 purge: run only through rollback_017.sh --apply --purge-rows (one transaction with the rollback)'; END $$;
+\endif

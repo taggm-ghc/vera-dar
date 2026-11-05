@@ -1,0 +1,574 @@
+-- 017_vera_topic_tags.sql -- DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL: the CHECKs, triggers, partial indexes and the
+-- view have never been executed. Not a live migration: it belongs in pending/ and is invisible to the runner (the filename does not
+-- match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval).
+-- TOPIC-TAGGING-1104. Strictly additive: chunk/document topic tags and a tagging queue/status log, schema vera_vjay.
+-- NUMBER 017: 016 = LISTS-TO-DB-1104; no other 017 claim was found by grep of work/ and records/ on 2026-11-04 (confirm against the
+-- owner's sequence before approval). Spec: work/TOPIC-TAGGING-1104/schema-spec.md.
+-- APPLYING IT NEEDS OWNER-APPROVED DDL IN THAT TURN (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py
+-- --dry-run (HZ-DAR-1). Use the owner script work/TOPIC-TAGGING-1104/scripts/apply_017.sh (dry run by default).
+-- ROLLBACK (owner-only, prepared, never expected to run; separate approval): db/migrations/rollback/017-DRAFT-topic-tags-rollback.sql.draft
+--   (refuses while any row exists in the three tables).
+-- REQUIRES PostgreSQL 16 or newer (the role checks read pg_auth_members.inherit_option and .set_option), and 011 applied
+--   (vera_vjay.topreg_topics), plus vera_vjay.sources and vera_vjay.evidence_spans (003).
+-- TABLES (prefix toptag_, suffixes per work/additive-1028/NAMING.md):
+--   toptag_chunk_topics     per stored part (evidence_spans row): one row per (tag set, topic); versioned by set_version.
+--   toptag_document_topics  composite per sources row, same versioning.
+--   toptag_attempts         append-only queue and status log (outcome queued/tagged/no_topic/failed; error CLASS NAME only, no text).
+--   toptag_span_status_v    view: latest attempt per span plus its failure count (security_invoker = true).
+-- AMENDMENT (parent, 2026-11-04): span_id is NULLABLE on toptag_chunk_topics and toptag_attempts; NULL = the source's own text
+--   (sources.content, for sources with no evidence_spans rows). Part identity = (source_id, span_id IS NOT DISTINCT FROM).
+-- AMENDMENT A2 (parent, 2026-11-04): sub-topics. 017 also adds ONE trigger to the 011 table topreg_topics (toptag_topic_tree_trg, BEFORE INSERT
+--   OR UPDATE OF state, WHEN parent_topic_key IS NOT NULL AND the row becomes active; R1) that rejects a topic-tree cycle (also through the
+--   key's own descendants) and a tree deeper than root -> sub-topic -> sub-sub-topic (ancestors + descendant levels <= 2).
+--   No 011 column, constraint, index, grant or existing trigger is changed; the rollback drops the trigger and its function.
+-- Tag rows hold keys, scores and timestamps only: no document text, no question text.
+-- GUARDS (no SECURITY DEFINER; every trigger function has SET search_path = pg_catalog, pg_temp and schema-qualified names):
+--   insert: topic key must exist in vera_vjay.topreg_topics with state active (R1: active only); source must equal the span's source;
+--   version 1; created_at/modified_at overwritten with now(); state active or draft. After insert of an ACTIVE row the older ACTIVE
+--   set_versions of the same span (chunks) / source (documents) are retired in the same transaction. Update: content immutable;
+--   non-owner roles may only move active -> retired (only when a newer active set_version exists) or draft -> retired.
+--   No DELETE or TRUNCATE for non-owner. The attempts log is append-only for non-owner (UPDATE, DELETE, TRUNCATE refused).
+-- OWNER = the table owner (default deny; toptag_is_owner_fn, as 011's topreg_is_owner_fn). Run this file as the account that will own
+--   the tables; the preflight refuses to run as, or as a member of, an app role.
+-- GRANTS go to the GROUP roles vera_vjay_wo / _rw / _ro; the LOGIN roles are named by psql variables (defaults from
+--   db/accounts/create_vera_accounts.sql): app_rw_login=vera_claude_code_rw, app_wo_login=vera_pipeline_wo, app_ro_login=vera_eval_ro.
+--   REVOKE ALL on the new objects from PUBLIC, the groups and the logins first; then:
+--   wo and rw: SELECT on the 3 tables; INSERT limited to the columns the app supplies (identity key, version, created_at and
+--     modified_at are NOT grantable, so a caller cannot choose them); UPDATE (state) on the two tag tables only; SELECT on the view.
+--   ro: SELECT on the 3 tables and the view. No app role gets DELETE, TRUNCATE, REFERENCES or TRIGGER.
+--   DEVIATION FROM THE SPEC TEXT, flagged for the owner: (1) INSERT is column-level (011 pattern), not table-level; (2) the guard
+--   triggers run as the INSERTING role and read topreg_topics and evidence_spans, which vera_vjay_wo cannot read today (011 gives wo
+--   nothing; 001-003 give wo nothing). Because SECURITY DEFINER is not allowed, this file grants vera_vjay_wo USAGE on the schema
+--   and column-level SELECT on topreg_topics (topic_key, state) and evidence_spans (span_id, source_id) ONLY. The rollback revokes
+--   those two column grants. Without them a wo-run tagging worker could not insert.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_wo_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT;
+--   ON_ERROR_STOP stops at the first error, so the open transaction is never committed and PostgreSQL rolls everything back).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+-- psql variables are not expanded inside $$ bodies, so they are passed to the DO blocks as transaction-local settings.
+SELECT set_config('vera017.rw', :'app_rw_login', true), set_config('vera017.wo', :'app_wo_login', true),
+       set_config('vera017.ro', :'app_ro_login', true);
+
+-- Collision preflight (strictly additive): required parents exist; nothing this file creates exists.
+DO $$
+DECLARE n text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '017 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.sources') IS NULL OR pg_catalog.to_regclass('vera_vjay.evidence_spans') IS NULL
+     OR pg_catalog.to_regclass('vera_vjay.topreg_topics') IS NULL THEN
+    RAISE EXCEPTION '017 requires vera_vjay.sources, vera_vjay.evidence_spans and vera_vjay.topreg_topics (001/003/011 first).';
+  END IF;
+  -- the foreign keys need a primary key or unique constraint on exactly the referenced column
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                  WHERE c.conrelid = 'vera_vjay.sources'::pg_catalog.regclass AND c.contype IN ('p','u')
+                    AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'source_id')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                  WHERE c.conrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass AND c.contype IN ('p','u')
+                    AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'span_id')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass
+                     AND a.attname = 'source_id' AND NOT a.attisdropped) THEN
+    RAISE EXCEPTION '017 requires sources(source_id) and evidence_spans(span_id) keyed, and evidence_spans.source_id present.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = 'vera_vjay.topreg_topics'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user) THEN
+    RAISE EXCEPTION '017 must run as the owner of vera_vjay.topreg_topics (it adds the trigger toptag_topic_tree_trg to that table).';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['toptag_chunk_topics','toptag_document_topics','toptag_attempts','toptag_span_status_v',
+                           'toptag_chunk_topics_chunk_topic_id_seq','toptag_document_topics_doc_topic_id_seq','toptag_attempts_attempt_id_seq',
+                           'toptag_chunk_topics_pk','toptag_document_topics_pk','toptag_attempts_pk','toptag_chunk_set_uq','toptag_chunk_srcset_uq','toptag_doc_set_uq',
+                           'toptag_chunk_active_source_idx','toptag_chunk_span_idx','toptag_doc_active_source_idx','toptag_attempts_span_idx'] LOOP
+    IF pg_catalog.to_regclass('vera_vjay.' || n) IS NOT NULL OR pg_catalog.to_regtype('vera_vjay.' || n) IS NOT NULL
+       OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                   WHERE c.relname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '017 already applied or name collision (relation %)', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['toptag_is_owner_fn','toptag_chunk_guard_trgfn','toptag_chunk_succ_trgfn','toptag_doc_guard_trgfn',
+                           'toptag_doc_succ_trgfn','toptag_attempts_guard_trgfn','toptag_forbid_delete_trgfn','toptag_forbid_truncate_trgfn','toptag_topic_tree_trgfn'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '017 already applied or name collision (function %)', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['toptag_chunk_a_guard_trg','toptag_chunk_b_succ_trg','toptag_chunk_c_nodel_trg','toptag_chunk_d_notrunc_trg',
+                           'toptag_doc_a_guard_trg','toptag_doc_b_succ_trg','toptag_doc_c_nodel_trg','toptag_doc_d_notrunc_trg',
+                           'toptag_attempts_a_guard_trg','toptag_attempts_c_nodel_trg','toptag_attempts_d_notrunc_trg','toptag_topic_tree_trg'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+                JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                WHERE t.tgname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '017 already applied or name collision (trigger %)', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['toptag_chunk_span_fk','toptag_chunk_source_fk','toptag_doc_source_fk','toptag_attempts_span_fk','toptag_attempts_source_fk',
+                           'toptag_chunk_set_chk','toptag_chunk_key_chk','toptag_chunk_score_chk','toptag_chunk_rank_chk','toptag_chunk_method_chk',
+                           'toptag_chunk_model_chk','toptag_chunk_tagver_chk','toptag_chunk_state_chk',
+                           'toptag_doc_set_chk','toptag_doc_key_chk','toptag_doc_sig_chk','toptag_doc_weight_chk','toptag_doc_share_chk','toptag_doc_nchunks_chk','toptag_doc_state_chk',
+                           'toptag_attempts_outcome_chk','toptag_attempts_err_chk','toptag_attempts_tagver_chk'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.connamespace
+                WHERE k.conname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '017 already applied or name collision (constraint %)', n;
+    END IF;
+  END LOOP;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE EXCEPTION '017 requires roles vera_vjay_wo, vera_vjay_rw and vera_vjay_ro (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+END $$;
+
+-- Owner preflight (both directions, as 011): the table owner is unrestricted by the guard triggers, so this file must NOT run as an
+-- app role, and no app role may be able to reach the account running it.
+DO $$
+DECLARE app text[] := ARRAY['vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro',
+                            current_setting('vera017.rw'), current_setting('vera017.wo'), current_setting('vera017.ro')];
+BEGIN
+  IF current_user = ANY (app) OR session_user = ANY (app)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                  JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+                  JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname = ANY (app)
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '017 must not run as, or as a member of, an app group or login role (vera_vjay_wo/_rw/_ro or the three app logins): the table owner is unrestricted.';
+  END IF;
+END $$;
+
+-- Role preflight: each group and login exists and each login inherits its group; no app role reaches the running account.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera017.rw')],
+                                              ['vera_vjay_wo', current_setting('vera017.wo')],
+                                              ['vera_vjay_ro', current_setting('vera017.ro')]];
+BEGIN
+  FOR i IN 1 .. 3 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '017 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '017 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '017: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro',
+                                           current_setting('vera017.rw'), current_setting('vera017.wo'), current_setting('vera017.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '017: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+END $$;
+
+-- R3 preflight: (1) the topic-tree trigger body is late-bound and reads these topreg_topics columns, so check them now rather than
+-- fail later at a production activation; (2) the rollback revokes the two wo column grants, so they must not exist before 017
+-- (otherwise the rollback would remove a grant 017 did not add).
+DO $$
+BEGIN
+  IF (SELECT pg_catalog.count(*) FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.topreg_topics'::pg_catalog.regclass
+        AND a.attname IN ('topic_key', 'parent_topic_key', 'version', 'state') AND a.attnum > 0 AND NOT a.attisdropped) <> 4 THEN
+    RAISE EXCEPTION '017 requires topreg_topics columns topic_key, parent_topic_key, version and state (011).';
+  END IF;
+  IF pg_catalog.has_column_privilege('vera_vjay_wo', 'vera_vjay.topreg_topics', 'topic_key', 'SELECT')
+     OR pg_catalog.has_column_privilege('vera_vjay_wo', 'vera_vjay.topreg_topics', 'state', 'SELECT')
+     OR pg_catalog.has_column_privilege('vera_vjay_wo', 'vera_vjay.evidence_spans', 'span_id', 'SELECT')
+     OR pg_catalog.has_column_privilege('vera_vjay_wo', 'vera_vjay.evidence_spans', 'source_id', 'SELECT') THEN
+    RAISE EXCEPTION '017: vera_vjay_wo already holds SELECT on topreg_topics(topic_key, state) or evidence_spans(span_id, source_id); the prepared rollback would revoke a grant 017 did not add. Resolve with the owner first.';
+  END IF;
+END $$;
+
+-- Table 1: one row per (span, tag set, topic).
+CREATE TABLE vera_vjay.toptag_chunk_topics (
+    chunk_topic_id BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.toptag_chunk_topics_chunk_topic_id_seq) CONSTRAINT toptag_chunk_topics_pk PRIMARY KEY,
+    span_id        BIGINT CONSTRAINT toptag_chunk_span_fk REFERENCES vera_vjay.evidence_spans (span_id),
+    source_id      BIGINT NOT NULL CONSTRAINT toptag_chunk_source_fk REFERENCES vera_vjay.sources (source_id),
+    set_version    INTEGER NOT NULL CONSTRAINT toptag_chunk_set_chk CHECK (set_version BETWEEN 1 AND 1000000),  -- R1 review m1: bounded
+    topic_key      TEXT NOT NULL CONSTRAINT toptag_chunk_key_chk CHECK (topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    score          REAL NOT NULL CONSTRAINT toptag_chunk_score_chk CHECK (score >= 0 AND score <= 1),
+    rank           SMALLINT NOT NULL CONSTRAINT toptag_chunk_rank_chk CHECK (rank BETWEEN 1 AND 16),
+    method         TEXT NOT NULL CONSTRAINT toptag_chunk_method_chk CHECK (method IN ('llm','bm25','llm+bm25')),
+    model          TEXT CONSTRAINT toptag_chunk_model_chk CHECK (model IS NULL OR pg_catalog.length(model) <= 80),
+    tagger_version TEXT NOT NULL CONSTRAINT toptag_chunk_tagver_chk CHECK (tagger_version ~ '^[A-Za-z0-9._:+-]{1,40}$'),
+    state          TEXT NOT NULL DEFAULT 'active' CONSTRAINT toptag_chunk_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    version        INTEGER NOT NULL DEFAULT 1
+);
+-- span_id NULL = the source's own text (sources.content; a source without evidence_spans rows). Part identity = (source_id, span_id).
+CREATE UNIQUE INDEX toptag_chunk_set_uq ON vera_vjay.toptag_chunk_topics (span_id, set_version, topic_key) WHERE span_id IS NOT NULL;
+CREATE UNIQUE INDEX toptag_chunk_srcset_uq ON vera_vjay.toptag_chunk_topics (source_id, set_version, topic_key) WHERE span_id IS NULL;
+CREATE INDEX toptag_chunk_active_source_idx ON vera_vjay.toptag_chunk_topics (source_id) WHERE state = 'active';
+CREATE INDEX toptag_chunk_span_idx ON vera_vjay.toptag_chunk_topics (span_id, set_version);
+
+-- Table 2: composite per source (document).
+CREATE TABLE vera_vjay.toptag_document_topics (
+    doc_topic_id   BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.toptag_document_topics_doc_topic_id_seq) CONSTRAINT toptag_document_topics_pk PRIMARY KEY,
+    source_id      BIGINT NOT NULL CONSTRAINT toptag_doc_source_fk REFERENCES vera_vjay.sources (source_id),
+    set_version    INTEGER NOT NULL CONSTRAINT toptag_doc_set_chk CHECK (set_version BETWEEN 1 AND 1000000),  -- R1 review m1: bounded
+    topic_key      TEXT NOT NULL CONSTRAINT toptag_doc_key_chk CHECK (topic_key ~ '^[a-z0-9][a-z0-9-]{1,63}$'),
+    weight         REAL NOT NULL CONSTRAINT toptag_doc_weight_chk CHECK (weight >= 0 AND weight <= 1),
+    chunk_share    REAL NOT NULL CONSTRAINT toptag_doc_share_chk CHECK (chunk_share >= 0 AND chunk_share <= 1),
+    n_chunks       INTEGER NOT NULL CONSTRAINT toptag_doc_nchunks_chk CHECK (n_chunks >= 1),
+    parts_signature TEXT NOT NULL CONSTRAINT toptag_doc_sig_chk CHECK (parts_signature ~ '^[0-9]{1,9}:[0-9]{1,19}:[0-9]{1,9}$'),  -- R1: terminal parts : max terminal attempt_id : active tag rows (no clock)
+    state          TEXT NOT NULL DEFAULT 'active' CONSTRAINT toptag_doc_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    version        INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT toptag_doc_set_uq UNIQUE (source_id, set_version, topic_key)
+);
+CREATE INDEX toptag_doc_active_source_idx ON vera_vjay.toptag_document_topics (source_id) WHERE state = 'active';
+
+-- Table 3: append-only queue and status log (created_at only; no state lifecycle, as topreg_judgments).
+CREATE TABLE vera_vjay.toptag_attempts (
+    attempt_id     BIGINT GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME vera_vjay.toptag_attempts_attempt_id_seq) CONSTRAINT toptag_attempts_pk PRIMARY KEY,
+    span_id        BIGINT CONSTRAINT toptag_attempts_span_fk REFERENCES vera_vjay.evidence_spans (span_id),
+    source_id      BIGINT NOT NULL CONSTRAINT toptag_attempts_source_fk REFERENCES vera_vjay.sources (source_id),
+    outcome        TEXT NOT NULL CONSTRAINT toptag_attempts_outcome_chk CHECK (outcome IN ('queued','tagged','no_topic','failed')),
+    error_code     TEXT CONSTRAINT toptag_attempts_err_chk CHECK (error_code IS NULL OR error_code ~ '^[A-Za-z0-9_.]{1,64}$'),
+    tagger_version TEXT NOT NULL CONSTRAINT toptag_attempts_tagver_chk CHECK (tagger_version ~ '^[A-Za-z0-9._:+-]{1,40}$'),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX toptag_attempts_span_idx ON vera_vjay.toptag_attempts (source_id, span_id, attempt_id DESC);
+
+-- Privileged = the table owner only (default deny). Everyone else, including other admins, gets the app limits.
+CREATE FUNCTION vera_vjay.toptag_is_owner_fn() RETURNS boolean LANGUAGE sql STABLE
+  SET search_path = pg_catalog, pg_temp AS $f$
+  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  WHERE c.oid = 'vera_vjay.toptag_chunk_topics'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user)
+$f$;
+
+-- Chunk tags: insert checks, then update limits. NOTE: the inserting role needs SELECT on topreg_topics(topic_key, state) and
+-- evidence_spans(span_id, source_id) (granted below to wo; rw and ro already hold SELECT).
+CREATE FUNCTION vera_vjay.toptag_chunk_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE
+  is_owner boolean := vera_vjay.toptag_is_owner_fn();
+  span_src bigint;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.span_id IS NOT NULL THEN
+      SELECT s.source_id INTO span_src FROM vera_vjay.evidence_spans s WHERE s.span_id = NEW.span_id;
+      IF span_src IS NULL OR span_src <> NEW.source_id THEN
+        RAISE EXCEPTION 'toptag_chunk_topics: source_id does not match the span''s source';
+      END IF;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = NEW.topic_key AND t.state = 'active') THEN
+      RAISE EXCEPTION 'toptag_chunk_topics: topic key is not an active registry topic';
+    END IF;
+    IF NEW.state NOT IN ('active','draft') THEN
+      RAISE EXCEPTION 'toptag_chunk_topics: new rows must be active or draft';
+    END IF;
+    IF NEW.version IS DISTINCT FROM 1 THEN
+      RAISE EXCEPTION 'toptag_chunk_topics: new rows must have version 1';
+    END IF;
+    NEW.created_at := now();
+    NEW.modified_at := now();
+    RETURN NEW;
+  END IF;
+  -- UPDATE: content is immutable for everyone; only state may change.
+  IF NEW.chunk_topic_id IS DISTINCT FROM OLD.chunk_topic_id OR NEW.span_id IS DISTINCT FROM OLD.span_id
+     OR NEW.source_id IS DISTINCT FROM OLD.source_id OR NEW.set_version IS DISTINCT FROM OLD.set_version
+     OR NEW.topic_key IS DISTINCT FROM OLD.topic_key OR NEW.score IS DISTINCT FROM OLD.score
+     OR NEW.rank IS DISTINCT FROM OLD.rank OR NEW.method IS DISTINCT FROM OLD.method
+     OR NEW.model IS DISTINCT FROM OLD.model OR NEW.tagger_version IS DISTINCT FROM OLD.tagger_version
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'toptag_chunk_topics: content is immutable; insert a new set_version instead (only state may change)';
+  END IF;
+  IF NOT is_owner THEN
+    IF NOT ((OLD.state = 'active' AND NEW.state = 'retired'
+             AND EXISTS (SELECT 1 FROM vera_vjay.toptag_chunk_topics n
+                          WHERE n.source_id = OLD.source_id AND n.span_id IS NOT DISTINCT FROM OLD.span_id
+                            AND n.set_version > OLD.set_version AND n.state = 'active'))
+            OR (OLD.state = 'draft' AND NEW.state = 'retired')) THEN
+      RAISE EXCEPTION 'toptag_chunk_topics: app roles may only retire an active row superseded by a newer active set_version, or a draft row';
+    END IF;
+  END IF;
+  NEW.modified_at := now();
+  NEW.version := OLD.version + 1;
+  RETURN NEW;
+END $f$;
+
+-- Succession: activating a newer set_version retires the older ACTIVE set_versions of the same span in the same transaction.
+CREATE FUNCTION vera_vjay.toptag_chunk_succ_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  UPDATE vera_vjay.toptag_chunk_topics c SET state = 'retired'
+   WHERE c.source_id = NEW.source_id AND c.span_id IS NOT DISTINCT FROM NEW.span_id AND c.set_version < NEW.set_version AND c.state = 'active';
+  RETURN NULL;
+END $f$;
+
+CREATE FUNCTION vera_vjay.toptag_doc_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE
+  is_owner boolean := vera_vjay.toptag_is_owner_fn();
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = NEW.topic_key AND t.state = 'active') THEN
+      RAISE EXCEPTION 'toptag_document_topics: topic key is not an active registry topic';
+    END IF;
+    IF NEW.state NOT IN ('active','draft') THEN
+      RAISE EXCEPTION 'toptag_document_topics: new rows must be active or draft';
+    END IF;
+    IF NEW.version IS DISTINCT FROM 1 THEN
+      RAISE EXCEPTION 'toptag_document_topics: new rows must have version 1';
+    END IF;
+    NEW.created_at := now();
+    NEW.modified_at := now();
+    RETURN NEW;
+  END IF;
+  IF NEW.doc_topic_id IS DISTINCT FROM OLD.doc_topic_id OR NEW.source_id IS DISTINCT FROM OLD.source_id
+     OR NEW.set_version IS DISTINCT FROM OLD.set_version OR NEW.topic_key IS DISTINCT FROM OLD.topic_key
+     OR NEW.weight IS DISTINCT FROM OLD.weight OR NEW.chunk_share IS DISTINCT FROM OLD.chunk_share
+     OR NEW.n_chunks IS DISTINCT FROM OLD.n_chunks OR NEW.parts_signature IS DISTINCT FROM OLD.parts_signature
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'toptag_document_topics: content is immutable; insert a new set_version instead (only state may change)';
+  END IF;
+  IF NOT is_owner THEN
+    IF NOT ((OLD.state = 'active' AND NEW.state = 'retired'
+             AND EXISTS (SELECT 1 FROM vera_vjay.toptag_document_topics n
+                          WHERE n.source_id = OLD.source_id AND n.set_version > OLD.set_version AND n.state = 'active'))
+            OR (OLD.state = 'draft' AND NEW.state = 'retired')) THEN
+      RAISE EXCEPTION 'toptag_document_topics: app roles may only retire an active row superseded by a newer active set_version, or a draft row';
+    END IF;
+  END IF;
+  NEW.modified_at := now();
+  NEW.version := OLD.version + 1;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.toptag_doc_succ_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  UPDATE vera_vjay.toptag_document_topics c SET state = 'retired'
+   WHERE c.source_id = NEW.source_id AND c.set_version < NEW.set_version AND c.state = 'active';
+  RETURN NULL;
+END $f$;
+
+-- Attempts log: append-only for non-owner roles.
+CREATE FUNCTION vera_vjay.toptag_attempts_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE span_src bigint;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.span_id IS NOT NULL THEN
+      SELECT s.source_id INTO span_src FROM vera_vjay.evidence_spans s WHERE s.span_id = NEW.span_id;
+      IF span_src IS NULL OR span_src <> NEW.source_id THEN
+        RAISE EXCEPTION 'toptag_attempts: source_id does not match the span''s source';
+      END IF;
+    END IF;
+    NEW.created_at := now();
+    RETURN NEW;
+  END IF;
+  IF NOT vera_vjay.toptag_is_owner_fn() THEN
+    RAISE EXCEPTION 'toptag_attempts: UPDATE not allowed for app roles (append-only log)';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.toptag_forbid_delete_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NOT vera_vjay.toptag_is_owner_fn() THEN
+    RAISE EXCEPTION '%: DELETE not allowed for app roles (retire instead)', TG_TABLE_NAME;
+  END IF;
+  RETURN OLD;
+END $f$;
+
+CREATE FUNCTION vera_vjay.toptag_forbid_truncate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF NOT vera_vjay.toptag_is_owner_fn() THEN
+    RAISE EXCEPTION '%: TRUNCATE not allowed for app roles', TG_TABLE_NAME;
+  END IF;
+  RETURN NULL;
+END $f$;
+
+-- Topic tree guard (A2): walks the parent chain over the CURRENT ACTIVE row of each key (bounded, 10 steps). Applies to every role.
+-- Depth: root = 0, so a chain of at most 2 ancestors above the new row is allowed.
+CREATE FUNCTION vera_vjay.toptag_topic_tree_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE hit boolean; deepest integer; unfinished boolean; height integer; down_hit boolean;
+BEGIN
+  -- R3 (skeptic 2): serialise tree checks so two concurrent activations cannot each pass on the old snapshot and together close a
+  -- cycle or exceed the depth. Fixed transaction-level key; activations are rare, so the wait is negligible.
+  PERFORM pg_catalog.pg_advisory_xact_lock(1704017017);
+  WITH RECURSIVE act AS (
+    SELECT DISTINCT ON (t.topic_key) t.topic_key, t.parent_topic_key
+      FROM vera_vjay.topreg_topics t WHERE t.state = 'active' ORDER BY t.topic_key, t.version DESC),
+  chain(topic_key, parent_key, n) AS (
+    SELECT a.topic_key, a.parent_topic_key, 1 FROM act a WHERE a.topic_key = NEW.parent_topic_key
+    UNION ALL
+    SELECT a.topic_key, a.parent_topic_key, c.n + 1 FROM chain c JOIN act a ON a.topic_key = c.parent_key WHERE c.n < 10)
+  SELECT COALESCE(pg_catalog.bool_or(c.topic_key = NEW.topic_key OR c.parent_key = NEW.topic_key), false),  -- R1 review M3
+         COALESCE(pg_catalog.max(c.n), 0),
+         COALESCE(pg_catalog.bool_or(c.n = 10 AND c.parent_key IS NOT NULL), false)
+    INTO hit, deepest, unfinished FROM chain c;
+  IF NEW.parent_topic_key = NEW.topic_key OR hit THEN
+    RAISE EXCEPTION 'topreg_topics: topic tree cycle';
+  END IF;
+  IF unfinished THEN
+    RAISE EXCEPTION 'topreg_topics: topic tree walk did not end within 10 steps';
+  END IF;
+  -- R1 (skeptic 7): a re-versioned key keeps its active children, so the WHOLE subtree must fit: ancestors + descendant levels <= 2,
+  -- and the new parent must not be one of the key's own descendants (cycle through the subtree).
+  WITH RECURSIVE act AS (
+    SELECT DISTINCT ON (t.topic_key) t.topic_key, t.parent_topic_key
+      FROM vera_vjay.topreg_topics t WHERE t.state = 'active' ORDER BY t.topic_key, t.version DESC),
+  down(topic_key, n) AS (
+    SELECT a.topic_key, 1 FROM act a WHERE a.parent_topic_key = NEW.topic_key AND a.topic_key <> NEW.topic_key
+    UNION ALL
+    SELECT a.topic_key, d.n + 1 FROM down d JOIN act a ON a.parent_topic_key = d.topic_key WHERE d.n < 10)
+  SELECT COALESCE(pg_catalog.max(d.n), 0), COALESCE(pg_catalog.bool_or(d.topic_key = NEW.parent_topic_key), false)
+    INTO height, down_hit FROM down d;
+  IF down_hit THEN
+    RAISE EXCEPTION 'topreg_topics: topic tree cycle';
+  END IF;
+  IF deepest + height > 2 THEN
+    RAISE EXCEPTION 'topreg_topics: topic tree too deep';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+-- R1 review M3: also on UPDATE OF state (draft -> active re-checks the tree).
+CREATE TRIGGER toptag_topic_tree_trg BEFORE INSERT OR UPDATE OF state ON vera_vjay.topreg_topics
+  FOR EACH ROW WHEN (NEW.parent_topic_key IS NOT NULL AND NEW.state = 'active') EXECUTE FUNCTION vera_vjay.toptag_topic_tree_trgfn();  -- drafts are checked when they activate; retiring is never blocked
+
+CREATE TRIGGER toptag_chunk_a_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.toptag_chunk_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_chunk_guard_trgfn();
+CREATE TRIGGER toptag_chunk_b_succ_trg AFTER INSERT ON vera_vjay.toptag_chunk_topics
+  FOR EACH ROW WHEN (NEW.state = 'active') EXECUTE FUNCTION vera_vjay.toptag_chunk_succ_trgfn();
+CREATE TRIGGER toptag_chunk_c_nodel_trg BEFORE DELETE ON vera_vjay.toptag_chunk_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_forbid_delete_trgfn();
+CREATE TRIGGER toptag_chunk_d_notrunc_trg BEFORE TRUNCATE ON vera_vjay.toptag_chunk_topics
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.toptag_forbid_truncate_trgfn();
+
+CREATE TRIGGER toptag_doc_a_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.toptag_document_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_doc_guard_trgfn();
+CREATE TRIGGER toptag_doc_b_succ_trg AFTER INSERT ON vera_vjay.toptag_document_topics
+  FOR EACH ROW WHEN (NEW.state = 'active') EXECUTE FUNCTION vera_vjay.toptag_doc_succ_trgfn();
+CREATE TRIGGER toptag_doc_c_nodel_trg BEFORE DELETE ON vera_vjay.toptag_document_topics
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_forbid_delete_trgfn();
+CREATE TRIGGER toptag_doc_d_notrunc_trg BEFORE TRUNCATE ON vera_vjay.toptag_document_topics
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.toptag_forbid_truncate_trgfn();
+
+CREATE TRIGGER toptag_attempts_a_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.toptag_attempts
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_attempts_guard_trgfn();
+CREATE TRIGGER toptag_attempts_c_nodel_trg BEFORE DELETE ON vera_vjay.toptag_attempts
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.toptag_forbid_delete_trgfn();
+CREATE TRIGGER toptag_attempts_d_notrunc_trg BEFORE TRUNCATE ON vera_vjay.toptag_attempts
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.toptag_forbid_truncate_trgfn();
+
+-- Latest attempt per part, its id, and the part's failure count (R1: failures pre-aggregated once per part, no correlated
+-- subquery; parts keyed by (source_id, span_id) with NULL span = the source's own text). Owner-owned plain view, security_invoker.
+CREATE VIEW vera_vjay.toptag_span_status_v WITH (security_invoker = true) AS
+  WITH latest AS (
+    SELECT DISTINCT ON (a.source_id, a.span_id)
+           a.span_id, a.source_id, a.outcome, a.tagger_version, a.created_at, a.attempt_id AS last_attempt_id
+      FROM vera_vjay.toptag_attempts a
+     ORDER BY a.source_id, a.span_id, a.attempt_id DESC),
+  fails AS (
+    SELECT f.source_id, f.span_id, pg_catalog.count(*) AS failures
+      FROM vera_vjay.toptag_attempts f WHERE f.outcome = 'failed' GROUP BY f.source_id, f.span_id)
+  SELECT l.span_id, l.source_id, l.outcome, l.tagger_version, l.created_at, l.last_attempt_id,
+         COALESCE(fails.failures, 0) AS failures
+    FROM latest l
+    LEFT JOIN fails ON fails.source_id = l.source_id AND fails.span_id IS NOT DISTINCT FROM l.span_id;
+
+-- Default deny, then exact grants.
+REVOKE ALL ON vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts, vera_vjay.toptag_span_status_v
+  FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts, vera_vjay.toptag_span_status_v FROM %I, %I, %I',
+                            current_setting('vera017.rw'), current_setting('vera017.wo'), current_setting('vera017.ro'));
+END $$;
+GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo;   -- same grant as 015; needed for the trigger reads and the inserts
+GRANT SELECT (topic_key, state) ON vera_vjay.topreg_topics TO vera_vjay_wo;     -- trigger reads (see DEVIATION in the header)
+GRANT SELECT (span_id, source_id) ON vera_vjay.evidence_spans TO vera_vjay_wo;  -- trigger reads (see DEVIATION in the header)
+GRANT SELECT ON vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts, vera_vjay.toptag_span_status_v
+  TO vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+GRANT INSERT (span_id, source_id, set_version, topic_key, score, rank, method, model, tagger_version, state)
+  ON vera_vjay.toptag_chunk_topics TO vera_vjay_wo, vera_vjay_rw;
+GRANT INSERT (source_id, set_version, topic_key, weight, chunk_share, n_chunks, parts_signature, state)
+  ON vera_vjay.toptag_document_topics TO vera_vjay_wo, vera_vjay_rw;
+GRANT INSERT (span_id, source_id, outcome, error_code, tagger_version)
+  ON vera_vjay.toptag_attempts TO vera_vjay_wo, vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics TO vera_vjay_wo, vera_vjay_rw;
+
+-- Final privilege check against the actual login roles (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  logins text[] := ARRAY[current_setting('vera017.wo'), current_setting('vera017.rw')];
+  ro text := current_setting('vera017.ro');
+  t text; r text; p text; c text; ins text[]; upd text[];
+BEGIN
+  FOR t, ins, upd IN SELECT * FROM (VALUES
+      ('vera_vjay.toptag_chunk_topics', ARRAY['span_id','source_id','set_version','topic_key','score','rank','method','model','tagger_version','state']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.toptag_document_topics', ARRAY['source_id','set_version','topic_key','weight','chunk_share','n_chunks','parts_signature','state']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.toptag_attempts', ARRAY['span_id','source_id','outcome','error_code','tagger_version']::text[], ARRAY[]::text[])) v(t, ins, upd) LOOP
+    FOREACH r IN ARRAY (logins || ro) LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN
+        RAISE EXCEPTION '017 grant check failed: login % needs SELECT on %.', r, t;
+      END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN
+          RAISE EXCEPTION '017 grant check failed: login % holds table-wide % on %.', r, p, t;
+        END IF;
+      END LOOP;
+    END LOOP;
+    FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+      FOREACH r IN ARRAY logins LOOP
+        IF pg_catalog.has_column_privilege(r, t, c, 'INSERT') <> (c = ANY (ins)) THEN
+          RAISE EXCEPTION '017 grant check failed: column INSERT for login % is wrong on %.%.', r, t, c;
+        END IF;
+        IF pg_catalog.has_column_privilege(r, t, c, 'UPDATE') <> (c = ANY (upd)) THEN
+          RAISE EXCEPTION '017 grant check failed: column UPDATE for login % is wrong on %.%.', r, t, c;
+        END IF;
+      END LOOP;
+      IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE') THEN
+        RAISE EXCEPTION '017 grant check failed: ro login holds a column write privilege on %.%.', t, c;
+      END IF;
+    END LOOP;
+  END LOOP;
+  FOREACH r IN ARRAY (logins || ro) LOOP
+    IF NOT pg_catalog.has_table_privilege(r, 'vera_vjay.toptag_span_status_v', 'SELECT') THEN
+      RAISE EXCEPTION '017 grant check failed: login % needs SELECT on the view.', r;
+    END IF;
+    FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+      IF pg_catalog.has_table_privilege(r, 'vera_vjay.toptag_span_status_v', p) THEN
+        RAISE EXCEPTION '017 grant check failed: login % holds % on the view.', r, p;
+      END IF;
+    END LOOP;
+  END LOOP;
+  -- wo trigger-read grants exist (column-level), and PUBLIC holds nothing on the new objects.
+  IF NOT (pg_catalog.has_column_privilege(current_setting('vera017.wo'), 'vera_vjay.topreg_topics', 'topic_key', 'SELECT')
+          AND pg_catalog.has_column_privilege(current_setting('vera017.wo'), 'vera_vjay.topreg_topics', 'state', 'SELECT')
+          AND pg_catalog.has_column_privilege(current_setting('vera017.wo'), 'vera_vjay.evidence_spans', 'span_id', 'SELECT')
+          AND pg_catalog.has_column_privilege(current_setting('vera017.wo'), 'vera_vjay.evidence_spans', 'source_id', 'SELECT')
+          AND pg_catalog.has_schema_privilege(current_setting('vera017.wo'), 'vera_vjay', 'USAGE')) THEN
+    RAISE EXCEPTION '017 grant check failed: wo login lacks the trigger-read grants.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k, pg_catalog.aclexplode(k.relacl) x
+              WHERE k.oid IN ('vera_vjay.toptag_chunk_topics'::pg_catalog.regclass, 'vera_vjay.toptag_document_topics'::pg_catalog.regclass,
+                              'vera_vjay.toptag_attempts'::pg_catalog.regclass, 'vera_vjay.toptag_span_status_v'::pg_catalog.regclass)
+                AND x.grantee = 0) THEN
+    RAISE EXCEPTION '017 grant check failed: PUBLIC holds a privilege on a new object.';
+  END IF;
+END $$;
+
+COMMIT;

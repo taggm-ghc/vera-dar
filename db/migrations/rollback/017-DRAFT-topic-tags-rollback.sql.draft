@@ -1,0 +1,74 @@
+-- 017_vera_topic_tags ROLLBACK -- DRAFT, NOT EXECUTED, UNTESTED against a real PostgreSQL. OWNER-ONLY, prepared, never expected to run.
+-- DESTRUCTIVE: drops toptag_chunk_topics, toptag_document_topics, toptag_attempts and the view toptag_span_status_v.
+-- Requires a separate, same-turn owner approval and the table-owner (admin) account. Never run via db/apply_migrations.py (HZ-DAR-1).
+-- SAFETY: the file LOCKs the three tables, then RAISEs (nothing changes) while ANY row exists in ANY of them. There is no force option.
+-- Non-destructive alternative: stop the tagging worker and leave the tables in place.
+-- IDENTITY GUARD: refuses unless current_user owns the 017 tables and is not an app group or login role.
+-- Dependency order: view, triggers, tables (drop their indexes, constraints and identity sequences), functions. No CASCADE, no IF EXISTS:
+-- a missing 017 object makes the file fail and roll back. The schema vera_vjay is kept. Also revokes the two column-level SELECT grants
+-- that 017 gave vera_vjay_wo (topreg_topics (topic_key, state); evidence_spans (span_id, source_id)); schema USAGE is left (015 also grants it).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+-- In the combined purge run (rollback_017.sh --purge-rows: psql -1 with -v purge_in_rollback=1) the outer -1 transaction is used and
+-- this file's own BEGIN/COMMIT are skipped (R4P-14: a nested BEGIN is only a warning, a COMMIT would end the outer transaction early).
+\if :{?purge_in_rollback}
+\else
+BEGIN;
+\endif
+
+LOCK TABLE vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+DECLARE n bigint;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+                  WHERE c.oid = 'vera_vjay.toptag_chunk_topics'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user)
+     OR current_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro')
+     OR session_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro') THEN
+    RAISE EXCEPTION '017 rollback: current_user must own the 017 tables and must not be an app role.';
+  END IF;
+  SELECT (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_chunk_topics)
+       + (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_document_topics)
+       + (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_attempts) INTO n;
+  IF n > 0 THEN
+    RAISE EXCEPTION '017 rollback refused: % row(s) exist in the 017 tables; nothing was changed.', n;
+  END IF;
+END $$;
+
+DROP VIEW vera_vjay.toptag_span_status_v;
+
+DROP TRIGGER toptag_topic_tree_trg ON vera_vjay.topreg_topics;   -- A2: the only 017 object on an 011 table
+
+DROP TRIGGER toptag_attempts_d_notrunc_trg ON vera_vjay.toptag_attempts;
+DROP TRIGGER toptag_attempts_c_nodel_trg ON vera_vjay.toptag_attempts;
+DROP TRIGGER toptag_attempts_a_guard_trg ON vera_vjay.toptag_attempts;
+DROP TRIGGER toptag_doc_d_notrunc_trg ON vera_vjay.toptag_document_topics;
+DROP TRIGGER toptag_doc_c_nodel_trg ON vera_vjay.toptag_document_topics;
+DROP TRIGGER toptag_doc_b_succ_trg ON vera_vjay.toptag_document_topics;
+DROP TRIGGER toptag_doc_a_guard_trg ON vera_vjay.toptag_document_topics;
+DROP TRIGGER toptag_chunk_d_notrunc_trg ON vera_vjay.toptag_chunk_topics;
+DROP TRIGGER toptag_chunk_c_nodel_trg ON vera_vjay.toptag_chunk_topics;
+DROP TRIGGER toptag_chunk_b_succ_trg ON vera_vjay.toptag_chunk_topics;
+DROP TRIGGER toptag_chunk_a_guard_trg ON vera_vjay.toptag_chunk_topics;
+
+DROP TABLE vera_vjay.toptag_attempts;
+DROP TABLE vera_vjay.toptag_document_topics;
+DROP TABLE vera_vjay.toptag_chunk_topics;
+
+DROP FUNCTION vera_vjay.toptag_forbid_truncate_trgfn();
+DROP FUNCTION vera_vjay.toptag_forbid_delete_trgfn();
+DROP FUNCTION vera_vjay.toptag_attempts_guard_trgfn();
+DROP FUNCTION vera_vjay.toptag_doc_succ_trgfn();
+DROP FUNCTION vera_vjay.toptag_doc_guard_trgfn();
+DROP FUNCTION vera_vjay.toptag_chunk_succ_trgfn();
+DROP FUNCTION vera_vjay.toptag_chunk_guard_trgfn();
+DROP FUNCTION vera_vjay.toptag_topic_tree_trgfn();
+DROP FUNCTION vera_vjay.toptag_is_owner_fn();
+
+REVOKE SELECT (topic_key, state) ON vera_vjay.topreg_topics FROM vera_vjay_wo;
+REVOKE SELECT (span_id, source_id) ON vera_vjay.evidence_spans FROM vera_vjay_wo;
+
+\if :{?purge_in_rollback}
+\else
+COMMIT;
+\endif

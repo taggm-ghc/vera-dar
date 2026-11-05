@@ -208,3 +208,21 @@ def k5_key(*_a, **_k):
 
 def k5_enabled(cfg: dict) -> bool:
     return False  # hard-off in S4-0 whatever the config says (L16 redaction lands in stage 1)
+
+
+# --- TOPIC-TAGGING-1104 (R4, orchestrator decision 2026-11-05): read-only registry views for the topic tagger and the corpus
+# digest. This module stays the only delegating hook (test_topicreg_1028) and uses only load_active_registry_data
+# (test_micro_topic_pd3_guard): the owner-checked READ ONLY read of the ACTIVE rows, whatever read_from_db says.
+def registry_active_tree(cfg: dict | None = None, reader=None) -> dict:
+    """{topic_key: {"label", "state": "active", "parent"}} of the registry table's ACTIVE rows; {} when the table is absent
+    (callers then offer and count nothing: deny-all). Raises on any other problem (fail closed)."""
+    from vera import topic_registry
+    data = topic_registry.load_active_registry_data(cfg, reader)
+    if data is None:
+        return {}
+    return {e["id"]: {"label": e.get("label"), "state": "active", "parent": e.get("parent_topic_key")} for e in data["entries"]}
+
+
+def registry_active_keys(cfg: dict | None = None, reader=None) -> set:
+    """ACTIVE registry keys (set(registry_active_tree)); empty when the table is absent."""
+    return set(registry_active_tree(cfg, reader))

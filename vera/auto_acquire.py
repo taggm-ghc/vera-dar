@@ -1510,4 +1510,9 @@ class WoStore:
                                     "relevance_score, evidence_type) VALUES (:s,:t,:a,:b,NULL,:e)")),
                           {"s": sid, "t": sp["text"], "a": sp["start_index"], "b": sp["end_index"],
                            "e": sp["evidence_type"]})
+        try:  # TOPIC-TAGGING-1104: AFTER the commit; O(1) hand-off to the background tagger, never raises or blocks
+            from vera import topic_tagging
+            topic_tagging.notify_ingested(sid)
+        except Exception:  # noqa: BLE001
+            pass
         return {"status": "stored", "run_id": rid, "source_id": sid, "canonical_source_id": csid}
