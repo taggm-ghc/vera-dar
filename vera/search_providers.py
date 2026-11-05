@@ -816,7 +816,35 @@ def _landing_robots(acq: Mapping | None, get: Callable, url_check: Callable, dea
     from types import SimpleNamespace
 
     from vera import acq_discovered
-    deps = SimpleNamespace(url_check=url_check, http_get=get)
+    from vera import selective_fetch as _sf
+
+    class _Tee:  # ASK-PARALLEL-FIX-1105: keep the raw robots.txt text (robotparser drops non-integer Crawl-delay)
+        def __init__(self, resp, host):  # explicit fields only (no run-time-named getattr: test_semantic_similarity)
+            self._r, self._h = resp, host
+            self.status_code, self.headers = resp.status_code, resp.headers
+
+        def close(self):
+            close = getattr(self._r, "close", None)
+            if close is not None:
+                close()
+
+        def iter_content(self, n):
+            buf = []
+            for chunk in self._r.iter_content(n):
+                buf.append(chunk)
+                yield chunk
+            _sf.remember_robots_text(self._h, b"".join(buf).decode("utf-8", "ignore"))
+
+    def tee_get(u, *a, **k):
+        r = get(u, *a, **k)
+        sp_ = urlsplit(u)
+        if sp_.path == "/robots.txt":
+            if getattr(r, "status_code", None) == 200:
+                return _Tee(r, (sp_.hostname or "").lower())
+            if getattr(r, "status_code", None) not in (301, 302, 303, 307, 308):
+                _sf.remember_robots_text(sp_.hostname or "", None)
+        return r
+    deps = SimpleNamespace(url_check=url_check, http_get=tee_get)
 
     def ok(u: str) -> bool:
         try:
@@ -825,6 +853,87 @@ def _landing_robots(acq: Mapping | None, get: Callable, url_check: Callable, dea
         except Exception:  # noqa: BLE001  fail closed
             return False
     return ok
+
+
+# ASK-PARALLEL-FIX-1105 (owner rule feedback_respect_access_and_compliance_terms): at most ONE landing request in flight
+# per actual request host, on every hop (redirects included), for every host (portal or not), process-wide. Entries are
+# refcounted and dropped when no landing holds or waits on them, so the table stays bounded by in-flight landings.
+_HOST_SLOTS: dict = {}
+_HOST_SLOTS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _host_slot(host: str, timeout: float):
+    """Hold the host's in-flight slot (yields True), or yield False if it is not free within `timeout` seconds."""
+    host = (host or "").lower()
+    with _HOST_SLOTS_LOCK:
+        ent = _HOST_SLOTS.get(host)
+        if ent is None:
+            ent = _HOST_SLOTS[host] = [threading.Lock(), 0]
+        ent[1] += 1
+    got = False
+    try:
+        got = ent[0].acquire(timeout=max(0.0, timeout))
+        yield got
+    finally:
+        if got:
+            ent[0].release()
+        with _HOST_SLOTS_LOCK:
+            ent[1] -= 1
+            if ent[1] <= 0 and _HOST_SLOTS.get(host) is ent:
+                del _HOST_SLOTS[host]
+
+
+def _landing_crawl_delay(url: str) -> float:
+    """robots.txt Crawl-delay (seconds) for this URL's host, from the robots.txt already parsed by the landing robots
+    check (acq_discovered cache) or by selective_fetch.robots_allowed; 0 when none is known. Never fetches or raises."""
+    try:
+        from vera import acq_discovered as _ad
+        from vera import selective_fetch as _sf
+        host = (urlsplit(url).hostname or "").lower()
+        t = _sf.robots_text_crawl_delay(host)  # ASK-PARALLEL-FIX-1105: fractions honoured; inf = malformed
+        if t is not None:
+            return float(t)
+        with _ad._ROBOTS_LOCK:
+            hit = _ad._ROBOTS.get(host)
+        rp = hit[1] if hit is not None else None
+        d = 0.0
+        if rp not in (None, True, False):
+            v = rp.crawl_delay(_sf.USER_AGENT)
+            d = float(v) if v else 0.0
+        return max(d, _sf.robots_crawl_delay(url))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _crawl_gate(url: str, budget: float, clock: Callable, sleep: Callable) -> bool:
+    """Honour the host's Crawl-delay before a landing request: wait (inside `budget` seconds, keeping 0.2 s for the
+    request) until selective_fetch.crawl_reserve (the shared per-host gate) admits it. False = skip, never send early.
+    Bounded: at most 3 waits (the caller holds the host slot, so only other code paths can race for the host)."""
+    from vera import selective_fetch as _sf
+    host = (urlsplit(url).hostname or "").lower()
+    delay = _landing_crawl_delay(url)
+    if not delay:
+        return True
+    if delay == float("inf"):
+        return False  # malformed Crawl-delay: skip this host rather than fetch without a delay
+    end = clock() + budget
+    for _ in range(3):
+        if _sf.crawl_reserve(host, delay, clock):
+            return True
+        w = _sf.crawl_wait_s(host, delay, clock)
+        if w <= 0:
+            continue
+        if clock() + w > end - 0.2:
+            return False  # the delay does not fit the budget: skip this landing rather than wait past it
+        try:
+            from vera import progress as _prog  # NOISY-UI: politeness (crawl-delay) wait is visible
+            ctx = _prog.waiting(_prog.ACT_POLITE, w)
+        except Exception:  # noqa: BLE001
+            ctx = contextlib.nullcontext()
+        with ctx:
+            sleep(w)
+    return False
 
 
 def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | None = None,
@@ -861,35 +970,45 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
             ok = url_check(cur)
             if not (ok[0] if isinstance(ok, tuple) else ok):
                 return None
-            if not robots_ok(cur):
-                return None
-            left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
-            if left <= 0.2:
-                return None
-            from vera.selective_fetch import USER_AGENT as _FETCH_UA  # verifier D1: the UA robots.txt was checked for
-            r = get(cur, headers={"User-Agent": _FETCH_UA, "Accept-Encoding": "identity"}, timeout=left,
-                    allow_redirects=False, stream=True)
-            stop_at = clock() + left  # a trickling server cannot hold the thread past the hop budget or the deadline
-            try:
-                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
-                    from urllib.parse import urljoin
-                    cur = urljoin(cur, r.headers["Location"])
-                    continue
-                if r.status_code != 200:
+            # ASK-PARALLEL-FIX-1105: this hop's host slot is held from its robots.txt check through the page GET,
+            # body read and close, so no two landings (first hop or redirect) are ever in flight to one host.
+            with _host_slot(urlsplit(cur).hostname or "", left - 0.2) as got:
+                if not got:
+                    return None  # the host stayed busy for the whole hop budget: skip, never overlap
+                if not robots_ok(cur):
                     return None
-                ctype = str((getattr(r, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
-                if ctype and ctype not in ("text/html", "application/xhtml+xml"):
-                    return None  # DF-8: only an HTML landing page is read for its meta tags
-                buf = b""
-                for chunk in r.iter_content(65536):
-                    buf += chunk
-                    if len(buf) >= max_bytes or clock() > stop_at:
-                        break
-            finally:
+                left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
+                if left <= 0.2:
+                    return None
+                if not _crawl_gate(cur, left, clock, _t.sleep):
+                    return None  # robots.txt Crawl-delay does not fit the hop budget: skip rather than send early
+                left = timeout_s if deadline is None else min(timeout_s, deadline - clock())
+                if left <= 0.2:
+                    return None
+                from vera.selective_fetch import USER_AGENT as _FETCH_UA  # verifier D1: the UA robots.txt was checked for
+                r = get(cur, headers={"User-Agent": _FETCH_UA, "Accept-Encoding": "identity"}, timeout=left,
+                        allow_redirects=False, stream=True)
+                stop_at = clock() + left  # a trickling server cannot hold the thread past the hop budget or the deadline
                 try:
-                    r.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                    if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                        from urllib.parse import urljoin
+                        cur = urljoin(cur, r.headers["Location"])
+                        continue
+                    if r.status_code != 200:
+                        return None
+                    ctype = str((getattr(r, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
+                    if ctype and ctype not in ("text/html", "application/xhtml+xml"):
+                        return None  # DF-8: only an HTML landing page is read for its meta tags
+                    buf = b""
+                    for chunk in r.iter_content(65536):
+                        buf += chunk
+                        if len(buf) >= max_bytes or clock() > stop_at:
+                            break
+                finally:
+                    try:
+                        r.close()
+                    except Exception:  # noqa: BLE001
+                        pass
             text = buf[:max_bytes].decode("utf-8", "ignore")
             for tag in _META_DOI.findall(text):
                 m = _CONTENT.search(tag)
@@ -924,6 +1043,67 @@ def europepmc_ids_lookup(ids: list, timeout_s: float, ecfg: Mapping, *, transpor
     return out
 
 
+def _landing_group(url: str) -> str:
+    """The rate-limit portal a landing URL's first hop goes through (config/rate_limits.json), else its host."""
+    host = (urlsplit(url).hostname or "").lower()
+    try:
+        from vera import rate_limit
+        a = rate_limit.get_registry().portal_for_url(url)
+        return "portal:" + a.name if a is not None else "host:" + host
+    except Exception:  # noqa: BLE001  no limiter config: group by host (still one call at a time per host)
+        return "host:" + host
+
+
+def _landing_dois_concurrently(urls: list, lt: float, lb: int, **kw) -> list:
+    """ASK-PARALLEL-1105 (owner rule feedback_nonblocking_spawned_steps): the DDG landing-page DOI lookups (each its own
+    robots.txt check and ONE GET, through landing_doi unchanged) are independent, so they run concurrently instead of one
+    after another. Landings whose FIRST hop shares a rate-limit portal (or, outside every portal, a host) run in ONE
+    worker in result order, rechecking the serial loop's `deadline - clock() > landing_timeout_s` before each later
+    landing (a skipped one is returned in `skipped` and not counted). ASK-PARALLEL-FIX-1105: on top of that grouping,
+    landing_doi holds a per-host in-flight slot (_host_slot) on EVERY hop, redirects included, for every host (portal
+    or not), and honours robots.txt Crawl-delay per host (_crawl_gate -> selective_fetch.crawl_reserve), so landings
+    that converge on one host after redirects run one at a time; different hosts still run in parallel. The same
+    deadline bounds every call. Workers
+    run in a copy of this context (the inline rate-limit deadline). Returns (DOIs or None in the order of `urls`,
+    set of skipped indexes)."""
+    out: list = [None] * len(urls)
+    skipped: set = set()
+    if not urls:
+        return out, skipped
+    deadline, clock = kw.get("deadline"), kw.get("clock")
+    groups: dict = {}
+    for i, u in enumerate(urls):
+        groups.setdefault(_landing_group(u), []).append(i)
+
+    errs: list = [None] * len(urls)
+
+    def run(idxs):
+        for j, i in enumerate(idxs):
+            if j and deadline is not None and clock is not None and not deadline - clock() > lt:
+                skipped.add(i)  # as the serial loop: no landing GET started without landing_timeout_s left
+                continue
+            try:
+                out[i] = landing_doi(urls[i], lt, lb, **kw)
+            except Exception as e:  # noqa: BLE001  landing_doi never raises; anything else propagates as before
+                errs[i] = e
+                return
+    if len(groups) == 1:
+        run(next(iter(groups.values())))
+    else:
+        threads = []
+        for idxs in groups.values():
+            t = threading.Thread(target=contextvars.copy_context().run, args=(run, idxs), name="vera-landing",
+                                 daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()  # each landing_doi call is bounded by landing_timeout_s and the caller's deadline
+    for e in errs:
+        if e is not None:
+            raise e
+    return out, skipped
+
+
 def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: float, clock: Callable,
                       calls_left: int, transport: Callable | None = None, get: Callable | None = None,
                       url_check: Callable | None = None, acq: Mapping | None = None,
@@ -942,6 +1122,7 @@ def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: 
     lt = float(dcfg.get("landing_timeout_s", 5))
     lb = int(dcfg.get("landing_max_bytes", 524288))
     lgroups = tuple(dcfg.get("landing_groups") or ("portals",))
+    rows, jobs = [], []  # ASK-PARALLEL-1105: (result, identifier, landing job index or None) in result order
     for r in results or ():
         if not isinstance(r, Mapping) or not r.get("url"):
             continue
@@ -950,12 +1131,20 @@ def ddg_to_candidates(results: list, ecfg: Mapping, dcfg: Mapping, *, deadline: 
         if ident is None and _is_wikipedia(r["url"]):
             counts["ddg_held"] += 1  # portal only: never fetched, never a candidate
             continue
+        job = None
         if ident is None and landing < max_landing and str(r.get("discovery_group") or "") in set(lgroups) \
                 and deadline - clock() > lt:
             landing += 1
             counts["ddg_landing_get"] += 1
-            d = landing_doi(r["url"], lt, lb, get=get, url_check=url_check, deadline=deadline, clock=clock, acq=acq,
-                            robots_ok=robots_ok)
+            job = len(jobs)
+            jobs.append(str(r["url"]))
+        rows.append((r, ident, job))
+    dois, skipped = _landing_dois_concurrently(jobs, lt, lb, get=get, url_check=url_check, deadline=deadline,
+                                               clock=clock, acq=acq, robots_ok=robots_ok)
+    counts["ddg_landing_get"] -= len(skipped)
+    for r, ident, job in rows:
+        if job is not None:
+            d = dois[job]
             ident = {"kind": "doi", "value": d} if d else None
         if ident is None:
             if _landing_url_ok(str(r["url"])):  # DF-3: followable URL-only candidate (no request is made for it)

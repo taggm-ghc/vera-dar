@@ -307,10 +307,75 @@ _ROBOTS_LOCK = threading.Lock()
 _ROBOTS_SIGNAL: dict = {}  # WP6-P2b D2: (scheme, host, ua) -> robots.txt Content-Signal values (signal text only)
 
 
+_ROBOTS_TEXT: dict = {}    # ASK-PARALLEL-FIX-1105: host -> raw robots.txt text (Crawl-delay only; insertion order)
+_ROBOTS_TEXT_MAX = 512
+
+
 def robots_cache_clear() -> None:
     with _ROBOTS_LOCK:
         _ROBOTS.clear()
         _ROBOTS_SIGNAL.clear()
+        _ROBOTS_TEXT.clear()
+
+
+def remember_robots_text(host: str, text: str | None) -> None:
+    """Keep the raw robots.txt of a host (None forgets it), so a non-integer Crawl-delay, which urllib.robotparser
+    drops, is still honoured. Bounded; never raises."""
+    try:
+        host = (host or "").lower()
+        with _ROBOTS_LOCK:
+            _ROBOTS_TEXT.pop(host, None)
+            if text is not None:
+                _ROBOTS_TEXT[host] = str(text)[:ROBOTS_MAX_BYTES]
+                while len(_ROBOTS_TEXT) > _ROBOTS_TEXT_MAX:
+                    _ROBOTS_TEXT.pop(next(iter(_ROBOTS_TEXT)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def parse_crawl_delay(text: str, user_agent=None) -> float | None:
+    """Crawl-delay of the robots.txt group that applies to user_agent (same matching as urllib.robotparser: a group
+    naming a substring of our product token wins, else the * group). None = no Crawl-delay line in that group; a
+    float >= 0 = the delay (fractions kept; several lines: the largest); math.inf = a malformed value (empty, not a
+    number, negative or not finite), which callers treat as "do not fetch this host"."""
+    import math
+    token = (user_agent or USER_AGENT).split("/")[0].lower()
+    groups, cur, in_agents = [], None, False
+    for raw in (text or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        key, val = (x.strip() for x in line.split(":", 1))
+        key = key.lower()
+        if key == "user-agent":
+            if not in_agents:
+                cur = {"agents": [], "delays": []}
+                groups.append(cur)
+            cur["agents"].append(val.lower())
+            in_agents = True
+        elif cur is not None:
+            in_agents = False
+            if key == "crawl-delay":
+                try:
+                    v = float(val)
+                except ValueError:
+                    v = math.inf
+                cur["delays"].append(v if math.isfinite(v) and v >= 0 else math.inf)
+    pick = next((g for g in groups if any(a != "*" and a and a in token for a in g["agents"])), None) \
+        or next((g for g in groups if "*" in g["agents"]), None)
+    if pick is None or not pick["delays"]:
+        return None
+    return max(pick["delays"])
+
+
+def robots_text_crawl_delay(host: str, user_agent=None) -> float | None:
+    """parse_crawl_delay of the remembered robots.txt of host; None when no text is remembered. Never raises."""
+    try:
+        with _ROBOTS_LOCK:
+            txt = _ROBOTS_TEXT.get((host or "").lower())
+        return None if txt is None else parse_crawl_delay(txt, user_agent)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock=time.monotonic,
@@ -347,6 +412,7 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     txt = body.decode("utf-8", "ignore")
                     p.parse(txt.splitlines())
                     rp = p
+                    remember_robots_text(host, txt)  # ASK-PARALLEL-FIX-1105: non-integer Crawl-delay
                     from vera import source_permissions as _sp
                     signal = " ".join(_sp.robots_content_signal(txt).split()).lower()[:300]
                 elif 400 <= resp.status_code < 500 and resp.status_code != 429:
@@ -393,6 +459,9 @@ def robots_crawl_delay(url, user_agent=None) -> float:
         rp = hit[1] if hit is not None else None
         if rp in (None, True, False):
             return 0.0
+        t = robots_text_crawl_delay(parts.hostname or "", ua)  # ASK-PARALLEL-FIX-1105: fractions; inf = malformed
+        if t is not None:
+            return float(t)
         v = rp.crawl_delay(ua)
         return float(v) if v else 0.0
     except Exception:  # noqa: BLE001
@@ -415,6 +484,19 @@ def crawl_reserve(host: str, delay: float, clock=time.monotonic) -> bool:
         while len(_CRAWL_LAST) > _CRAWL_MAX_HOSTS:
             _CRAWL_LAST.pop(next(iter(_CRAWL_LAST)))
         return True
+
+
+def crawl_wait_s(host: str, delay: float, clock=time.monotonic) -> float:
+    """ASK-PARALLEL-FIX-1105: seconds until crawl_reserve(host, delay) would succeed (0.0 now). Records nothing; a
+    caller that may wait sleeps this long, then calls crawl_reserve (which stays the only gate). Never raises."""
+    try:
+        if not delay or delay <= 0:
+            return 0.0
+        with _CRAWL_LOCK:
+            last = _CRAWL_LAST.get((host or "").lower())
+            return 0.0 if last is None else max(0.0, last + float(delay) - clock())
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def reset_for_tests() -> None:
@@ -442,6 +524,8 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
             cd = (crawl_delays or {}).get((urlsplit(current).hostname or "").lower())
             if not cd and robots_ok is None:  # WP6-P2: the Crawl-delay robots_allowed just parsed, same per-host gate
                 cd = robots_crawl_delay(current)
+            if cd == float("inf"):  # ASK-PARALLEL-FIX-1105: malformed Crawl-delay: do not fetch this host at all
+                return None, None, None, hops, None, "crawl_delay"
             if cd and not crawl_reserve(urlsplit(current).hostname or "", cd, crawl_clock):
                 return None, None, None, hops, None, "crawl_delay"
             resp = http_get(current, headers={"User-Agent": USER_AGENT}, timeout=timeout_s,

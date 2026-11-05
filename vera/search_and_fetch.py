@@ -15,6 +15,7 @@ routes failed or fell short; its use is recorded in meta["fallback_used"].
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import re
@@ -531,11 +532,12 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
     return SearchResults(items, meta)
 
 
-def _trace_provider(name, t0, items=None, notes=None) -> None:
+def _trace_provider(name, t0, items=None, notes=None, ms=None) -> None:
     """Trace one provider attempt: provider name, status ok/empty/error/rate_limited/timeout, latency_ms, result count.
-    Never carries notes, URLs or result text. No-op outside a traced request; never raises."""
+    Never carries notes, URLs or result text. No-op outside a traced request; never raises. `ms` (ASK-PARALLEL-1105):
+    a latency measured in the provider's worker thread, used instead of t0."""
     try:
-        ms = int((time.monotonic() - t0) * 1000)
+        ms = int((time.monotonic() - t0) * 1000) if ms is None else int(ms)
         if items is not None:
             rt.event("search", "provider", counts={"results": len(items)},
                      detail={"provider": str(name), "status": "ok" if items else "empty", "latency_ms": ms})
@@ -556,6 +558,73 @@ def _failure_status(notes) -> str:
     return "timeout" if re.search(r"deadline|timed? ?out", t) else "error"
 
 
+class _BufferedLedger:
+    """ASK-PARALLEL-1105: one provider worker's ledger records, replayed into the caller's ledger in chain order after
+    every worker finished, so the ledger reads exactly as in the serial loop."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def record(self, **kw):
+        kw.setdefault("at", datetime.now(timezone.utc).isoformat())  # the call's own time, not the replay time
+        self.calls.append(kw)
+
+
+def _call_live_concurrently(live, question, n, kw) -> list:
+    """ASK-PARALLEL-1105 (owner rule feedback_nonblocking_spawned_steps): the fan-out's live providers are independent
+    portals, so each runs in its own worker thread (a copy of this request's context: trace, rate-limit deadline,
+    sub-queries) instead of one after another. Nothing about a call changes: each still passes its own RateGate
+    (single connection), the shared per-portal limiter inside provider.call, its bounded retries and the ONE shared
+    deadline. Providers with the same name (one portal) share one worker and run in chain order. Workers start in chain
+    order (DDG first, YIELD-1021). Returns, in chain order, (kind, value, latency_ms) with kind ok (raw items) | failed
+    (_ProviderFailed) | sce (the provider's config error) | raise (any other exception, re-raised by the caller);
+    ledger records are replayed in chain order. Difference from the serial loop (recorded): when a provider raises a
+    config or unexpected error, the later providers have already been called; their calls are still recorded in the
+    ledger (every call made is accounted for) and the error is raised as before."""
+    if not live:
+        return []
+    ledger = kw.get("ledger")
+    bufs = [_BufferedLedger() if ledger else None for _ in live]
+    out: list = [None] * len(live)
+    groups: dict = {}
+    for i, p in enumerate(live):
+        groups.setdefault(p.name, []).append(i)
+
+    def run_group(idxs):
+        for i in idxs:
+            p = live[i]
+            t0 = time.monotonic()
+            try:
+                raw = _attempts(p, question, n, **{**kw, "ledger": bufs[i]})
+                out[i] = ("ok", raw, None)
+            except _SCE as e:
+                out[i] = ("sce", e, None)
+            except _ProviderFailed as f:
+                out[i] = ("failed", f, None)
+            except BaseException as e:  # noqa: BLE001  same as the serial loop: an unexpected error propagates
+                out[i] = ("raise", e, None)
+            out[i] = out[i][:2] + ((time.monotonic() - t0) * 1000,)
+
+    threads = []
+    for idxs in groups.values():
+        started, ctx = threading.Event(), contextvars.copy_context()
+
+        def body(_idxs=idxs, _ev=started, _ctx=ctx):
+            _ev.set()
+            _ctx.run(run_group, _idxs)
+        t = threading.Thread(target=body, name="vera-search-fanout", daemon=True)
+        t.start()
+        started.wait(1.0)  # start order = chain order (the providers still run concurrently)
+        threads.append(t)
+    for t in threads:
+        t.join()  # each provider call is bounded by its retries, timeout_s and the shared deadline
+    if ledger:
+        for b in bufs:
+            for rec in b.calls:
+                ledger.record(**rec)
+    return out
+
+
 def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_share=None):
     """Call every live provider (each under its own gate and the shared deadline), tolerate individual failures
     (recorded), merge by reciprocal rank fusion. The seed provider is used only if no live provider returned
@@ -563,19 +632,18 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
     live = [p for p in chain if not p.name.startswith("seed:")]
     seeds = [p for p in chain if p.name.startswith("seed:")]
     notes, tried, per = [], [], {}
-    for p in live:
-        t0 = time.monotonic()
-        try:
-            raw = _attempts(p, question, n, **kw)
-        except _SCE as e:
-            raise SearchConfigError(f"{p.name}: {e}") from None
-        except _ProviderFailed as f:
-            notes += [f"{p.name}: {x}" for x in f.notes]
-            tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(f.notes)})
-            _trace_provider(p.name, t0, notes=f.notes)
+    for p, (kind, val, ms) in zip(live, _call_live_concurrently(live, question, n, kw)):
+        if kind == "raise":  # an unexpected error propagates, as in the serial loop (chain order)
+            raise val
+        if kind == "sce":
+            raise SearchConfigError(f"{p.name}: {val}") from None
+        if kind == "failed":
+            notes += [f"{p.name}: {x}" for x in val.notes]
+            tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(val.notes)})
+            _trace_provider(p.name, None, notes=val.notes, ms=ms)
             continue
-        items = _finalize(raw, p.name, n)
-        _trace_provider(p.name, t0, items=items)
+        items = _finalize(val, p.name, n)
+        _trace_provider(p.name, None, items=items, ms=ms)
         per[p.name] = items
         tried.append({"provider": p.name, "outcome": "ok", "count": len(items), "status": "completed"})
     merged = rrf_merge(per, rrf_k, max(n * len(per), n)) if per else []
