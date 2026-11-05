@@ -111,6 +111,25 @@ END $$;
 GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo, vera_vjay_ro;
 GRANT INSERT ON vera_vjay.live_ask_stats TO vera_vjay_wo;
 GRANT SELECT ON vera_vjay.live_ask_stats TO vera_vjay_ro;
+-- LIVESTATS-013-REVIEW-1104 (parity with 015 TRACE-SECREV-1104): deny-all for the rw group too, in case live default
+-- privileges differ from the repo; then assert the ACL: no non-owner grantee holds anything except vera_vjay_wo INSERT and
+-- vera_vjay_ro SELECT, and there are no column-level grants.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    REVOKE ALL ON vera_vjay.live_ask_stats FROM vera_vjay_rw;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+              WHERE c.oid = 'vera_vjay.live_ask_stats'::regclass
+                AND a.grantee <> c.relowner
+                AND NOT ((a.privilege_type = 'INSERT'
+                          AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))
+                      OR (a.privilege_type = 'SELECT'
+                          AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro'))))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+                 WHERE attrelid = 'vera_vjay.live_ask_stats'::regclass AND attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '013 ACL check failed: a non-owner role holds a privilege other than wo INSERT / ro SELECT.';
+  END IF;
+END $$;
 
 -- Final privilege check against the actual logins (a RAISE rolls everything back).
 DO $$
