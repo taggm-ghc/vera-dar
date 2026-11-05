@@ -1,0 +1,60 @@
+name: Privacy request
+description: Ask what VERA-DAR holds about a question you sent, or object to its use, or ask for a stored question to be deleted.
+title: "Privacy request"
+labels: ["privacy"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Do not include personal data or your question
+
+        This issue is **public**. Do **not** write your question text, your name, contact details, health information, ID or account numbers, or any other personal details here. Only fill in the fields below. The operator will reply in this issue with how to identify your question privately.
+
+  - type: input
+    id: date
+    attributes:
+      label: Date
+      description: The approximate date you used VERA-DAR (YYYY-MM-DD).
+      placeholder: "YYYY-MM-DD"
+    validations:
+      required: true
+
+  - type: input
+    id: approximate_time
+    attributes:
+      label: Approximate time
+      description: Roughly when you sent the question (24-hour clock is fine). An approximate time is enough.
+      placeholder: "e.g. 14:00"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: time_zone
+    attributes:
+      label: Time zone
+      description: The time zone for the approximate time above.
+      options:
+        - UTC
+        - US Eastern
+        - US Central
+        - US Mountain
+        - US Pacific
+        - UK (London)
+        - Central Europe (CET/CEST)
+        - India (IST)
+        - Japan (JST)
+        - Australia Eastern (AEST/AEDT)
+        - Other (see approximate time)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: request_type
+    attributes:
+      label: Request type
+      description: What you are asking for.
+      options:
+        - Delete my stored question
+        - Question about privacy
+    validations:
+      required: true

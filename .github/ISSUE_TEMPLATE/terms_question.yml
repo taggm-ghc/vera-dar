@@ -1,0 +1,19 @@
+name: Question about the terms
+description: Ask a general question about the Terms of Access, Browsing, and Use. For privacy requests, use the Privacy request form instead.
+title: "Terms question: "
+labels: ["terms"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Do not include personal data
+
+        This issue is **public**. Do not include your question text about VERA-DAR, your name, contact details or any other personal details. For privacy requests, use the "Privacy request" form.
+
+  - type: textarea
+    id: terms_question
+    attributes:
+      label: Your question about the terms
+      description: Ask about the terms in general. Refer to the section heading if you can, without personal details.
+    validations:
+      required: true
