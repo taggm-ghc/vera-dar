@@ -1,0 +1,198 @@
+-- 018_vera_trace_purge_erasure.sql -- DRAFT. NOT EXECUTED. Staged outside repo/ (work/PRIV-D2-KIT-1105/migrations/); copy to
+-- repo/db/migrations/pending/018-DRAFT-trace-purge-erasure.sql.draft only at owner approval. Filename does not match the runner's
+-- `{prefix}_vera_*.sql` glob (same convention as the 007/011-017 drafts).
+-- PRIV-D2-KIT-1105, owner decision D2 option (a) (work/PRIVACY-1104/gaps-and-decisions.md G1, G2). Depends on 015 (applied
+-- 2026-11-04, owner-reported). NUMBERING: 018 = next free after 016 (lists-to-DB) and 017 (topic tagging) per
+-- work/MIG-NUMBERING-1105/plan.md (2026-11-05); confirm at approval.
+-- WHAT IT DOES (no table, column, role or login is created or altered; no row is touched by applying it):
+--   1. vera_vjay.purge_expired_trace(): SECURITY DEFINER, owned by the table owner (the admin/owner account that runs this file).
+--      Deletes request-trace rows older than 30 days (fixed; no parameter) and returns the two counts. EXECUTE: vera_vjay_wo only
+--      (the API's write-only group), so the API can run the daily purge without holding DELETE on any table.
+--   2. vera_vjay.erase_trace_request(text): deletes one request and its events REGARDLESS OF AGE (right-to-erasure path).
+--      SECURITY INVOKER on purpose: only the table owner holds DELETE, so it works only for the owner; a future mistaken
+--      GRANT EXECUTE would give the grantee nothing (it still needs DELETE). EXECUTE: owner only (revoked from PUBLIC).
+--   3. Replaces the 015 trigger function vera_vjay.request_trace_append_only_trgfn() with one extra DELETE exception: a row
+--      whose request_id equals the transaction-local setting vera_trace.erase_request_id, which only erase_trace_request() sets
+--      (and resets before returning). The exception never widens WHO can delete: no app role holds DELETE.
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin/owner-run only, never via
+-- db/apply_migrations.py. Owner script: work/PRIV-D2-KIT-1105/apply_018.sh (dry run by default).
+-- Prepared rollback (non-destructive: drops the 2 functions, restores the 015 trigger body; no data loss):
+--   work/PRIV-D2-KIT-1105/migrations/018-DRAFT-trace-purge-erasure-rollback.sql.draft via rollback_018.sh.
+-- UNTESTED against a real PostgreSQL: the functions and DO blocks have never been executed (offline fake-psql tests only).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_wo_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SELECT pg_catalog.set_config('vera018.wo', :'app_wo_login', true), pg_catalog.set_config('vera018.ro', :'app_ro_login', true);
+
+-- Preflight: 015 objects exist, 018 objects do not, the runner owns both trace tables and is not a superuser,
+-- the groups and logins exist and inherit, and the wo login cannot CREATE in vera_vjay.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_wo', current_setting('vera018.wo')],
+                                              ['vera_vjay_ro', current_setting('vera018.ro')]];
+BEGIN
+  IF pg_catalog.to_regclass('vera_vjay.request_trace_requests') IS NULL
+     OR pg_catalog.to_regclass('vera_vjay.request_trace_events') IS NULL
+     OR pg_catalog.to_regprocedure('vera_vjay.request_trace_append_only_trgfn()') IS NULL THEN
+    RAISE EXCEPTION '018 requires migration 015 (request_trace tables and trigger function) to be applied first.';
+  END IF;
+  IF pg_catalog.to_regprocedure('vera_vjay.purge_expired_trace()') IS NOT NULL
+     OR pg_catalog.to_regprocedure('vera_vjay.erase_trace_request(text)') IS NOT NULL THEN
+    RAISE EXCEPTION '018 already applied or name collision';
+  END IF;
+  IF (SELECT count(DISTINCT relowner) FROM pg_catalog.pg_class
+          WHERE oid IN ('vera_vjay.request_trace_requests'::regclass, 'vera_vjay.request_trace_events'::regclass)) <> 1
+     OR (SELECT relowner FROM pg_catalog.pg_class WHERE oid = 'vera_vjay.request_trace_requests'::regclass)
+        <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
+     OR (SELECT proowner FROM pg_catalog.pg_proc WHERE oid = 'vera_vjay.request_trace_append_only_trgfn()'::regprocedure)
+        <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user) THEN
+    RAISE EXCEPTION '018 must run as the owner of both 015 trace tables and of the 015 trigger function.';
+  END IF;
+  IF (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user) THEN
+    RAISE EXCEPTION '018 refuses to create a SECURITY DEFINER function owned by a superuser; run as the (non-superuser) owner.';
+  END IF;
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g)
+       OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '018 requires group role % and login role %.', g, l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '018: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF pg_catalog.has_schema_privilege(current_setting('vera018.wo'), 'vera_vjay', 'CREATE')
+     OR pg_catalog.has_schema_privilege('vera_vjay_wo', 'vera_vjay', 'CREATE') THEN
+    RAISE EXCEPTION '018: the wo group/login can CREATE in schema vera_vjay (unexpected); review before adding a SECURITY DEFINER function.';
+  END IF;
+END $$;
+
+-- 3. Trigger function: 015 body plus the single-request erasure exception and a pinned TimeZone. Same name, signature, owner.
+CREATE OR REPLACE FUNCTION vera_vjay.request_trace_append_only_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp
+  SET TimeZone = 'UTC'  -- PRIV-D2-SECREV-1105 S1: the 30-day cutoff must not depend on the caller's session TimeZone (DST)
+  AS $f$
+DECLARE erase_id text;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF OLD.created_at < pg_catalog.now() - interval '30 days' THEN
+      RETURN OLD;
+    END IF;
+    -- PRIV-D2-KIT-1105: erasure on request. Set only by vera_vjay.erase_trace_request() (transaction-local, reset on return).
+    erase_id := pg_catalog.current_setting('vera_trace.erase_request_id', true);
+    IF erase_id IS NOT NULL AND erase_id ~ '^[0-9a-f]{32}$' AND erase_id = OLD.request_id THEN
+      RETURN OLD;
+    END IF;
+  END IF;
+  RAISE EXCEPTION '% is append-only: % not allowed (DELETE only for rows older than 30 days or via erase_trace_request)',
+    TG_TABLE_NAME, TG_OP;
+END $f$;
+
+-- 1. Daily retention purge, callable by the API's wo group. Fixed 30-day cutoff (matches the trigger); no parameters, no dynamic
+-- SQL, fully qualified names, pinned search_path (pg_temp last). Clears the erasure setting first so a caller-set value can never
+-- widen what this DEFINER function deletes (the WHERE clause limits it to expired rows in any case).
+CREATE FUNCTION vera_vjay.purge_expired_trace()
+  RETURNS TABLE (events_deleted bigint, requests_deleted bigint)
+  LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+  SET search_path = pg_catalog, pg_temp
+  SET TimeZone = 'UTC'  -- S1: same UTC cutoff as the trigger, whatever TimeZone the wo caller set
+  AS $f$
+DECLARE cutoff timestamptz := pg_catalog.now() - interval '30 days'; e bigint; r bigint;
+BEGIN
+  PERFORM pg_catalog.set_config('vera_trace.erase_request_id', '', true);
+  DELETE FROM vera_vjay.request_trace_events t WHERE t.created_at < cutoff;
+  GET DIAGNOSTICS e = ROW_COUNT;
+  DELETE FROM vera_vjay.request_trace_requests t WHERE t.created_at < cutoff;
+  GET DIAGNOSTICS r = ROW_COUNT;
+  events_deleted := e; requests_deleted := r;
+  RETURN NEXT;
+END $f$;
+COMMENT ON FUNCTION vera_vjay.purge_expired_trace() IS
+  'PRIV-D2-KIT-1105 (D2a): deletes request-trace rows older than 30 days. SECURITY DEFINER; EXECUTE vera_vjay_wo only.';
+
+-- 2. Erasure on request (owner only). Deletes events, then the request row, for one validated request id, regardless of age.
+CREATE FUNCTION vera_vjay.erase_trace_request(p_request_id text)
+  RETURNS TABLE (events_deleted bigint, requests_deleted bigint)
+  LANGUAGE plpgsql VOLATILE SECURITY INVOKER
+  SET search_path = pg_catalog, pg_temp
+  AS $f$
+DECLARE e bigint; r bigint;
+BEGIN
+  IF p_request_id IS NULL OR p_request_id !~ '^[0-9a-f]{32}$' THEN
+    RAISE EXCEPTION 'erase_trace_request: request id must be 32 lowercase hex characters';
+  END IF;
+  PERFORM pg_catalog.set_config('vera_trace.erase_request_id', p_request_id, true);
+  DELETE FROM vera_vjay.request_trace_events t WHERE t.request_id = p_request_id;
+  GET DIAGNOSTICS e = ROW_COUNT;
+  DELETE FROM vera_vjay.request_trace_requests t WHERE t.request_id = p_request_id;
+  GET DIAGNOSTICS r = ROW_COUNT;
+  PERFORM pg_catalog.set_config('vera_trace.erase_request_id', '', true);
+  events_deleted := e; requests_deleted := r;
+  RETURN NEXT;
+END $f$;
+COMMENT ON FUNCTION vera_vjay.erase_trace_request(text) IS
+  'PRIV-D2-KIT-1105 (D2a): erasure on request; deletes one request and its events regardless of age. Owner only (needs DELETE).';
+
+-- Grants: functions get EXECUTE for PUBLIC by default; remove it and anything default privileges may have added.
+REVOKE ALL ON FUNCTION vera_vjay.purge_expired_trace(), vera_vjay.erase_trace_request(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION vera_vjay.purge_expired_trace(), vera_vjay.erase_trace_request(text) FROM vera_vjay_wo, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION vera_vjay.purge_expired_trace(), vera_vjay.erase_trace_request(text) FROM %I, %I',
+                            current_setting('vera018.wo'), current_setting('vera018.ro'));
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    REVOKE ALL ON FUNCTION vera_vjay.purge_expired_trace(), vera_vjay.erase_trace_request(text) FROM vera_vjay_rw;
+  END IF;
+END $$;
+GRANT EXECUTE ON FUNCTION vera_vjay.purge_expired_trace() TO vera_vjay_wo;
+
+-- ACL assertion: purge -> only owner + vera_vjay_wo; erase -> only owner. A NULL proacl means default PUBLIC EXECUTE (fail).
+DO $$ BEGIN
+  IF (SELECT proacl IS NULL FROM pg_catalog.pg_proc WHERE oid = 'vera_vjay.purge_expired_trace()'::regprocedure)
+     OR (SELECT proacl IS NULL FROM pg_catalog.pg_proc WHERE oid = 'vera_vjay.erase_trace_request(text)'::regprocedure)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) a
+                 WHERE p.oid = 'vera_vjay.purge_expired_trace()'::regprocedure
+                   AND a.grantee <> p.proowner
+                   AND a.grantee <> (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) a
+                 WHERE p.oid = 'vera_vjay.erase_trace_request(text)'::regprocedure
+                   AND a.grantee <> p.proowner) THEN
+    RAISE EXCEPTION '018 ACL check failed: unexpected EXECUTE grantee on purge_expired_trace or erase_trace_request.';
+  END IF;
+END $$;
+
+-- Final checks against the actual logins and function attributes (a RAISE rolls everything back).
+DO $$
+DECLARE wo constant text := current_setting('vera018.wo'); ro constant text := current_setting('vera018.ro');
+BEGIN
+  IF NOT pg_catalog.has_function_privilege(wo, 'vera_vjay.purge_expired_trace()', 'EXECUTE') THEN
+    RAISE EXCEPTION '018 check failed: wo login lacks EXECUTE on purge_expired_trace().';
+  END IF;
+  IF pg_catalog.has_function_privilege(ro, 'vera_vjay.purge_expired_trace()', 'EXECUTE')
+     OR pg_catalog.has_function_privilege(wo, 'vera_vjay.erase_trace_request(text)', 'EXECUTE')
+     OR pg_catalog.has_function_privilege(ro, 'vera_vjay.erase_trace_request(text)', 'EXECUTE') THEN
+    RAISE EXCEPTION '018 check failed: an app login holds EXECUTE it must not hold.';
+  END IF;
+  IF pg_catalog.has_table_privilege(wo, 'vera_vjay.request_trace_requests', 'DELETE')
+     OR pg_catalog.has_table_privilege(wo, 'vera_vjay.request_trace_events', 'DELETE')
+     OR pg_catalog.has_table_privilege(ro, 'vera_vjay.request_trace_requests', 'DELETE')
+     OR pg_catalog.has_table_privilege(ro, 'vera_vjay.request_trace_events', 'DELETE') THEN
+    RAISE EXCEPTION '018 check failed: an app login holds DELETE on a trace table (015 invariant broken).';
+  END IF;
+  IF NOT (SELECT prosecdef FROM pg_catalog.pg_proc WHERE oid = 'vera_vjay.purge_expired_trace()'::regprocedure)
+     OR (SELECT prosecdef FROM pg_catalog.pg_proc WHERE oid = 'vera_vjay.erase_trace_request(text)'::regprocedure)
+     OR NOT (SELECT bool_and(EXISTS (SELECT 1 FROM pg_catalog.unnest(p.proconfig) c
+                                     WHERE c ~ '^search_path="?pg_catalog"?, ?"?pg_temp"?$'))
+              FROM pg_catalog.pg_proc p
+              WHERE p.oid IN ('vera_vjay.purge_expired_trace()'::regprocedure, 'vera_vjay.erase_trace_request(text)'::regprocedure,
+                              'vera_vjay.request_trace_append_only_trgfn()'::regprocedure)) THEN
+    RAISE EXCEPTION '018 check failed: SECURITY DEFINER/INVOKER flags or pinned search_path not as designed.';
+  END IF;
+END $$;
+
+COMMIT;

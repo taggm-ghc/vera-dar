@@ -21,6 +21,13 @@
     "connect_timeout_s": 2,
     "statement_timeout_ms": 2000
   },
+  "retention_purge": {
+    "_comment": "PURGE-WIRING-1105: daily in-app purge of trace rows older than 30 days by calling vera_vjay.purge_expired_trace() (migration 018, NOT applied; owner approval needed) on the wo account via vera/retention_purge.py from the trace writer thread. Ships OFF: while enabled is false no connection is opened. Needs db_sink.enabled. interval_s 86400 = once a day; initial_delay_s 300 = first run 5 min after the writer starts and the first retry delay (doubles on error, capped at interval_s); statement_timeout_ms 60000 because the flush engine's 2000 is too short for a bulk delete (PROVISIONAL: no live row counts exist; data that would change it: rows deleted and run time in the first week of 'vera_trace purge' log lines).",
+    "enabled": false,
+    "interval_s": 86400,
+    "initial_delay_s": 300,
+    "statement_timeout_ms": 60000
+  },
   "digest_store": {
     "_comment": "Latest corpus digest persisted in the DB (owner rule: runtime state lives in the DB). Table exists since migration 015 (2026-11-04, owner-reported) and this flag is ON since DEFERRED-DB-1104 (2026-11-04). When true, vera/corpus_description.py reuses the stored digest for the same corpus state and prompt version after a restart and saves each new digest (code + offline tests in place). Write: write-only account (INSERT). Read: read-only account (SELECT).",
     "enabled": true,

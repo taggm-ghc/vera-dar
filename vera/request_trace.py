@@ -40,6 +40,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
+from vera import retention_purge
+
 log = logging.getLogger("vera.trace")
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "request_trace.json"
 LOG_PREFIX = "vera_trace"
@@ -560,6 +562,7 @@ class _Writer:
         self._engine = None
         self._stop = threading.Event()
         self.inflight = 0
+        self._purger = retention_purge.Purger(CFG.get("retention_purge"), dcfg, factory, self._env)
         self.thread = threading.Thread(target=self._run, name="request-trace-writer", daemon=True)
         self.thread.start()
 
@@ -616,10 +619,17 @@ class _Writer:
                                   ":question, :outcome_branch, :message_code, :event_count, :dropped_events, "
                                   ":elapsed_ms)"), reqs)
 
+    def _purge_tick(self) -> None:
+        # PURGE-WIRING-1105: daily retention purge on this thread; no-op (no connection) while the flag is off.
+        def emit(ev: dict) -> None:
+            _log_line({"v": SCHEMA_VERSION, "request_id": None, "ts": _utc_iso(), **ev})
+        self._purger.tick(emit)
+
     def _run(self) -> None:
         interval = float(self.cfg.get("flush_interval_s") or 2)
         bmax = int(self.cfg.get("batch_max") or 200)
         while not self._stop.is_set():
+            self._purge_tick()
             try:
                 first = self.q.get(timeout=interval)
             except queue.Empty:

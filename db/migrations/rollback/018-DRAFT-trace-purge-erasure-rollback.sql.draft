@@ -1,0 +1,20 @@
+-- 018_vera_trace_purge_erasure ROLLBACK -- DRAFT, NOT EXECUTED. Owner-only, never expected to run; needs the owner's separate
+-- same-turn approval. NON-DESTRUCTIVE TO DATA: drops the two 018 functions and restores the 015 trigger function body verbatim
+-- (DELETE again allowed only for rows older than 30 days). No table or row is dropped.
+-- Effect: the in-app daily purge stops (the API's call then fails; set retention_purge.enabled=false first), and single-request
+-- erasure is no longer possible; fall back to the owner-run work/PERF-MISS-1104/trace/purge_trace.sh.
+-- Owner script: work/PRIV-D2-KIT-1105/rollback_018.sh (dry run by default).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+BEGIN;
+DROP FUNCTION IF EXISTS vera_vjay.erase_trace_request(text);
+DROP FUNCTION IF EXISTS vera_vjay.purge_expired_trace();
+-- Restore the 015 body exactly (work/PERF-MISS-1104 015-DRAFT-request-trace.sql.draft, pinned sha256 ac6e2559...).
+CREATE OR REPLACE FUNCTION vera_vjay.request_trace_append_only_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'DELETE' AND OLD.created_at < pg_catalog.now() - interval '30 days' THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION '% is append-only: % not allowed (DELETE only for rows older than 30 days)', TG_TABLE_NAME, TG_OP;
+END $f$;
+COMMIT;
