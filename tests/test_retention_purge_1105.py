@@ -177,3 +177,42 @@ def test_writer_flag_off_opens_no_purge_connection():
         assert all("60000" not in o for o in made)
     finally:
         rt.configure({"enabled": False})
+
+
+def _boot_cfg(on):
+    return {"enabled": True, "db_sink": {"enabled": True, "flush_interval_s": 0.02},
+            "retention_purge": {"enabled": on, "interval_s": 100, "initial_delay_s": 0.05, "statement_timeout_ms": 60000},
+            "limits": {}}
+
+
+def test_boot_flag_off_starts_nothing():
+    rt.configure(_boot_cfg(False), engine_factory=lambda url, **kw: Eng(), env=ENV)
+    try:
+        assert rt.start_purge_at_boot() is False and rt._WRITER is None
+    finally:
+        rt.configure({"enabled": False})
+
+
+def test_boot_flag_on_starts_once_purges_idle_and_request_start_is_noop():
+    purge_eng, made = Eng(), []
+
+    def factory(url, **kw):
+        made.append(kw["connect_args"]["options"])
+        return purge_eng
+    rt.configure(_boot_cfg(True), engine_factory=factory, env=ENV)
+    try:
+        t0 = time.monotonic()
+        assert rt.start_purge_at_boot() is True
+        assert time.monotonic() - t0 < 0.5                       # boot not blocked
+        w = rt._WRITER
+        assert w is not None and w.thread.is_alive()
+        assert rt.start_purge_at_boot() is False                 # second boot call: no second scheduler
+        rt._writer_put(("evt", {}))                              # first request: no-op start
+        assert rt._WRITER is w
+        assert rt._WRITER is w and w.thread.is_alive()           # same singleton, no second scheduler
+        end = time.monotonic() + 3                               # purge ran with no request traffic at all
+        while time.monotonic() < end and rp.PURGE_SQL not in purge_eng.calls:
+            time.sleep(0.02)
+        assert rp.PURGE_SQL in purge_eng.calls
+    finally:
+        rt.configure({"enabled": False})

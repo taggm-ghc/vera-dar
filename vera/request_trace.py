@@ -666,6 +666,25 @@ def _writer_put(item) -> None:
         log.warning("request_trace writer unavailable (%s)", type(exc).__name__)
 
 
+def start_purge_at_boot() -> bool:
+    """PURGE-BOOT-1105: when retention_purge.enabled and the DB sink is on, start the writer thread (which hosts the
+    daily purge scheduler) now, so an idle API still purges. Idempotent with the first-request start (same lock and
+    singleton). Non-blocking: only spawns a daemon thread. Flag off: nothing starts. Never raises."""
+    global _WRITER
+    try:
+        rp = CFG.get("retention_purge")
+        if not (isinstance(rp, dict) and rp.get("enabled") is True and db_enabled()):
+            return False
+        with _writer_lock:
+            if _WRITER is not None:
+                return False
+            _WRITER = _Writer(CFG.get("db_sink") or {}, _FACTORY_OVERRIDE["f"], _FACTORY_OVERRIDE["env"])
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("request_trace purge boot start failed (%s)", type(exc).__name__)
+        return False
+
+
 def drain_for_tests(timeout_s: float = 5.0) -> bool:
     """Wait until the writer queue is empty (tests only)."""
     w = _WRITER
@@ -679,3 +698,6 @@ def drain_for_tests(timeout_s: float = 5.0) -> bool:
                 return True
         time.sleep(0.02)
     return False
+
+
+start_purge_at_boot()  # PURGE-BOOT-1105: import-time start (main.py imports this module); no-op while the flag is off
