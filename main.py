@@ -626,8 +626,10 @@ def _after_response(admit_args, memory, result, question: str, discovery=None) -
             memory.write_discovery_note(list(result.candidates), question)
         if result.evidence is not None:  # TOPIC-TAGGING-1104: update-if-needed composites of the used documents (queued only)
             from vera import topic_tagging
-            topic_tagging.schedule_refresh([a.get("text_sha256") for a in (getattr(result.evidence, "admitted", ()) or ())
-                                            if isinstance(a, dict)])
+            # TT-R6 A1: FULL-DOCUMENT hashes (sources.provenance text_sha256), not the admitted passage hashes
+            topic_tagging.schedule_refresh([d.get("text_sha256") for d in
+                                            (getattr(result.evidence, "examined_full_documents", ()) or ())
+                                            if isinstance(d, dict)])
     except Exception as exc:  # noqa: BLE001
         logger.warning("post-response task failed (%s)", type(exc).__name__)
 

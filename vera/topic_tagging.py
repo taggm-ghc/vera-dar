@@ -23,6 +23,7 @@ config file alone applies (recorded fallback). Tagging also waits until the regi
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import math
@@ -352,6 +353,10 @@ SQL_EXHAUSTED = (f"SELECT st.source_id, st.span_id, (SELECT a.error_code FROM {S
 # LISTS-TO-DB 016 generic list tables (design: work/LISTS-TO-DB-1104/design.md section 2; view granted to ro). Payload {"value": x}.
 CONTROL_LIST = "topic_tagging.control"
 SQL_CONTROL_EXISTS = "SELECT to_regclass('vera_vjay.lstreg_active_items_v') IS NOT NULL"
+# TT-R6 C5: migration 017 applied (every table and view this module reads or writes); absent = clean pause, not store errors
+SQL_017_EXISTS = ("SELECT to_regclass('vera_vjay.toptag_chunk_topics') IS NOT NULL AND to_regclass('vera_vjay.toptag_document_topics') "
+                  "IS NOT NULL AND to_regclass('vera_vjay.toptag_attempts') IS NOT NULL AND "
+                  "to_regclass('vera_vjay.toptag_span_status_v') IS NOT NULL")
 SQL_CONTROL = "SELECT item_key, payload FROM vera_vjay.lstreg_active_items_v WHERE list_name = :ln"
 _CONTROL_TYPES = {"enabled": bool, "limits_confirmed": bool, "calls_per_minute": int, "tokens_per_minute": int,
                   "concurrency": int, "batch": int}
@@ -438,6 +443,12 @@ class PgTagStore:
             if not c.execute(self._t(SQL_CONTROL_EXISTS)).scalar():
                 return None
             return {str(k): v for k, v in c.execute(self._t(SQL_CONTROL), {"ln": CONTROL_LIST})}
+
+    def schema_ready(self) -> bool:
+        """TT-R6 C5: True when migration 017's tables and view exist (to_regclass, read only)."""
+        with self.ro.connect() as c:
+            c.execute(self._t("SET TRANSACTION READ ONLY"))
+            return bool(c.execute(self._t(SQL_017_EXISTS)).scalar())
 
     def active_keys(self) -> set:
         """ACTIVE registry keys through the registry module (R4: no registry SQL here). No loader = nothing usable (deny-all)."""
@@ -651,6 +662,10 @@ class Worker:
                                                 "restarts": 0})
 
     def __post_init__(self):
+        # TT-R6 A3: immutable copy of the FILE config; every control poll merges the DB rows onto a fresh copy of it, so a
+        # deleted override reverts to the file value at the next poll (no restart needed)
+        self.seed_cfg = copy.deepcopy(dict(self.cfg))
+        self.cfg = copy.deepcopy(self.seed_cfg)
         self.inbox = queue.Queue(maxsize=int(self.cfg["queue_max"]))
         self.pace = _Pace(int(self.cfg["calls_per_minute"]), self.clock, self.sleep, int(self.cfg.get("tokens_per_minute") or 0))
         self._stop = threading.Event()
@@ -677,13 +692,18 @@ class Worker:
             return self._paused
         self._control_at = now
         reader = getattr(self.store, "control", None)
+        ready = getattr(self.store, "schema_ready", None)
         try:
+            if callable(ready) and not ready():  # TT-R6 C5: 017 not applied: clean pause, no store errors
+                self._paused = "migration_017_absent"
+                logger.warning("topic tagging paused: migration 017 tables are absent")
+                return self._paused
             rows = reader() if callable(reader) else None
         except Exception as exc:  # noqa: BLE001
             self.stats["last_error"] = type(exc).__name__
             self._paused = "db_control_unreadable"
             return self._paused
-        eff, self._paused = apply_control(self.cfg, rows)
+        eff, self._paused = apply_control(copy.deepcopy(self.seed_cfg), rows)  # TT-R6 A3: never onto the merged cfg
         if (eff["calls_per_minute"], eff.get("tokens_per_minute")) != (self.cfg["calls_per_minute"], self.cfg.get("tokens_per_minute")):
             self.pace = _Pace(int(eff["calls_per_minute"]), self.clock, self.sleep, int(eff.get("tokens_per_minute") or 0))
         self.cfg = eff
@@ -954,11 +974,18 @@ def limits_ok(cfg: dict) -> bool:
     return cfg.get("limits_confirmed") is True and tpm > 0
 
 
+def registry_source_ok(mt_cfg: dict | None) -> bool:
+    """TT-R6 A2: the tagger's registry (micro_topic.load_registry) and the active keys / digest tree (micro_topic.registry_active_tree)
+    must come from the SAME source, the DB registry table. load_registry reads it only when registry_table.read_from_db is literally
+    true; otherwise it returns the JSON seed, which disagrees with the digest and keeps tagging below min_active_roots."""
+    return ((mt_cfg or {}).get("registry_table") or {}).get("read_from_db") is True
+
+
 def build_worker(cfg: dict, env=os.environ, engine_factory=None, on_documents_changed=None,
-                 require_limits: bool = True) -> Worker | None:
+                 require_limits: bool = True, micro_cfg: dict | None = None) -> Worker | None:
     """Worker over the deployed accounts, or None when disabled, the limits are unconfirmed (require_limits; the read-only --status
     path passes False) or an account URL is missing (logged by name only)."""
-    if not cfg.get("enabled"):
+    if cfg.get("enabled") is not True:  # TT-R6 C4: literal true only
         return None
     if require_limits and not limits_ok(cfg):
         logger.warning("topic tagging off: limits_confirmed is not true or tokens_per_minute is 0 (owner sets both after checking "
@@ -968,10 +995,14 @@ def build_worker(cfg: dict, env=os.environ, engine_factory=None, on_documents_ch
     if not ro_url or not wo_url:
         logger.warning("topic tagging off: %s or %s not set", cfg["db_url_env_ro"], cfg["db_url_env_wo"])
         return None
+    from vera import acq_config, micro_topic
+    mt_cfg = micro_cfg if micro_cfg is not None else ((acq_config.load_config() or {}).get("micro_topic") or {})
+    if require_limits and not registry_source_ok(mt_cfg):  # TT-R6 A2: tagging needs the DB registry (same source as the digest)
+        logger.warning("topic tagging off: micro_topic.registry_table.read_from_db is not true, so the tagger would read the "
+                       "JSON seed while the digest reads the DB registry (owner sets read_from_db with the T7/T8 gate)")
+        return None
     if engine_factory is None:
         from sqlalchemy import create_engine as engine_factory
-    from vera import acq_config, micro_topic
-    mt_cfg = (acq_config.load_config() or {}).get("micro_topic") or {}
     # R4 (orchestrator, T5 guard tests): registry reads go through vera.micro_topic, which delegates to the
     # registry module (its owner-checked READ ONLY row reader); this module holds no registry SQL.
     store = PgTagStore(engine_factory(ro_url, pool_pre_ping=True, hide_parameters=True),
@@ -1009,7 +1040,8 @@ def main(argv=None) -> int:
         return 2
     w = build_worker(cfg, require_limits=a.backfill)  # --status and --retag-inactive make no model call
     if w is None:
-        print("topic_tagging: database account URLs not set (names only):", cfg["db_url_env_ro"], cfg["db_url_env_wo"])
+        print("topic_tagging: no worker (see the logged reason: database account URLs", cfg["db_url_env_ro"], cfg["db_url_env_wo"],
+              "not set, or micro_topic.registry_table.read_from_db not true)")
         return 2
     print("status before:", json.dumps(w.store.counts(), sort_keys=True), flush=True)
     if a.status:

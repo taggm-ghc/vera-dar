@@ -688,3 +688,42 @@ def test_registry_block_is_reported_for_the_cli():
     w, _ = make_worker(store, epi_reply, min_active_roots=4)
     w.run_parts(store.pending(5))
     assert w.blocked == "registry_too_small"
+
+
+# ---- TT-R6-FIX-1105 (convergence round 6) ------------------------------------------------------------------------------------
+def test_r6_a3_deleted_control_override_reverts_to_file_value():
+    store = FakeStore([tt.Part(5, 50, "outbreak")])
+    rows = {"enabled": {"value": True}, "calls_per_minute": {"value": 3}, "concurrency": {"value": 7}}
+    store.control = lambda: dict(rows)
+    w, _ = make_worker(store, epi_reply)
+    assert w.control() is None and w.cfg["calls_per_minute"] == 3 and w.cfg["concurrency"] == 7
+    rows.pop("calls_per_minute")
+    rows.pop("concurrency")
+    w.test_clock[0] += 31
+    assert w.control() is None
+    assert w.cfg["calls_per_minute"] == CFG["calls_per_minute"] and w.cfg["concurrency"] == CFG["concurrency"]
+    assert abs(w.pace.gap - 60.0 / CFG["calls_per_minute"]) < 1e-9
+    assert w.seed_cfg["calls_per_minute"] == CFG["calls_per_minute"]  # the file seed is never mutated
+    rows["enabled"] = {"value": False}
+    w.test_clock[0] += 31
+    assert w.control() == "db_control_disabled"
+    rows.pop("enabled")
+    w.test_clock[0] += 31
+    assert w.control() is None and w.cfg["enabled"] is True
+
+
+def test_r6_c5_missing_017_pauses_cleanly():
+    store = FakeStore([tt.Part(5, 50, "outbreak")])
+    store.schema_ready = lambda: False
+    w, _ = make_worker(store, epi_reply)
+    w.tick()
+    assert not w.llm.calls and not store.status and w.health()["paused"] == "migration_017_absent"
+    assert "toptag_chunk_topics" in tt.SQL_017_EXISTS and "toptag_attempts" in tt.SQL_017_EXISTS
+
+
+def test_r6_c6_config_note_matches_bm25_fallback_value():
+    import pathlib
+    raw = json.loads((pathlib.Path(tt.__file__).resolve().parent.parent / "config" / "topic_tagging.json").read_text())
+    assert raw["bm25_fallback_after_failures"] == 0
+    assert "bm25_fallback_after_failures 3" not in raw["_note"]
+    assert all(raw[k] is False for k in ("enabled", "limits_confirmed", "propose_new_topics", "tag_chunkless_sources"))
