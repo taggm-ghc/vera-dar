@@ -184,3 +184,51 @@ def test_f7_single_flight_other_threads_do_not_block_on_refresh():
     release.set()
     t.join(5)
     assert res["first"] == ["db"] and eng.connects == 1
+
+
+# ---- LTD-TRACE-HUNK-1105: request_trace key_allowlist via the loader ----------------------------------------------
+
+TSTAGES = [("trace.key_allowlist",) + r[1:] for r in STAGES]
+
+
+def _rt_on(monkeypatch, eng):
+    from vera import request_trace as rt
+    orig = lt._fetch
+    monkeypatch.setattr(lt, "_CFG", dict(json.loads((ROOT / "config" / "list_tables.json").read_text()), read_from_db=True))
+    monkeypatch.setenv("VERA_DB_URL_RO", "postgresql://x/y")
+    monkeypatch.setattr(lt, "_fetch", lambda cfg, env, f: orig(cfg, env, lambda *a, **k: eng))
+    return rt
+
+
+def test_trace_flag_off_gives_config_allowlist():
+    from vera import request_trace as rt
+    assert rt._key_allowlist() is rt.CFG.get("key_allowlist")
+    for st, ent in rt.CFG["key_allowlist"].items():
+        if not isinstance(ent, dict):
+            continue
+        assert rt._stage_keys(st) == frozenset(k for k in ent["keys"] if isinstance(k, str))
+
+
+def test_trace_flag_on_gives_db_rows(monkeypatch):
+    eng = Eng([("trace.key_allowlist", "stage_keys", "replace", 1)],
+              TSTAGES + [("trace.key_allowlist", "s:p.n1", 3, 1, {"stage": "s", "parent": "p", "key": "n1"})])
+    rt = _rt_on(monkeypatch, eng)
+    assert rt._stage_keys("s") == frozenset({"k"})
+    assert rt._nested_keys("s", "p") == ["n1"] or set(rt._nested_keys("s", "p")) == {"n1"}
+
+
+def test_trace_missing_parent_gives_empty(monkeypatch):
+    seed = {"s": {"keys": ["k"], "reason": "r", "nested": {"p": ["n1"], "q": ["m1"]}}}
+    eng = Eng([("trace.key_allowlist", "stage_keys", "replace", 1)],
+              TSTAGES + [("trace.key_allowlist", "s:p.n1", 3, 1, {"stage": "s", "parent": "p", "key": "n1"})])
+    rt = _rt_on(monkeypatch, eng)
+    monkeypatch.setitem(rt.CFG, "key_allowlist", seed)
+    assert list(rt._nested_keys("s", "q") or []) == []
+    assert lt.get("trace.key_allowlist", seed)["s"]["nested"]["q"] == []
+
+
+def test_trace_db_error_falls_back_to_seed(monkeypatch):
+    eng = Eng([], [], boom=RuntimeError("down"))
+    rt = _rt_on(monkeypatch, eng)
+    assert rt._key_allowlist() == rt.CFG.get("key_allowlist")
+    assert rt._stage_keys("nonexistent") == frozenset()

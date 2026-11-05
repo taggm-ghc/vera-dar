@@ -133,9 +133,18 @@ def _key_ok(k) -> bool:
     return isinstance(k, str) and IDENT_RE.match(k) is not None and _DENY_KEY_RE.search(k) is None
 
 
+def _key_allowlist():
+    """LISTS-TO-DB-1104: trace.key_allowlist from the DB when enabled (per call, loader TTL cache), else CFG."""
+    try:
+        from vera import list_tables
+        return list_tables.get("trace.key_allowlist", CFG.get("key_allowlist"))
+    except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+        return CFG.get("key_allowlist")
+
+
 def _stage_keys(stage) -> frozenset:
     """Allowed top-level detail keys for `stage` from config key_allowlist (missing or malformed = none: fail closed)."""
-    al = CFG.get("key_allowlist")
+    al = _key_allowlist()
     ent = al.get(stage) if isinstance(al, dict) and isinstance(stage, str) else None
     ks = ent.get("keys") if isinstance(ent, dict) else None
     return frozenset(k for k in ks if isinstance(k, str)) if isinstance(ks, list) else frozenset()
@@ -144,7 +153,7 @@ def _stage_keys(stage) -> frozenset:
 def _nested_keys(stage, key):
     """Optional config `nested` map (stage entry): allowed keys inside the mapping stored under detail[key]. None = free
     identifier tokens (reason-code and phase-ms maps, whose keys are data)."""
-    al = CFG.get("key_allowlist")
+    al = _key_allowlist()
     ent = al.get(stage) if isinstance(al, dict) and isinstance(stage, str) else None
     nm = ent.get("nested") if isinstance(ent, dict) else None
     ks = nm.get(key) if isinstance(nm, dict) else None
