@@ -332,8 +332,9 @@ SHORT_NOTICE = ("VERA-DAR is an AI system and its answers may be wrong. Your que
                 "search services.")
 
 def short_notice_text() -> str:
-    """SHORT_NOTICE, plus the lane sentences while a lane flag is on (SD.1)."""
-    return SHORT_NOTICE + lane_third_party()
+    """SHORT_NOTICE only. HOTFIX-BLURB-1104 (owner 2026-11-04, "only the About page should have About-related
+    content"): the lane sentences, retention text and GDELT credit are in the full disclosure on About, never here."""
+    return SHORT_NOTICE
 
 
 ABOUT_LINKS = (("pages/about.py", "About: how VERA-DAR answers, licences, data"),

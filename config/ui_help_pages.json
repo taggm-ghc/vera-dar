@@ -38,7 +38,6 @@
         "heading": "What to ask",
         "paragraphs": [
           "Type one research question in your own words on the Ask VERA-DAR page, then press Enter.",
-          "Current coverage: {coverage}",
           "VERA-DAR does not write or fix code; it can point to published research instead. A question outside the collection may get a reading list instead of an answer. Some requests are refused for safety reasons."
         ]
       },
@@ -76,7 +75,7 @@
       {
         "heading": "Privacy",
         "paragraphs": [
-          "{privacy} The About page says which outside AI and search services receive your question and how they handle it."
+          "The About page says what VERA-DAR keeps from your question, for how long, and which outside AI and search services receive it."
         ]
       }
     ]

@@ -10,6 +10,7 @@ from vera import sources_sidebar
 logger = logging.getLogger(__name__)
 HELP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "ui_help_pages.json"
 _UNSET = object()
+CORPUS_HEADING = "What VERA-DAR draws on"
 FALLBACK = "This page is not available right now. The notice at the top of the page still applies."
 
 
@@ -86,7 +87,10 @@ def render_about(st, cfg=_UNSET) -> None:
     for heading, text in disclosure.disclosure_sections():
         st.subheader(heading)
         st.markdown(text)
-    sources_sidebar.render_corpus_notes(st, sources_sidebar._corpus(st))  # CORPUS-DIGEST-1104: moved from the sidebar
+    _corpus = sources_sidebar._corpus(st)
+    st.subheader(CORPUS_HEADING)  # HOTFIX-BLURB-1104: the corpus description is About-only (was the sidebar on every page)
+    sources_sidebar.render_corpus(st, _corpus)
+    sources_sidebar.render_corpus_notes(st, _corpus)  # CORPUS-DIGEST-1104: moved from the sidebar
     for sec in page.get("after_disclosure") or []:
         _section(st, sec)
     if live_stats_enabled():
@@ -101,6 +105,5 @@ def render_how_to_use(st, cfg=_UNSET) -> None:
         st.info(FALLBACK)
         return
     st.markdown(str(page.get("intro", "")))
-    coverage = sources_sidebar.coverage_text(sources_sidebar._corpus(st))
-    for sec in page.get("sections") or []:
-        _section(st, sec, coverage)
+    for sec in page.get("sections") or []:  # HOTFIX-BLURB-1104: no coverage/retention text here (About-only)
+        _section(st, sec)

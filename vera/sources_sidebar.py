@@ -305,8 +305,9 @@ def _about_link(st) -> None:
 
 
 def render_sources_sidebar(st) -> None:
-    with st.sidebar.expander("📚 What VERA-DAR draws on", expanded=False):
-        render_corpus(st, _corpus(st))
+    """HOTFIX-BLURB-1104 (owner rule "only the About page should have About-related content"): the corpus
+    description is About-only (vera.help_pages.render_about); every other page's sidebar holds only a link to About."""
+    with st.sidebar:
         _about_link(st)
 
 

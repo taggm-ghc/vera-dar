@@ -173,6 +173,8 @@ def _sidebar_text(monkeypatch, snap_path, notes=False):
 
     class Side:
         def expander(self, *a, **k): return Exp()
+        def __enter__(self): return self  # HOTFIX-BLURB-1104: the sidebar now holds only the About link
+        def __exit__(self, *a): return False
 
     class St:
         sidebar = Side()
@@ -598,7 +600,8 @@ def test_generated_coverage_renders_on_about_and_how_to_use(monkeypatch):
         st, cap = _capture()
         st.title = st.info = st.subheader = lambda *a, **k: None
         render(st)
-        assert any(sb.plain("Mostly epidemiology and public health.") in c and "overage" in c for c in cap), render.__name__
+        shown = any(sb.plain("Mostly epidemiology and public health.") in c and "overage" in c for c in cap)
+        assert shown is (render is help_pages.render_about), render.__name__  # HOTFIX-BLURB-1104: About only
     assert sb.corpus_notes_lines(_AGENTIC)[0] == r"**Current coverage:** Mostly epidemiology and public health\."
     # a coverage naming a backend is dropped, never shown
     assert sb.coverage_text({**_AGENTIC, "coverage": "Written by gpt-4.1-nano."}) is None

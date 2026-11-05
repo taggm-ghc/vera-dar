@@ -93,8 +93,9 @@ def test_how_to_use_page_renders_sections_and_uses_config_scope():
         assert h in heads, h
     t = _text(at)
     assert "{scope}" not in t and "{privacy}" not in t and "{" not in t
-    assert disclosure._NO_SAVE.strip() in _NORM(t) and disclosure._THIRD_PARTY.strip() not in _NORM(t)
-    assert "The About page says which outside AI and search services receive your question" in _NORM(t)
+    # HOTFIX-BLURB-1104: retention and third-party detail are About-only; How to use only points there
+    assert disclosure._NO_SAVE.strip() not in _NORM(t) and disclosure._THIRD_PARTY.strip() not in _NORM(t)
+    assert "The About page says what VERA-DAR keeps from your question" in _NORM(t)
 
 
 def test_unreadable_config_shows_fallback(tmp_path):
@@ -259,6 +260,7 @@ def test_live_stats_line_only_when_flag_on(tmp_path):
         def info(self, x): pass
         def subheader(self, x): pass
         def markdown(self, x): self.md.append(x)
+        def caption(self, x): pass  # HOTFIX-BLURB-1104: About renders the corpus description
     from vera import sources_sidebar as sb_mod
     orig_corpus = sb_mod._corpus
     for on in (False, True):

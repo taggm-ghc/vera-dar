@@ -10,7 +10,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -145,14 +145,6 @@
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
   ],
   [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
    "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
@@ -168,7 +160,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -303,14 +295,6 @@
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
   ],
   [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
    "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
@@ -326,7 +310,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -445,14 +429,6 @@
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
   ],
   [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
    "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
@@ -468,7 +444,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -599,14 +575,6 @@
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
   ],
   [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
    "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
@@ -622,7 +590,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -717,14 +685,6 @@
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
   ],
   [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
    "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
@@ -740,7 +700,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -825,14 +785,6 @@
   [
    "Caption",
    "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -850,7 +802,7 @@
   ],
   [
    "Caption",
-   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services. Search terms derived from your question may also be sent to GDELT (a news index). VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for your answer, and page text is not saved.\"\nis_caption: true\nelement_type: CAPTION\n"
+   "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",
@@ -935,14 +887,6 @@
   [
    "Caption",
    "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "Expander",
-   "label: \"📚 What VERA-DAR draws on\"\nexpanded: false\n"
-  ],
-  [
-   "Caption",
-   "body: \"**VERA-DAR\\'s corpus:** description not available right now.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
    "UnknownElement",

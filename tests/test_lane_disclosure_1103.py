@@ -42,8 +42,9 @@ def test_flag_errors_fail_closed(monkeypatch):
 
 def test_reporting_on(monkeypatch):
     _set(monkeypatch, False, True)
-    for t in _all()[:3]:
+    for t in _all()[:2]:
         assert SEARCH in t and PAGES in t
+    assert disclosure.short_notice_text() == disclosure.SHORT_NOTICE  # HOTFIX-BLURB-1104: lane text is About-only
     secs = dict(disclosure.disclosure_sections())
     assert LINK in secs["Your question and what is stored"]
     assert "Hacker News" not in " ".join(secs.values()) and "Algolia" not in " ".join(secs.values())
