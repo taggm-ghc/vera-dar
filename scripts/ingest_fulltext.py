@@ -194,7 +194,9 @@ def cmd_ingest(args, cfg, env=os.environ, engine_factory=None) -> int:
                   f"version={entry['version']} dar={json.dumps(entry.get('dar'), sort_keys=True)}")
         except fl.Refused as e:
             print(f"REFUSED {did} {e.code}: {e}")
-            report["items"].append({"id": did, "outcome": "refused", "code": e.code, "reason": str(e)})
+            n_obs = fl.record_licence_hold(eng_wo, e, cfg)  # LICENCE-ALLOWLIST-1104: unknown licence -> observations
+            report["items"].append({"id": did, "outcome": "refused", "code": e.code, "reason": str(e),
+                                    **({"licence_observations": n_obs} if n_obs else {})})
             rc = 2
             break
         except Exception as e:  # noqa: BLE001  stop on first failure, verbosely; never echo URLs

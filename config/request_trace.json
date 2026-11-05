@@ -8,8 +8,9 @@
     "include_question": false
   },
   "db_sink": {
-    "_comment": "ON since 2026-11-04: the owner applied migration 015 (db/migrations/pending/015-DRAFT-request-trace.sql.draft; owner-reported, verify output not seen by agents). App-path INSERT only, write-only account. request_trace.db_view (read through db_url_env_ro) exists and is tested but is NOT wired to the owner route in this increment (deferred; it also needs SELECT for vera_vjay_ro, which 015 does not grant).",
+    "_comment": "ON since 2026-11-04: the owner applied migration 015 (db/migrations/pending/015-DRAFT-request-trace.sql.draft; owner-reported, verify output not seen by agents). App-path INSERT only, write-only account. request_trace.db_view (read through db_url_env_ro) exists and is tested but is wired to the owner route only while db_sink.owner_route_db_view is true (default false, DEFERRED-DB-1104); 015 grants vera_vjay_ro no SELECT on the trace tables, so it needs an owner-read login named in the optional key db_url_env_owner_read (work/DEFERRED-DB-1104/grant_trace_read.sh).",
     "enabled": true,
+    "owner_route_db_view": false,
     "db_url_env_ro": "VERA_DB_URL_RO",
     "db_url_env_wo": "VERA_DB_URL_WO",
     "requests_table": "vera_vjay.request_trace_requests",
@@ -21,8 +22,8 @@
     "statement_timeout_ms": 2000
   },
   "digest_store": {
-    "_comment": "Latest corpus digest persisted in the DB (owner rule: runtime state lives in the DB). Table exists since migration 015 (2026-11-04, owner-reported) but this flag stays OFF for this increment (coordinator: deferred). When true, vera/corpus_description.py reuses the stored digest for the same corpus state and prompt version after a restart and saves each new digest (code + offline tests in place). Write: write-only account (INSERT). Read: read-only account (SELECT).",
-    "enabled": false,
+    "_comment": "Latest corpus digest persisted in the DB (owner rule: runtime state lives in the DB). Table exists since migration 015 (2026-11-04, owner-reported) and this flag is ON since DEFERRED-DB-1104 (2026-11-04). When true, vera/corpus_description.py reuses the stored digest for the same corpus state and prompt version after a restart and saves each new digest (code + offline tests in place). Write: write-only account (INSERT). Read: read-only account (SELECT).",
+    "enabled": true,
     "db_url_env_wo": "VERA_DB_URL_WO",
     "db_url_env_ro": "VERA_DB_URL_RO",
     "table": "vera_vjay.corpus_digest_state",

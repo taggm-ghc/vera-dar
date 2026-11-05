@@ -1,0 +1,729 @@
+{
+ "_doc": "LICENCE-ALLOWLIST-1104 seed (owner 2026-11-04: Deny All, option 1, policy approved). The DB table drafted in db/migrations/pending/016-DRAFT-licence-allowlist.sql.draft supersedes this file once applied; until then this file is the seed and fallback. Only status 'active' rows are used; storable=true ones allow storage, other active rows are recognised link-only licences. ND, no-educational-use and fee-only are rejected by config/licence_rules.json BEFORE this list is read. Matching: vera.licence_gate.norm_id on id/aliases, norm_url on urls. New rows arrive as status 'proposed' from scripts/licence_research.py and need owner or orchestrator approval (status -> active, approved_by set) before they are used. evidence_read_state records how much of the evidence page was actually read. A row with reject=true is a recognised rejecting licence (R1 reject classes): the gate rejects it.",
+ "schema_version": 1,
+ "config_version": "1104.1",
+ "entries": [
+  {
+   "id": "CC-BY-4.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by 4.0",
+    "cc-by-4.0",
+    "creative commons attribution 4.0 international",
+    "creative commons attribution 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-3.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by/3.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by 3.0",
+    "cc-by-3.0",
+    "creative commons attribution 3.0 unported",
+    "creative commons attribution 3.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by/3.0/"
+   ]
+  },
+  {
+   "id": "CC-BY",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by",
+    "by",
+    "by"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC-BY-SA-4.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": true,
+   "reason": "ShareAlike; attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-sa/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-sa 4.0",
+    "cc-by-sa-4.0",
+    "creative commons attribution-sharealike 4.0 international",
+    "creative commons attribution-sharealike 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-sa/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-SA-3.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": true,
+   "reason": "ShareAlike; attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-sa/3.0/legalcode.en",
+   "evidence_read_state": "INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-sa 3.0",
+    "cc-by-sa-3.0",
+    "creative commons attribution-sharealike 3.0 unported",
+    "creative commons attribution-sharealike 3.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-sa/3.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-SA",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": true,
+   "reason": "ShareAlike; attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-sa",
+    "by sa",
+    "by-sa"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC-BY-NC-4.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": false,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc 4.0",
+    "cc-by-nc-4.0",
+    "creative commons attribution-noncommercial 4.0 international",
+    "creative commons attribution-noncommercial 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nc/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-NC-3.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": false,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc/3.0/legalcode.en",
+   "evidence_read_state": "INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc 3.0",
+    "cc-by-nc-3.0",
+    "creative commons attribution-noncommercial 3.0 unported",
+    "creative commons attribution-noncommercial 3.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nc/3.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-NC",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": false,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc",
+    "by nc",
+    "by-nc"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC-BY-NC-SA-4.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": true,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc-sa 4.0",
+    "cc-by-nc-sa-4.0",
+    "creative commons attribution-noncommercial-sharealike 4.0 international",
+    "creative commons attribution-noncommercial-sharealike 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-NC-SA-3.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": true,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1)",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc-sa/3.0/legalcode.en",
+   "evidence_read_state": "INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc-sa 3.0",
+    "cc-by-nc-sa-3.0",
+    "creative commons attribution-noncommercial-sharealike 3.0 unported",
+    "creative commons attribution-noncommercial-sharealike 3.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nc-sa/3.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-NC-SA",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": true,
+   "nd": false,
+   "sa": true,
+   "reason": "NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc-sa",
+    "by nc sa",
+    "by-nc-sa"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC-BY-2.0",
+   "status": "proposed",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "PROPOSED: CC BY 2.0 believed attribution-only like 3.0/4.0; terms not fetched, needs approval",
+   "evidence_url": "https://creativecommons.org/licenses/by/2.0/legalcode.en",
+   "evidence_read_state": "UNVERIFIED: 2.x deed not fetched (R1); SPDX id listed on spdx.org",
+   "approved_by": null,
+   "aliases": [
+    "cc by 2.0",
+    "cc-by-2.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by/2.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-2.5",
+   "status": "proposed",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "PROPOSED: CC BY 2.5 believed attribution-only like 3.0/4.0; terms not fetched, needs approval",
+   "evidence_url": "https://creativecommons.org/licenses/by/2.5/legalcode.en",
+   "evidence_read_state": "UNVERIFIED: 2.x deed not fetched (R1); SPDX id listed on spdx.org",
+   "approved_by": null,
+   "aliases": [
+    "cc by 2.5",
+    "cc-by-2.5"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by/2.5/"
+   ]
+  },
+  {
+   "id": "CC-BY-ND-4.0",
+   "status": "active",
+   "storable": false,
+   "attribution_required": true,
+   "nc": false,
+   "nd": true,
+   "sa": false,
+   "reason": "ND: rejected by the R1 marker rule before the allowlist is consulted",
+   "evidence_url": "https://creativecommons.org/licenses/by-nd/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nd 4.0",
+    "cc-by-nd-4.0",
+    "creative commons attribution-noderivatives 4.0 international",
+    "creative commons attribution-noderivatives 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nd/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-ND",
+   "status": "active",
+   "storable": false,
+   "attribution_required": true,
+   "nc": false,
+   "nd": true,
+   "sa": false,
+   "reason": "ND: rejected by the R1 marker rule before the allowlist is consulted; version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by-nd/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nd",
+    "by nd"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC-BY-NC-ND-4.0",
+   "status": "active",
+   "storable": false,
+   "attribution_required": true,
+   "nc": true,
+   "nd": true,
+   "sa": false,
+   "reason": "ND: rejected by the R1 marker rule before the allowlist is consulted",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc-nd 4.0",
+    "cc-by-nc-nd-4.0",
+    "creative commons attribution-noncommercial-noderivatives 4.0 international",
+    "creative commons attribution-noncommercial-noderivatives 4.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/licenses/by-nc-nd/4.0/"
+   ]
+  },
+  {
+   "id": "CC-BY-NC-ND",
+   "status": "active",
+   "storable": false,
+   "attribution_required": true,
+   "nc": true,
+   "nd": true,
+   "sa": false,
+   "reason": "ND: rejected by the R1 marker rule before the allowlist is consulted; version not stated: family terms (NC/ND/SA) are the same in every version",
+   "evidence_url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc by-nc-nd",
+    "by nc nd"
+   ],
+   "urls": []
+  },
+  {
+   "id": "CC0-1.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": false,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "public-domain waiver; no conditions (owner option 1)",
+   "evidence_url": "https://creativecommons.org/publicdomain/zero/1.0/legalcode.en",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "cc0",
+    "cc zero",
+    "cc0 1.0 universal",
+    "CC0-1.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/publicdomain/zero/1.0/"
+   ]
+  },
+  {
+   "id": "CC-PDM-1.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": false,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "Public Domain Mark: work marked free of known copyright restrictions (owner option 1: public domain)",
+   "evidence_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R1)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "public domain mark",
+    "pdm",
+    "public domain mark 1.0"
+   ],
+   "urls": [
+    "https://creativecommons.org/publicdomain/mark/1.0/"
+   ]
+  },
+  {
+   "id": "LicenseRef-public-domain",
+   "status": "active",
+   "storable": true,
+   "attribution_required": false,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "declared public domain (owner option 1); cite the source as good practice",
+   "evidence_url": "https://www.usa.gov/government-copyright",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "public domain",
+    "public-domain",
+    "pd",
+    "publicdomain"
+   ],
+   "urls": []
+  },
+  {
+   "id": "LicenseRef-us-government-work",
+   "status": "active",
+   "storable": true,
+   "attribution_required": false,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "17 U.S.C. 105: no US copyright in works of the US Government (federal employees, official duties); contractor/grantee works and third-party images are NOT covered",
+   "evidence_url": "https://www.copyright.gov/title17/92chap1.html",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3; page truncated at 100k chars)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "us government work",
+    "us-gov-work",
+    "work of the us government",
+    "united states government work"
+   ],
+   "urls": []
+  },
+  {
+   "id": "OGL-UK-3.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "Open Government Licence v3.0: copy, publish, adapt, commercial or not, with attribution; excludes personal data, third-party rights, logos",
+   "evidence_url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "open government licence v3.0",
+    "ogl v3.0",
+    "ogl-uk-3.0",
+    "open government licence 3.0"
+   ],
+   "urls": [
+    "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"
+   ]
+  },
+  {
+   "id": "MIT",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "permissive open licence; keep the copyright and permission notice",
+   "evidence_url": "https://spdx.org/licenses/MIT.html",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "mit license",
+    "mit licence"
+   ],
+   "urls": [
+    "https://opensource.org/licenses/MIT"
+   ]
+  },
+  {
+   "id": "Apache-2.0",
+   "status": "active",
+   "storable": true,
+   "attribution_required": true,
+   "nc": false,
+   "nd": false,
+   "sa": false,
+   "reason": "permissive open licence; keep the licence and NOTICE, mark changes",
+   "evidence_url": "https://www.apache.org/licenses/LICENSE-2.0",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "apache 2.0",
+    "apache license 2.0",
+    "apache license, version 2.0"
+   ],
+   "urls": [
+    "https://www.apache.org/licenses/LICENSE-2.0"
+   ]
+  },
+  {
+   "id": "LicenseRef-all-rights-reserved",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "All rights reserved: no reuse grant; link-only (owner option 1)",
+   "evidence_url": null,
+   "evidence_read_state": "n/a (owner decision)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "all rights reserved",
+    "copyright all rights reserved",
+    "(c) all rights reserved",
+    "proprietary"
+   ],
+   "urls": []
+  },
+  {
+   "id": "LicenseRef-arxiv-nonexclusive-distrib-1.0",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "grants arXiv only a right to distribute; no third-party reuse grant",
+   "evidence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "arxiv nonexclusive distrib 1.0",
+    "arxiv.org perpetual non-exclusive license"
+   ],
+   "urls": [
+    "http://arxiv.org/licenses/nonexclusive-distrib/1.0/"
+   ]
+  },
+  {
+   "id": "LicenseRef-arxiv-assumed-1991-2003",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "arXiv assumed licence 1991-2003: functionally equivalent to the non-exclusive distribution licence",
+   "evidence_url": "https://info.arxiv.org/help/license/reuse.html",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3); metadata string not observed",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "arxiv assumed 1991 2003"
+   ],
+   "urls": [
+    "http://arxiv.org/licenses/assumed-1991-2003/"
+   ]
+  },
+  {
+   "id": "LicenseRef-elsevier-user-license",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": true,
+   "nd": true,
+   "sa": null,
+   "reason": "REJECT (ND class): Elsevier open-archive user licence forbids creating and distributing derivative works and redistribution; read and NC text-mine only",
+   "evidence_url": "https://www.elsevier.com/about/policies-and-standards/open-access-licenses",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R2)",
+   "approved_by": "coordinator 2026-11-04 (owner criteria: a no-derivatives term is ND, R1 reject class)",
+   "aliases": [
+    "elsevier user license",
+    "elsevier user licence",
+    "elsevier open archive"
+   ],
+   "urls": [
+    "https://www.elsevier.com/open-access/userlicense/1.0/"
+   ],
+   "url_note": "urls value from background knowledge (Crossref form), not observed in this research; recognition only (link-only either way)",
+   "reject": true
+  },
+  {
+   "id": "LicenseRef-elsevier-tdm-1.0",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": true,
+   "nd": true,
+   "sa": null,
+   "reason": "subscriber TDM licence: forbids retaining or redistributing the dataset and derivatives",
+   "evidence_url": "https://www.elsevier.com/tdm/userlicense/1.0/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R2)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "elsevier tdm",
+    "elsevier tdm user license"
+   ],
+   "urls": [
+    "https://www.elsevier.com/tdm/userlicense/1.0/"
+   ]
+  },
+  {
+   "id": "LicenseRef-springernature-tdm",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": true,
+   "nd": null,
+   "sa": null,
+   "reason": "subscriber TDM terms: store on a secure internal server without third-party access; OA articles carry their own CC licence",
+   "evidence_url": "https://www.springernature.com/gp/researchers/text-and-data-mining",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R2)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "springer tdm",
+    "springer nature tdm"
+   ],
+   "urls": [
+    "https://www.springernature.com/gp/researchers/text-and-data-mining",
+    "https://www.springer.com/tdm"
+   ]
+  },
+  {
+   "id": "LicenseRef-wiley-tdm",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": true,
+   "nd": null,
+   "sa": null,
+   "reason": "Wiley TDM licence: NC scholarly TDM via token; reproduction rights reserved; canonical page 403 to the fetcher",
+   "evidence_url": "http://onlinelibrary.wiley.com/termsAndConditions#vor",
+   "evidence_read_state": "SUMMARY (search snippet / mirror) 2026-11-04 (research-reader R2)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "wiley tdm",
+    "wiley tdm license"
+   ],
+   "urls": [
+    "http://onlinelibrary.wiley.com/termsAndConditions"
+   ]
+  },
+  {
+   "id": "LicenseRef-acs-authorchoice",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "standard ACS AuthorChoice: access-and-use permission, no redistribution grant seen; terms page 403 (ACS CC articles carry CC URLs)",
+   "evidence_url": "https://pubs.acs.org/page/policy/authorchoice_termsofuse.html",
+   "evidence_read_state": "SUMMARY (search snippet) 2026-11-04 (research-reader R2); canonical page not read",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "acs authorchoice",
+    "acs author choice",
+    "acs authorchoice usage agreement"
+   ],
+   "urls": [
+    "https://pubs.acs.org/page/policy/authorchoice_termsofuse.html"
+   ]
+  },
+  {
+   "id": "LicenseRef-pmc-author-manuscript",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "PMC/NIH author manuscript: free to read and text-mine; no reuse licence (authors keep copyright)",
+   "evidence_url": "https://pmc.ncbi.nlm.nih.gov/about/copyright/",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "author manuscript",
+    "nihms",
+    "pmc author manuscript"
+   ],
+   "urls": []
+  },
+  {
+   "id": "LicenseRef-generic-open-access",
+   "status": "active",
+   "storable": false,
+   "attribution_required": null,
+   "nc": null,
+   "nd": null,
+   "sa": null,
+   "reason": "bare 'open access' / 'free to read' label: not a licence; per-article licence must be checked (PMC/Europe PMC OA subset terms vary per article)",
+   "evidence_url": "https://europepmc.org/downloads/openaccess",
+   "evidence_read_state": "READ-SUMMARIZER 2026-11-04 (research-reader R3)",
+   "approved_by": "owner 2026-11-04 (Deny All option 1; policy approved)",
+   "aliases": [
+    "open access",
+    "open-access",
+    "free to read",
+    "oa",
+    "free"
+   ],
+   "urls": []
+  }
+ ]
+}

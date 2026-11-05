@@ -60,7 +60,9 @@ def licence_observation_rows(cand: dict, run_id=None, now=None) -> list[dict]:
             "url_sha256": hashlib.sha256(url.encode("utf-8", "replace")).hexdigest(),
             "url": url if decision == "allow" else None, "doc_ref": cand.get("doi"), "family": None,
             "nc": None, "nd": None, "confidence": None, "decision": decision,
-            "native_decision": cand.get("gate_a_decision"), "reason_code": f"licence_{cand.get('licence_decision') or 'unknown'}",
+            "native_decision": cand.get("gate_a_decision"),
+            # LICENCE-ALLOWLIST-1104: the gate's specific code (licence_unknown = the licence research queue), else legacy
+            "reason_code": cand.get("licence_reason_code") or f"licence_{cand.get('licence_decision') or 'unknown'}",
             "config_version": None, "run_id": None if run_id is None else str(run_id), "candidate_id": None}
     out = []
     for scope in ("metadata", "content"):

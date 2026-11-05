@@ -720,8 +720,11 @@ def _trace_header(exc: BaseException, tid: str | None) -> None:
 def trace_request(trace_id: str):
     """OD-1104-TRACE (c): owner-key only. One recent trace (question, events, outcome) from the in-process window
     (config limits.recent_ttl_s); older traces are in the DB (owner script show_trace.sh) once migration 015 is on.
-    INTEGRATE-1104: the DB-backed read (request_trace.db_view) is deferred to the next increment."""
-    view = request_trace.recent(trace_id)
+    DEFERRED-DB-1104: when db_sink.owner_route_db_view is on, the DB read (request_trace.db_view) is tried first and the
+    window is the fallback (db_view returns None on any error, e.g. no SELECT grant)."""
+    view = request_trace.db_view(trace_id) if request_trace.owner_db_view_enabled() else None
+    if view is None:
+        view = request_trace.recent(trace_id)
     if view is None:
         raise HTTPException(status_code=404, detail="Trace not found (expired, unknown or tracing off)")
     return view

@@ -8,6 +8,8 @@
   "db_statement_timeout_ms": 15000,
   "marker": "vera-dar-auto-acquire-v1",
   "question_text": "VERA-DAR automatic acquisition (open-access full text; visitor question not stored)",
+  "licence_hold_observations_enabled": true,
+  "_licence_hold_observations_note": "LICENCE-ALLOWLIST-1104 (coordinator 2026-11-04): an UNKNOWN licence held on the full-text path is appended to licence_observations (reason_code licence_unknown) via the write-only account before the hold; false = not recorded.",
   "triggers": {
     "on_decline_reasons_prefix": [
       "llm_out:",

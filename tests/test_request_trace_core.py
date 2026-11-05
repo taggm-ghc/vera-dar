@@ -83,7 +83,7 @@ def lines(caplog):
 def test_shipped_config_defaults():
     assert BASE["enabled"] is True and BASE["log_sink"]["enabled"] is True
     # INTEGRATE-1104 round 2: migration 015 applied by the owner 2026-11-04 -> both DB flags ship on
-    assert BASE["db_sink"]["enabled"] is True and BASE["digest_store"]["enabled"] is False  # digest: deferred
+    assert BASE["db_sink"]["enabled"] is True and BASE["digest_store"]["enabled"] is True  # DEFERRED-DB-1104: on
     assert BASE["db_sink"]["db_url_env_wo"] == "VERA_DB_URL_WO"
     assert "_calibration" in BASE
 
@@ -310,7 +310,7 @@ def test_recent_window_for_owner_route():
 def test_digest_store_off_by_default_and_never_raises():
     eng, made = FakeEngine(), []
     off = {**BASE["digest_store"], "enabled": False}  # INTEGRATE-1104: ships on since 015; the off path is still pinned
-    assert digest_store.enabled() is False and digest_store.enabled(off) is False
+    assert digest_store.enabled() is True and digest_store.enabled(off) is False
     assert digest_store.save({"summary": "s"}, "k1", cfg=off, env={"VERA_DB_URL_WO": "x"}, engine_factory=factory_for(eng, made)) is False
     assert digest_store.load_latest(cfg=off, env={"VERA_DB_URL_RO": "x"}, engine_factory=factory_for(eng, made)) is None
     assert made == []

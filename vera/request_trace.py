@@ -366,6 +366,12 @@ def recent(trace_id) -> dict | None:
         return None
 
 
+def owner_db_view_enabled() -> bool:
+    """DEFERRED-DB-1104: db_sink.owner_route_db_view (default false) gates the owner route's DB read."""
+    ds = CFG.get("db_sink")
+    return db_enabled() and isinstance(ds, dict) and ds.get("owner_route_db_view") is True
+
+
 def db_view(trace_id, *, env=None, engine_factory=None) -> dict | None:
     """INTEGRATE-1104 (owner: migration 015 applied): the owner route's durable read. One trace (request row + its
     events in seq order) from the db_sink tables through the read-only account (db_sink.db_url_env_ro). None when the
@@ -376,7 +382,9 @@ def db_view(trace_id, *, env=None, engine_factory=None) -> dict | None:
             return None
         dcfg = CFG.get("db_sink") or {}
         env = env if env is not None else (_FACTORY_OVERRIDE.get("env") or os.environ)
-        url = (env.get(str(dcfg.get("db_url_env_ro") or "VERA_DB_URL_RO")) or "").strip()
+        # DEFERRED-DB-1104: an optional dedicated owner-read login (db_url_env_owner_read) wins over the ro login, which
+        # migration 015 does not allow to SELECT these tables
+        url = (env.get(str(dcfg.get("db_url_env_owner_read") or dcfg.get("db_url_env_ro") or "VERA_DB_URL_RO")) or "").strip()
         if not url:
             return None
         rt = str(dcfg.get("requests_table") or "vera_vjay.request_trace_requests")

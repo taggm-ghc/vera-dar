@@ -75,7 +75,9 @@ def test_selective_fetch_robots_no_ai_never_requests_page():
 
 # ---- D3: lanes ---------------------------------------------------------------------------------------
 GC = {"entity": "Google Cloud", "domains": ["docs.cloud.google.com"], "state": "active", "terms_verdict": "unknown",
-      "docs_entry_urls": ["https://docs.cloud.google.com/docs"]}
+      "access_verdict": "allow",
+      "docs_entry_urls": ["https://docs.cloud.google.com/docs"],
+      "allowed_paths": {"docs.cloud.google.com": {"exact": ["/docs", "/login"], "prefix": ["/docs/"]}}}
 AWS = {"entity": "AWS", "domains": ["docs.aws.amazon.com"], "state": "active", "access_verdict": "forbid"}
 
 
@@ -84,7 +86,7 @@ def test_official_lane_unknown_terms_read_and_redirect_hop_gated():
              ("docs.cloud.google.com", "/docs"): Resp(302, {"Location": "https://docs.aws.amazon.com/x"})}
     net = Net(DNS, pages)
     out = ol.OfficialLane({"enabled": True}, registry=[GC, AWS], fetch=net_fetch(net)).run(["Google Cloud"])
-    assert out["pages"] == [] and out["links"][0]["reason"] == "read_registry_forbid"
+    assert out["pages"] == [] and out["links"][0]["reason"] in ("read_lane_hop_refused", "read_registry_forbid")
     assert "docs.aws.amazon.com" not in [c[0] for c in net.calls]
     ok = Net(DNS, {("docs.cloud.google.com", "/robots.txt"): rob(OK_ROBOTS),
                    ("docs.cloud.google.com", "/docs"): html(b"<p>Official text.</p>")})

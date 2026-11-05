@@ -19,7 +19,7 @@ RID = "0123456789abcdef0123456789abcdef"
 
 def test_shipped_flags_on():
     cfg = json.loads((ROOT / "config" / "request_trace.json").read_text())
-    assert cfg["db_sink"]["enabled"] is True and cfg["digest_store"]["enabled"] is False  # digest persistence deferred
+    assert cfg["db_sink"]["enabled"] is True and cfg["digest_store"]["enabled"] is True  # DEFERRED-DB-1104: on
     assert cfg["db_sink"]["db_url_env_ro"] == "VERA_DB_URL_RO"
     assert cfg["log_sink"]["include_question"] is False  # unchanged (orchestrator-accepted)
 
@@ -123,8 +123,9 @@ def test_db_view_error_or_off_returns_none(trace_on):
     assert rt.db_view(RID, engine_factory=lambda *a, **k: Eng()) is None
 
 
-def test_owner_route_still_reads_the_window_only(monkeypatch):  # DB read deferred to the next increment
+def test_owner_route_reads_the_window_only_while_flag_off(monkeypatch):  # DEFERRED-DB-1104: flag default off
     import main
+    assert rt.owner_db_view_enabled() is False
     monkeypatch.setattr(main.request_trace, "db_view", lambda tid: pytest.fail("DB read wired early"))
     monkeypatch.setattr(main.request_trace, "recent", lambda tid: {"source": "window"})
     assert main.trace_request(RID) == {"source": "window"}
@@ -172,10 +173,16 @@ def test_restart_reuses_the_stored_digest_without_an_llm_call(describer):
     assert out["summary"] == "STORED" and describer.calls == [] and describer.eng.inserts == []
 
 
-def test_stale_stored_digest_is_ignored(describer):
+def test_stale_stored_digest_is_shown_then_refreshed_in_background(describer):  # DEFERRED-DB-1104
     describer.eng.digest_rows = [Row({"cache_key": "6|old|pv1", "digest": json.dumps({"summary": "OLD"}),
                                       "created_at": "x"})]
-    assert describer.d.current(llm=None)["summary"] == "S" and describer.calls == [1]
+    assert describer.d.current(llm=None)["summary"] == "OLD"
+    import time
+    for _ in range(100):
+        if describer.calls:
+            break
+        time.sleep(0.02)
+    assert describer.calls == [1]
 
 
 def test_flag_off_never_touches_the_store(describer):

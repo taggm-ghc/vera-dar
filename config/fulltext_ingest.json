@@ -2,6 +2,8 @@
   "_doc": "DARINT G1/G2/G5 full-text ingest (vera/fulltext_loader.py, vera/jats_text.py, scripts/ingest_fulltext.py). Every kind, filter and limit used by the loader lives here; nothing is hard-coded. Env var NAMES only (values are never read except to build engines, and never printed). domain_hint in a manifest is informational and is never read by the loader.",
   "_calibration_note": "min_fulltext_chars and min_body_to_abstract_ratio are uncalibrated placeholders chosen to separate an abstract (typically 1-3k chars) from a full article (typically 20k+ chars); calibrate on the nine fetched demo texts before the production run (threshold calibration rule).",
   "stored_text_kind": "full_text",
+  "licence_hold_observations_enabled": true,
+  "_licence_hold_observations_note": "LICENCE-ALLOWLIST-1104 (coordinator 2026-11-04): an UNKNOWN licence held on the full-text path is appended to licence_observations (reason_code licence_unknown) via the write-only account before the hold; false = not recorded.",
   "accepted_formats": [
     "jats-xml",
     "html"

@@ -1,7 +1,7 @@
 {
  "_doc": "NONASK-1103 S1b seed/fallback for the proposed vera_entity_registry table (db/migrations/pending/014-DRAFT). Owner-curated; exact hosts only (no wildcards); only state=active rows count. App code never writes rows; no user text becomes a row.",
- "_terms_note": "Owner decision 2026-11-03 (honour site terms): terms_verdict is allow | links_only | unknown, with terms_evidence pointing at the evidence record. Pages are fetched ONLY where terms_verdict=allow AND robots.txt permits automated access; unknown or missing means links_only. Seeded from work/NONASK-1103/entity-hosts-evidence.md (Google Cloud allow, host docs.cloud.google.com since cloud.google.com/docs 301-redirects there; AWS, Nvidia, Azure links_only).",
- "_calibration_note": "Curated list, not a tuned number. Seed rows 2026-11-03 are proposals pending owner review: hosts are exact but UNVERIFIED against live sites at this date. match_case=true on common-word names (Azure, Google, AWS) so lowercase everyday use does not match; exclude_next lists lowercase words after which the name is not the entity (e.g. 'Amazon rainforest').",
+ "_terms_note": "SUPERSEDED 2026-11-04 in part: the sentence 'unknown or missing means links_only' is the R-042 wording; R-050 (read unless restricted) governs, see _verification_note. Original: Owner decision 2026-11-03 (honour site terms): terms_verdict is allow | links_only | unknown, with terms_evidence pointing at the evidence record. Pages are fetched ONLY where terms_verdict=allow AND robots.txt permits automated access; unknown or missing means links_only. Seeded from work/NONASK-1103/entity-hosts-evidence.md (Google Cloud allow, host docs.cloud.google.com since cloud.google.com/docs 301-redirects there; AWS, Nvidia, Azure links_only).",
+ "_calibration_note": "Curated list, not a tuned number. 2026-11-04 (OD-OL-1): the 10 active rows were verified against live sites by OFFICIAL-REGISTRY-VERIFY-1104 (work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md) and signed off by the owner; each row carries `verification`. Domain identity rests on each entity's own pages (no WHOIS); ai.txt/noai mostly unchecked. Draft and suspended rows remain unverified proposals. match_case=true on common-word names (Azure, Google, AWS) so lowercase everyday use does not match; exclude_next lists lowercase words after which the name is not the entity (e.g. 'Amazon rainforest'). Entity-detection precision (gate G8) is UNCALIBRATED.",
  "entities": [
   {
    "entity": "AWS",
@@ -21,7 +21,7 @@
     "https://docs.aws.amazon.com/"
    ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "AWS",
     "Amazon Web Services"
@@ -45,13 +45,28 @@
     "amazon rainforest"
    ],
    "terms_verdict": "links_only",
-   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar data mining/robots)",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar data mining/robots)",
    "access_verdict": "forbid",
-   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar robots/data mining)",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar robots/data mining)",
    "derivative_verdict": "allow",
    "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Docs CC BY-SA 4.0)",
    "ingest_verdict": "forbid",
-   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining)"
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining)",
+   "avoid_paths": [
+    "*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also disallows old versioned paths.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1; work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining, robots)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Google Cloud",
@@ -78,7 +93,7 @@
     "https://docs.cloud.google.com/docs"
    ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "Google Cloud",
     "GCP",
@@ -107,13 +122,56 @@
     "just google"
    ],
    "terms_verdict": "allow",
-   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
    "access_verdict": "allow",
-   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)",
    "derivative_verdict": "allow",
    "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)",
    "ingest_verdict": "allow",
-   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)"
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)",
+   "avoid_paths": [
+    "/cpp/docs/reference/*",
+    "/dotnet/docs/reference/*",
+    "/go/docs/reference/*",
+    "/java/docs/reference/*",
+    "/nodejs/docs/reference/*",
+    "/php/docs/reference/*",
+    "/python/docs/reference/*",
+    "/ruby/docs/reference/*",
+    "*authuser=*",
+    "*getstarted=*",
+    "/walkthroughs/*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): robots.txt * group (paraphrase). The table's exceptions (/latest/, /help/ under the reference paths) are NOT modelled: the whole reference subtree is avoided (more restrictive).",
+   "read_conditions": "Attribution required (CC BY 4.0).",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "read-permitted",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2; https://docs.cloud.google.com/docs (footer: CC BY 4.0, code Apache 2.0)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "docs.cloud.google.com": {
+     "exact": [
+      "/docs"
+     ],
+     "prefix": [
+      "/docs/"
+     ]
+    },
+    "cloud.google.com": {
+     "exact": [
+      "/docs"
+     ],
+     "prefix": [
+      "/docs/"
+     ]
+    }
+   },
+   "allowed_paths_note": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2: robots * has no Disallow on /docs; /docs/ excludes the /<lang>/docs/reference/ trees by construction; no query strings (authuser=, getstarted= never match).",
+   "path_case_insensitive": false
   },
   {
    "entity": "Nvidia",
@@ -133,7 +191,7 @@
     "https://docs.nvidia.com/"
    ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [],
    "parents": [],
    "context_terms": [
@@ -150,13 +208,28 @@
    ],
    "generic_phrases": [],
    "terms_verdict": "links_only",
-   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
    "access_verdict": "forbid",
-   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)",
    "derivative_verdict": "forbid",
    "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial internal use only)",
    "ingest_verdict": "forbid",
-   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial use only)"
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial use only)",
+   "avoid_paths": [
+    "*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only): terms conflict with the robots invitation; restrictive wins.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3; work/NONASK-1103/entity-hosts-evidence.md (Terms s.3.2(f) bar robots/scrapers)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Azure",
@@ -180,7 +253,7 @@
     "https://learn.microsoft.com/azure/"
    ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "Microsoft Azure"
    ],
@@ -208,13 +281,28 @@
     "azure coast"
    ],
    "terms_verdict": "links_only",
-   "terms_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial; no copying)",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial; no copying)",
    "access_verdict": "forbid",
-   "access_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial use)",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial use)",
    "derivative_verdict": "forbid",
    "derivative_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying or derivatives without consent)",
    "ingest_verdict": "forbid",
-   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying)"
+   "ingest_evidence": "work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying)",
+   "avoid_paths": [
+    "*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots disallows search params only.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4; work/NONASK-1103/entity-hosts-evidence.md (personal non-commercial use; no copy)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Kubernetes",
@@ -311,9 +399,11 @@
    "domains": [
     "docs.snowflake.com"
    ],
-   "docs_entry_urls": [],
+   "docs_entry_urls": [
+    "https://docs.snowflake.com/"
+   ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [],
    "parents": [
     "Snowflake Inc"
@@ -332,14 +422,33 @@
     "snowflake effect",
     "snowflake pattern"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
-   "derivative_verdict": "unknown",
-   "derivative_evidence": null,
-   "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1)",
+   "derivative_verdict": "forbid",
+   "derivative_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1) (terms bar copying)",
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1) (link-only row)",
+   "avoid_paths": [
+    "*",
+    "/*sql-reference/commands-*",
+    "/*INCLUDE/*",
+    "/*DRAFT/*",
+    "/*PREVIEW/*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also blocks sql-reference/commands-*, INCLUDE/, DRAFT/, PREVIEW/.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5; https://www.snowflake.com/legal/snowflake-site-terms/ (s.5(i) bars scrape/copy)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Kafka",
@@ -354,9 +463,11 @@
    "domains": [
     "kafka.apache.org"
    ],
-   "docs_entry_urls": [],
+   "docs_entry_urls": [
+    "https://kafka.apache.org/"
+   ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "Apache Kafka"
    ],
@@ -378,14 +489,37 @@
     "franz kafka",
     "kafkaesque"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
-   "derivative_verdict": "unknown",
-   "derivative_evidence": null,
+   "terms_verdict": "allow",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1)",
+   "access_verdict": "allow",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1) (Apache License 2.0)",
    "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)",
+   "avoid_paths": [],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): none: robots.txt * group has no Disallow.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "read-permitted",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6; https://kafka.apache.org/ (footer: Apache License v2)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "kafka.apache.org": {
+     "exact": [
+      "/",
+      "/documentation"
+     ],
+     "prefix": [
+      "/documentation/"
+     ]
+    }
+   },
+   "allowed_paths_note": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6: robots * has no Disallow and the site is Apache License 2.0; the home page (verified) plus the /documentation/ tree. The /documentation/ path layout was not fetched in verification: an absent path only means nothing is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Pulsar",
@@ -400,9 +534,11 @@
    "domains": [
     "pulsar.apache.org"
    ],
-   "docs_entry_urls": [],
+   "docs_entry_urls": [
+    "https://pulsar.apache.org/"
+   ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "Apache Pulsar"
    ],
@@ -424,14 +560,46 @@
     "millisecond pulsar",
     "radio pulsar"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
-   "derivative_verdict": "unknown",
-   "derivative_evidence": null,
+   "terms_verdict": "allow",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1)",
+   "access_verdict": "allow",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1) (Apache License 2.0)",
    "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)",
+   "avoid_paths": [
+    "/docs/2.*",
+    "/docs/3.*",
+    "/docs/4.0.*",
+    "/docs/4.1.*",
+    "/api/client/*",
+    "/api/admin/*",
+    "/api/pulsar-functions/*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): robots.txt * group (paraphrase): versioned /docs/ 2.2.0 to 4.1.x and the /api/ trees are disallowed (only 4.0.x, 4.2.x, next indexable). Modelled more restrictively: all /docs/2.*, /docs/3.*, /docs/4.0.*, /docs/4.1.* and the whole /api/client|admin|pulsar-functions trees. Note (SEC3 S3-4): the evidence row says only 4.0.x, 4.2.x and next are indexable, so allowed_paths permits /docs/4.0.x/; the /docs/4.0.* entry in avoid_paths is the earlier, broader reading (documentation only). robots.txt decides live.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "read-permitted",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7; https://pulsar.apache.org/ (footer: Apache License 2.0)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "pulsar.apache.org": {
+     "exact": [
+      "/"
+     ],
+     "prefix": [
+      "/docs/4.0.x/",
+      "/docs/4.2.x/",
+      "/docs/next/"
+     ]
+    }
+   },
+   "allowed_paths_note": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7: only the 4.0.x, 4.2.x and next doc trees are indexable per robots (paraphrase); robots.txt is still enforced per fetch, so a disallowed tree is refused there too.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Teams",
@@ -448,7 +616,7 @@
    ],
    "docs_entry_urls": [],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [
     "Microsoft Teams"
    ],
@@ -469,14 +637,33 @@
     "team members",
     "teams of"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
-   "derivative_verdict": "unknown",
-   "derivative_evidence": null,
-   "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1)",
+   "derivative_verdict": "forbid",
+   "derivative_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1) (terms bar copying)",
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1) (link-only row)",
+   "avoid_paths": [
+    "*",
+    "/search/*",
+    "/api/*",
+    "/support/*",
+    "*signin*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also bars /search/, /api/, /support/, signin. No docs entry URL: no Teams-specific page was verified, so the row gives no link until the owner adds one.",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8; https://www.microsoft.com/en-us/legal/terms-of-use (may not copy; personal non-commercial)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   },
   {
    "entity": "Slack",
@@ -489,11 +676,14 @@
    "exclude_next": [],
    "domains": [
     "api.slack.com",
-    "slack.com"
+    "slack.com",
+    "docs.slack.dev"
    ],
-   "docs_entry_urls": [],
+   "docs_entry_urls": [
+    "https://docs.slack.dev/"
+   ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [],
    "parents": [
     "Salesforce"
@@ -511,14 +701,45 @@
     "cut some slack",
     "slack variable"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
+   "terms_verdict": "allow",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1)",
+   "access_verdict": "allow",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1)",
    "derivative_verdict": "unknown",
-   "derivative_evidence": null,
+   "derivative_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1) (no derivative terms read; unknown = allowed for answer use, R-049)",
    "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)",
+   "avoid_paths": [
+    "/messages*",
+    "/oauth*",
+    "/openid*",
+    "/files-pri/*",
+    "/help/requests/new*",
+    "/careers/*",
+    "/join/shared_invite*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): slack.com / api.slack.com robots.txt * group. docs.slack.dev robots: Allow: /.",
+   "read_conditions": "Docs pages only; never use the Slack API. Honor crawl-delay (public_fetch enforces it). Unique UA VERA-research-fetcher and robots enforced (AUP s.6.A.XXIV condition).",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "read-permitted",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9; https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/legal/Agreements/policies/ExternalFacing_Services_Policy.pdf (AUP s.6.A.XXIV)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "docs.slack.dev": {
+     "exact": [
+      "/"
+     ],
+     "prefix": [
+      "/"
+     ]
+    }
+   },
+   "allowed_paths_note": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9: docs.slack.dev robots `Allow: /` and AUP s.6.A.XXIV permits identified, robots-honouring reads; slack.com and api.slack.com get no allowed path (api.slack.com 302s to docs.slack.dev, which is then checked on its own).",
+   "path_case_insensitive": false
   },
   {
    "entity": "Zoom",
@@ -530,11 +751,13 @@
    "match_case": true,
    "exclude_next": [],
    "domains": [
-    "support.zoom.us"
+    "support.zoom.com"
    ],
-   "docs_entry_urls": [],
+   "docs_entry_urls": [
+    "https://support.zoom.com/hc"
+   ],
    "state": "active",
-   "version": 1,
+   "version": 2,
    "full_aliases": [],
    "parents": [
     "Zoom Video"
@@ -552,16 +775,35 @@
     "zoom out",
     "zoom level"
    ],
-   "terms_verdict": "unknown",
-   "terms_evidence": null,
-   "access_verdict": "unknown",
-   "access_evidence": null,
+   "terms_verdict": "links_only",
+   "terms_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1)",
+   "access_verdict": "forbid",
+   "access_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1)",
    "derivative_verdict": "unknown",
    "derivative_evidence": null,
-   "ingest_verdict": "unknown",
-   "ingest_evidence": null
+   "ingest_verdict": "forbid",
+   "ingest_evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1) (link-only row)",
+   "avoid_paths": [
+    "*",
+    "/search*",
+    "/hc/*/search*",
+    "/hc*?id=*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also bars /search, /hc/*/search*, /hc*?id= (kb_article_view).",
+   "verification": {
+    "status": "verified",
+    "date": "2026-11-04",
+    "verdict": "link-only",
+    "decision": "OD-OL-1 (owner, 2026-11-04)",
+    "evidence": "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10; https://www.zoom.com/en/trust/terms/ (ToS s.8); support.zoom.us 301 -> support.zoom.com",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {},
+   "allowed_paths_note": "link-only row: no path is read.",
+   "path_case_insensitive": false
   }
  ],
  "_context_note": "NONASK-1103 stream S disambiguation: full_aliases count alone; otherwise a name or parent hit counts only with a context term (curated list, whole-word, phrases allowed) and after generic_phrases are removed. No numeric threshold. Curated data, UNCALIBRATED; extend from reviewed false hits.",
- "_permissions_note": "Owner decisions R-049/R-050 (2026-11-03): three per-source gates read by vera/source_permissions.py. access_verdict (read), derivative_verdict (use for the answer), ingest_verdict (store), each allow | forbid | unknown with *_evidence. Unknown = allowed for read and use; ingest also needs an explicit storage licence. forbid on access means the host is never fetched. terms_verdict/terms_evidence (I-SL) are unchanged. Seeded from work/NONASK-1103/entity-hosts-evidence.md."
+ "_permissions_note": "Owner decisions R-049/R-050 (2026-11-03): three per-source gates read by vera/source_permissions.py. access_verdict (read), derivative_verdict (use for the answer), ingest_verdict (store), each allow | forbid | unknown with *_evidence. Unknown = allowed for read and use; ingest also needs an explicit storage licence. forbid on access means the host is never fetched. terms_verdict/terms_evidence (I-SL) are unchanged. Seeded from work/NONASK-1103/entity-hosts-evidence.md.",
+ "_verification_note": "OD-OL-1 (owner, 2026-11-04) signed off the registry table at work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md: read-permitted 4 (Google Cloud, Kafka, Pulsar, Slack incl. docs.slack.dev), link-only 6 (AWS, Nvidia, Azure, Snowflake, Teams, Zoom on support.zoom.com), exclude 0. Owner qualification, verbatim: \"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use.\" Deny All (owner standard 2026-11-04): allowed_paths per exact host ({exact:[...], prefix:[... ending '/']}) is the only path rule; a path is read only if, after normalisation (percent-decode once; deny anything still encoded, non-ASCII, a query, ';', backslash, empty/'.'/'..' segments), it equals an exact entry or starts with a prefix. Everything else is link-only. path_case_insensitive=false: paths compare case-sensitively. avoid_paths is kept as documentation only. robots.txt is still enforced per hop."
 }

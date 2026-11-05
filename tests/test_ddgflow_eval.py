@@ -4,7 +4,7 @@ OFFLINE, in process: POST /ask through main.app (FastAPI TestClient) over the RO
 ONLY external I/O: the DuckDuckGo Lite HTTP response (but its rows come from the REAL DDG-lite HTML parser,
 DuckDuckGoLiteProvider._parse_one over synthetic lite.duckduckgo.com result HTML), the OpenAlex/arXiv provider calls,
 the Europe PMC transport, the full-text http_get (Europe PMC JATS, arxiv.org), a landing-page GET and its public-address
-check, and the answer model / claim checker (_pipeline_support rig). Licence gate (owner-applied v4: sha256 0747e62c...,
+check, and the answer model / claim checker (_pipeline_support rig). Licence gate (owner-applied v5 LICENCE-ALLOWLIST-1104: sha256 2ae9c248...,
 rules 4e194967...), injection, relevance, admission, caps, DB/socket guards (fail loud) run unchanged. No background
 worker is started (queue inspected only). Every scenario prints one `DDGFLOW-OBS <json>` line (run with -s) that the
 FLOW-EVAL.md tables are built from.
@@ -153,7 +153,7 @@ def by(body, key, val):
 def test_00_owner_gate_files_and_flags():
     lg = hashlib.sha256((ROOT / "vera" / "licence_gate.py").read_bytes()).hexdigest()
     lr = hashlib.sha256((ROOT / "config" / "licence_rules.json").read_bytes()).hexdigest()
-    assert lg.startswith("0747e62c") and lr.startswith("4e194967"), (lg, lr)
+    assert lg.startswith("2ae9c248") and lr.startswith("4e194967"), (lg, lr)
     acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text(encoding="utf-8"))
     assert acq["search"]["ddg_first"]["enabled"] is True and acq["arxiv_route"]["enabled"] is True
     reg = json.loads((ROOT / "config" / "portal_registry.json").read_text(encoding="utf-8"))

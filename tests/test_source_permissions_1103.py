@@ -146,12 +146,12 @@ def test_registry_seed_values():
     for name, (a, d, i) in exp.items():
         e = rows[name]
         assert (e["access_verdict"], e["derivative_verdict"], e["ingest_verdict"]) == (a, d, i)
-        assert all(e[k + "_evidence"] and "entity-hosts-evidence.md" in e[k + "_evidence"]
+        assert all(e[k + "_evidence"] and ("entity-hosts-evidence.md" in e[k + "_evidence"] or "OFFICIAL-REGISTRY-VERIFY-1104" in e[k + "_evidence"])
                    for k in ("access", "derivative", "ingest"))
     for name, e in rows.items():
         for k in ("access", "derivative", "ingest"):
             assert k + "_verdict" in e and k + "_evidence" in e
-            if name not in exp:
+            if name not in exp and e.get("state") != "active":
                 assert e[k + "_verdict"] == "unknown" and e[k + "_evidence"] is None
     assert rows["AWS"]["terms_verdict"] == "links_only" and rows["Google Cloud"]["terms_verdict"] == "allow"
     assert "_permissions_note" in REG

@@ -702,6 +702,7 @@ class CorpusDescriber:
         self.cfg, self.env, self.clock = cfg, env, clock
         self.engine_factory = engine_factory
         self._engine, self._cache, self._last_good, self._retry_at = None, None, None, 0.0
+        self._refreshing = False
         self.last_trace: list[dict] = []
         self._lock = threading.Lock()
         # INTEGRATE-1104 (owner: migration 015 applied): DB persistence of the latest digest, ONLY behind
@@ -714,18 +715,49 @@ class CorpusDescriber:
         return _re.sub(r"[^A-Za-z0-9_.:|+-]", "_", k)[:200]
 
     def _stored(self, overview: dict):
-        """The persisted digest for exactly this corpus state and prompt version, else None. Never raises."""
+        """(digest, exact): the persisted digest merged with the live overview, and whether it is for exactly this corpus
+        state and prompt version (exact) or an older one (stale: DEFERRED-DB-1104, shown at once while a background refresh
+        runs). (None, False) when off, empty or on any error. Never raises."""
         try:
             from vera import digest_store
             if not digest_store.enabled(self.store_cfg):
-                return None
+                return None, False
             row = digest_store.load_latest(cfg=self.store_cfg, env=self.env, engine_factory=self.store_engine_factory)
-            if not row or row.get("cache_key") != self._store_key(overview):
-                return None
+            if not row or not isinstance(row.get("digest"), dict) or not row["digest"].get("summary"):
+                return None, False
             d = row["digest"]
-            return {**d, **overview} if d.get("prompt_version") == self.cfg["prompt_version"] else None
+            exact = row.get("cache_key") == self._store_key(overview) and d.get("prompt_version") == self.cfg["prompt_version"]
+            return {**d, **overview}, exact
         except Exception:  # noqa: BLE001
-            return None
+            return None, False
+
+    def _start_refresh(self, overview: dict, profile, llm) -> None:
+        """Owner rule (non-blocking spawned steps): regenerate in an independent daemon thread; the page never waits.
+        One refresh at a time; a failure only sets the retry cooldown (the stored digest stays on show)."""
+        self._refreshing = True  # caller holds self._lock
+
+        def run():
+            try:
+                now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                out = run_digest_pipeline(overview, profile, llm, self.cfg)
+                digest = {**overview, "summary": out["summary"], "topics": out["topics"], "coverage": out["coverage"],
+                          "topic_shares": out["topic_shares"], "summary_source": CHECKED, "summary_generated_at": now,
+                          "summary_model": out["model"], "prompt_version": self.cfg["prompt_version"]}
+                with self._lock:
+                    self.last_trace = out["trace"]
+                    self._cache = self._last_good = digest
+                self._persist(overview, digest)
+            except Exception as exc:  # noqa: BLE001
+                with self._lock:
+                    self.last_trace = getattr(exc, "trace", [])
+                    wait = float(self.cfg.get("echo_retry_s", 3600)) if isinstance(exc, TitleEchoError) else float(self.cfg["retry_s"])
+                    self._retry_at = self.clock() + wait
+                logger.warning("corpus digest background refresh failed (%s)", type(exc).__name__)
+            finally:
+                with self._lock:
+                    self._refreshing = False
+
+        threading.Thread(target=run, name="digest-refresh", daemon=True).start()
 
     def _persist(self, overview: dict, digest: dict) -> None:
         try:
@@ -765,10 +797,17 @@ class CorpusDescriber:
         with self._lock:
             if self._fresh(overview):
                 return self._cache
-            stored = self._stored(overview) if overview["source_count"] else None  # restart: reuse, no LLM call
-            if stored is not None:
+            if self._refreshing and self._last_good and overview["source_count"]:  # refresh running: no DB read per view
+                return {**self._last_good, **overview}
+            stored, exact = self._stored(overview) if overview["source_count"] else (None, False)  # restart: reuse
+            if stored is not None and exact:
                 self._cache = self._last_good = stored
                 return self._cache
+            if stored is not None:  # older stored digest: show it now, regenerate in the background (DEFERRED-DB-1104)
+                self._last_good = stored
+                if not self._refreshing and self.clock() >= self._retry_at:
+                    self._start_refresh(overview, profile, llm)
+                return stored
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             if overview["source_count"] and self.clock() >= self._retry_at:
                 try:

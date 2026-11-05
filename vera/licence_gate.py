@@ -8,6 +8,16 @@ markers only; page text is never scanned. The GOVERNING licence depends on what 
   * anything else (full content): the CONTENT licence governs. A metadata licence (e.g. CC0 on an abstract)
     is NEVER permission to store content.
 A rejecting marker on either record rejects. arXiv e-print URLs (pdf, html, e-print) are rejected outright.
+
+DENY-ALL ALLOWLIST (LICENCE-ALLOWLIST-1104, owner 2026-11-04: "the human standard is Deny All; Approve specified
+exceptions-from-Deny"; audit item E1). After the reject markers, the governing licence is STORABLE ("allow") only when
+its normalised id (or, when the id is unrecognised, its normalised licence URL) matches an ACTIVE allowlist entry with
+storable=true in config/licence_allowlist.json (the seed; a DB table is drafted, not applied). Recognised but
+non-storable licences ("All rights reserved", publisher user/TDM licences, the arXiv distribution licence) and
+unknown licences are link-only ("defer", never stored). Entries in any status other than "active" (e.g. "proposed"
+rows written by scripts/licence_research.py) are never used. Plain NC stays accepted (R1); the three reject classes
+stay rejected. Every decision carries a reason code (licence_reason_code) that the /ask path writes to
+licence_observations, so unknown licence strings are counted there (reason_code 'licence_unknown').
 """
 from __future__ import annotations
 
@@ -17,6 +27,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 RULES_PATH = Path(__file__).resolve().parent.parent / "config" / "licence_rules.json"
+ALLOWLIST_PATH = Path(__file__).resolve().parent.parent / "config" / "licence_allowlist.json"
+ACTIVE = "active"
+# Reason codes (licence_observations.reason_code). 'licence_unknown' rows are the research queue.
+RC_ALLOW, RC_REJECT, RC_ARXIV = "licence_allow", "licence_reject", "licence_reject_arxiv_url"
+RC_MISSING, RC_UNKNOWN, RC_NOT_STORABLE = "licence_missing", "licence_unknown", "licence_not_storable"
+RC_CONFLICT, RC_HOST = "licence_id_url_conflict", "licence_host_unnormalisable"
 
 # Why: arXiv's terms forbid storing/serving e-prints without permission; only /abs/ pages may be stored.
 ARXIV_HOSTS = ("arxiv.org", "www.arxiv.org", "export.arxiv.org")
@@ -110,34 +126,126 @@ def reject_reason(licence_id: str | None, licence_url: str | None = None) -> str
     return None
 
 
-def licence_decision(c: dict) -> tuple[str, str]:
+_CC_LICENCE_TEXT = re.compile(
+    r"(?:cc|creative-commons)-(by|by-sa|by-nc|by-nc-sa|by-nd|by-nc-nd)(?:-(\d\.\d))?"
+    r"(?:-(?:international|unported|generic))?(?:-(?:license|licence|public-license))?")
+_CC_ZERO_TEXT = re.compile(r"(?:cc-?0|cc-zero|creative-commons-zero)(?:-(1\.0))?(?:-universal)?")
+
+
+def norm_id(text: str | None) -> str:
+    """Normalised licence id: lowercase, runs of anything but [a-z0-9.] become '-', '-' trimmed. A CC id written in any
+    common spelling ("CC BY 4.0", "CC_BY_NC_4.0", "Creative Commons Attribution-NonCommercial 4.0 International" is NOT
+    parsed: only the cc-<family>[-<version>] forms) becomes "cc-<family>[-<version>]" ; CC0 forms become "cc0-1.0"."""
+    t = re.sub(r"(?<![0-9])\.|\.(?![0-9])", "-", str(text or "").lower())  # keep only version dots (4.0)
+    t = re.sub(r"[^a-z0-9.]+", "-", t).strip("-.")
+    m = _CC_LICENCE_TEXT.fullmatch(t)
+    if m:
+        return f"cc-{m.group(1)}" + (f"-{m.group(2)}" if m.group(2) else "")
+    if _CC_ZERO_TEXT.fullmatch(t):
+        return "cc0-1.0"
+    return t
+
+
+def norm_url(url: str | None) -> str:
+    """Normalised licence URL: lowercase host+path without scheme, 'www.', query, fragment, trailing '/', and a final
+    legalcode[.xx] / deed[.xx] segment. "" when it is not an http(s) URL."""
+    s = str(url or "").strip().lower()
+    if not re.match(r"https?://", s):
+        return ""
+    sp = urlsplit(s)
+    host = (sp.hostname or "").removeprefix("www.")
+    path = re.sub(r"/(?:legalcode|deed)(?:\.[a-z\-]+)?/?$", "", sp.path).rstrip("/")
+    return f"{host}{path}" if host else ""
+
+
+def _load_allowlist(path: Path | None = None) -> tuple[dict, dict]:
+    """(by_alias, by_url) over ACTIVE entries only. Fails verbosely: a gate without its allowlist must not run."""
+    p = path or ALLOWLIST_PATH
+    try:
+        entries = json.loads(p.read_text(encoding="utf-8"))["entries"]
+        by_alias, by_url = {}, {}
+        for e in entries:
+            if e.get("status") != ACTIVE:
+                continue  # deny-all: proposed / suspended / retired rows are never used
+            for a in [e["id"], *e.get("aliases", [])]:
+                by_alias.setdefault(norm_id(a), e)
+            for u in e.get("urls", []):
+                by_url.setdefault(norm_url(u), e)
+        by_alias.pop("", None)
+        by_url.pop("", None)
+        return by_alias, by_url
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise RuntimeError(f"licence allowlist unreadable at {p}: {e!r}") from e
+
+
+def _terms(e: dict) -> tuple:
+    return tuple(e.get(k) for k in ("storable", "nc", "nd", "sa"))
+
+
+def match_entry(licence_id: str | None, licence_url: str | None = None, path: Path | None = None):
+    """(entry_or_None, how): how is 'id', 'url', 'conflict' or 'none'. The id governs; the URL is used only when the id
+    is unrecognised. An id and URL that resolve to entries with different terms (storable, NC, ND, SA) are a conflict
+    (no entry)."""
+    by_alias, by_url = _load_allowlist(path)
+    e_id = by_alias.get(norm_id(licence_id)) if licence_id else None
+    e_url = by_url.get(norm_url(licence_url)) if licence_url else None
+    if e_id and e_url and _terms(e_id) != _terms(e_url):  # e.g. "CC BY" + a .../by/4.0/ URL agree; BY-SA + BY do not
+        return None, "conflict"
+    if e_id:
+        return e_id, "id"
+    if e_url:
+        return e_url, "url"
+    return None, "none"
+
+
+def licence_status(c: dict) -> tuple[str, str, str]:
+    """(decision, rationale, reason_code). decision is 'allow', 'defer' (link-only / held) or 'reject'."""
     try:
         sp = urlsplit(c.get("url", ""))
         host = _arxiv_host(sp)
     except Exception as e:  # noqa: BLE001  F-1 (C1): a host that cannot be normalised is held, never allowed
-        return "defer", f"URL host could not be normalised ({type(e).__name__}): held for review (F-1, fail closed)"
+        return ("defer", f"URL host could not be normalised ({type(e).__name__}): held for review (F-1, fail closed)",
+                RC_HOST)
     # F-1 (C2): any arXiv host whose RAW netloc is not exactly the normalised host (port incl. :443, userinfo, case,
     # trailing dot, Unicode dots) is refused on every path, /abs/ included.
     if host in ARXIV_HOSTS and (sp.netloc != host or (
             not sp.path.startswith(ARXIV_ALLOWED_PREFIX) and not _arxiv_html_cc_ok(c, sp))):
-        return "reject", "arXiv e-print/PDF/HTML is never stored (arXiv terms); only the abstract page"
+        return "reject", "arXiv e-print/PDF/HTML is never stored (arXiv terms); only the abstract page", RC_ARXIV
     lic = c.get("licence") or {}
     meta, content = lic.get("metadata") or {}, lic.get("content") or {}
     for rec in (meta, content):
         why = reject_reason(rec.get("id"), rec.get("url")) if (rec.get("id") or rec.get("url")) else None
         if why:
-            return "reject", f"licence {rec.get('id') or rec.get('url')} is {why} (R1 rule)"
+            return "reject", f"licence {rec.get('id') or rec.get('url')} is {why} (R1 rule)", RC_REJECT
     governing = meta if c.get("stored_text_kind") == METADATA_KIND else content
     if not governing.get("id"):
-        return "defer", "no declared licence for the stored text: held for review (#63)"
-    return "allow", f"licence {governing['id']}"
+        return "defer", "no declared licence for the stored text: held for review (#63)", RC_MISSING
+    entry, how = match_entry(governing.get("id"), governing.get("url"))
+    if how == "conflict":
+        return ("defer", f"licence id {governing['id']} and URL name different licences: link-only (deny-all)",
+                RC_CONFLICT)
+    if entry is None:
+        return ("defer", f"licence {governing['id']} is not on the allowlist: link-only, queued for licence research "
+                         "(deny-all)", RC_UNKNOWN)
+    if entry.get("reject") is True:  # a recognised licence in an R1 reject class (e.g. a no-derivatives term)
+        return "reject", f"licence {governing['id']} ({entry['id']}) is rejected: {entry.get('reason')}", RC_REJECT
+    if entry.get("storable") is not True:
+        return ("defer", f"licence {governing['id']} ({entry['id']}) is not storable: link-only (deny-all)",
+                RC_NOT_STORABLE)
+    return "allow", f"licence {governing['id']}", RC_ALLOW  # rationale text unchanged (downstream contract)
+
+
+def licence_decision(c: dict) -> tuple[str, str]:
+    d, why, _code = licence_status(c)
+    return d, why
 
 
 def apply_licence_gate(scored: list[dict]) -> list[dict]:
     """Mutates and returns `scored`. A Gate A reject is kept; otherwise reject/defer override a fetch."""
     for c in scored:
-        d, why = licence_decision(c)
+        d, why, code = licence_status(c)
         c["licence_decision"] = d
+        c["licence_reason_code"] = code
         if d != "allow" and c.get("gate_a_decision") != "reject":
             c["gate_a_decision"] = d
         c["gate_a_rationale"] = f"{c.get('gate_a_rationale', '')} Licence: {why}."

@@ -1210,8 +1210,10 @@ def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl
                                                 min_spans=acq_config.answer_min_spans(acq))  # ONE-SPAN-1021
             return idx, plan, None
         except aa._Stop as e:
+            aa.record_licence_hold(deps.store, e)  # LICENCE-ALLOWLIST-1104: unknown licence -> observations; never raises
             return idx, None, e.code
         except fl.Refused as e:
+            aa.record_licence_hold(deps.store, e)  # LICENCE-ALLOWLIST-1104: unknown licence -> observations; never raises
             return idx, None, str(e.code)
         except Exception as e:  # noqa: BLE001
             return idx, None, aa.error_code(acq, e)

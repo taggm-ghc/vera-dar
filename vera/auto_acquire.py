@@ -561,6 +561,18 @@ class _Stop(Exception):
         super().__init__(code)
         self.code = code
         self.n_adm = n_adm  # ONE-SPAN-1021: qualifying passages counted by the relevance gate (0 before it ran)
+        self.licence_obs = None  # LICENCE-ALLOWLIST-1104: set for an unknown-licence hold (record_licence_hold)
+
+
+def _unknown_licence_obs(lic: str, doi, pmcid) -> dict | None:
+    """LICENCE-ALLOWLIST-1104: the gated candidate for a declared licence the licence gate does not know (reason code
+    licence_unknown), else None (rejects, recognised link-only licences and missing licences are not research items)."""
+    from vera.licence_gate import RC_UNKNOWN, apply_licence_gate
+    url = f"https://doi.org/{doi}" if doi else f"https://europepmc.org/article/PMC/{pmcid}"
+    cand = {"url": url, "doi": doi, "stored_text_kind": "full_text", "gate_a_decision": None, "gate_a_rationale": "",
+            "licence": {"metadata": {}, "content": {"id": lic, "url": None, "source": "europepmc record"}}}
+    apply_licence_gate([cand])
+    return cand if cand.get("licence_reason_code") == RC_UNKNOWN else None
 
 
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
@@ -705,7 +717,10 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
     lic = str(r.get("license") or "").strip()
     lic_url = acq_config.licence_url_for(lic, cfg)
     if not lic or not lic_url:
-        raise _Stop(acq_config.reason(cfg, "no_licence"))  # unclear licence = hold (never stored)
+        st = _Stop(acq_config.reason(cfg, "no_licence"))  # unclear licence = hold (never stored)
+        if lic:
+            st.licence_obs = _unknown_licence_obs(lic, doi, pmcid)
+        raise st
     book = r.get("bookOrReportDetails") if isinstance(r.get("bookOrReportDetails"), dict) else {}
     return {"pmcid": pmcid, "licence": lic, "licence_url": lic_url, "title": " ".join(str(r.get("title") or "").split()),
             "authors": " ".join(str(r.get("authorString") or "").split()),
@@ -1323,10 +1338,12 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 count(acq_config.reason(cfg, "stored"))
             except _Stop as e:
                 count(e.code)
+                record_licence_hold(deps.store, e)  # LICENCE-ALLOWLIST-1104: unknown licence -> observations
                 if e.n_adm >= acq_config.answer_min_spans(cfg):  # would answer inline; below persist min: not stored
                     tel["answer_eligible"] += 1
             except fl.Refused as e:
                 count(str(e.code))
+                record_licence_hold(deps.store, e)
             except Exception as e:  # noqa: BLE001
                 count(error_code(cfg, e))
         if stored and deps.refresh is not None:
@@ -1405,6 +1422,18 @@ class RoLookup:
         return csid, ver, has_fd, bool(h)
 
 
+def record_licence_hold(store, exc) -> int:
+    """LICENCE-ALLOWLIST-1104: record an unknown-licence hold through the store's write engine, if the store has one
+    (WoStore). Never raises."""
+    rec = getattr(store, "record_licence_hold", None)
+    if rec is None or getattr(exc, "licence_obs", None) is None:
+        return 0
+    try:
+        return int(rec(exc) or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class WoStore:
     """Write-only account (vera_pipeline_wo): plain INSERT ... RETURNING in savepoints, one transaction per document
     (question, run, candidate, canonical [or a new version under an existing canonical], source, spans), the WoCorpusStore
@@ -1431,6 +1460,11 @@ class WoStore:
             if getattr(getattr(exc, "orig", None), "pgcode", None) not in (None, "23505"):
                 raise
             return None
+
+    def record_licence_hold(self, exc) -> int:
+        """LICENCE-ALLOWLIST-1104: unknown-licence hold -> licence_observations (fl.record_licence_hold; never raises)."""
+        from vera import fulltext_loader as fl
+        return fl.record_licence_hold(self.engine, exc, self.cfg)
 
     def write(self, plan: dict) -> dict:
         prov = plan["source"]["provenance"]

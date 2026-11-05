@@ -60,14 +60,15 @@ def test_registry_seed_facts():
 
 def test_verdict_rules():
     # WP6-P2b: R-050 (read unless restricted) governs the Official lane; only an access restriction is links_only
-    assert ol.verdict({}) == "allow"
-    assert ol.verdict({"terms_verdict": "unknown", "terms_evidence": "x"}) == "allow"
+    # Deny All (owner 2026-11-04, D3): only an explicit allow reads; unknown/missing/odd values are links_only
+    assert ol.verdict({}) == "links_only"
+    assert ol.verdict({"terms_verdict": "unknown", "terms_evidence": "x"}) == "links_only"
     assert ol.verdict({"terms_verdict": "allow"}) == "allow"
-    assert ol.verdict({"terms_verdict": "bogus", "terms_evidence": "x"}) == "allow"
+    assert ol.verdict({"terms_verdict": "bogus", "terms_evidence": "x"}) == "links_only"
     assert ol.verdict({"terms_verdict": "links_only", "terms_evidence": "x"}) == "links_only"
     assert ol.verdict({"terms_verdict": "allow", "access_verdict": "forbid"}) == "links_only"
     assert ol.verdict({"terms_verdict": "allow", "terms_evidence": "x"}) == "allow"
-    assert ol.verdict(None) == "allow"
+    assert ol.verdict(None) == "links_only"
 
 
 # ---- flags off --------------------------------------------------------------------------------------
@@ -140,18 +141,18 @@ def test_fetch_refused_link_only(reason):
 
 
 def test_unknown_access_rows_readable_forbid_rows_never_fetched():
-    reg = [{"entity": "X", "domains": ["x.example"], "docs_entry_urls": ["https://x.example/d"], "state": "active",
+    reg = [{"entity": "X", "domains": ["x.example"], "docs_entry_urls": ["https://x.example/d"], "allowed_paths": {"x.example": {"exact": ["/d"]}}, "state": "active",
             "terms_verdict": "unknown", "terms_evidence": None},
-           {"entity": "Y", "domains": ["y.example"], "docs_entry_urls": ["https://y.example/d"], "state": "active"},
-           {"entity": "Z", "domains": ["z.example"], "docs_entry_urls": ["https://z.example/d"], "state": "active",
+           {"entity": "Y", "domains": ["y.example"], "docs_entry_urls": ["https://y.example/d"], "allowed_paths": {"y.example": {"exact": ["/d"]}}, "state": "active"},
+           {"entity": "Z", "domains": ["z.example"], "docs_entry_urls": ["https://z.example/d"], "allowed_paths": {"z.example": {"exact": ["/d"]}}, "state": "active",
             "terms_verdict": "allow"}]
-    reg.append({"entity": "F", "domains": ["f.example"], "docs_entry_urls": ["https://f.example/d"],
+    reg.append({"entity": "F", "domains": ["f.example"], "docs_entry_urls": ["https://f.example/d"], "allowed_paths": {"f.example": {"exact": ["/d"]}},
                 "state": "active", "access_verdict": "forbid"})
     f = Stub()
     out = ol.OfficialLane(on(), registry=reg, fetch=f).run(["X", "Y", "Z", "F", "NoRow"])
-    # access_verdict unknown/missing is readable (I-A6); forbid is never fetched
-    assert sorted(f.calls) == ["https://x.example/d", "https://y.example/d", "https://z.example/d"]
-    assert len(out["links"]) == 4 and len(out["pages"]) == 3
+    # Deny All (D3): only the explicit allow (Z) is fetched; unknown/missing (X, Y) and forbid (F) are links only
+    assert f.calls == ["https://z.example/d"]
+    assert len(out["links"]) == 4 and len(out["pages"]) == 1
     assert [lk for lk in out["links"] if lk["entity"] == "F"][0]["reason"] == "read_registry_forbid"
 
 

@@ -115,7 +115,10 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                     pg.part = p.label
                     res.pages.append(pg)
             # NEWS-LANE-1104 W3: a news / current-events question also reaches the reporting lane (vera.news_intent)
-            current = p.temporal or temporality.detect(p.text).current or _news(p.text) or _news(question)
+            # OFFICIAL-LANE-S4A G11: a time cue (volatile_entity=False) or news intent only; a volatile registry
+            # entity alone (SubPart.temporal) no longer sends a vendor question to the news lane
+            from vera import lane_router
+            current = lane_router.reporting_cue(p.text, question)
             if rl is None or not current:
                 continue
             found = rl.search(p.text, p.entities)

@@ -50,9 +50,12 @@ ROUTING_CONFIG_PATH = ROOT / "config" / "domain_routing.json"
 class Refused(Exception):
     """An item failed a filter. code is the configured reason code; str(self) is the reason."""
 
-    def __init__(self, code: str, reason: str):
+    def __init__(self, code: str, reason: str, licence_obs: dict | None = None):
         super().__init__(reason)
         self.code = code
+        # LICENCE-ALLOWLIST-1104: the gated candidate when the hold is an UNKNOWN licence, so the caller that owns a
+        # write engine can record it in licence_observations before dropping the item (record_licence_hold)
+        self.licence_obs = licence_obs
 
 
 class IngestError(RuntimeError):
@@ -69,8 +72,29 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     return cfg
 
 
-def _refuse(cfg: dict, key: str, reason: str):
-    raise Refused(cfg["reason_codes"][key], reason)
+def _refuse(cfg: dict, key: str, reason: str, licence_obs: dict | None = None):
+    raise Refused(cfg["reason_codes"][key], reason, licence_obs)
+
+
+def record_licence_hold(engine_wo, exc: Exception, cfg: dict, run_id=None, now=None) -> int:
+    """LICENCE-ALLOWLIST-1104: append the licence_observations rows (reason_code 'licence_unknown') for a Refused whose
+    hold was an unknown licence. Only when cfg["licence_hold_observations_enabled"] is exactly true and a write engine
+    is given. Plain INSERT through the write-only app account into the applied, append-only 006 table; no text columns.
+    Never raises (a failed observation never changes the refusal); returns the number of rows written."""
+    cand = getattr(exc, "licence_obs", None)
+    if not isinstance(cand, dict) or engine_wo is None or cfg.get("licence_hold_observations_enabled") is not True:
+        return 0
+    try:
+        from sqlalchemy import text as _t
+        rows = licence_observation_rows(cand, run_id, now=now)
+        with engine_wo.begin() as c:
+            for r in rows:
+                c.execute(_t(LICENCE_OBS_INSERT.replace("{S}", SCHEMA)), r)
+        return len(rows)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger("vera").warning("licence hold observation write failed (%s)", type(e).__name__)
+        return 0
 
 
 # --------------------------------------------------------------------------------------------- filters
@@ -210,7 +234,7 @@ def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | N
     if arxiv_evidence is not None:
         lic["arxiv_evidence"] = dict(arxiv_evidence)
     cand = {"url": item["fulltext_url"], "licence": lic, "stored_text_kind": cfg["stored_text_kind"],
-            "gate_a_decision": None, "gate_a_rationale": ""}
+            "gate_a_decision": None, "gate_a_rationale": "", "doi": item.get("doi")}
     apply_licence_gate([cand])
     d = cand["licence_decision"]
     for u in (item.get("landing_url"),):
@@ -220,7 +244,9 @@ def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | N
     if d == "reject":
         _refuse(cfg, "licence_reject", cand["gate_a_rationale"].strip())
     if d != "allow":
-        _refuse(cfg, "licence_hold", cand["gate_a_rationale"].strip())
+        from vera.licence_gate import RC_UNKNOWN
+        _refuse(cfg, "licence_hold", cand["gate_a_rationale"].strip(),
+                dict(cand) if cand.get("licence_reason_code") == RC_UNKNOWN else None)
     emb = (meta.get("meta") or {}).get("licence") or {}
     if emb.get("id") or emb.get("url"):
         why = reject_reason(emb.get("id"), emb.get("url"))
