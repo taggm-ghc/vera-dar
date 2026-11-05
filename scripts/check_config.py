@@ -50,6 +50,11 @@ STRIP = ("*DB_URL*", "DATABASE_URL", "PG*", "KRB5*", "GSS*", "*_DBADMIN*", "DB_A
          "ALL_PROXY", "NO_PROXY")
 CONFIG_ENV_ALLOWED = set(FILES) | {"README.md"}
 LITERALS = ("AI-Internship", "week-1v2", ".env.db-accounts")
+# Deny-list constants: string elements of these module-level tuples are protective glob entries (refuse or mask
+# files), not stale path references. Exemption is per (repo-relative POSIX file, constant name), never per whole file,
+# so any other literal in those files is still checked. (CHECKCONFIG-FIX-1105)
+LITERAL_EXEMPT_NAMES = {"vera/env_precedence.py": ("_FORBIDDEN_FILE_GLOBS",),
+                        "scripts/vera_test_runner.py": ("CRED_MASK_GLOBS",)}
 NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -150,13 +155,25 @@ def _loader_preview(env_dir: Path) -> dict:
         return {"status": "unavailable", "error": type(e).__name__}
 
 
-def _string_constants(path: Path):
+def _string_constants(path: Path, exempt_names=()):
+    """Code string constants only. Skips module/class/function docstrings (prose, CHECKCONFIG-FIX-1105) and the
+    elements of module-level tuples named in exempt_names (deny-list globs). Nothing else is skipped."""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
     except (SyntaxError, OSError):
         return
+    skip = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                skip.add(id(first.value))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple) \
+                and any(getattr(t, "id", None) in exempt_names for t in node.targets):
+            skip.update(id(elt) for elt in node.value.elts)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
             yield node.value
 
 
@@ -218,7 +235,9 @@ def layout_checks(root: Path, repo: Path, env_dir: Path, findings: list) -> dict
                                     for p in sorted((repo / d).rglob("*.py"))]
     for p in targets:
         if p.is_file() and p.resolve() != HERE:
-            count += sum(1 for s in _string_constants(p) for lit in LITERALS if lit in s)
+            rel = p.relative_to(repo).as_posix()
+            count += sum(1 for s in _string_constants(p, LITERAL_EXEMPT_NAMES.get(rel, ()))
+                         for lit in LITERALS if lit in s)
     out["legacy_literal_count"] = count
     if count:
         findings.append("legacy path literals present")
@@ -234,7 +253,7 @@ def build_report(root: Path, environ, *, resolve: bool = False, repo: Path | Non
                  git: bool = True) -> tuple[dict, list]:
     _GIT["enabled"] = bool(git)
     root = Path(root)
-    repo = Path(repo) if repo is not None else root / "vera"
+    repo = Path(repo) if repo is not None else root / "repo"   # canonical repo/ (CHECKCONFIG-FIX-1105; was vera/)
     env_dir = root / "config" / "env"
     findings: list = []
     report: dict = {"files": [file_report(root, env_dir, n, findings) for n in FILES]}
