@@ -36,7 +36,9 @@ def test_shipped_config_enabled_gdelt_only_and_allowlist():
     c = shipped()
     assert c["enabled"] is True and rl.lane_enabled(c)
     assert c["fallback_order"] == ["gdelt"]  # HN Algolia excluded (no first-party terms)
-    assert c["emit_link_only"] is False and c["outlet_query"] == "allowlist" and c["unlisted_verdict"] == "links_only"
+    # OWNER DECISION 2026-11-05 ("News sources: yes, as far as permitted by each source's permissions and license
+    # terms"): every outlet is searched and listed; only allow outlets are read (PERF-MISS-1105-FIX2)
+    assert c["emit_link_only"] is True and c["outlet_query"] == "all" and c["unlisted_verdict"] == "links_only"
     for o in c["outlets"]:
         assert o["terms_verdict"] in rl.VERDICTS and o["terms_evidence"].startswith("work/NEWS-LANE-1104/compliance.md")
     assert set(rl.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org"}
@@ -66,8 +68,8 @@ def test_fail_closed_allow_without_evidence_and_unknown_verdict():
 
 
 def test_allowlist_query_and_only_allow_items_emitted():
-    f = Fake((200, {}, ARTS))
-    L = rl.ReportingLane(shipped(), http_get=f, sleep=lambda s: None)
+    f = Fake((200, {}, ARTS))  # the pre-2026-11-05 allowlist mode (still supported by config)
+    L = rl.ReportingLane(dict(shipped(), emit_link_only=False, outlet_query="allowlist"), http_get=f, sleep=lambda s: None)
     r = L.search("USA 2026 midterm elections news")
     q = f.urls[0]
     assert "domain%3Aglobalvoices.org" in q and "domain%3Aen.wikinews.org" in q and "+OR+" in q
@@ -98,7 +100,8 @@ def test_crawl_delay_across_requests():
     t = [0.0]
     L = rl.ReportingLane(shipped(), http_get=Fake((200, {}, ARTS), (200, {}, ARTS), (200, {}, ARTS)),
                          sleep=lambda s: None, clock=lambda: t[0])
-    gv = lambda r: sum("globalvoices.org" in i["url"] for i in r["items"])  # noqa: E731
+    # items offered for READING (read_ok); since 2026-11-05 the others are still listed as links (emit_link_only)
+    gv = lambda r: sum("globalvoices.org" in i["url"] and i["read_ok"] is True for i in r["items"])  # noqa: E731
     assert gv(L.search("midterm elections news")) == 1
     t[0] = 6.0
     assert gv(L.search("midterm elections news")) == 0  # 6 s later (min interval) < crawl delay 10 s
@@ -120,7 +123,7 @@ def test_min_interval_skips_never_sleeps():
 
 def test_allowlist_mode_with_no_allow_hosts_makes_no_call():
     f = Fake()
-    c = dict(shipped(), outlets=[])
+    c = dict(shipped(), outlets=[], outlet_query="allowlist")
     r = rl.ReportingLane(c, http_get=f).search("midterm elections")
     assert r["items"] == [] and f.urls == []
 

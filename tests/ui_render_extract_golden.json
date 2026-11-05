@@ -146,6 +146,10 @@
   ],
   [
    "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
@@ -296,6 +300,10 @@
   ],
   [
    "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
@@ -427,6 +435,10 @@
   [
    "UnknownElement",
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -576,6 +588,10 @@
   ],
   [
    "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
@@ -686,6 +702,10 @@
   ],
   [
    "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
    "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
@@ -757,6 +777,10 @@
   [
    "UnknownElement",
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "Header",
@@ -859,6 +883,10 @@
   [
    "UnknownElement",
    "page: \"about\"\nlabel: \"About\"\npage_script_hash: \"<H>\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "Header",

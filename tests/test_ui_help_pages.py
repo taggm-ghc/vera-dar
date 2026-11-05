@@ -81,21 +81,26 @@ def test_about_page_renders_full_disclosure_once_under_headings():
     at = _run("pages/about.py")
     t = _NORM(_text(at))
     assert not any(_NORM(disclosure.disclosure_text()) in _NORM(c.value) for c in at.caption)  # split under headings
+    moved = set(json.loads((ROOT / "config" / "ui_help_pages.json").read_text())["about"]["moved_to_terms"])
     for h, body in disclosure.disclosure_sections():
-        assert h in [s.value for s in at.subheader] and _NORM(body) in t
+        if h in moved:  # PRIVACY-1104: terms-type sections render on the Terms page only
+            assert h not in [s.value for s in at.subheader]
+        else:
+            assert h in [s.value for s in at.subheader] and _NORM(body) in t
     assert [x.value for x in at.title] == ["About VERA-DAR"]
+    assert disclosure._NO_SAVE.strip() not in t  # retention text moved to Terms
 
 
 def test_how_to_use_page_renders_sections_and_uses_config_scope():
     at = _run("pages/how_to_use.py")
     heads = [s.value for s in at.subheader]
-    for h in ("What to ask", "What you get back", "How to read the citations", "Limits", "Privacy"):
+    for h in ("What to ask", "What you get back", "How to read the citations", "Limits", "Terms and privacy"):
         assert h in heads, h
     t = _text(at)
     assert "{scope}" not in t and "{privacy}" not in t and "{" not in t
     # HOTFIX-BLURB-1104: retention and third-party detail are About-only; How to use only points there
     assert disclosure._NO_SAVE.strip() not in _NORM(t) and disclosure._THIRD_PARTY.strip() not in _NORM(t)
-    assert "The About page says what VERA-DAR keeps from your question" in _NORM(t)
+    assert "The Terms of Access, Browsing, and Use page says what VERA-DAR keeps from your question" in _NORM(t)
 
 
 def test_unreadable_config_shows_fallback(tmp_path):
@@ -111,7 +116,8 @@ def test_unreadable_config_shows_fallback(tmp_path):
 
 def test_sidebar_nav_has_both_pages_and_files_exist():
     from vera.sources_sidebar import NAV
-    assert NAV[-2:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"))
+    assert NAV[-3:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
+                        ("pages/terms.py", "Terms of Access, Browsing, and Use"))
     assert all((ROOT / p).exists() for p, _ in NAV)
     assert {t for t, _ in disclosure.ABOUT_LINKS} == {"pages/about.py", "pages/how_to_use.py"}
 
@@ -270,7 +276,39 @@ def test_live_stats_line_only_when_flag_on(tmp_path):
         help_pages.live_stats_enabled = lambda *a, **k: on
         try:
             help_pages.render_about(s)
+            about_md = list(s.md)
+            s.md.clear()
+            help_pages.render_terms(s)  # PRIVACY-1104: the live-stats privacy line moved to the Terms page
         finally:
             help_pages.live_stats_enabled = orig
             sb_mod._corpus = orig_corpus
+        assert help_pages.LIVE_STATS_LINE not in about_md
         assert s.md.count(help_pages.LIVE_STATS_LINE) == (1 if on else 0)
+
+
+# ---- PRIVACY-1104: Terms of Access, Browsing, and Use ------------------------------------------------------
+def test_terms_page_renders_moved_sections_and_hides_placeholders():
+    at = _run("pages/terms.py")
+    t = _NORM(_text(at))
+    heads = [s.value for s in at.subheader]
+    assert [x.value for x in at.title] == ["Terms of Access, Browsing, and Use"]
+    for h in ("Acceptable use", "AI answers may be wrong; no warranty", "Third-party sources and licences", "Privacy",
+              "Cookies", "Changes to these terms", "Governing law and contact"):
+        assert h in heads, h
+    moved = set(json.loads((ROOT / "config" / "ui_help_pages.json").read_text())["about"]["moved_to_terms"])
+    for h, body in disclosure.disclosure_sections():
+        if h in moved:
+            assert _NORM(body) in t, h
+    assert "[[" not in t and "{" not in t  # placeholders never render
+    # owner decisions 2026-11-05: operator, governing law, no email (repository issues), effective date
+    assert "Tagg Maiwald" in t and "State of Nevada, USA" in t and "github.com/taggm-ghc/vera-dar/issues" in t
+    assert "@" not in t
+    assert "Effective date: 2026-10-20" in [c.value for c in at.caption]
+    assert "_streamlit_xsrf" in t
+    assert disclosure.short_notice_text() in [c.value for c in at.caption]  # R-031 short notice on this page too
+
+
+def test_terms_release_gate_no_placeholders_left():
+    """Release gate: fails while any owner placeholder remains in the shipped config (expected to fail until filled)."""
+    raw = (ROOT / "config" / "ui_help_pages.json").read_text()
+    assert "[[" not in raw, sorted(set(re.findall(r"\[\[([A-Z]+-[A-Z0-9]+)", raw)))

@@ -52,6 +52,13 @@ _DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
 # Caller's absolute monotonic deadline for the current request (inline budget). Set with deadline_scope(); threads
 # started by a ThreadPoolExecutor need contextvars.copy_context().run to inherit it (see INTEGRATION.md).
 DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar("vera_rate_deadline", default=None)
+# PERF-MISS-1105-FIX2 F1: when True (set with queue_scope()), a caller that finds the portal at its max_concurrency or
+# pacing limit queues for a slot until DEADLINE (its remaining per-fetch budget) instead of being skipped after
+# max_wait_s. Cooldown, breaker and daily-cap skips are unchanged (immediate). Default False: unchanged behaviour.
+QUEUE: contextvars.ContextVar[bool] = contextvars.ContextVar("vera_rate_queue", default=False)
+# Skip reasons that mean the provider (or this deployment's daily cap) is really unavailable, as opposed to this
+# process's own concurrency/pacing limiter or a caller deadline. Only these may be reported to a user as "busy".
+PROVIDER_BUSY_REASONS = frozenset({"cooldown", "breaker_open", "half_open_busy", "daily_cap"})
 
 
 class RateLimitConfigError(ValueError):
@@ -344,6 +351,8 @@ class PortalAdapter:
         return Skip(self.name, reason, retry_in)
 
     def _budget(self, now: float, deadline: float | None) -> float:
+        if deadline is not None and QUEUE.get():  # F1: queue for a slot within the caller's remaining budget
+            return deadline - now - float(self.c["min_call_s"])
         b = float(self.c["max_wait_s"])
         if deadline is not None:
             b = min(b, deadline - now - float(self.c["min_call_s"]))
@@ -378,7 +387,7 @@ class PortalAdapter:
         self._refill(now)
         wait = 0.0 if self.tokens >= 1.0 else (1.0 - self.tokens) / max(self.rate, _RATE_EPS)
         if wait > budget:
-            return self._skip("deadline" if budget < float(self.c["max_wait_s"]) else "pacing", wait)
+            return self._skip("deadline" if budget < float(self.c["max_wait_s"]) or QUEUE.get() else "pacing", wait)
         self.tokens -= 1.0  # reserved now (may go negative): later callers queue behind this one
         self.inflight += 1
         self.probes += 1 if probe else 0
@@ -601,6 +610,19 @@ def deadline_scope(deadline: float | None):
         yield
     finally:
         DEADLINE.reset(tok)
+
+
+@contextlib.contextmanager
+def queue_scope(deadline: float):
+    """PERF-MISS-1105-FIX2 F1: every acquire() in this context queues for a concurrency/pacing slot until `deadline`
+    (absolute, time.monotonic) instead of skipping after max_wait_s. Bounded: never past the deadline."""
+    outer = DEADLINE.get()
+    t1, t2 = DEADLINE.set(deadline if outer is None else min(outer, deadline)), QUEUE.set(True)  # never widened
+    try:
+        yield
+    finally:
+        QUEUE.reset(t2)
+        DEADLINE.reset(t1)
 
 
 def contact_params(portal: str, env: Mapping | None = None, registry: Registry | None = None) -> dict:

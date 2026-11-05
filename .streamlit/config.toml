@@ -3,3 +3,7 @@
 showSidebarNavigation = false
 # PROG-1027 R4-PROG-S-1 (partial mitigation, Streamlit 1.40.1 still shows type and traceback): no error details to clients.
 showErrorDetails = false
+
+[browser]
+# PRIVACY-1104 G9: Streamlit usage telemetry off in config as well as in the start.sh flag.
+gatherUsageStats = false

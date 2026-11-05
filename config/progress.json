@@ -18,12 +18,14 @@
       "heartbeat_s": "PROVISIONAL prior 10, unmeasured (PLAN s2.3). Keeps bytes flowing well inside any idle window; Render idle behaviour undocumented, W10 measures it. Change from W10 gap/close data.",
       "client_no_data_s": "PROVISIONAL prior 60 = 6 x heartbeat: connection lost after >=5 missed heartbeats. Unmeasured. Change from heartbeat-gap p99 in W10 and live.",
       "connect_timeout_s": "PROVISIONAL liveness prior 10, unmeasured; change from observed connect latency. No total timeout exists on the stream (OD-1031-NODEADLINE).",
-      "orphan_s": "PROVISIONAL prior 120 = Streamlit disconnectedSessionTTL default (RENDER-TIMEOUT-1031); unmeasured. Change if the deployed TTL differs."
+      "orphan_s": "PROVISIONAL prior 120 = Streamlit disconnectedSessionTTL default (RENDER-TIMEOUT-1031); unmeasured. Change if the deployed TTL differs.",
+      "activity_tick_s": "PROVISIONAL prior 5, unmeasured (PERF-MISS-1105-FIX2 F4). The live miss of 2026-11-04 showed the UI caption 'last update N s ago' growing during the lane and reading-list phases, which the owner read as a stop (rca2 Q4 A); 5 s is the owner's 'never silent for more than about 5 s'. Applies only inside phases wrapped in progress.ticking (no stage events of their own). Change from owner feel or event-volume data (max_events_per_record)."
     },
     "enabled": true,
     "heartbeat_s": 10,
     "client_no_data_s": 60,
     "connect_timeout_s": 10,
-    "orphan_s": 120
+    "orphan_s": 120,
+    "activity_tick_s": 5
   }
 }

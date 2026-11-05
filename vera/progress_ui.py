@@ -7,6 +7,7 @@ Exception text is never stored: the Holder keeps the exception type name and a s
 from __future__ import annotations
 
 import json
+import logging
 import string
 import threading
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ import requests
 from vera import progress
 from vera.public_mode import ASK_TIMEOUT_S, GONE
 
+log = logging.getLogger("vera.progress_ui")
+
 LABELS_PATH = Path(__file__).resolve().parent.parent / "config" / "progress-stages.json"
 TERMINAL_KINDS = ("answered", "partial", "no_answer", "declined", "error", "provider_error", "busy", "expired",
                   "poll_timeout_received", "poll_timeout_unreceived")
@@ -25,13 +28,15 @@ _STREAM_COUNT_KEYS = frozenset({"shortlisted", "held", "step", "ceiling", "why"}
 _COUNT_KEYS = frozenset(progress.COUNT_KEYS) | _STREAM_COUNT_KEYS | {"act", "wait_s", "k", "n", "elapsed"}
 _FIELDS = _COUNT_KEYS | {"rid", "why_text"}
 _EXTRA_STATES = {"acquire": frozenset({"limited", "busy"})}  # stream states; tolerated until progress.VALID carries them
-STREAM_TERMINALS = ("unavailable", "connection_lost", "never_connected", "stalled")
+STREAM_TERMINALS = ("unavailable", "connection_lost", "never_connected", "stalled", "orphaned", "cancelled")
 # Generic fallbacks (no exception text, no names) when config/progress-stages.json lacks a stream terminal key.
 _GENERIC_TERMINALS = {
     "unavailable": "VERA-DAR cannot answer right now; please try again shortly",
     "connection_lost": "The connection was interrupted. Documents VERA-DAR already saved stay in its collection; ask again to use them.",
     "never_connected": "VERA-DAR could not be reached; please try again shortly",
     "stalled": "VERA-DAR stopped searching because no further progress was made; ask again to use what it already saved.",
+    "orphaned": "This page stopped receiving updates, so the request was closed; ask again to use what VERA-DAR already saved.",
+    "cancelled": "The request was cancelled before it finished; ask again to use what VERA-DAR already saved.",
     "busy": "VERA-DAR is busy right now; please try again shortly",
     "error": "Something went wrong; please try again",
     "provider_error": "The answer could not be generated right now; please try again shortly",
@@ -403,6 +408,8 @@ def stream_worker(holder: StreamHolder, stream_fn, args, now, orphan_s: float) -
                 break
         if holder.terminal is None:
             holder.terminal = "orphaned" if orphaned() else "connection_lost"
+            # PERF-MISS-1105-FIX2 F4: a stream that ended without a result line is logged with its closed code
+            log.info("stream ended without a result terminal=%s lines=%d", holder.terminal, len(holder.events))
     except StreamNeverConnected as e:
         holder.status = e.status
         holder.terminal = "busy" if e.status == 429 else "never_connected"

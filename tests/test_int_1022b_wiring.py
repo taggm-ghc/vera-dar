@@ -101,7 +101,7 @@ def test_guarded_get_maps_a_rate_limit_skip_to_its_own_code_not_unreachable():
     deps = SimpleNamespace(http_get=get, url_check=lambda u: (True, ""))
     with pytest.raises(aa._Stop) as e:
         aa._guarded_get("https://www.ebi.ac.uk/europepmc/webservices/rest/search?q=x", A.cfg(), deps, 1000, 5.0, True)
-    assert e.value.code == "R-ACQ-RATELIMITED"
+    assert e.value.code == "R-ACQ-RATELIMITED-COOLDOWN"  # PERF-MISS-1105-FIX2 F1: per-reason code
 
 
 def test_transport_counts_the_request_in_the_portal(monkeypatch):

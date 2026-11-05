@@ -88,7 +88,7 @@ def _reason_line(entry) -> str | None:
         return None
     r = entry.get("reason")
     if isinstance(r, str) and r:
-        return REASON_TEXT.get(r, REASON_GENERIC)
+        return REASON_TEXT.get("R-ACQ-RATELIMITED" if r.upper().startswith("R-ACQ-RATELIMITED-") else r, REASON_GENERIC)
     o = entry.get("outcome")
     return OUTCOME_TEXT.get(o) if isinstance(o, str) and o in OUTCOME_TEXT else (REASON_GENERIC if o else None)
 

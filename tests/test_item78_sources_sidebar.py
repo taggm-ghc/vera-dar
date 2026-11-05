@@ -312,7 +312,8 @@ def test_licence_and_heading_reworded(tmp_path, monkeypatch):
 
 
 def test_nav_labels_and_streamlit_config():
-    assert tuple(label for _, label in sb.NAV) == ("Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About")
+    assert tuple(label for _, label in sb.NAV) == ("Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About",
+                                                 "Terms of Access, Browsing, and Use")
     assert not any("streamlit" in label.lower() for _, label in sb.NAV)
     cfg = (ROOT / ".streamlit" / "config.toml").read_text()
     assert re.search(r"^showSidebarNavigation\s*=\s*false\s*$", cfg, re.M)
@@ -329,7 +330,8 @@ def test_nav_labels_and_streamlit_config():
         sidebar = Side()
 
     sb.render_nav(St())
-    assert [c[1] for c in calls] == ["Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About"]
+    assert [c[1] for c in calls] == ["Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About",
+                                         "Terms of Access, Browsing, and Use"]
 
 
 def test_main_page_nav_renders_via_apptest_with_labels(monkeypatch):

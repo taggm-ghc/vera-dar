@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md)
 
-Status of everything on this page: **offline-tested only; not deployed; live behaviour unverified.** It describes branches prepared for the second NONASK-1103 push. The search-lane section and the page-access section describe code prepared for that push. The lanes apply the separate read, use-for-answer and ingest gates (see "Page-access gates").
+Status of everything on this page: **offline-tested only; live behaviour unverified.** (Updated 2026-11-05: the Current-reporting lane is enabled in config at HEAD, see "Flag state"; nothing here has been validated live.) It describes code from the second NONASK-1103 push. The search-lane section and the page-access section describe code prepared for that push. The lanes apply the separate read, use-for-answer and ingest gates (see "Page-access gates").
 
 ## APA 7 house variant: identifiers appended
 
@@ -57,7 +57,7 @@ In plain words (owner decisions R-037 and R-042):
 
 ## Search lanes
 
-Status: offline-tested only; not deployed; live behaviour unverified. Both lanes ship off. The checks that must pass before either is enabled are in the [lanes enable checklist](lanes-enable-checklist.md).
+Status: offline-tested only; live behaviour unverified. As of 2026-11-05 the Official lane ships off and the Current-reporting lane is on in config (Superseded 2026-11-05: earlier text said both ship off). The checks that must pass before either is enabled are in the [lanes enable checklist](lanes-enable-checklist.md).
 
 ### Lane names and sources
 
@@ -94,13 +94,15 @@ Status: offline-tested only; not deployed; live behaviour unverified. Both lanes
 | `config/subquery.json` | `official_lane.enabled` | false |
 | `config/subquery.json` | `official_lane.site_search` | false |
 | `config/subquery.json` | `model_fallback.enabled` | false |
-| `config/reporting_lane.json` | `enabled` | false |
-| `config/reporting_lane.json` | `outlets` | [] (empty) |
+| `config/reporting_lane.json` | `enabled` | true at HEAD (Superseded 2026-11-05: was false) |
+| `config/reporting_lane.json` | `fallback_order` | ["gdelt"] only (Hacker News no longer in the order) |
+| `config/reporting_lane.json` | `outlets` | 18 listed hosts at HEAD (was empty) |
+| `config/reporting_lane.json` | `emit_link_only` / `outlet_query` | true / "all" in the working tree (owner decision 2026-11-05; HEAD: false / "allowlist") |
 | `config/auto_acquire.json` | `search.subquery.enabled` | false |
 | `config/synthesis.json` (synthesis pass) | `enabled` | false |
 | `config/research_loop.json` (research loop) | `enabled` | false |
 
-With `site_search` false the Official lane uses the registry entry URLs only. When true, each "allow" entity gets one `site:<host>` query through the shared DuckDuckGo Lite provider, with its cache, daily cap and rate gate. The GDELT field names are not confirmed against a live response, and the Hacker News search terms are unconfirmed, so the Current-reporting lane stays off.
+With `site_search` false the Official lane uses the registry entry URLs only. When true, each "allow" entity gets one `site:<host>` query through the shared DuckDuckGo Lite provider, with its cache, daily cap and rate gate. The GDELT field names are not confirmed against a live response, and the Hacker News search terms are unconfirmed, so the Current-reporting lane was kept off at the time of writing; it is now on in config (see above), still without live confirmation.
 
 The synthesis pass and the research loop are present but not wired into a request, and both ship off.
 

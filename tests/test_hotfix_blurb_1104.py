@@ -70,6 +70,16 @@ def test_no_about_content_outside_about(page):
 
 def test_about_holds_the_about_content():
     text, _caps = _all_text(_run("pages/about.py"))
-    for s in (disclosure._LANE_PAGES, disclosure._LANE_GDELT_CREDIT, disclosure._NO_SAVE, "30 days",
-              sources_sidebar.LICENCE_SIDEBAR, sources_sidebar.CORPUS_NOTES_HEADING):
+    for s in (disclosure._LANE_GDELT_CREDIT, sources_sidebar.LICENCE_SIDEBAR, sources_sidebar.CORPUS_NOTES_HEADING):
         assert _NORM(s).strip() in text, s
+    # PRIVACY-1104 (owner 2026-11-04: terms content migrates off About and How): retention and lane-privacy text is on Terms
+    for s in (disclosure._LANE_PAGES, disclosure._NO_SAVE, "30 days"):
+        assert _NORM(s).strip() not in text, s
+
+
+def test_terms_holds_the_terms_content():
+    text, caps = _all_text(_run("pages/terms.py"))
+    assert APPROVED_SHORT in caps  # R-031: the short notice on every page except About
+    for s in (disclosure._LANE_PAGES, disclosure._LANE_GDELT_CREDIT, disclosure._NO_SAVE, "30 days"):
+        assert _NORM(s).strip() in text, s
+    assert sources_sidebar.CORPUS_NOTES_HEADING not in text  # About content stays on About

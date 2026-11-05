@@ -33,6 +33,8 @@ A separate evaluation of a later abstract-grounded `/ask` configuration (since s
 
 ## Scope-router fix (offline layer-1 measurement)
 
+*Superseded in part 2026-11-05: the pre-retrieval router is now safety-only (no fixed Scope; subject matter is never a reason to decline), so the topic-versus-intent framing below is history. The figures remain a dated layer-1 measurement.*
+
 This counts how the layer-1 rule set of the scope router (`config/scope_router.json`) routes questions; it is **not an answer success rate**. The earlier rules blocked topic words such as "medicine" or "stocks"; the fix replaces topic blocking with intent-based rules. Measured on the 85-probe set the fix was developed against (48 that should pass, 37 that should be blocked; not held out), layer 1 only, reproduced independently twice:
 
 | Measure (offline layer-1 scope router) | Before | After the fix |
@@ -42,9 +44,9 @@ This counts how the layer-1 rule set of the scope router (`config/scope_router.j
 
 Limits: layer 1 only, no model calls; the probe set was written before the fix, was used while developing it (three probes appear in the tests), is not held out and has not been externally reviewed; one operational-harm probe still passes layer 1 and relies on layer 2. Real-model layer-2 behaviour under the new prompt is untested (assumed).
 
-## Status note (as of 2026-10-30)
+## Status note (as of 2026-10-30; re-checked 2026-11-05)
 
-**No current-system measurement exists.** No before/after measurement of the current full-document pipeline has been made, and no evaluation of the current discovery-to-answer path has been published. Not measured: answer quality of the current full-document path, any comparison with other systems, the accuracy of the claim checker, and live production behaviour of discovery-to-answer acquisition. The figures above are dated history (2026-10-04 and a later run); they were not re-measured in this documentation pass. Test-suite counts reported elsewhere are branch- and revision-specific; record the command, revision and counts rather than quoting one number.
+**No current-system measurement exists.** No before/after measurement of the current full-document pipeline has been made, and no evaluation of the current discovery-to-answer path has been published. Not measured: answer quality of the current full-document path, any comparison with other systems, the accuracy of the claim checker, and live production behaviour of discovery-to-answer acquisition. The figures above are dated history (2026-10-04 and a later run); they were not re-measured in this documentation pass. Offline release-verification runs under `work/RELEASE-VERIFY-1104/` (for example result-20261105T072514Z.md: PASS on offline unit and integration tests and static scans, no live behaviour) show the suites pass; they are not quality measurements. Test-suite counts reported elsewhere are branch- and revision-specific; record the command, revision and counts rather than quoting one number.
 
 ## Remaining research questions
 

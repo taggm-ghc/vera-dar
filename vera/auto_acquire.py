@@ -627,8 +627,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             try:
                 resp = deps.http_get(current, headers=hdrs, timeout=timeout_s,
                                      allow_redirects=False, stream=True)
-            except rate_limit.RateLimited:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
-                raise _Stop(acq_config.reason(cfg, "rate_limited")) from None
+            except rate_limit.RateLimited as e:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
+                raise _Stop(acq_config.rate_limited_code(cfg, e.reason)) from None  # F1: per-reason code
             except Exception:  # noqa: BLE001  unreachable = unusable (never substituted by an abstract)
                 raise _Stop(acq_config.reason(cfg, "unreachable")) from None
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):

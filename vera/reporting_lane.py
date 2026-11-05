@@ -261,6 +261,7 @@ class ReportingLane:
         # NEWS-LANE-1104 SEC B1: the production lane (default HTTP client, default clock) shares one per-process
         # state, so the circuit, backoff and min interval hold across requests (lane_evidence builds a lane per
         # request). An injected http_get or clock (tests) gets its own state.
+        self.last_why: str | None = None  # PERF-MISS-1105-FIX2 F2: closed token for the last _call (trace only)
         st = _SHARED if (http_get is None and clock is time.monotonic) else _new_state()
         self._open_until, self._last_call, self._last_emit, self._fails = st["open"], st["last"], st["emit"], st["fails"]
         self._lock = st["lock"]
@@ -298,6 +299,7 @@ class ReportingLane:
         longer), and after max_retries consecutive failures for circuit_open_s; every wait is clamped to
         circuit_open_s. None = unavailable (the caller falls through)."""
         if not self._space(portal):
+            self.last_why = "spacing"  # PERF-MISS-1105-FIX2 F2: why the call returned None (trace only)
             return None
         status, headers, body = None, {}, b""
         try:
@@ -307,9 +309,12 @@ class ReportingLane:
         if status == 200:
             with self._lock:
                 self._fails[portal] = 0
+            self.last_why = "ok"
             return body
         if status is not None and status not in (0, 429) and not 500 <= status < 600:
+            self.last_why = "http_4xx"
             return None  # other 4xx: not retryable, not a circuit event
+        self.last_why = "throttled" if status == 429 else "failed"
         # 0 (client refused: oversize, non-JSON, read deadline) counts as a transient failure (SEC-RR R3)
         ra = {str(k).lower(): v for k, v in (headers or {}).items()}.get("retry-after")
         try:
@@ -357,21 +362,36 @@ class ReportingLane:
         The first available portal in fallback order that answers (even with zero hits) is used; an unavailable
         or failed portal falls through to the next. Lane flag OFF -> no call at all.
         """
-        res = {"items": [], "attribution": None, "terms": []}
+        # PERF-MISS-1105-FIX2 F2: res["diag"] = one {portal, status: called|skipped, reason, items} per portal tried
+        # (closed tokens and counts only; for the request trace, never shown to a user).
+        res = {"items": [], "attribution": None, "terms": [], "diag": []}
         if not self.cfg["enabled"]:
+            res["diag"].append({"portal": "-", "status": "skipped", "reason": "off", "items": 0})
             return res
         terms = extract_terms(sub_query, known_entities)
         res["terms"] = terms
         if not terms:
+            res["diag"].append({"portal": "-", "status": "skipped", "reason": "no_terms", "items": 0})
             return res
         for portal in self.cfg["fallback_order"]:
             fn = {"gdelt": self.gdelt, "hn": self.hn}.get(portal)
-            if fn is None or not self.available(portal):
+            if fn is None:
                 continue
+            if not self.available(portal):
+                res["diag"].append({"portal": portal, "status": "skipped", "reason": "circuit", "items": 0})
+                continue
+            self.last_why = None
             items = fn(terms)
             if items is None:
+                why = self.last_why or "no_query"
+                res["diag"].append({"portal": portal, "status": "skipped" if why in ("spacing", "no_query") else "called",
+                                    "reason": why, "items": 0})
                 continue
+            raw_n = len(items)
             res["items"] = self._apply_outlet_policy(sort_items(items))
+            res["diag"].append({"portal": portal, "status": "called",
+                                "reason": "ok" if res["items"] else ("no_items" if raw_n == 0 else "outlet_policy"),
+                                "items": len(res["items"])})
             if portal == "gdelt":
                 res["attribution"] = gdelt_attribution()
             return res

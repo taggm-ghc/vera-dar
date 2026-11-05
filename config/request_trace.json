@@ -67,6 +67,19 @@
         ]
       }
     },
+    "lane": {
+      "keys": [
+        "portal",
+        "status",
+        "reason",
+        "news"
+      ],
+      "reason": "PERF-MISS-1105-FIX2 F2 inline_acquire._trace_lane: the lane pass portal token (gdelt, hn or -), called/skipped, a closed reason token (ok, no_items, outlet_policy, circuit, spacing, throttled, failed, http_4xx, off, no_terms, no_reporting_part, error) and the news-intent flag; item/page/link counts are counts. Never a URL, outlet, title or question text."
+    },
+    "reading_list": {
+      "keys": [],
+      "reason": "PERF-MISS-1105-FIX2 F4 ask_service._reading_list start/done: counts only (candidates)"
+    },
     "search": {
       "keys": [
         "provider",

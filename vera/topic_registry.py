@@ -1,4 +1,4 @@
-"""TOPICREG-1028: DB-backed topic registry (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT, NOT applied).
+"""TOPICREG-1028: DB-backed topic registry (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT; migration 011 applied 2026-10-29 per db/README.md).
 READ path (read_topic_rows, load_active_registry_data): SELECT only, in a READ ONLY transaction through the existing rw engine.
 WRITE path (register_proposed_topic): off by default (registry_table.registration_enabled); inserts one runtime 'draft' row and
 moves it to active or suspended. vera.micro_topic.load_registry delegates to the read path only, and only when
@@ -17,7 +17,7 @@ class TopicRegistryError(RuntimeError):
     so key_for_provenance does not turn it into 'unassigned')."""
 
 
-# TOPICREG-1028: the registry table (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT, NOT applied). The JSON file is
+# TOPICREG-1028: the registry table (vera_vjay.topreg_topics, db/migrations/pending/011-DRAFT; migration 011 applied 2026-10-29 per db/README.md). The JSON file is
 # the SEED and the FALLBACK. Settings live in cfg["registry_table"]; only explicit boolean true enables a toggle.
 TOPIC_STATES = ("draft", "active", "suspended", "retired", "banned", "prohibited", "secrets")
 # OD-1028(51)/(52): refused-topic states. Such rows are NEVER loaded as active and NEVER trigger acquisition (registry_data_from_rows

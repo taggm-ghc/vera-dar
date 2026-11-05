@@ -92,10 +92,12 @@ class StreamCfg:
     client_no_data_s: float
     connect_timeout_s: float
     orphan_s: float
+    activity_tick_s: float = 5.0  # PERF-MISS-1105-FIX2 F4 (optional key; absent = 5)
 
 
 _STREAM_NUM = {"heartbeat_s": (0.01, 300), "client_no_data_s": (1, 3600), "connect_timeout_s": (0.1, 300),
                "orphan_s": (1, 86400)}
+_STREAM_OPT = {"activity_tick_s": (0.01, 60)}
 DEFAULT_STREAM = StreamCfg(enabled=True, heartbeat_s=10, client_no_data_s=60, connect_timeout_s=10, orphan_s=120)
 
 
@@ -105,7 +107,7 @@ def validate_stream(raw) -> StreamCfg:
         raise ValueError("stream must be a JSON object")
     problems: list[str] = []
     for k in raw:
-        if k not in {"enabled", *_STREAM_NUM} and not str(k).startswith("_"):
+        if k not in {"enabled", *_STREAM_NUM, *_STREAM_OPT} and not str(k).startswith("_"):
             problems.append(f"stream: unknown key {k!r}")
     if not isinstance(raw.get("enabled"), bool):
         problems.append("stream.enabled must be a boolean")
@@ -115,6 +117,12 @@ def validate_stream(raw) -> StreamCfg:
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
             problems.append(f"stream.{k} must be a number in [{lo}, {hi}]")
         vals[k] = v
+    for k, (lo, hi) in _STREAM_OPT.items():
+        if k in raw:
+            v = raw[k]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+                problems.append(f"stream.{k} must be a number in [{lo}, {hi}]")
+            vals[k] = v
     if not problems and raw["client_no_data_s"] <= raw["heartbeat_s"]:
         problems.append("stream.client_no_data_s must be > stream.heartbeat_s")
     if problems:
@@ -375,7 +383,9 @@ def emit(stage, state, **counts) -> None:
 # NOISY-UI (owner 2026-10-31): every wait / slow step is visible. Closed activity codes (labels: progress-stages.json
 # "activities"); counts only (wait_s, k, n, elapsed), never a provider, host, URL, title or question text.
 ACT_RATE, ACT_POLITE, ACT_SLOW_READ, ACT_RETRY, ACT_BUSY_FALLBACK, ACT_CONN = 1, 2, 3, 4, 5, 6
-ACTIVITY_CODES = frozenset({1, 2, 3, 4, 5, 6})
+# PERF-MISS-1105-FIX2 F2/F4: the current-reporting lane, and the reading-list fallback (both were silent phases)
+ACT_NEWS, ACT_READING_LIST = 7, 8
+ACTIVITY_CODES = frozenset({1, 2, 3, 4, 5, 6, 7, 8})
 
 
 def set_activity(code: int, **counts) -> None:
@@ -410,6 +420,58 @@ class waiting:
 
     def __exit__(self, *exc):
         clear_activity()
+        return False
+
+
+class ticking:
+    """PERF-MISS-1105-FIX2 F4: around a phase that emits no stage events (the lane pass, the reading-list fallback):
+    set the activity at entry and re-set it every stream.activity_tick_s (elapsed seconds in the phase) from a daemon
+    thread until exit, so the stream never goes quiet for longer than that. The ticker holds the sink captured at
+    entry (no context switch), stops at exit, and is a no-op without a stream sink. Never raises."""
+
+    def __init__(self, code: int, every: float | None = None):
+        self.code = code
+        self.every = every
+        self._stop = threading.Event()
+        self._lock = threading.Lock()  # a tick never lands after the exit's clear
+        self._t = None
+        self._sink = None
+
+    def __enter__(self):
+        try:
+            sink = SINK.get()
+            if getattr(sink, "set_activity", None) is None or self.code not in ACTIVITY_CODES:
+                return self
+            every = float(self.every if self.every is not None else
+                          (CFG.stream.activity_tick_s if CFG is not None else DEFAULT_STREAM.activity_tick_s))
+            t0 = time.monotonic()
+            self._sink = sink
+            sink.set_activity(int(self.code), {"elapsed": 0})
+
+            def run():
+                while not self._stop.wait(every):
+                    try:
+                        with self._lock:
+                            if self._stop.is_set() or getattr(sink, "closed", False):
+                                return
+                            sink.set_activity(int(self.code), {"elapsed": int(time.monotonic() - t0)})
+                    except Exception:  # noqa: BLE001
+                        return
+            self._t = threading.Thread(target=run, name="vera-progress-tick", daemon=True)
+            self._t.start()
+        except Exception:  # noqa: BLE001
+            _drop("exception")
+        return self
+
+    def __exit__(self, *exc):
+        with self._lock:
+            self._stop.set()
+        try:
+            fn = getattr(self._sink, "clear_activity", None)
+            if fn is not None:
+                fn()
+        except Exception:  # noqa: BLE001
+            _drop("exception")
         return False
 
 

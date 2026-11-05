@@ -48,6 +48,9 @@ class LaneResult:
     links: list = field(default_factory=list)
     pages: list = field(default_factory=list)
     attributions: list = field(default_factory=list)
+    # PERF-MISS-1105-FIX2 F2: per-portal call records {portal, status, reason, items} (closed tokens and counts; for
+    # the request trace only, never in public()).
+    diag: list = field(default_factory=list)
 
     def __repr__(self) -> str:
         return f"LaneResult(links={len(self.links)}, pages={len(self.pages)})"
@@ -122,6 +125,7 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
             if rl is None or not current:
                 continue
             found = rl.search(p.text, p.entities)
+            res.diag.extend(d for d in (found.get("diag") or []) if isinstance(d, dict))
             if found.get("attribution") and found["attribution"] not in res.attributions:
                 res.attributions.append(found["attribution"])
             for it in found.get("items") or []:
@@ -157,7 +161,8 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                         pass
                 res.links.append(lk)
     except Exception:  # noqa: BLE001  a lane never breaks the answer path
-        return LaneResult(links=list(res.links))
+        return LaneResult(links=list(res.links), diag=list(res.diag) + [{"portal": "-", "status": "called",
+                                                                       "reason": "error", "items": 0}])
     return res
 
 

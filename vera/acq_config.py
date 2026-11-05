@@ -162,6 +162,38 @@ def reason(cfg: dict, key: str) -> str:
     return str(((cfg or {}).get("reason_codes") or {}).get(key) or f"R-ACQ-{key.upper()}")
 
 
+RATELIMITED_BASE = "R-ACQ-RATELIMITED"
+_LIMITER_WHY_RE = re.compile(r"^[a-z_]{1,32}$")
+
+
+def rate_limited_code(cfg: dict, why) -> str:
+    """PERF-MISS-1105-FIX2 F1: the per-reason limiter-skip code R-ACQ-RATELIMITED-<REASON> (the rate_limit Skip
+    reason: cooldown, breaker_open, half_open_busy, daily_cap, deadline, pacing, concurrency). An unknown or malformed
+    reason gives the plain base code."""
+    base = reason(cfg, "rate_limited")
+    w = str(why or "").strip().lower()
+    return f"{base}-{w.upper()}" if _LIMITER_WHY_RE.fullmatch(w) else base
+
+
+def is_rate_limited(cfg: dict, code) -> bool:
+    """True for the base limiter-skip code and every per-reason variant (prefix match)."""
+    base, c = reason(cfg, "rate_limited"), str(code or "")
+    return c == base or c.startswith(base + "-")
+
+
+def limiter_why(cfg: dict, code) -> str | None:
+    """The lower-case limiter reason of a per-reason code; "" for the plain base code; None when not a limiter skip."""
+    if not is_rate_limited(cfg, code):
+        return None
+    return str(code)[len(reason(cfg, "rate_limited")) + 1:].lower()
+
+
+def base_code(code) -> str:
+    """Collapse a per-reason limiter code to R-ACQ-RATELIMITED for code tables that key on the base code."""
+    c = str(code or "").strip().upper()
+    return RATELIMITED_BASE if c.startswith(RATELIMITED_BASE + "-") else c
+
+
 def marker(cfg: dict) -> str:
     return str(cfg["marker"])
 

@@ -19,6 +19,14 @@ Copy `.env.example` to a gitignored `.env` and fill in only the names you need; 
 - Automatic acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. Set `VERA_AUTOACQ_DISABLED=true` to keep it off locally.
 - The configured database is the production database (see Data safety below). Leave the database URLs unset unless the task needs them.
 
+## Current behaviour to know when developing (as of 2026-11-05, read from code and config)
+
+- The pre-retrieval gate is safety-only; there is no fixed scope list. Whether the corpus suffices is decided after retrieval, and acquisition runs rounds until about 6 full texts are held. Premise handling and the corpus-digest checker are in `vera/`; see [vera-design.md](vera-design.md) and [api.md](api.md) for contracts.
+- Request trace: `vera/request_trace.py` with `config/request_trace.json`. New event detail keys must be added to `key_allowlist` with a reason (Deny All); question text is never an event field. Tests use fake engines: no database is touched.
+- Lanes: the news lane (`config/reporting_lane.json`) is on in the working tree and the official-sources lane (`config/subquery.json` `official_lane.enabled`) is off. Changing either flag changes the disclosure text (`vera.disclosure.lanes_disclosure_on()`); see [lanes-enable-checklist.md](lanes-enable-checklist.md).
+- Licence allowlist: `config/licence_allowlist.json` is the seed (Deny All: unlisted licences are not stored); `vera/licence_gate.py` reads it. The planned DB table (draft 016) is not in this tree.
+- Config sanity: `<venv>/bin/python -I scripts/check_config.py`.
+
 ## Run the API
 
 From the repository root:
@@ -57,7 +65,7 @@ The offline suite runs with:
 <venv>/bin/python -I scripts/vera_test_runner.py -- tests -q
 ```
 
-Tests run offline; the test boundary refuses network and database connections. Live-stage tests need the pytest flag `--run-live-stages` (the live API test also needs API_BASE_URL); run them with plain `pytest`, because the project test runner refuses `--run-live-stages`. Record the actual command, revision and counts when reporting a result. No test count is stored in the repo and no single number is authoritative: reported counts differ by revision and branch. State the command, the git revision and the pass/fail/skip counts you observed, with the date.
+Tests run offline; the test boundary refuses network and database connections. Live-stage tests need the pytest flag `--run-live-stages` (the live API test also needs API_BASE_URL); run them with plain `pytest`, because the project test runner refuses `--run-live-stages`. Tests that read documentation text include `tests/test_dar_migration_007_roles.py`, `tests/test_integrate_1104_db_flags.py` (pins the 015 row in `db/README.md`), `tests/test_s1_fulldoc_disclosure.py` and `tests/test_wp6p2b_robots_signal_lanes_1103.py`; rerun them after editing those docs. Record the actual command, revision and counts when reporting a result. No test count is stored in the repo and no single number is authoritative: reported counts differ by revision and branch. State the command, the git revision and the pass/fail/skip counts you observed, with the date.
 
 ## Data safety
 

@@ -6,6 +6,12 @@ appear here or in the tool output.
 
 **Status as of 2026-10-30:** this file owns gate status. The release gate has NOT passed for `main`; the latest recorded run, on a candidate ahead of `main`, failed check (a2) (live catalog evidence). Migration 007 and the related change C1 are pending owner decision; neither is done. Sections headed "history" below are dated records, kept as written.
 
+**Update 2026-11-05 (DOCS-1105-REPO).** Nothing above is superseded: the six checks and the (a2) rule are unchanged, and the release gate has still not passed for `main` (no (a2) evidence for any current candidate is on record). New since 2026-10-30, from `work/RELEASE-VERIFY-1104/`:
+- Pre-commit rehearsals (candidate built in scratch, offline tests plus static scans, no live behaviour): the earlier results (e.g. `result-20261105T070856Z.md`, repo HEAD 2054f12) were FAIL (acceptance group S-F: 8 failing probe tests; secret/host scan: 1 hit to triage); the latest listed result, `result-20261105T072514Z.md`, records Verdict PASS with the full suite at 9246 passed, 39 skipped, 12 xfailed, and states "Gate (a2) not run (owner evidence)". That result names repo HEAD 35f21fb, an ancestor of the cd81eab this documentation pass reads (one commit later adds the official-sources lane, licence allowlist and digest storage); it was not re-run here. It is a rehearsal, not the release gate.
+- Owner-run wrappers (agents do not run them): `work/RELEASE-VERIFY-1104/owner_release_gate.sh` (derives the SHA from `repo/` HEAD, refuses the pre-MVP base, then runs `work/RELPREP-1031/run_release_gate.sh`: clean worktree, hidden prompt for the read-only database URL, one read-only live catalog check for (a2), then the full gate) and `work/RELEASE-VERIFY-1104/owner_deploy_check.sh` (post-deploy `/version` check). Checksums: `work/RELEASE-VERIFY-1104/SHA256SUMS`.
+- (a2) and migration 015: `live_catalog_check.py` checks (table, column) pairs; whether the 015 tables are in its pair list was not checked in this pass. Migrations 007/009/013/014 stay unapplied, so any pair belonging to them blocks (a2) for as long as the code requires it.
+- The 2026-10-30 sentence that migration 007 and change C1 are "pending owner decision" is unchanged: no decision is on record in this tree.
+
 <!-- TODO(DOCS-1030 D-REL): after the owner disposes the pending C1 decision, re-touch this file (gate status, the (a2) paragraph and the 007 reference) and the README gate sentence. Do not edit before that decision. -->
 
 ## The release gate: six checks (`scripts/release_gate.py`, as of 2026-10-29)

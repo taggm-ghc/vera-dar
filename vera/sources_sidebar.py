@@ -58,7 +58,8 @@ def plain_url(text: str) -> str:
 
 # K3.I: UI labels for the page links (labels, not data). Order is the order shown.
 NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"),
-       ("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"))
+       ("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
+       ("pages/terms.py", "Terms of Access, Browsing, and Use"))  # PRIVACY-1104: a link on every page, not content
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",

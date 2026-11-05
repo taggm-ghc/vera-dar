@@ -1,14 +1,8 @@
 {
   "about": {
     "title": "About VERA-DAR",
-    "intro": "This page holds the full disclosure for VERA-DAR. Other pages show a one-line notice that links here.",
+    "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
     "after_disclosure": [
-      {
-        "heading": "Questions kept for diagnosing errors",
-        "paragraphs": [
-          "To help diagnose errors, VERA-DAR keeps the text of your question for up to 30 days; only the service owner can read it, and it is then deleted."
-        ]
-      },
       {
         "heading": "What the sidebar entry shows",
         "paragraphs": [
@@ -28,7 +22,14 @@
           "Some bibliographic data and abstracts come from Semantic Scholar (semanticscholar.org), through the Semantic Scholar Academic Graph API."
         ]
       }
-    ]
+    ],
+    "moved_to_terms": [
+      "Reliability",
+      "Licences",
+      "Privacy and data sent to third parties",
+      "Your question and what is stored"
+    ],
+    "terms_link_label": "Terms of Access, Browsing, and Use"
   },
   "how_to_use": {
     "title": "How to use VERA-DAR",
@@ -73,9 +74,90 @@
         ]
       },
       {
+        "heading": "Terms and privacy",
+        "paragraphs": [
+          "The Terms of Access, Browsing, and Use page says what VERA-DAR keeps from your question, for how long, which outside AI and search services receive it, and the terms for using VERA-DAR."
+        ]
+      }
+    ]
+  },
+  "terms": {
+    "title": "Terms of Access, Browsing, and Use",
+    "effective_date": "2026-10-20",
+    "intro": "These terms apply when you access, browse or use VERA-DAR, including its API. By using VERA-DAR you agree to them; if you do not agree, please do not use it. This page also holds VERA-DAR's privacy notice.",
+    "sections": [
+      {
+        "heading": "Who runs VERA-DAR",
+        "paragraphs": [
+          "VERA-DAR is a free, non-commercial educational research assistant run by Tagg Maiwald, an individual in the United States, who decides how its data is used. How to get in touch is under Governing law and contact."
+        ]
+      },
+      {
+        "heading": "Acceptable use",
+        "paragraphs": [
+          "Use VERA-DAR for lawful, good-faith research questions. Do not:",
+          "- send automated, scripted or bulk requests, or scrape or copy the service or its output at scale;\n- try to get around request limits, safety checks or refusals;\n- ask for help to harm people or property, or for instructions to commit illegal acts;\n- interfere with the service or with other people's use of it.",
+          "VERA-DAR may refuse a request, and may limit or block access that breaks these terms."
+        ]
+      },
+      {
+        "heading": "AI answers may be wrong; no warranty",
+        "paragraphs": [
+          "VERA-DAR is an AI system and its answers may be wrong. Check the sources and read them yourself before relying on any claim. Answers are not medical, legal, financial or other professional advice.",
+          "VERA-DAR is provided free, as is and as available, without warranties of any kind, and it may be changed, limited or stopped at any time. To the extent the law allows, the operator is not liable for any loss arising from your use of VERA-DAR. Nothing in these terms excludes or limits liability that cannot be excluded or limited by law, or rights you have as a consumer where you live."
+        ],
+        "disclosure": [
+          "Reliability"
+        ]
+      },
+      {
+        "heading": "Third-party sources and licences",
+        "paragraphs": [
+          "Documents that VERA-DAR cites or lists belong to their authors and publishers and keep their own licences; follow each source's licence when you reuse it. Links lead to sites with their own terms.",
+          "VERA-DAR finds sources through the services listed below. Wikipedia is used only to find original sources.",
+          "Thank you to arXiv for use of its open access interoperability.",
+          "Some bibliographic data and abstracts come from Semantic Scholar (semanticscholar.org), through the Semantic Scholar Academic Graph API."
+        ],
+        "disclosure": [
+          "Licences"
+        ],
+        "gdelt_credit": true,
+        "services": true
+      },
+      {
         "heading": "Privacy",
         "paragraphs": [
-          "The About page says what VERA-DAR keeps from your question, for how long, and which outside AI and search services receive it."
+          "**What VERA-DAR collects.** VERA-DAR has no accounts and does not ask who you are. It receives the question you type. Please do not put names, contact details, health information, ID or account numbers, or other personal details in a question.",
+          "**Why.** To answer your question, and to diagnose errors. Where EU or UK data protection law applies, the legal basis is the operator's legitimate interest in running and fixing this free educational service.",
+          "**Who receives it.** To answer, your question, or search terms taken from it, is sent to AI model providers and to the search and data services listed above under Third-party sources and licences, and, for current-events questions, to the GDELT news index. VERA-DAR runs on Render. These services are in the United States, except Europe PMC (United Kingdom), and have their own data-handling and retention policies.",
+          "**How long.** How long VERA-DAR keeps your question is set out under \"Your question and what is stored\" below. VERA-DAR uses your IP address only briefly, in memory, to apply request limits, and does not store it; the hosting provider may record IP addresses in its own logs for security and operation.",
+          "**Your rights.** You can ask what VERA-DAR holds about a question you sent, or object to its use. VERA-DAR has no accounts and no email contact, so raise a request by opening an issue titled \"Privacy request\" on {repo_issues}. Issues are public: do not put your question text, your name or any other personal details in the issue; the operator will reply there with how to identify the question privately. Stored questions are kept for up to 30 days; VERA-DAR cannot yet delete a single question earlier on request. If you are in the EU or the UK you may also complain to your data protection authority.",
+          "**Sale and tracking.** VERA-DAR does not sell or share personal information, shows no advertising, uses no analytics and does not track you across sites. It does not respond to Do Not Track signals because it does no tracking.",
+          "**Children.** VERA-DAR is not directed at children under 13 and does not knowingly collect their information. If you believe a child has sent personal information, open a \"Privacy request\" issue as described above, without including that information."
+        ],
+        "disclosure": [
+          "Privacy and data sent to third parties",
+          "Your question and what is stored"
+        ],
+        "live_stats": true
+      },
+      {
+        "heading": "Cookies",
+        "paragraphs": [
+          "VERA-DAR sets one cookie, `_streamlit_xsrf`, which protects your session against cross-site request forgery. It is strictly necessary, so no consent is needed. Your browser also keeps the sidebar width, whether the sidebar is open and the colour theme on your device; this stays on your device. VERA-DAR uses no analytics, advertising or tracking cookies."
+        ]
+      },
+      {
+        "heading": "Changes to these terms",
+        "paragraphs": [
+          "These terms may be updated. The effective date at the top of this page shows the current version; changes apply from that date. Continuing to use VERA-DAR after a change means you accept the updated terms."
+        ]
+      },
+      {
+        "heading": "Governing law and contact",
+        "paragraphs": [
+          "These terms are governed by the laws of the State of Nevada, USA, without limiting mandatory rights you have under the law where you live.",
+          "VERA-DAR has no email contact. For questions about these terms or about VERA-DAR, open an issue on {repo_issues}. Issues are public, so do not include personal details; for privacy requests follow the steps under Privacy."
         ]
       }
     ]

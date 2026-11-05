@@ -524,8 +524,11 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)  # S2: never topic-restricted
     if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
         kw["topic_key"] = decision.topic_key
+    # PERF-MISS-1105-FIX2 F2: the lane pass needs only the question, so it starts NOW and runs concurrently with the
+    # acquisition rounds (it used to start only after acquire() returned); joined below, with a visible activity.
+    lane_task = inline_acquire.start_lane_pass(question, acq)
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
-    lanes = inline_acquire.with_web(o, inline_acquire.lane_pass(question, acq))  # NONASK-1103 (+A6-W web pages): request-local only
+    lanes = inline_acquire.with_web(o, lane_task.result())  # NONASK-1103 (+A6-W web pages): request-local only
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
     try:  # PERF-MISS-1104-TRACE: per inline attempt (counts, status, reason codes; never DOIs, URLs or titles)
@@ -875,6 +878,19 @@ def _relevant(sources, question=None) -> list:
 
 def _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=None,
                   cost=None) -> AskResult:
+    """PERF-MISS-1105-FIX2 F4: the reading-list fallback was a silent phase (its grounding search emits no stage
+    event); it now shows the reading-list activity, re-set every stream.activity_tick_s, plus trace events."""
+    from vera import progress as _prog
+    _rt_event("reading_list", "start")
+    with _prog.ticking(_prog.ACT_READING_LIST):
+        res = _reading_list_body(question, model, pricing, decision, chained, grounding, contract, tokens=tokens,
+                                 cost=cost)
+    _rt_event("reading_list", "done", counts={"candidates": len(getattr(res, "candidates", None) or ())})
+    return res
+
+
+def _reading_list_body(question, model, pricing, decision, chained, grounding, contract, tokens=None,
+                       cost=None) -> AskResult:
     """The L0 reading-list result (unchanged K2 behaviour). tokens/cost default to the router's."""
     tokens = decision.tokens_used if tokens is None else tokens
     cost = decision.cost_usd if cost is None else cost
@@ -1319,9 +1335,15 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
                                                               older_available=True, fr_before=fr,
                                                               citations=_source_freshness(fd.sources, fr),
                                                               answer_basis="generated_existing_only"))
-    pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
     from vera import inline_acquire as _ia
-    lanes = _ia.with_web(o, _ia.lane_pass(question, acq)) if o is not None else None  # NONASK-1103 (+A6-W): request-local
+    # PERF-MISS-1105-FIX2 F2: start the lane pass concurrently with the research attempt when that attempt can run
+    # (its first guards); the result is used only when the attempt ran (o is not None), as before.
+    lane_task = _ia.start_lane_pass(question, acq) if _research_may_run(question, acq, budget, grounding) else None
+    pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
+    lane_res = lane_task.result() if lane_task is not None and o is not None else None  # unused: not joined
+    if o is not None and lane_task is None:
+        lane_res = _ia.lane_pass(question, acq)
+    lanes = _ia.with_web(o, lane_res) if o is not None else None  # NONASK-1103 (+A6-W): request-local
     if lanes is not None and isinstance(pub, dict):
         pub = dict(pub, lanes=lanes.public())  # links and counts only (need-to-know)
     new_res, failed = None, False
@@ -1351,6 +1373,22 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     if pub is not None and pub.get("status") not in (None, "off"):
         base = replace(base, contract={**(base.contract or {}), "inline_acquisition": pub})
     return _with_research(base, rec, rec["user_text"] or None)
+
+
+def _research_may_run(question, acq, budget, grounding=None) -> bool:
+    """PERF-MISS-1105-FIX2 F2: the cheap first guards of _research_attempt (no search, no network), so the lane pass
+    is started concurrently only for an attempt that can run. Never raises."""
+    try:
+        if acq is None or not _layer1_clean(question) or getattr(budget, "inline_used", False):
+            return False
+        from vera import fulldoc_corpus, inline_acquire
+        if not (inline_acquire.icfg_of(acq).get("in_scope") is True
+                and fulldoc_corpus.flag_enabled(fulldoc_corpus.load_config())):
+            return False
+        need = inline_need_s(acq, grounding)  # the attempt's own deadline guard (no network)
+        return need is not None and budget.deadline - time.monotonic() >= need
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _research_attempt(question, grounding, acq, fcfg, used_in, budget):

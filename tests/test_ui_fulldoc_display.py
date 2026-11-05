@@ -1,4 +1,5 @@
 """AE-1020/WP-D: the Ask page shows a full-document answer truthfully (offline; stubbed requests, no DB/network)."""
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -139,8 +140,9 @@ def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
                     + [s.value for s in at.main.subheader])  # main area only: the sidebar is excluded (H8)
     if page == "pages/about.py":  # R-031/H8: full sections exactly once, no short line, no required-notice caption
         assert disclosure.SHORT_NOTICE not in caps and disclosure.required_notice_text() not in caps
-        for _h, t in disclosure.disclosure_sections():
-            assert main.count(t) == 1
+        moved = set(json.loads((ROOT / "config" / "ui_help_pages.json").read_text())["about"]["moved_to_terms"])
+        for _h, t in disclosure.disclosure_sections():  # PRIVACY-1104: terms-type sections render on Terms instead
+            assert main.count(t) == (0 if _h in moved else 1), _h
     else:  # one short line; the long disclosure is not repeated
         assert any(c.value == disclosure.short_notice_text() for c in at.main.caption)
         assert disclosure.required_notice_text() not in main

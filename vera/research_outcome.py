@@ -93,6 +93,12 @@ _CODE_MAP: dict[str, str] = {
 KNOWN_CODES = tuple(sorted(_CODE_MAP))
 
 
+def _base(code) -> str:
+    """PERF-MISS-1105-FIX2 F1: R-ACQ-RATELIMITED-<REASON> keys the same table rows as R-ACQ-RATELIMITED."""
+    c = str(code or "").strip().upper()
+    return "R-ACQ-RATELIMITED" if c.startswith("R-ACQ-RATELIMITED-") else c
+
+
 def reason_from_code(code: str) -> str:
     """Map an existing reason code to a terminal reason.
 
@@ -100,7 +106,7 @@ def reason_from_code(code: str) -> str:
     """
     if not isinstance(code, str):
         return "fetch_failed"
-    return _CODE_MAP.get(code.strip().upper(), "fetch_failed")
+    return _CODE_MAP.get(_base(code), "fetch_failed")
 
 
 # P0DTA-DIAG (additive): per-candidate acquisition diagnostics. Every discovered candidate ends in exactly one status.
@@ -137,7 +143,7 @@ def diag_status(outcome, reason, *, quota: bool = False) -> tuple[str, str, str]
     raises. stage: resolve | fetch | licence | relevance | admission (where the candidate's path ended).
     quota: legacy fallback when no per-candidate skip reason was recorded. Nothing is upgraded to 'admitted' except an
     explicit admitted/reused outcome."""
-    c = str(reason or "").strip().upper()
+    c = _base(reason)
     o = outcome if isinstance(outcome, str) else None
     cls = reason_from_code(c)
     if o in ("admitted", "reused"):
@@ -234,7 +240,7 @@ def queued_unreachable(code) -> bool:
     """DDGFIX-1023 DF-4: the reason a queued candidate was left unfinished is a fetch/transport failure (the source
     could not be reached), not the request's search budget (deadline, candidate cut, not evaluated)."""
     c = str(code or "").strip().upper()
-    return c in ("R-ACQ-UNREACHABLE", "R-ACQ-RATELIMITED", "R-ACQ-ERROR") or c.startswith("R-ACQ-ERR-")
+    return c in ("R-ACQ-UNREACHABLE", "R-ACQ-RATELIMITED", "R-ACQ-ERROR") or c.startswith(("R-ACQ-ERR-", "R-ACQ-RATELIMITED-"))
 
 
 def _awaiting_route(candidates) -> bool:

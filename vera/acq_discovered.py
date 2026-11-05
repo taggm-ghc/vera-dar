@@ -416,8 +416,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
         try:
             resp = deps.http_get(cur, headers={"User-Agent": sf.USER_AGENT, "Accept-Encoding": "identity"},
                                  timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
-        except rate_limit.RateLimited:
-            raise aa._Stop(acq_config.reason(acq, "rate_limited")) from None
+        except rate_limit.RateLimited as e:
+            raise aa._Stop(acq_config.rate_limited_code(acq, e.reason)) from None  # F1: per-reason code
         except Exception:  # noqa: BLE001
             raise aa._Stop(acq_config.reason(acq, "unreachable")) from None
         try:

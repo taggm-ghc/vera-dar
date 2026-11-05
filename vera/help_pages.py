@@ -76,6 +76,29 @@ def _section(st, sec: dict, coverage: str | None = None) -> None:
         st.markdown(_fill(str(p), coverage))
 
 
+# PRIVACY-1104 (owner 2026-11-04: "toabnu content should be migrated away from About & How"). About skips the
+# disclosure_sections() headings listed in config about.moved_to_terms; the Terms page appends them verbatim. In list mode
+# (fulldoc off) the reliance, licence and no-profile sentences sit inside the single _BASE section and stay on About until
+# vera/disclosure.py splits _BASE (follow-up in work/PRIVACY-1104/migration-map.md). Links live here, never in the JSON.
+THIRD_PARTY_SERVICES = (("arXiv", "https://arxiv.org/"), ("OpenAlex", "https://openalex.org/"),
+                        ("Europe PMC", "https://europepmc.org/"), ("Semantic Scholar", "https://www.semanticscholar.org/"),
+                        ("Wikipedia", "https://en.wikipedia.org/"), ("DuckDuckGo", "https://duckduckgo.com/"))
+# Owner 2026-11-05: no email contact; terms and privacy requests go through the public repository's issue tracker.
+REPO_ISSUES_LINK = "the project's public GitHub repository ([taggm-ghc/vera-dar issues](https://github.com/taggm-ghc/vera-dar/issues))"
+TERMS_PAGE = "pages/terms.py"
+TERMS_LABEL = "Terms of Access, Browsing, and Use"
+TERMS_PENDING = "This part of the terms is being finalised."
+NEWS_HEADING = "News reports"
+
+
+def _terms_link(st, label: str = TERMS_LABEL) -> None:
+    """PRIVACY-1104: one short link to the Terms page (a link, not content; About-only rule unaffected)."""
+    try:
+        st.page_link(TERMS_PAGE, label=label)
+    except Exception:  # noqa: BLE001  (StreamlitPageNotFoundError outside a multipage run, e.g. AppTest of a pages/ file)
+        logger.warning("terms link unavailable in this run")
+
+
 def render_about(st, cfg=_UNSET) -> None:
     cfg = load() if cfg is _UNSET else cfg
     page = (cfg or {}).get("about")
@@ -84,7 +107,10 @@ def render_about(st, cfg=_UNSET) -> None:
         st.info(FALLBACK)
         return
     st.markdown(str(page.get("intro", "")))
+    moved = set(page.get("moved_to_terms") or [])  # PRIVACY-1104: terms-type disclosure sections render on Terms
     for heading, text in disclosure.disclosure_sections():
+        if heading in moved:
+            continue
         st.subheader(heading)
         st.markdown(text)
     _corpus = sources_sidebar._corpus(st)
@@ -93,8 +119,46 @@ def render_about(st, cfg=_UNSET) -> None:
     sources_sidebar.render_corpus_notes(st, _corpus)  # CORPUS-DIGEST-1104: moved from the sidebar
     for sec in page.get("after_disclosure") or []:
         _section(st, sec)
-    if live_stats_enabled():
-        st.markdown(LIVE_STATS_LINE)
+        if sec.get("heading") == NEWS_HEADING and disclosure.reporting_lane_on():
+            # NEWS-LANE-1104 / R-031 fix note: the GDELT credit stays on About (and next to GDELT items), even though
+            # "Your question and what is stored" (which also carries it) moved to Terms.
+            st.markdown(disclosure._LANE_GDELT_CREDIT.strip())
+    _terms_link(st, str(page.get("terms_link_label") or TERMS_LABEL))
+
+
+def _terms_para(st, text: str) -> None:
+    # Placeholders ([[OWNER-n]], [[VERIFY-n]], [[GAP-..]]) never reach users: the paragraph is replaced, and a release
+    # test must assert that the shipped config has none.
+    st.markdown(TERMS_PENDING if "[[" in text else text.replace("{repo_issues}", REPO_ISSUES_LINK))
+
+
+def render_terms(st, cfg=_UNSET) -> None:
+    """PRIVACY-1104: Terms of Access, Browsing, and Use, including the privacy notice. Static prose from
+    config/ui_help_pages.json `terms`; flag-driven disclosure sections are appended verbatim by heading."""
+    cfg = load() if cfg is _UNSET else cfg
+    page = (cfg or {}).get("terms")
+    st.title((page or {}).get("title", TERMS_LABEL))
+    if not isinstance(page, dict):
+        st.info(FALLBACK)
+        return
+    eff = str(page.get("effective_date", ""))
+    if eff and "[[" not in eff:
+        st.caption(f"Effective date: {eff}")
+    st.markdown(str(page.get("intro", "")))
+    dsec = dict(disclosure.disclosure_sections())
+    for sec in page.get("sections") or []:
+        st.subheader(str(sec.get("heading", "")))
+        for p in sec.get("paragraphs") or []:
+            _terms_para(st, str(p))
+        if sec.get("services"):
+            st.markdown("\n".join(f"- [{name}]({url})" for name, url in THIRD_PARTY_SERVICES))
+        for h in sec.get("disclosure") or []:
+            if h in dsec:
+                st.markdown(f"**{h}.** {dsec[h]}")
+        if sec.get("gdelt_credit") and disclosure.reporting_lane_on():
+            st.markdown(disclosure._LANE_GDELT_CREDIT.strip())
+        if sec.get("live_stats") and live_stats_enabled():
+            st.markdown(LIVE_STATS_LINE)
 
 
 def render_how_to_use(st, cfg=_UNSET) -> None:

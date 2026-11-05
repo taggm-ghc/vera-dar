@@ -245,6 +245,17 @@ def _subquery_parts(question: str, acq: dict) -> list | None:
         return None
 
 
+def news_question(question: str) -> bool:
+    """PERF-MISS-1105-FIX2 F2/F5: True when the question has news / current-events intent (vera.news_intent: a news
+    cue, or an event noun with a recent year). A bare current-state cue (vera.temporality, e.g. "status quo") is not
+    news intent. Never raises (False on error)."""
+    try:
+        from vera import news_intent
+        return bool(news_intent.news_intent(str(question or "")))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def lane_pass(question: str, acq: dict | None = None):
     """NONASK-1103 S4/S7 (R-037, R-042): the Official and Current-reporting lanes, per sub-query and, for reporting,
     per temporality (vera.lane_evidence.collect). Request-local: the result is NEVER put in the inline result cache,
@@ -261,6 +272,68 @@ def lane_pass(question: str, acq: dict | None = None):
     except Exception as e:  # noqa: BLE001
         logger.warning("lane pass failed (%s)", type(e).__name__)
         return None
+
+
+def _trace_lane(question: str, lanes) -> None:
+    """PERF-MISS-1105-FIX2 F2: one request-trace event for the lane pass: portal called or skipped, the reason
+    (circuit, spacing, no_items, throttled, failed, off ...), and item, page and link counts. Closed tokens and counts
+    only (never a URL, title, outlet or question text). Never raises."""
+    try:
+        news = news_question(question)
+        if lanes is None:
+            rt.event("lane", "skipped", counts={"items": 0, "pages": 0, "links": 0},
+                     detail={"status": "skipped", "reason": "off", "news": news})
+            return
+        diag = [d for d in (getattr(lanes, "diag", None) or []) if isinstance(d, dict)]
+        called = [d for d in diag if d.get("status") == "called"]
+        first = (called or diag or [{}])[0]
+        rt.event("lane", "done" if called else "skipped",
+                 counts={"items": sum(int(d.get("items", 0) or 0) for d in diag), "pages": len(lanes.pages),
+                         "links": len(lanes.links), "calls": len(called), "skips": len(diag) - len(called)},
+                 detail={"portal": str(first.get("portal") or "-"), "status": "called" if called else "skipped",
+                         "reason": str(first.get("reason") or ("no_reporting_part" if not diag else "-")),
+                         "news": news})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class LaneTask:
+    """PERF-MISS-1105-FIX2 F2 (owner rule feedback_nonblocking_spawned_steps): the lane pass started CONCURRENTLY with
+    inline acquisition (it needs only the question), in a daemon thread with a copy of the request context (trace,
+    progress sink, stream ctx). result() joins it; while the caller waits, the stream shows the news-lane activity
+    (progress.ticking). Request-local, like lane_pass; never raises."""
+
+    def __init__(self, question: str, acq: dict | None):
+        self.question = question
+        self._done = threading.Event()
+        self._value = None
+        ctx = contextvars.copy_context()
+        self._t = threading.Thread(target=ctx.run, args=(self._run, question, acq), name="vera-lane", daemon=True)
+        self._t.start()
+
+    def _run(self, question, acq):
+        try:
+            self._value = lane_pass(question, acq)  # its activity is shown only while the caller waits (result())
+        except Exception:  # noqa: BLE001
+            self._value = None
+        finally:
+            self._done.set()
+
+    def result(self):
+        if not self._done.is_set():
+            from vera import progress
+            with progress.ticking(progress.ACT_NEWS):
+                while not self._done.wait(1.0):  # bounded by the lane's own connect/read timeouts and read cap
+                    c = stream_ctx.current()
+                    if c is not None:
+                        c.touch()
+        _trace_lane(self.question, self._value)
+        return self._value
+
+
+def start_lane_pass(question: str, acq: dict | None = None) -> LaneTask:
+    """Start the lane pass now (concurrently with acquire()); call .result() where the lane result is needed."""
+    return LaneTask(question, acq)
 
 
 def _with_parts(plan, fn, *a):
@@ -374,6 +447,16 @@ def _stop_reason(ctx, st: dict):
     return st.get("stop") or getattr(ctx, "_stop", None)
 
 
+def _provider_busy(acq: dict, codes: dict) -> bool:
+    """PERF-MISS-1105-FIX2 F1: "sources are busy" only for a real provider cooldown, open breaker or daily cap
+    (R-ACQ-RATELIMITED-<reason> with a rate_limit.PROVIDER_BUSY_REASONS reason). This process's own concurrency or
+    pacing limiter, a caller deadline, or the plain legacy code never make the request "busy"."""
+    for c, n in (codes or {}).items():
+        if n and acq_config.limiter_why(acq, c) in rate_limit.PROVIDER_BUSY_REASONS:
+            return True
+    return False
+
+
 def _emit_final(o: Outcome, acq: dict, codes: dict, stop) -> None:
     """The Stage A Outcome.acquisition surfaced as the final acquire event (counts only)."""
     a = o.acquisition or {}
@@ -381,7 +464,7 @@ def _emit_final(o: Outcome, acq: dict, codes: dict, stop) -> None:
         _emit("acquire", "done", stored=a["stored"], target=a["target"])
     elif a.get("status") in ("resource_limited", "relevance_rejected", "no_route"):
         why = (WHY_STALLED if stop == stream_ctx.STALLED else WHY_EXHAUSTED if stop == stream_ctx.PROVIDERS_EXHAUSTED
-               else WHY_BUSY if codes.get(acq_config.reason(acq, "rate_limited")) else WHY_NO_MORE)
+               else WHY_BUSY if _provider_busy(acq, codes) else WHY_NO_MORE)
         _emit("acquire", "limited", stored=a["stored"], target=a["target"], why=why)
 
 
@@ -419,7 +502,9 @@ QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the bac
 def _transient(acq, code) -> bool:
     """CONT-1023: a per-candidate failure that may succeed later (timeout, 5xx/non-200, quota, connection error)."""
     c = str(code or "")
-    if c in {acq_config.reason(acq, k) for k in ("unreachable", "rate_limited", "deadline", "crawl_delay")}:
+    if c in {acq_config.reason(acq, k) for k in ("unreachable", "deadline", "crawl_delay")}:
+        return True
+    if acq_config.is_rate_limited(acq, c):  # F1: every per-reason limiter skip (nothing was sent)
         return True
     if c == acq_config.reason(acq, "fetch_timeout"):  # P0DTA-DIAG: the per-fetch wall clock (was R-ACQ-DEADLINE)
         return True
@@ -875,7 +960,8 @@ def web_read_enabled(acq: dict | None) -> bool:
     return icfg_of(acq).get("web_read_enabled") is True
 
 
-def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadline=None, max_fetches=None) -> None:
+def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadline=None, max_fetches=None,
+              again: bool = False) -> None:
     """A6-W (R-045/R-047/R-048/R-050, review N3/N4): read the round-0 general-web results (no DOI/PMCID/arXiv id)
     through vera.web_route (read gate before any fetch, vera.public_fetch, use_for_answer gate; always answer-only).
     Their candidate records are marked terminal so CONT-1023 never hands them to enqueue_candidates/run_job (N4).
@@ -883,8 +969,10 @@ def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadli
     WP6-P2b S2: before EACH fetch the route checks the stop/disconnect signal (streamed path) or the non-stream
     `deadline` less the existing fetch reserve (per_doc_timeout_s); fetches started are bounded by `max_fetches` (the
     pass's max_docs_per_prompt budget) and recorded in st["n_web_fetched"], which the caller subtracts from the fresh
-    budget. One call per question (a second call is a no-op), one fetch per host (redirects included)."""
-    if not web_read_enabled(acq) or (ctx is not None and ctx.stop_reason() is not None) or "web" in st:
+    budget. One call per question (a second call is a no-op), one fetch per host (redirects included).
+    again=True (PERF-MISS-1105-FIX2 F5, news-intent variant rounds only): a further pass over that round's new web
+    results, merged into st["web"]; the same gates, and hosts already read in this request are not read again."""
+    if not web_read_enabled(acq) or (ctx is not None and ctx.stop_reason() is not None) or ("web" in st and not again):
         return
     reserve = _b(acq, "per_doc_timeout_s", 25)
 
@@ -897,13 +985,23 @@ def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadli
     try:
         from vera import web_route
         web = [c for c in cands if isinstance(c, dict) and web_route.is_web_candidate(c)]
+        prev = st.get("web") if again else None
+        if again:  # F5: one fetch per host per request, across passes (every host offered before, read or not)
+            seen_hosts = set(st.get("web_hosts") or ())
+            web = [c for c in web if web_route._host(str(c.get("url") or "")) not in seen_hosts]
         if not web:
             return
+        if max_fetches is not None and max_fetches <= 0:
+            return
+        st["web_hosts"] = set(st.get("web_hosts") or ()) | {web_route._host(str(c.get("url") or "")) for c in web}
         res = web_route.read_web(question, web, should_stop=should_stop, max_fetches=max_fetches)
+        if prev is not None:
+            res = web_route.WebResult(pages=list(prev.pages) + list(res.pages), listed=list(prev.listed) + list(res.listed),
+                                      dev=list(prev.dev) + list(res.dev), fetched=int(prev.fetched) + int(res.fetched))
         st["web"], st["n_web"], st["n_web_fetched"] = res, len(res.pages), int(res.fetched)
         if any((d.get("gate") or {}).get("read") == "read_deadline" for d in res.dev):
             count(acq_config.reason(acq, "deadline"))
-        st["web_ids"] = {id(c) for c in web}  # their records are marked terminal where they are built (N4)
+        st["web_ids"] = set(st.get("web_ids") or ()) | {id(c) for c in web}  # marked terminal where built (N4)
         count("R-ACQ-WEB-READ") if res.pages else None
         if ctx is not None:
             ctx.touch()
@@ -961,6 +1059,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     rounds, stop = 1, "variants_exhausted"
     r6 = st["acq6"] = {"rounds": 1, "stop": stop}
     idle, last = 0, None  # consecutive variant rounds that added zero new usable documents (NO_PROGRESS_ROUNDS)
+    news = news_question(question)  # F5
     try:
         variants = query_variants6.variants(question)
     except Exception:  # noqa: BLE001
@@ -998,7 +1097,10 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         _emit("search", "start", step=rounds)
         with search_providers.portal_scope() as pl:
             try:
-                so_tok = search_providers.SCHOLARLY_ONLY.set(True)  # N3: DDG once per question; no DDG/Wikipedia here
+                # N3: DDG once per question; no DDG/Wikipedia here. PERF-MISS-1105-FIX2 F5: a news-intent question is
+                # not forced to scholarly-only portals (a scholarly-only round cannot find current reporting); the
+                # web results it finds go through the same A6-W web route gates as round 0.
+                so_tok = search_providers.SCHOLARLY_ONLY.set(not news)
                 try:
                     cands = list(_with_parts(None, deps.search, q, int(s.get("results_per_provider", 10)),
                                              float(s.get("timeout_s", 20)) if ctx is not None else
@@ -1022,6 +1124,14 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         for c in cands:
             if isinstance(c, dict):
                 tried |= _ckeys(c)
+        if news and fresh:  # F5: this round's general-web results through the gated web route (answer-only)
+            n_before = int(st.get("n_web", 0) or 0)
+            _web_read(question, acq, fresh, st, ctx, count, clock=clock, deadline=deadline, again=True,
+                      max_fetches=max(0, min(remaining, tgt - eligible)))
+            from vera import web_route
+            # every general-web result stays on the gated web route (read, link or nothing), never the paper pipeline
+            fresh = [c for c in fresh if not web_route.is_web_candidate(c)]
+            r6["web_pages"] = int(r6.get("web_pages", 0)) + int(st.get("n_web", 0) or 0) - n_before
         if not fresh:
             continue
         ranked = aa.rank_candidates(question, fresh, acq, set(skip) | tried, fdcfg, count, drops={}, route=route,
@@ -1194,9 +1304,22 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
         return REUSE_UNUSABLE
 
 
-def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl):
-    """The per-candidate evaluation closure shared by the legacy and the streamed pool (unchanged behaviour)."""
+def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl, queue_slots: bool = False):
+    """The per-candidate evaluation closure shared by the legacy and the streamed pool. queue_slots (streamed path,
+    PERF-MISS-1105-FIX2 F1): the candidate's limited fetches queue for a free per-portal slot within its own
+    per-document budget (rate_limit.queue_scope) instead of skipping after max_wait_s, so parallel workers never
+    self-skip on a single-connection portal."""
     def one(idx, score, doi, cand, isbn):
+        if not queue_slots:
+            return _one(idx, score, doi, cand, isbn)
+        pd = per_doc
+        if isinstance(cand.get("arxiv"), dict):
+            from vera import arxiv_fulltext
+            pd = max(per_doc, arxiv_fulltext.doc_budget(acq, clock))
+        with rate_limit.queue_scope(time.monotonic() + float(pd)):
+            return _one(idx, score, doi, cand, isbn)
+
+    def _one(idx, score, doi, cand, isbn):
         d: dict = {}
         durs.append(d)
         job = aa.Job(question=question, trigger="inline", created=clock())
@@ -1254,7 +1377,8 @@ def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, co
     workers = max(1, int(_b(acq, "fetch_workers", 4)))
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vera-inline")
     durs: list = []
-    one = _runner(question, acq, deps, icfg, fdcfg, clock, INF, durs, per_doc, fl)  # each fetch keeps its own timeout
+    one = _runner(question, acq, deps, icfg, fdcfg, clock, INF, durs, per_doc, fl,  # each fetch keeps its own timeout
+                  queue_slots=True)  # F1: queue for a portal slot, never a self-inflicted skip
     tgt = acq_rounds.target_of(acq)
     held_codes = {acq_config.reason(acq, k) for k in HELD_KEYS}
     got: dict = {}

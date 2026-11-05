@@ -78,7 +78,9 @@
     "unavailable": "The answering service is at its limit right now; please try again later",
     "connection_lost": "The connection was interrupted. Documents VERA-DAR already saved stay in its collection; ask again to use them.",
     "never_connected": "Could not reach VERA-DAR; please try again shortly",
-    "stalled": "VERA-DAR stopped searching because no further progress was made; documents already saved stay in its collection."
+    "stalled": "VERA-DAR stopped searching because no further progress was made; documents already saved stay in its collection.",
+    "orphaned": "This page stopped receiving updates, so the request was closed. Documents VERA-DAR already saved stay in its collection; ask again to use them.",
+    "cancelled": "The request was cancelled before it finished. Documents VERA-DAR already saved stay in its collection; ask again to use them."
   },
   "why": {
     "1": "no more open sources found",
@@ -93,6 +95,8 @@
     "3": "Still reading source {k} of {n} ({elapsed} s)",
     "4": "A step failed; trying again in about {wait_s} s",
     "5": "Free AI providers are busy; finishing with backup",
-    "6": "Waiting for a connection ({elapsed} s)"
+    "6": "Waiting for a connection ({elapsed} s)",
+    "7": "Searching current news reporting ({elapsed} s)",
+    "8": "Preparing a reading list from the sources found ({elapsed} s)"
   }
 }

@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md)
 
-This describes a **two-service, owner-managed** Docker deployment. It is not evidence that any service has been created or passed live acceptance. Render is the interim host; a non-Render host is planned (Postgres remains the database technology). For the current project status and timeline, see the [project overview](../README.md#status). Status of this page as of 2026-10-30. Auto-Deploy is off on both services; deploys are owner-controlled.
+This describes a **two-service, owner-managed** Docker deployment. It is not evidence that any service has been created or passed live acceptance. Render is the interim host; a non-Render host is planned (Postgres remains the database technology). For the current project status and timeline, see the [project overview](../README.md#status). Status of this page as of 2026-11-05 (repo HEAD cd81eab plus uncommitted working-tree edits; the 2026-10-30 text is revised, not deleted). Auto-Deploy is off on both services; deploys are owner-controlled.
 
 ## Services
 
@@ -33,7 +33,7 @@ This is the canonical list of the environment variables the serving code reads. 
 | `GROQ_API_KEY` | Required for `/ask` as shipped | The answer provider chain is Groq first (`config/ask-provider-chain.json`). A chain entry whose key is unset is skipped, and with the OpenAI fallback off no other provider remains. |
 | `OPENAI_API_KEY` | Only if the OpenAI fallback is on | `openai_fallback.enabled` ships `false`: the API then makes no OpenAI call, and a set key is ignored. Turning it on is a reviewed config change plus a deploy, and needs a valid key. |
 | `VERA_DB_URL_RO` | Optional | Read-only database connection: aggregate corpus description, the database corpus source, and reading acquired documents. |
-| `VERA_DB_URL_WO` | Optional; needed for acquisition | Write-only application account that automatic acquisition uses to store acquired documents. Acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. |
+| `VERA_DB_URL_WO` | Optional; needed for acquisition | Write-only application account that automatic acquisition uses to store acquired documents. Acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. It is also the INSERT-only connection for the request trace and the stored corpus digest (see "Request trace and stored digest" below). |
 | `VERA_AUTOACQ_DISABLED` | Optional (kill switch) | When set to a true-like value (`true`, `1`, `yes`, `on`), automatic acquisition is off even though `config/auto_acquire.json` enables it. Leave unset for normal operation. |
 | `VERA_FULLDOC_BUNDLE_DIR` | Optional | Full-document corpus from a local bundle directory. |
 | `VERA_FULLDOC_DB_RUN_ID` | Optional | Full-document corpus from a pinned database run, read through `VERA_DB_URL_RO`. |
@@ -57,6 +57,17 @@ This is the canonical list of the environment variables the serving code reads. 
 - On the API, the read-only URL is enough for corpus reading. Configure the write-only application URL (`VERA_DB_URL_WO`) only if automatic acquisition should store documents. Never configure an administrative or read-write account URL on a serving service.
 - To stop acquisition without a code or config change, set `VERA_AUTOACQ_DISABLED=true` on the API service and restart it. Removing `VERA_DB_URL_WO` also stops it.
 
+### Request trace and stored digest
+
+`config/request_trace.json` ships `enabled`, `log_sink.enabled`, `db_sink.enabled` and `digest_store.enabled` true (as read from the file 2026-11-05); `log_sink.include_question` ships false. Migration 015 is recorded as applied by the owner on 2026-11-04 (see [db/README.md](../db/README.md); the verify output was not seen by agents). With no database URLs set, the sinks do nothing and requests are unaffected (offline-tested; not observed live). The trace uses the existing write-only and read-only URLs: no extra variable is needed. The visitor question is stored only in the database requests table, owner-only, and purged after 30 days by the owner script `work/PERF-MISS-1104/trace/purge_trace.sh`; hosting-platform logs are not covered by that purge, which is why the log line carries only the question length. The request id is returned only in the `X-VERA-Trace-Id` response header, never in the UI. Owner scripts (not run by agents): `work/PERF-MISS-1104/trace/show_trace.sh`, `pull_trace.sh`, `purge_trace.sh`.
+
+### Lanes and acquisition switches (config, not environment)
+
+- News lane (`config/reporting_lane.json`): `enabled` is true in the working tree (owner decision 2026-11-05; GDELT only, `fallback_order` is `["gdelt"]`). Outlets are searched, but only hosts listed with `terms_verdict` `allow` are read in full; others are title and link only. **Untested live**: offline-tested only, and a full-suite run recorded in `work/NEWS-LANE-1104/checkpoint.md` had unattributed failures. Check the [lanes checklist](lanes-enable-checklist.md) before relying on it.
+- Official-sources lane: built, `official_lane.enabled` in `config/subquery.json` ships false (and `site_search` false).
+- Automatic acquisition: `config/auto_acquire.json` has inline acquisition on with up to 6 acquisition rounds (`inline.acq6_rounds_enabled`, `bounds.acq_round_target_new_docs` 6). Corpus sufficiency is decided after retrieval, not by a fixed scope. Kill switch: `VERA_AUTOACQ_DISABLED`.
+- Live statistics (`config/live_stats.json`) ship off; they need migration 013, which is not applied.
+
 ### Full-document path
 
 The full-document path stays off unless `fulldoc.enabled` is true in `config/fulldoc_answer.json` and a corpus source is configured. There are two sources: a local bundle directory (`VERA_FULLDOC_BUNDLE_DIR`) or a pinned database run (`VERA_FULLDOC_DB_RUN_ID`). Configuring both is refused: the base corpus is reported unusable rather than silently preferring one. Acquired documents are served only next to the database-backed base corpus. This describes what the code implements, not that either source has been exercised on the deployment. To see the state, call `/health/dar` with the API key and read `fulldoc.status` (`disabled`, `not_configured`, `ok`, `unusable` or `error`).
@@ -65,6 +76,6 @@ The full-document path stays off unless `fulldoc.enabled` is true in `config/ful
 
 `start.sh` is the container entry point and refuses to start unless `RENDER=true` or `VERA_ENV_CONTEXT=production` is set. It listens on `PORT` (default 8000) and runs a single worker, because the public request caps are in-memory per process.
 
-After deploying, verify `/health`, `/version` and that an unauthenticated `POST /ask` is rejected, and check the visitor disclosure against the live configuration.
+After deploying, verify `/health`, `/version` and that an unauthenticated `POST /ask` is rejected, and check the visitor disclosure against the live configuration. The owner wrapper for the post-deploy build check is `work/RELEASE-VERIFY-1104/owner_deploy_check.sh` (it loads the live host from the gitignored host file into a variable and never prints it; `--dry-run` makes no call). Deploys stay owner-run.
 
 Do not publish real service hostnames, tokens, passwords, or database connection strings.
