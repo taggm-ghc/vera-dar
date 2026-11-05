@@ -9,14 +9,14 @@ Q = "How do jazz drummers practise brushes?"  # layer 1 UNSURE, no marker: reach
 
 # id -> (classifier_raw, intent as written in the fixture file)
 FIXTURES = {
-    "P001": ('{"in_scope":false,"category":"off_topic","category":"harmful"}', "nullify_then_safe_retry"),
-    "P002": ('{"in_scope":true,"category":"off_topic"', "nullify_then_safe_retry"),
-    "P003": ('{"in_scope":false,"category":"novel_subject"}', "unrecognized_category_handling"),
-    "P004": ('{"in_scope":false,"reason":"Unfamiliar area"}', "unrecognized_category_handling_if_contract_valid"),
-    "P005": ('{"in_scope":false,"category":"harmful"}', "existing_safety_policy"),
+    "P001": ('{"safe_request":true,"category":"safe_request","category":"harmful"}', "nullify_then_safe_retry"),
+    "P002": ('{"safe_request":true,"category":"safe_request"', "nullify_then_safe_retry"),
+    "P003": ('{"safe_request":false,"category":"novel_subject"}', "unrecognized_category_handling"),
+    "P004": ('{"safe_request":false,"reason":"Unfamiliar area"}', "unrecognized_category_handling_if_contract_valid"),
+    "P005": ('{"safe_request":false,"category":"harmful"}', "existing_safety_policy"),
     "P006": ("I think this is off-topic.", "nullify_then_safe_retry"),
-    "P007": ('{"in_scope":false,"category":"off_t\\u006fpic"}', "decode_then_apply_policy"),
-    "P008": ('{"in_scope":false,"category":"off_topic","reason":"The text discusses the historical label harmful"}',
+    "P007": ('{"safe_request":true,"category":"safe_r\\u0065quest"}', "decode_then_apply_policy"),
+    "P008": ('{"safe_request":true,"category":"safe_request","reason":"The text discusses the historical label harmful"}',
              "existing_refusal_token_policy_check"),
 }
 
@@ -30,8 +30,8 @@ ACTUAL = {
     "P004": (2, "llm_out:Unfamiliar area", "", False),  # absent category: same
     "P005": (1, "llm_out:", "harmful", False),        # in_scope=false + refusal category: not nullified; REFUSE_CATEGORIES
     "P006": (2, "classifier_malformed", "", False),   # prose: not JSON -> malformed, retried once
-    "P007": (1, "llm_out:", "off_topic", False),      # json decodes the escape to off_topic (ASCII): usable, no retry
-    "P008": (1, "llm_out:The text discusses the historical label harmful", "off_topic", False),  # prose reason: no refusal_token
+    "P007": (1, "llm_in:", "safe_request", False),  # SCOPE-GATE-1104: legacy off_topic = alias of safe_request      # json decodes the escape to off_topic (ASCII): usable, no retry
+    "P008": (1, "llm_in:The text discusses the historical label harmful", "safe_request", False),  # SCOPE-GATE-1104 alias  # prose reason: no refusal_token
 }
 
 
@@ -50,7 +50,7 @@ def test_fixture_actual_handling(pid):
     d, n = run(FIXTURES[pid][0])
     calls, reason, cat, named = ACTUAL[pid]
     assert (n, d.llm_calls) == (calls, calls)
-    assert d.accepted is False and d.layer == "layer2_llm"
+    assert d.accepted is (cat == sr.SAFE_CATEGORY) and d.layer == "layer2_llm"  # SCOPE-GATE-1104: only safe_request passes
     assert d.reason == reason and d.category == cat and d.raw_refusal_named is named
 
 
@@ -95,7 +95,7 @@ def _seq(*replies):
 def test_ooe_label_twice_goes_to_catstep_with_label_log(label, caplog):
     import logging
     with caplog.at_level(logging.INFO, logger="vera"):
-        d, n = run('{"in_scope":false,"category":"%s","reason":"Q-secret-text"}' % label)
+        d, n = run('{"safe_request":false,"category":"%s","reason":"Q-secret-text"}' % label)
     assert n == d.llm_calls == 2  # one retry, as for malformed replies
     assert d.accepted is False and d.reason.startswith("llm_out:") and d.category == "" and not d.raw_refusal_named
     assert catstep.applies(d, Q) is True
@@ -104,7 +104,7 @@ def test_ooe_label_twice_goes_to_catstep_with_label_log(label, caplog):
 
 
 def test_ooe_dangerous_twice_still_subject_to_layer1_and_intent_clean(monkeypatch):
-    raw = '{"in_scope":false,"category":"dangerous"}'
+    raw = '{"safe_request":false,"category":"dangerous"}'
     d, _ = run(raw)
     assert catstep.applies(d, Q) is True
     monkeypatch.setattr(sr, "intent_clean", lambda q, cfg=None: False)  # layer 1 not clean -> no catstep
@@ -117,16 +117,16 @@ def test_ooe_dangerous_twice_still_subject_to_layer1_and_intent_clean(monkeypatc
 
 def test_ooe_retry_resolving_to_in_enum_value(caplog):
     import logging
-    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"category":"off_topic","reason":"r"}')
+    chat, calls = _seq('{"safe_request":false,"category":"dangerous"}', '{"safe_request":true,"category":"safe_request","reason":"r"}')
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
-    assert len(calls) == d.llm_calls == 2 and d.reason == "llm_out:r" and d.category == "off_topic"
+    assert len(calls) == d.llm_calls == 2 and d.reason == "llm_in:r" and d.category == "safe_request"  # SCOPE-GATE-1104 alias
     assert "label=dangerous" in caplog.text and "outcome=retry_resolved" in caplog.text
 
 
 def test_ooe_label_then_absent_category_logs_catstep(caplog):  # review D3
     import logging
-    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"reason":"r"}')
+    chat, calls = _seq('{"safe_request":false,"category":"dangerous"}', '{"safe_request":false,"reason":"r"}')
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
     assert len(calls) == 2 and d.reason == "llm_out:r" and d.category == "" and catstep.applies(d, Q)
@@ -135,7 +135,7 @@ def test_ooe_label_then_absent_category_logs_catstep(caplog):  # review D3
 
 def test_two_different_ooe_labels_both_logged(caplog):  # review D3
     import logging
-    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"category":"risky<x>"}')
+    chat, calls = _seq('{"safe_request":false,"category":"dangerous"}', '{"safe_request":false,"category":"risky<x>"}')
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
     assert len(calls) == 2 and catstep.applies(d, Q)
@@ -144,59 +144,63 @@ def test_two_different_ooe_labels_both_logged(caplog):  # review D3
 
 def test_ooe_label_then_bad_json_still_declines(caplog):
     import logging
-    chat, calls = _seq('{"in_scope":false,"category":"dangerous"}', '{"in_scope":false,"category":')
+    chat, calls = _seq('{"safe_request":false,"category":"dangerous"}', '{"safe_request":false,"category":')
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
     assert len(calls) == 2 and d.reason == "classifier_malformed" and not catstep.applies(d, Q)
     assert "outcome=declined" in caplog.text
 
 
-@pytest.mark.parametrize("raw", ['{"in_scope":false,"category":',  # bad JSON
-                                 '{"in_scope":false,"category":"off_topic","category":"x"}',  # duplicate key
-                                 '{"in_scope":false,"category":"\u043ef_topic"}'])  # non-ASCII lookalike
+@pytest.mark.parametrize("raw", ['{"safe_request":false,"category":',  # bad JSON
+                                 '{"safe_request":true,"category":"safe_request","category":"x"}',  # duplicate key
+                                 '{"safe_request":true,"category":"s\u0430fe_request"}'])  # non-ASCII lookalike
 def test_other_malformed_still_retry_then_decline(raw):
     d, n = run(raw)
     assert n == 2 and d.reason == "classifier_malformed" and not catstep.applies(d, Q)
 
 
 def test_ooe_label_naming_refusal_word_still_declines_at_once():
-    d, n = run('{"in_scope":false,"category":"harmful_stuff"}')
+    d, n = run('{"safe_request":false,"category":"harmful_stuff"}')
     assert n == 1 and d.reason == "classifier_malformed" and not catstep.applies(d, Q)
 
 
-@pytest.mark.parametrize("raw,reason", [('{"in_scope":false,"category":"off_topic"}', "llm_out:"),
-                                        ('{"in_scope":true,"category":"in_scope"}', "llm_in:")])
-def test_ooe_in_enum_label_unchanged(raw, reason):
+def test_ooe_in_enum_label_unchanged():
+    d, n = run('{"safe_request":true,"category":"safe_request"}')
+    assert n == 1 and d.reason.startswith("llm_in:") and d.category == "safe_request"
+
+
+@pytest.mark.parametrize("raw", ['{"in_scope":false,"category":"off_topic"}', '{"in_scope":true,"category":"in_scope"}'])
+def test_legacy_schema_is_off_schema_and_declines(raw):  # INTEGRATE-1104 r2: legacy in_scope / alias labels never pass
     d, n = run(raw)
-    assert n == 1 and d.reason.startswith(reason) and d.category in ("off_topic", "in_scope")
+    assert n == d.llm_calls == 2 and d.accepted is False and d.reason == "classifier_malformed"
 
 
-@pytest.mark.parametrize("raw", ['{"in_scope":false}', '{"in_scope":false,"category":""}'])
+@pytest.mark.parametrize("raw", ['{"safe_request":false}', '{"safe_request":false,"category":""}'])
 def test_ooe_empty_or_absent_category_still_catstep(raw):
     d, _ = run(raw)
     assert d.reason.startswith("llm_out:") and d.category == "" and catstep.applies(d, Q) is True
 
 
 # FINAL-REVIEW-1028 D1/D2/D4
-def test_d1_in_scope_true_label_twice_logs_accepted_after_retry(caplog):
+def test_d1_true_verdict_out_of_enum_label_twice_is_declined(caplog):  # DENYALL-AUDIT-1104 A1 (was: accepted_after_retry)
     import logging
-    raw = '{"in_scope":true,"category":"dangerous"}'
+    raw = '{"safe_request":true,"category":"dangerous"}'
     chat, calls = _seq(raw, raw)
     with caplog.at_level(logging.INFO, logger="vera"):
         d = sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
-    assert len(calls) == 2 and d.accepted is True and d.category == ""
-    assert "outcome=accepted_after_retry" in caplog.text and "retry_resolved" not in caplog.text
+    assert len(calls) == 2 and d.accepted is False and d.reason.startswith("classifier_malformed")
+    assert "outcome=declined" in caplog.text and "accepted_after_retry" not in caplog.text
 
 
 def test_d2_echoed_question_in_category_is_never_logged(caplog):
     import logging
     echo = "jazz brushes drummers"  # short (<32 chars) question text echoed into category
-    raw = '{"in_scope":false,"category":"%s"}' % echo
+    raw = '{"safe_request":false,"category":"%s"}' % echo
     chat, calls = _seq(raw, raw)
     with caplog.at_level(logging.INFO, logger="vera"):
         sr.route(Q, "m", cfg=sr.load_config(), chat=chat)
     assert echo not in caplog.text and "label=nonlabel" in caplog.text
-    assert sr._ooe_label('{"in_scope":false,"category":"Novel_Subject"}') == "novel_subject"
-    assert sr._ooe_label('{"in_scope":false,"category":"x" }') == "x"
-    assert sr._ooe_label('{"in_scope":false,"category":"a b"}') == "nonlabel"
-    assert sr._ooe_label('{"in_scope":false,"category":"%s"}' % ("a" * 33)) == "nonlabel"
+    assert sr._ooe_label('{"safe_request":false,"category":"Novel_Subject"}') == "novel_subject"
+    assert sr._ooe_label('{"safe_request":false,"category":"x" }') == "x"
+    assert sr._ooe_label('{"safe_request":false,"category":"a b"}') == "nonlabel"
+    assert sr._ooe_label('{"safe_request":false,"category":"%s"}' % ("a" * 33)) == "nonlabel"

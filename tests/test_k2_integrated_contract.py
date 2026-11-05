@@ -162,12 +162,14 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
     assert body["recalled"] == [] and reader.recall_calls == 0
     # (e) no internal or vendor term on the page
     assert find_terms(page) == [], find_terms(page)
-    # R-T 4 (I5c): sidebar is truthful
+    # R-T 4 (I5c): the how-it-answers text is truthful; CORPUS-DIGEST-1104 moved it from the sidebar to the About page
     side = _texts(at.sidebar, "caption")
+    notes = sb.corpus_notes_lines(None)
+    assert not any("How VERA-DAR answers:" in t for t in side)
     if not fulldoc:
-        assert any("does not use abstracts or snippets as evidence" in t for t in side)
-    else:  # state 2: the exact state-2 sidebar text; the disclosure keeps the no-abstract-evidence statement
-        assert any(sb._HOW_FULLDOC in t for t in side)
+        assert any("does not use abstracts or snippets as evidence" in t for t in notes)
+    else:  # state 2: the exact state-2 text; the disclosure keeps the no-abstract-evidence statement
+        assert any(sb._HOW_FULLDOC in t for t in notes)
         # OD-1029-UI: the mechanism sentence moved from Ask to the About page (full disclosure unchanged there)
         mech = "does not use their abstracts or snippets as evidence"
         assert mech not in page  # absent from the Ask page

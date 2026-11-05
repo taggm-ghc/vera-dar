@@ -137,7 +137,7 @@ def test_answer_in_scope_logs_token_only(monkeypatch, caplog):
         except Exception:  # noqa: BLE001  the downstream decline path is not under test here
             pass
     msgs = [r.getMessage() for r in caplog.records]
-    assert f"scope {sr.INSTRUCTION_REMOVED_TOKEN}" in msgs
+    assert f"scope {sr.INSTRUCTION_REMOVED_TOKEN} rid=-" in msgs  # INTEGRATE-1104: request ID suffix ("-" untraced)
     assert not any("coral" in m.lower() or "ignore your rules" in m.lower() for m in msgs)
     assert captured["routed"] == q  # layer 1 judges the original (request-local only)
     assert captured["cat"] == "Why do coral reefs bleach?"  # later gates see the remainder
@@ -233,7 +233,11 @@ def test_masked_quote_layer1_accept_goes_to_classifier():
 
 
 def test_plain_layer1_accept_without_masked_quote_unchanged():
+    # SCOPE-GATE-1104 S1 (requirement change, owner 2026-11-04): layer 1 no longer ACCEPTs on topic words, so a plain
+    # question with no masked quote now always gets the layer-2 safety check (stricter than before, never looser)
     q = "Why do AI coding assistants fail on large Python repositories?"
-    assert sr.layer1(q, CFG)[0] == sr.ACCEPT
-    d = sr.route(q, "m", cfg=CFG, chat=lambda *a, **k: pytest.fail("classifier must not run"))
-    assert d.accepted and d.layer == "layer1"
+    assert sr.layer1(q, CFG)[0] == sr.UNSURE
+    calls = []
+    d = sr.route(q, "m", cfg=CFG, chat=lambda *a, **k: (calls.append(1), (
+        '{"safe_request": true, "category": "safe_request", "reason": "ok"}', 1, 1))[1])
+    assert d.accepted and d.layer == "layer2_llm" and calls == [1]

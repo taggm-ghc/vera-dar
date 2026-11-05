@@ -17,14 +17,16 @@ from vera.scope_router import ScopeDecision
 DEC = ScopeDecision(accepted=False, layer="layer2_llm", reason="r", tokens_used=1)
 
 
-def test_d1_note_work_decision_is_refreshed_after_research_eligible_override(monkeypatch):
+def test_d1_note_work_decision_is_refreshed_after_catstep(monkeypatch):
+    # INTEGRATE-1104 R2: no legacy relabel any more (a declined off_topic decision declines). note_work must still see
+    # the decision as refreshed by _catstep (here an accepted safe_request decision), not the stale routed one.
     seen = {}
     px.reset_for_tests()
-    monkeypatch.setattr("vera.scope_router.route", lambda *a, **k: DEC)
-    monkeypatch.setattr(svc, "_catstep", lambda d, *a, **k: d)
+    routed = ScopeDecision(accepted=False, layer="layer2_llm", reason="llm_out:x", tokens_used=1, category="off_topic")
+    fresh = ScopeDecision(accepted=True, layer="layer2_llm", reason="llm_in:x", tokens_used=1, category="safe_request")
+    monkeypatch.setattr("vera.scope_router.route", lambda *a, **k: routed)
+    monkeypatch.setattr(svc, "_catstep", lambda d, *a, **k: fresh)
     monkeypatch.setattr(svc, "_acq_cfg_if_on", lambda: None)
-    monkeypatch.setattr(svc, "_research_eligible", lambda *a, **k: True)
-    monkeypatch.setattr(svc, "_offline_coverage_eligible", lambda *a, **k: True)
 
     def fd(question, model, pricing, decision, *a, **k):
         seen["state"] = px.WORK.get()["decision"]
@@ -34,7 +36,7 @@ def test_d1_note_work_decision_is_refreshed_after_research_eligible_override(mon
     try:
         svc.answer_in_scope("a research question", "m", None)
         assert px.WORK.get()["decision"].accepted is True
-        assert seen["state"].accepted is True
+        assert seen["state"].accepted is True and seen["state"].category == "safe_request"
     finally:
         px.WORK.reset(tok)
 

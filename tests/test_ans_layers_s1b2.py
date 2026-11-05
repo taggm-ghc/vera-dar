@@ -53,14 +53,14 @@ def test_in_scope_flag_on_answer_clean_and_order_matches_off_topic(rig, monkeypa
     _flag(monkeypatch, True)
     r = _call(True)
     assert r.answer == "ANS" and [n["kind"] for n in r.notes] == ["acquisition", "background"]
-    o = _call(False)
-    assert o.answer == "ANS" and [n["kind"] for n in o.notes] == ["offtopic_warning", "acquisition", "background"]
-    assert o.accepted is False
+    o = _call(False)  # INTEGRATE-1104 / SCOPE-GATE-1104 S2: no off-topic wording remains; in_scope is ignored
+    assert o.answer == "ANS" and [n["kind"] for n in o.notes] == ["acquisition", "background"]
+    assert "offtopic" not in (o.contract or {}) and o.accepted == r.accepted  # same as the in-scope call
 
 
 def test_off_topic_flag_off_legacy_text(rig, monkeypatch):
     _flag(monkeypatch, False)
-    assert _call(False).answer == "W ACQ BG ANS"
+    assert _call(False).answer == "ACQ BG ANS"  # INTEGRATE-1104 S2: no off-topic warning prefix ("W") any more
 
 
 def test_background_note_is_separate_kind_on_non_answer(rig, monkeypatch):

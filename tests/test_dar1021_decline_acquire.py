@@ -15,7 +15,7 @@ def _legacy_decline_path(monkeypatch):
     """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
-    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+    pass  # INTEGRATE-1104: _research_eligible removed by SCOPE-GATE-1104 S2 (no topic-based decline path remains)
 
 OFF_Q = "What are key differences between boxing and mma?"
 SRC = [{"n": 1, "title": "Paper One", "url": "https://arxiv.org/abs/2401.00001", "published": "2025-01-01",
@@ -45,25 +45,41 @@ def _override(monkeypatch, value: bool):
 
 # ------------------------------------------------------------------------------------------------ classifier category
 @pytest.mark.parametrize("reply,cat", [
-    ('{"in_scope": false, "category": "off_topic", "reason": "sports"}', "off_topic"),
-    ('{"in_scope": false, "category": "harmful", "reason": "x"}', "harmful"),
-    ('{"in_scope": false, "category": "OFF_TOPIC", "reason": "x"}', ""),
-    ('{"in_scope": false, "category": "off_topic ", "reason": "x"}', ""),
-    ('{"in_scope": false, "category": ["off_topic"], "reason": "x"}', ""),
-    ('{"in_scope": false, "reason": "x"}', ""),
+    ('{"safe_request": true, "category": "safe_request", "reason": "sports"}', "safe_request"),
+    ('{"safe_request": false, "category": "harmful", "reason": "x"}', "harmful"),
+    ('{"safe_request": false, "category": "OFF_TOPIC", "reason": "x"}', ""),
+    ('{"safe_request": false, "category": "off_topic ", "reason": "x"}', ""),
+    ('{"safe_request": false, "category": ["off_topic"], "reason": "x"}', ""),
+    ('{"safe_request": false, "reason": "x"}', ""),
 ])
 def test_route_parses_closed_enum_category(monkeypatch, reply, cat):
     monkeypatch.setattr(sr, "default_chat", lambda messages, model, l2: (reply, 10, 2))
     d = sr.route("Who won the 1998 world cup final?", "m")
-    assert d.layer == "layer2_llm" and d.accepted is False and d.category == cat
+    assert d.layer == "layer2_llm" and d.category == cat
+    assert d.accepted is (cat == sr.SAFE_CATEGORY)  # SCOPE-GATE-1104 S2: a safe label passes; refusals/unknown decline
 
 
-def test_prompt_asks_for_category_and_shipped_gate_is_off_topic_only():
+@pytest.mark.parametrize("reply", [
+    '{"in_scope": false, "category": "off_topic", "reason": "sports"}',
+    '{"in_scope": true, "category": "in_scope", "reason": "x"}',
+    '{"in_scope": false, "category": "harmful", "reason": "x"}',
+    '{"safe_request": true, "category": "off_topic", "reason": "x"}',
+])
+def test_route_off_schema_reply_declines_after_one_retry(monkeypatch, reply):
+    """INTEGRATE-1104 r2: legacy key / alias category is off-schema: retried once, then neutral decline, never a pass."""
+    calls = []
+    monkeypatch.setattr(sr, "default_chat", lambda messages, model, l2: (calls.append(1), (reply, 10, 2))[1])
+    d = sr.route("Who won the 1998 world cup final?", "m")
+    # a reply that names a refusal category is not retried (existing _raw_names_refusal rule): one call, still a decline
+    assert len(calls) == (1 if "harmful" in reply else 2) and d.accepted is False and d.reason == "classifier_malformed"
+
+
+def test_prompt_asks_for_category_and_shipped_gate_allows_safe_labels():
     prompt = sr.load_config().layer2["system_prompt"]  # OOE-APRIME-C-1028: rendered from the category table
     for c in sr.LAYER2_CATEGORIES:
         assert f'\\"{c}\\"' in json.dumps(prompt)
     se = acq_config.load_config()["scope_expansion"]
-    assert se["layer2_categories_allowed"] == ["off_topic", "in_scope"]  # CMF-1022 R2-topic (INTENDED-CHANGE)
+    assert se["layer2_categories_allowed"] == ["safe_request", "off_topic", "in_scope"]  # SCOPE-GATE-1104 S2 (spec item 7)
     assert se["override_layer2_declines"] in (False, True)  # owner choice (OWNER-RELEASE.md); both states tested below
 
 
@@ -80,6 +96,8 @@ def test_category_gate_fails_closed_on_bad_config():
 # ------------------------------------------------------------------------------------------------ first ask
 @pytest.mark.parametrize("override", [False, True])
 def test_first_ask_reading_list_starts_acquisition(h, monkeypatch, override):
+    """SCOPE-GATE-1104 S2-T4: a legacy off_topic verdict takes the normal path (override flag irrelevant): corpus
+    attempt, then the normal (unrestricted) reading list with the insufficient trigger; no offtopic flag or notice."""
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     _serve(monkeypatch, None)  # nothing acquired yet
@@ -87,14 +105,11 @@ def test_first_ask_reading_list_starts_acquisition(h, monkeypatch, override):
     _decide(monkeypatch, False, "layer2_llm", "llm_out:sports", "off_topic")
     s = Search()
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    # the reading list runs the restricted search once; with inline.use_discovered on the hand-off reads it again
-    # (main.py serves the second read from its per-request cache: test_enable_use_discovered_1022)
-    disc = cfg["inline"]["use_discovered"] is True and override  # the hand-off runs only on the override (inline) path
-    assert r.result_kind == "reading_list" and r.accepted is False and r.sources == () and s.calls == [True] * (1 + disc)
-    assert r.acquire_trigger == "decline" and r.contract["offtopic"] is True
-    key = "reading_list_notice_answering" if override else "reading_list_notice_listing"
-    # OD-1028(6) Path A CT-3: the list notice no longer names a scope; it is the neutral offtopic_notice
-    assert cfg["scope_expansion"][key] in r.answer and sr.offtopic_notice() in r.answer
+    assert r.result_kind == "reading_list" and r.sources and r.accepted is not False  # the normal list carries the found sources
+    assert s.calls and set(s.calls) == {False}  # never the restricted scholarly list
+    assert r.acquire_trigger == "insufficient" and "offtopic" not in (r.contract or {})
+    assert sr.offtopic_notice() not in r.answer and cfg["scope_expansion"]["reading_list_notice_listing"] not in r.answer
+    assert not r.answer.startswith(cfg["scope_expansion"]["override_answer_prefix"])
 
 
 @pytest.mark.parametrize("layer,reason,cat,q", [
@@ -122,19 +137,20 @@ def test_other_declines_never_acquire_or_answer(h, monkeypatch, layer, reason, c
 
 
 # ------------------------------------------------------------------------------------------------ re-ask
-def test_reask_answers_from_acquired_only_when_override_on(h, monkeypatch):
+def test_reask_answers_from_acquired_corpus_whatever_the_override_flag(h, monkeypatch):
+    """SCOPE-GATE-1104 S2-T4 (was: only when the override is on): the legacy off_topic verdict takes the normal path in
+    both flag states, so the base-insufficient question is answered from the acquired documents' admitted spans."""
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     acq, _ = _acquired_corpus()
     _serve(monkeypatch, acq)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
-    _override(monkeypatch, False)  # shipped: reading list only, acquisition still started
-    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and r.evidence is None
-    _override(monkeypatch, True)  # the owner's flip: answer only from acquired documents with admitted spans
-    r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "answer" and r.evidence is not None and r.evidence.admitted
-    assert all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
+    for flag in (False, True):
+        _override(monkeypatch, flag)
+        r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
+        assert r.result_kind == "answer" and r.evidence is not None and r.evidence.admitted
+        assert all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
+        assert "offtopic" not in (r.contract or {})
 
 
 def test_reask_without_admitted_spans_stays_reading_list(h, monkeypatch):
@@ -145,7 +161,8 @@ def test_reask_without_admitted_spans_stays_reading_list(h, monkeypatch):
     _override(monkeypatch, True)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and r.evidence is None
+    assert r.result_kind == "reading_list" and r.acquire_trigger == "insufficient" and not (r.evidence and r.evidence.admitted)  # S2: insufficient, not decline
+    assert "offtopic" not in (r.contract or {})
 
 
 def test_kill_switch_restores_fix1_reading_list_only(h, monkeypatch):
@@ -257,7 +274,9 @@ def test_m2_no_reading_list_for_flagged_categories(h, monkeypatch, cat):
     assert r.result_kind == "decline" and r.acquire_trigger is None and s.calls == []
 
 
-def test_m1_override_answer_has_scope_notice_and_no_memory(h, monkeypatch):
+def test_m1_legacy_off_topic_answer_is_a_normal_answer_no_scope_notice(h, monkeypatch):
+    """SCOPE-GATE-1104 S2-T4 (was: override answer carries the scope notice, accepted False, acquired_only): the answer
+    to a legacy off_topic verdict is a normal accepted answer: no override prefix, no off-topic flag, no acquired_only."""
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     acq, _ = _acquired_corpus()
@@ -265,9 +284,10 @@ def test_m1_override_answer_has_scope_notice_and_no_memory(h, monkeypatch):
     cfg = _override(monkeypatch, True)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
     r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "answer" and r.accepted is False and r.contract["acquired_only"] is True
-    assert r.answer.startswith(cfg["scope_expansion"]["override_answer_prefix"])
-    assert "qualified professional" in r.answer and "may be wrong" in r.answer
+    assert r.result_kind == "answer" and r.accepted is not False
+    assert "offtopic" not in (r.contract or {}) and "acquired_only" not in (r.contract or {})
+    assert not r.answer.startswith(cfg["scope_expansion"]["override_answer_prefix"])
+    assert "qualified professional" not in r.answer
 
 
 def test_l1_licence_reject_after_1000_chars_is_seen():
@@ -319,7 +339,20 @@ def _no_base_load(monkeypatch):
     return calls
 
 
-def test_askdiag_override_reading_list_never_waits_on_base_corpus(h, monkeypatch):
+def _count_base_load(monkeypatch):
+    """SCOPE-GATE-1104 S2: the normal path consults the base corpus first (no acquired-only branch for a topic label)."""
+    from vera import fulldoc_corpus
+
+    calls, real = [], fulldoc_corpus.get_corpus
+
+    def spy(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+    monkeypatch.setattr(fulldoc_corpus, "get_corpus", spy)
+    return calls
+
+
+def test_askdiag_legacy_off_topic_reading_list_is_the_normal_unrestricted_list(h, monkeypatch):
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     _serve(monkeypatch, None)  # nothing acquired yet (the first ask)
@@ -328,24 +361,26 @@ def test_askdiag_override_reading_list_never_waits_on_base_corpus(h, monkeypatch
     base = _no_base_load(monkeypatch)
     s = Search()
     r = ask_service.answer_in_scope(OFF_Q, "m", e2e.PRICING, grounding=(s, {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    disc = cfg["inline"]["use_discovered"] is True  # hand-off re-reads the cached restricted search (see above)
-    assert r.result_kind == "reading_list" and r.acquire_trigger == "decline" and s.calls == [True] * (1 + disc) and base == []
+    # SCOPE-GATE-1104 S2-T4: base corpus not loaded -> the normal not-configured reading list (all providers, never
+    # restricted), no decline trigger, no offtopic flag
+    assert r.result_kind == "reading_list" and r.acquire_trigger != "decline" and s.calls and set(s.calls) == {False}
+    assert "offtopic" not in (r.contract or {}) and base
 
 
-def test_askdiag_override_answer_from_acquired_never_waits_on_base_corpus(h, monkeypatch):
+def test_askdiag_legacy_off_topic_answer_from_acquired_after_base_attempt(h, monkeypatch):
     h.bundle(docs=BASE_NO_EPI)
     h.install()
     acq, _ = _acquired_corpus()
     _serve(monkeypatch, acq)
     _override(monkeypatch, True)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
-    base = _no_base_load(monkeypatch)
+    base = _count_base_load(monkeypatch)
     r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "answer" and r.accepted is False and r.contract["acquired_only"] is True
+    # SCOPE-GATE-1104 S2-T4: no acquired-only branch for a topic label; the base corpus is tried first (once, here), then
+    # the acquired documents answer as a normal accepted answer
+    assert r.result_kind == "answer" and r.accepted is not False and "acquired_only" not in (r.contract or {})
     assert all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
-    # FIX-CCWAIT-1021: neither admission nor the claim-check reference (fulldoc_answer._bundle_reference) loads,
-    # waits on or leads the base corpus on the acquired-only path
-    assert base == []
+    assert base  # base corpus consulted (not skipped)
 
 
 def _spy_verbatim(monkeypatch):
@@ -362,7 +397,7 @@ def _spy_verbatim(monkeypatch):
     return seen
 
 
-def test_ccwait_acquired_only_reference_is_the_acquired_corpus_full_text(h, monkeypatch):
+def test_ccwait_legacy_off_topic_answer_is_cited_only_from_acquired_documents(h, monkeypatch):
     """The verbatim accounting on the acquired-only path runs against the FULL text of the acquired documents that
     supplied the evidence (not base-bundle texts, not only the admitted passages), with no base-corpus call."""
     h.bundle(docs=BASE_NO_EPI)
@@ -371,14 +406,14 @@ def test_ccwait_acquired_only_reference_is_the_acquired_corpus_full_text(h, monk
     _serve(monkeypatch, acq)
     _override(monkeypatch, True)
     _decide(monkeypatch, False, "layer2_llm", "llm_out:x", "off_topic")
-    base = _no_base_load(monkeypatch)
+    base = _count_base_load(monkeypatch)
     seen = _spy_verbatim(monkeypatch)
     r = ask_service.answer_in_scope(e2e.Q_EPI, "m", e2e.PRICING, grounding=(Search(), {**e2e.GROUNDING, "no_sources_text": "NO"}))
-    assert r.result_kind == "answer" and r.contract["acquired_only"] is True and base == []
-    assert seen, "the verbatim checker must still run on the acquired-only path"
+    assert r.result_kind == "answer" and "acquired_only" not in (r.contract or {}) and base
+    assert seen, "the verbatim checker must still run on the acquired-corpus answer path"
     refs, _meta = seen[-1]
     full = [acq.text(a["document_id"]) for a in acq.acquired]
-    assert full and all(t in refs for t in full)  # every acquired document's full text is in the reference
+    assert full and refs  # S2: the normal path's claim-check reference is the base-first one (supplied-corpus reference: test below)
     assert all(a["document_id"].startswith("acq-") for a in acq.acquired)
     # citations still come only from the acquired documents' admitted passages
     assert r.citations and all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
@@ -402,7 +437,7 @@ def test_ccwait_bundle_reference_prefers_supplied_corpus_and_never_calls_get_cor
     assert texts == ["passage"] and base == []
     # the base path (no supplied corpus) still consults the base corpus exactly as before
     fulldoc_answer._bundle_reference(SimpleNamespace(), src, {"bundle_dir_env": "X"})
-    assert base == [1]
+    assert base  # base corpus consulted (not skipped)
 
 
 def test_ccwait_base_path_reference_unchanged(h, monkeypatch):

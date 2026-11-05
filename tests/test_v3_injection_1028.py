@@ -48,7 +48,7 @@ def test_audit_examples_reach_layer2(q):
 
     def chat(messages, model, l2):
         calls.append(messages)
-        return json.dumps({"in_scope": True, "category": "in_scope", "reason": "ok"}), 1, 1
+        return json.dumps({"safe_request": True, "category": "safe_request", "reason": "ok"}), 1, 1
 
     sr.route(q, "m", cfg=CFG, chat=chat)
     assert len(calls) == 1, q

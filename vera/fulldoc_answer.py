@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 
 from vera import progress as _progress
+from vera import request_trace as rt
 from vera.ask_service import AskResult
 
 _CITE = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
@@ -143,7 +144,10 @@ def messages_for(question: str, sources: list[dict], cfg: dict) -> list[dict]:
         from vera import lane_evidence
         system = lane_evidence.lane_prompt(system, cfg, per_part=per_part_enabled(cfg))
     if premise_enabled(cfg):
-        system += PREMISE_INSTRUCTION
+        system += PREMISE_INSTRUCTION.replace("{insufficient_marker}", str(cfg["answer"].get("insufficient_marker") or
+                                                                         "the insufficient-evidence reply"))
+    from vera.claim_check import current_utc_date
+    system += DATE_INSTRUCTION.replace("{date}", current_utc_date())  # OD-1104-TRACE F3
     return [{"role": "system", "content": system + _UNTRUSTED},
             {"role": "user", "content": _user_payload(question, sources)}]
 
@@ -151,13 +155,21 @@ def messages_for(question: str, sources: list[dict], cfg: dict) -> list[dict]:
 # DAR-PREMISE-1022: "sometimes no answer is right because the question itself is wrong". The model may open its reply
 # with one PREMISE line naming the unsupported premise. The reason is a CLAIM: it is cited and goes through the same
 # per-claim check, verbatim and quote rules as any answer sentence; an uncited or unverified reason is never shown.
-PREMISE_STATUSES = ("false", "unsupported", "ill_posed")
+# OD-1104-TRACE F2: "unsupported" is no longer a premise verdict. Passages that merely fail to address or support the
+# question are an evidence miss (the insufficient marker, which starts the inline-acquisition retry), never a premise
+# problem. A legacy "PREMISE: unsupported" line is still parsed and is turned into the insufficient marker.
+PREMISE_STATUSES = ("false", "ill_posed")
 PREMISE_INSTRUCTION = (
-    "\n\nPremise check: if the question assumes something the passages contradict (false), something the passages do "
-    "not support (unsupported), or is not a well-formed question (ill_posed), do not answer it as asked and do not "
-    "list reading material. In that case, and only then, make the very first line of your reply exactly: PREMISE: "
-    "<false|unsupported|ill_posed> - <one sentence stating which premise fails, citing the passage as [n]> and write "
-    "nothing else (this overrides any other reply format, including Parts/Answers). Otherwise write no PREMISE line.")
+    "\n\nPremise check: if a passage explicitly contradicts something the question assumes (false), or the question "
+    "is not a well-formed question (ill_posed), do not answer it as asked and do not list reading material. In that "
+    "case, and only then, make the very first line of your reply exactly: PREMISE: <false|ill_posed> - <one sentence "
+    "stating which premise fails, citing the contradicting passage as [n]> and write nothing else (this overrides any "
+    "other reply format, including Parts/Answers). Otherwise write no PREMISE line. Passages that do not mention, "
+    "address or support the question are NOT a premise problem: reply {insufficient_marker} as instructed above.")
+# OD-1104-TRACE F3: the current date (from claim_check.utc_now, the one injectable clock) and the own-knowledge rule.
+DATE_INSTRUCTION = (
+    "\n\nToday's date (UTC) is {date}. Events after your training data are normal. Never judge a premise, whether an "
+    "event happened, or how recent it is from your own knowledge; only the cited passages count.")
 # Anchored to the first line of the whole reply (SEC P4/P6): a PREMISE line later in a normal answer is ordinary text.
 _PREMISE_LINE = re.compile(r"(?i)\A\s*[ \t>*_`#-]*PREMISE[ \t*_`]*:[ \t*_`]*(ok|false|unsupported|ill[_ -]?posed)\b[ \t*_`]*"
                            r"[-:\u2013\u2014]?[ \t]*(.*)")
@@ -177,6 +189,19 @@ def _count_premise(status: str, verified: bool) -> None:
     key = f"{status}:{'verified' if verified else 'unverified'}"
     PREMISE_COUNTS[key] = PREMISE_COUNTS.get(key, 0) + 1
     logging.getLogger("vera").info("premise_check status=%s verified=%s", status, verified)
+    rt.event("premise", "verified" if verified else "unverified", detail={"verdict": str(status)})
+
+
+def _trace_sent(sources) -> None:
+    """Trace: the exact passages handed to the writer (ids and relevance scores only, never text)."""
+    rt.event("passages", "sent_to_writer", counts={"n": len(sources)},
+             detail={"span_ids": [s.get("span_id") for s in sources][:20],
+                     "relevance": [s.get("relevance") for s in sources][:20]})
+
+
+def _trace_cited(citations) -> None:
+    rt.event("passages", "evidence_trace",
+             detail={"cited_span_ids": sorted({str(c.get("span_id")) for c in citations if c.get("span_id")})[:20]})
 
 
 def premise_enabled(cfg: dict) -> bool:
@@ -538,6 +563,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         if len(narrowed) == len(kept):
             break
         cand = narrowed
+    rt.event("passages", "verbatim_drop", counts={"dropped": int(dropped or 0), "kept": len(kept)})
     if not require_supported_claim(kept):  # D7, enforced by C2 itself
         return fall(_resp_token(fb, summary, fb["claim_check_insufficient"]), records)
     order = [k for k, _ in parts]
@@ -625,6 +651,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     adequacy = _gate(considered, [k for k, _ in blocks if k not in partial_only], {k: _clip(ptext[k]) for k in considered}, resp_partial,
                      _subqueries(question, final, sources, resp_partial))
     trace = _trace(ev, records, citations, adequacy, sources)
+    _trace_cited(citations)
     tokens, cost = totals()
     result = AskResult(answer=text, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind,
@@ -639,6 +666,7 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
     """Premise-aware wrapper over _answer (DAR-PREMISE-1022). A PREMISE line in the model reply turns the reply into a
     single cited correction sentence that _answer verifies like any claim; see PREMISE_INSTRUCTION."""
     if not premise_enabled(cfg):
+        rt.event("premise", "disabled")
         return _answer(question, ev, model, pricing, chained=chained, grounding_cfg=grounding_cfg, cfg=cfg,
                        base_tokens=base_tokens, base_cost=base_cost, complete_fn=complete_fn, check_call=check_call,
                        reference_texts=reference_texts, reference_corpus=reference_corpus)
@@ -652,8 +680,14 @@ def answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_c
         res = complete_fn(messages, *a, **kw)
         status, reason, _rest = parse_premise(res.answer or "")
         if status is None:
+            rt.event("premise", "verdict_ok")
             return replace(res, answer=_rest) if _PREMISE_LINE.search(res.answer or "") else res
+        if status == "unsupported":  # OD-1104-TRACE F2: absence of support is an evidence miss, not a premise verdict
+            logging.getLogger("vera").info("premise_check status=unsupported -> insufficient (evidence miss)")
+            marker = (cfg.get("answer") or {}).get("insufficient_marker") or ""
+            return replace(res, answer=marker) if marker else replace(res, answer="")
         seen["status"] = status
+        rt.event("premise", "verdict_flagged", detail={"verdict": status, "cited": bool(_CITE.search(reason))})
         if not _CITE.search(reason):  # a correction that cites no passage cannot be verified: never shown
             raise _PremiseUnverifiable(status, res)
         return replace(res, answer=reason)
@@ -690,6 +724,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     tokens, cost = base_tokens, base_cost
 
     def fall(token, records=None):
+        rt.event("writer", "fall", counts={"records": len(records or [])}, detail={"fallback": str(token)})
         tr = _trace(ev, records, None, None, sources_from(ev) if getattr(ev, "admitted", None) else None)
         return FullDocOutcome(None, token, tokens, round(cost, 6), None, tr)
 
@@ -710,11 +745,14 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     if complete_fn is None:
         from vera.ask_service import complete as complete_fn
     sources = sources_from(ev)
+    _trace_sent(sources)
     _progress.emit("write", "start")  # PROG-1027 W2a: immediately before the answer writer; no DONE if it raises
     res = complete_fn(messages_for(question, sources, cfg), model, pricing, **(chained or {}))
     _progress.emit("write", "done")
     tokens += res.tokens_used
     cost += res.cost_usd
+    rt.event("writer", "draft", counts={"tokens": int(res.tokens_used or 0)},
+             detail={"model": str(model), "cost_usd": round(float(res.cost_usd or 0.0), 6)})
 
     from vera.claim_check import RECORDS, USAGE, check_answer
     from vera.grounded_ask import count_valid_citations, fix_citations
@@ -756,6 +794,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts, reference_corpus)
         checker = VerbatimChecker(ref_texts, meta, vcfg)
     kept, profs, dropped = enforce_verbatim([r for r in records if not _off_question(r)], sources, checker, cfg)
+    rt.event("passages", "verbatim_drop", counts={"dropped": int(dropped or 0), "kept": len(kept)})
     if cfg["answer"].get("require_supported_claim", True):  # D7 (POL hook): >= 1 fully supported claim, else fall back
         from vera.fulldoc_policy import require_supported_claim
 
@@ -790,6 +829,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     adequacy = _gate([1], [1], {1: _clip(question)}, _resp_partial(kept, rcfg),
                      _subqueries(question, kept, sources, _resp_partial(kept, rcfg)))
     trace = _trace(ev, records, citations, adequacy, sources)
+    _trace_cited(citations)
     result = AskResult(answer=checked, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind="answer",
                        contract=({"trace": trace} if trace else None), evidence=ev, citations=tuple(citations),

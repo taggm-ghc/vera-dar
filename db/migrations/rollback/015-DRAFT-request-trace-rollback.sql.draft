@@ -1,0 +1,21 @@
+-- 015_vera_request_trace ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the request-trace tables, the corpus digest table
+-- and every row in them (including stored question text).
+-- Owner-only, never expected to run, needs the owner's separate same-turn approval. Never run via db/apply_migrations.py.
+-- Non-destructive rollback first: set db_sink.enabled and digest_store.enabled to false in config/request_trace.json (the app
+-- then writes nothing to these tables). Export the tables first if their rows are wanted.
+-- The schema vera_vjay is shared and NOT dropped; the USAGE grants on it predate this file for other tables.
+-- Owner script: work/PERF-MISS-1104/trace/rollback_migration.sh (dry run by default).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+BEGIN;
+DROP TRIGGER IF EXISTS request_trace_requests_append_only_trg ON vera_vjay.request_trace_requests;
+DROP TRIGGER IF EXISTS request_trace_requests_no_truncate_trg ON vera_vjay.request_trace_requests;
+DROP TRIGGER IF EXISTS request_trace_events_append_only_trg ON vera_vjay.request_trace_events;
+DROP TRIGGER IF EXISTS request_trace_events_no_truncate_trg ON vera_vjay.request_trace_events;
+DROP INDEX IF EXISTS vera_vjay.request_trace_requests_created_idx;
+DROP INDEX IF EXISTS vera_vjay.request_trace_events_created_idx;
+DROP TABLE IF EXISTS vera_vjay.request_trace_events;
+DROP TABLE IF EXISTS vera_vjay.request_trace_requests;
+DROP TABLE IF EXISTS vera_vjay.corpus_digest_state;
+DROP FUNCTION IF EXISTS vera_vjay.request_trace_no_truncate_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.request_trace_append_only_trgfn();
+COMMIT;

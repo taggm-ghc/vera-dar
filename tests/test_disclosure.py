@@ -14,6 +14,17 @@ ROOT = Path(__file__).resolve().parent.parent
 PAGES = ["streamlit_app.py", "pages/vera_demo.py", "pages/trace_eval.py", "pages/about.py", "pages/how_to_use.py"]
 
 
+_REAL_LANES_ON, _REAL_REPORTING_ON = disclosure.lanes_disclosure_on, disclosure.reporting_lane_on
+
+
+@pytest.fixture(autouse=True)
+def _lanes_off(monkeypatch):
+    """NEWS-LANE-1104: the reporting lane ships on, so the shipped text carries lane sentences. These tests are about the
+    other switches and pin the lanes off; the lane-on wording is tested in test_lane_disclosure_1103.py."""
+    monkeypatch.setattr(disclosure, "lanes_disclosure_on", lambda: False)
+    monkeypatch.setattr(disclosure, "reporting_lane_on", lambda: False)
+
+
 def _store() -> dict:
     return json.loads(CONFIG_PATH.read_text())["memory"]["store"]
 
@@ -28,7 +39,7 @@ def _contract(tmp_path, layers=("L0", "L2"), evidence=False, note="Discovery not
 def test_text_exists_and_states_core_claims():
     t = disclosure.DISCLOSURE_TEXT.lower()
     for phrase in ("not neutral or complete", "may be wrong", "check the sources", "no profile",
-                   "does not save your question"):
+                   "keeps the text of your question for up to 30 days"):
         assert phrase in t
 
 
@@ -84,10 +95,12 @@ def test_unreadable_contract_config_is_l0_text(tmp_path):
     assert disclosure.disclosure_text(contract_path=bad) == l0 == disclosure.disclosure_text(contract_path=tmp_path / "missing.json")
 
 
-def test_confirm_flag_does_not_change_text_while_evidence_recall_off(tmp_path):
+def test_confirm_flag_does_not_change_text_while_evidence_recall_off(tmp_path, monkeypatch):
     cfg = tmp_path / "c.json"
     cfg.write_text(json.dumps({"memory": {"store": {"confirm_required": False}}}))
-    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT.replace(disclosure._web_sentence(), "", 1).replace(disclosure._LANE_COUNT_NEW, disclosure._LANE_COUNT_OLD).replace(disclosure._LANE_SENT_NEW, disclosure._LANE_SENT_OLD)
+    monkeypatch.setattr(disclosure, "lanes_disclosure_on", _REAL_LANES_ON)  # the shipped constant is built lane-on
+    monkeypatch.setattr(disclosure, "reporting_lane_on", _REAL_REPORTING_ON)
+    assert disclosure.disclosure_text(cfg) == disclosure.disclosure_text() == disclosure.DISCLOSURE_TEXT.replace(disclosure._web_sentence(), "", 1)
     assert disclosure.DISCLOSURE_TEXT_UNCONFIRMED == disclosure.DISCLOSURE_TEXT
 
 
@@ -100,7 +113,7 @@ def test_evidence_findings_sentence_only_when_recall_on(tmp_path):
 def test_render_calls_caption_with_text():
     st = mock.MagicMock()
     disclosure.render_disclosure(st)
-    st.caption.assert_called_once_with(disclosure.SHORT_NOTICE)  # R-031: one short line; full text is on About only
+    st.caption.assert_called_once_with(disclosure.short_notice_text())  # R-031: one short line; full text is on About only
     assert [c.args[0] for c in st.page_link.call_args_list] == [t for t, _ in disclosure.ABOUT_LINKS]
 
 
@@ -123,13 +136,13 @@ def test_pages_do_not_hardcode_the_text():
 
 def test_no_url_or_host():
     for t in (disclosure.DISCLOSURE_TEXT, disclosure.DISCLOSURE_TEXT_UNCONFIRMED):
+        t = t.replace(disclosure._LANE_GDELT_CREDIT, "")  # the one disclosed link: the GDELT credit while the lane is on
         assert not re.search(r"https?://|www\.|\.(com|org|net|io|ai|app)\b|onrender|localhost|\d+\.\d+\.\d+\.\d+", t, re.I)
 
 
 # ---- Owner decision 2026-10-19 (Option C): exact text, and the storage claims follow the shipped configuration ----
 EXACT_TAIL = ("Your question is sent to third-party AI and search services to generate a response. These services have "
-              "their own data-handling and retention policies. VERA-DAR does not save your question or information "
-              "identifying you. During this demonstration, VERA-DAR does not save newly discovered documents or research "
+              "their own data-handling and retention policies." + disclosure._NO_SAVE + " During this demonstration, VERA-DAR does not save newly discovered documents or research "
               "notes from your questions.")
 
 
@@ -147,10 +160,9 @@ def test_shipped_config_is_demo_configuration():
 
 
 EXACT_TAIL_P17 = ("Your question is sent to third-party AI and search services to generate a response. These services have "
-                  "their own data-handling and retention policies. VERA-DAR does not save your question or information "
-                  "identifying you. Its collection also grows automatically: VERA-DAR may add open-access full-text "
+                  "their own data-handling and retention policies." + disclosure._NO_SAVE + " Its collection also grows automatically: VERA-DAR may add open-access full-text "
                   "documents found while searching for your question, after automated licence and content checks, "
-                  "recording each document's source, licence and the time it was added; it does not store your question.")
+                  "recording each document's source, licence and the time it was added; the question itself is not added to it.")
 
 
 @pytest.fixture(autouse=True)
@@ -170,9 +182,12 @@ def test_web_sentence_only_in_full_disclosure_iff_flag_on(monkeypatch):
 def test_exact_owner_text_as_shipped(monkeypatch):  # WED-ACQ2 P1.7: automatic acquisition ships switched on (owner 2026-10-21)
     # DISCLOSURE_TEXT is built at import with the shipped (web-read on) config: it is the web-off text plus the web sentence
     web = disclosure._web_sentence()
-    shipped = disclosure.DISCLOSURE_TEXT
+    shipped = disclosure.DISCLOSURE_TEXT.replace(disclosure._LANE_GDELT_CREDIT, "")  # NEWS-LANE-1104: lane credit follows the tail
     assert shipped.count(web) == 1
     shipped = shipped.replace(web, "", 1)
+    monkeypatch.setattr(disclosure, "lanes_disclosure_on", _REAL_LANES_ON)
+    monkeypatch.setattr(disclosure, "reporting_lane_on", _REAL_REPORTING_ON)
+    shipped = shipped.replace(disclosure.lane_third_party(), "", 1)  # NEWS-LANE-1104: lane sentences sit after the third-party sentences
     assert shipped.endswith(" " + EXACT_TAIL_P17)
     assert "During this demonstration" not in shipped
     assert "A third-party hosted language model may be used" not in shipped  # folded into the exact text
@@ -185,7 +200,7 @@ def test_demo_sentence_only_when_corpus_and_l2_off(tmp_path, monkeypatch):
     for chain, layers in ((_chain(tmp_path, True), ("L0",)), (off, ("L0", "L2")), (tmp_path / "missing.json", ("L0",))):
         t = disclosure.disclosure_text(contract_path=_contract(tmp_path, layers), chain_path=chain)
         assert "During this demonstration" not in t, (chain, layers)
-        assert "does not save your question or information identifying you" in t
+        assert disclosure._NO_SAVE.strip() in t
 
 
 def test_corpus_enabled_text_does_not_claim_no_new_storage(tmp_path):
@@ -206,7 +221,7 @@ def test_r028_no_save_sentence_still_emitted_and_backed_by_counts_only_logging(m
     t = disclosure.disclosure_text()
     assert ("During this demonstration, VERA-DAR does not save newly discovered documents or research notes from "
             "your questions.") in t
-    assert "VERA-DAR does not save your question or information identifying you." in t
+    assert disclosure._NO_SAVE.strip() in t
     # the only acquisition log is the counts-only line: no question/title/url/identifier is read by it
     import inspect
 

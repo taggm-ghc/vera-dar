@@ -1,4 +1,5 @@
-"""OD-DARINT-SCOPE (option 1): widened four-field scope text, scope set v2 shape, layer 1 unchanged (offline)."""
+"""OD-DARINT-SCOPE (option 1): scope set v2 shape and layer-1 behaviour on it (offline). The four-field scope text
+itself was removed by SCOPE-GATE-1104 S1 (2026-11-04)."""
 import json
 from collections import Counter
 from pathlib import Path
@@ -15,15 +16,16 @@ FIELDS = ("ai_software_development", "epidemiology", "climate_science",
 CFG = sr.parse_config(RAW, "llm")
 
 
-def test_four_fields_named_in_scope_prompt_and_decline_text():
-    for text in (RAW["scope"], RAW["layer2"]["system_prompt"]):
-        for word in ("epidemiology", "climate science", "reproducibility", "ecology"):
-            assert word in text
-    # OD-1028(6) Path A CT-3: topic never produces a refusal, so the neutral decline text names no field and no scope
-    for word in ("epidemiology", "climate science", "reproducibility", "ecology", "scope"):
-        assert word not in RAW["decline_template"]
-    assert "AI in other fields" in RAW["layer2"]["system_prompt"]  # OUT list unchanged
-    assert "scope_v2_note" in RAW and "poison" in RAW["scope_v2_note"] and "symptoms" in RAW["scope_v2_note"]
+def test_no_field_list_in_config_prompt_or_decline_text():
+    # SCOPE-GATE-1104 S1 (requirement change; owner 2026-11-04: "there should be no Fixed Scope text"): the four-field
+    # scope string and the prompt's IN/OUT field lists are removed; the v2 note is kept as Superseded history
+    assert "scope" not in RAW
+    for text in (RAW["layer2"]["system_prompt"], RAW["decline_template"]):
+        for word in ("epidemiology", "climate science", "reproducibility", "ecology", "AI in other fields", "scope"):
+            assert word not in text
+    # INTEGRATE-1104 round 2 (orchestrator): the superseded v2 note (it held the old field list) is removed from the
+    # shipped config too; its history stays in version control
+    assert "scope_v2_note" not in RAW
 
 
 def test_set_v2_has_at_least_six_per_field_and_ten_negatives():

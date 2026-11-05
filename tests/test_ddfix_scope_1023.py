@@ -33,16 +33,20 @@ def _ask(q, ds=None):
     return ask_service.answer_in_scope(q, "m", e2e.PRICING, grounding=(ds or Search(), GROUND[1]))
 
 
-OFF = {"in_scope": False, "category": "off_topic", "reason": "multi-agent systems"}
+OFF = {"safe_request": True, "category": "safe_request", "reason": "multi-agent systems"}  # R2: new schema
 
 
 # ------------------------------------------------------------------------------------------------ routing (live question)
 def test_live_question_is_research_eligible_not_refused(rig):
-    """The owner's live question: layer 1 is unsure, the classifier says off_topic; research runs on the normal path."""
+    """The owner's live question: layer 1 is unsure, the classifier says safe_request; research runs on the normal path."""
     assert sr.layer1(LIVE_Q, sr.load_config()) == (sr.UNSURE, "no_rule") and sr.intent_clean(LIVE_Q)
     _real_router(rig, OFF)
+    d = sr.route(LIVE_Q, "m")  # R2: an ordinary safe_request verdict passes
+    assert d.accepted is True and d.category == sr.SAFE_CATEGORY and d.reason.startswith("llm_in:")
+    # the end-to-end run uses the rig's own question (OFF_Q): the stubbed acquisition fixture holds documents for that
+    # topic only, and LIVE_Q would send the variant rounds to the real providers (blocked in tests)
     ds = Spy()
-    r = _ask(LIVE_Q, ds)
+    r = _ask(OFF_Q, ds)
     assert r.result_kind != "decline" and r.answer != sr.decline_text()
     assert sr.offtopic_notice() not in r.answer and "curated scope" not in r.answer
     assert not (r.contract or {}).get("offtopic")
@@ -65,7 +69,7 @@ def test_off_topic_question_is_answered_from_acquired_full_text_without_scope_re
 # ------------------------------------------------------------------------------------------------ refusals unchanged
 @pytest.mark.parametrize("cat", ["advice", "harmful", "programming_task", "rule_change"])
 def test_safety_and_policy_refusals_still_refuse(rig, cat):
-    _real_router(rig, {"in_scope": False, "category": cat, "reason": "x"})
+    _real_router(rig, {"safe_request": False, "category": cat, "reason": "x"})
     ds = Spy()
     r = _ask(LIVE_Q, ds)
     if cat == "programming_task":
@@ -88,19 +92,26 @@ def test_layer1_injection_still_refuses_without_classifier_or_research(rig):
     assert ds.calls == [] and rig.outcomes == []
 
 
-@pytest.mark.parametrize("reply", ['{"in_scope": false, "reason": "x"}', "not json"])
+@pytest.mark.parametrize("reply", ['{"safe_request": false, "reason": "x"}', "not json",
+                                   '{"in_scope": false, "category": "off_topic", "reason": "x"}',  # R2: legacy = off-schema
+                                   '{"in_scope": true, "category": "in_scope", "reason": "x"}'])
 def test_missing_category_or_malformed_verdict_keeps_the_decline_path(rig, reply):
     rig.mp.setattr(sr, "route", REAL_ROUTE)
     rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (reply, 10, 2))
-    assert not ask_service._research_eligible(sr.route(LIVE_Q, "m"), LIVE_Q, rig.cfg)
-    r = _ask(LIVE_Q, Spy())
-    assert r.result_kind != "answer"
+    d = sr.route(LIVE_Q, "m")
+    assert d.accepted is False
+    ds = Spy()
+    r = _ask(LIVE_Q, ds)
+    assert r.result_kind == "decline" and r.answer == sr.decline_text()  # SCOPE-GATE-1104 S2 D2a: neutral decline
+    assert ds.calls == [] and rig.outcomes == [] and rig.h.answer_calls == []
 
 
-def test_override_switch_off_keeps_the_previous_decline_path(rig):
+def test_override_switch_off_no_longer_gates_a_topic_verdict(rig):
+    # SCOPE-GATE-1104 S2: override_layer2_declines no longer gates anything; a legacy off_topic verdict passes safety
+    # and takes the normal path (here: acquired full text answers) with no offtopic flag
     rig.cfg["scope_expansion"]["override_layer2_declines"] = False
     r = rig.run()
-    assert r.result_kind == "reading_list" and r.contract.get("offtopic") is True and rig.outcomes == []
+    assert r.result_kind == "answer" and not (r.contract or {}).get("offtopic") and r.answer != sr.decline_text()
 
 
 # ------------------------------------------------------------------------------------------------ abstention

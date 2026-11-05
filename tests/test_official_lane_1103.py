@@ -33,8 +33,11 @@ def on(**kw):
 def test_shipped_flags_off():
     assert ol.load_config()["enabled"] is False
     assert ol.lane_enabled() is False
-    assert reporting_lane.load_config(ROOT / "config" / "reporting_lane.json")["enabled"] is False
-    assert json.loads((ROOT / "config" / "reporting_lane.json").read_text())["outlets"] == []
+    # NEWS-LANE-1104 (owner 2026-11-04 "enable"): the reporting lane ships ON; every outlet row carries a verdict
+    # and evidence (tests/test_news_lane_1104_lane.py covers the policy).
+    assert reporting_lane.load_config(ROOT / "config" / "reporting_lane.json")["enabled"] is True
+    for o in json.loads((ROOT / "config" / "reporting_lane.json").read_text())["outlets"]:
+        assert o["terms_verdict"] in reporting_lane.VERDICTS and o["terms_evidence"]
 
 
 def test_lane_enabled_fails_closed():
@@ -68,9 +71,11 @@ def test_verdict_rules():
 
 
 # ---- flags off --------------------------------------------------------------------------------------
-def test_flags_off_collect_empty_no_fetch():
+def test_flags_off_collect_empty_no_fetch(monkeypatch):
+    # NEWS-LANE-1104: the reporting lane now ships ON; its rollback (flag off) is simulated here
+    monkeypatch.setattr(reporting_lane, "lane_enabled", lambda cfg=None: False)
     f = Stub()
-    res = lane_evidence.collect(QUESTION, fetch=f)  # shipped config: both flags off
+    res = lane_evidence.collect(QUESTION, fetch=f)  # official ships off; reporting rolled back
     assert res.links == [] and res.pages == [] and f.calls == []
     assert lane_evidence.any_enabled() is False
 
@@ -100,6 +105,9 @@ def test_example_question_one_link_per_entity_fetch_only_allow(monkeypatch):
 
 def test_collect_example_question_through_lane_evidence(monkeypatch):
     monkeypatch.setattr(ol, "load_config", lambda path=None: on())
+    # INTEGRATE-1104: the reporting lane ships on (NEWS-LANE-1104) and would make a real GDELT request for this
+    # question (refused by the test boundary); this test is about the Official lane, so reporting is pinned off
+    monkeypatch.setattr(reporting_lane, "lane_enabled", lambda cfg=None: False)
     f = Stub()
     res = lane_evidence.collect(QUESTION, fetch=f)
     ents = {lk["entity"] for lk in res.links if lk["lane"] == "official"}

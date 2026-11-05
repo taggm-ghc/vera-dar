@@ -14,7 +14,7 @@ from vera.pricing.config import PricingRecord
 PRICING = PricingRecord(provider="p", model="m", input=0.1, output=0.4, source_url="u",
                         retrieved_at="2026-01-01", effective_from="2026-01-01")
 RAW = json.loads(sr.CONFIG_PATH.read_text())
-P10B = '{"in_scope": false, "reason": "not a research question"}'  # well-formed, no category (D-P10b)
+P10B = '{"safe_request": false, "reason": "not a research question"}'  # well-formed, no category (D-P10b)
 Q_ANCHOR = "What does surveillance show about outbreak transmission, incidence and vaccination in an epidemic?"
 Q_NONE = "How do jazz drummers practise brushes?"
 STOP = ask_service.AskResult(answer="STOP", tokens_used=0, cost_usd=0.0, result_kind="answer")
@@ -166,7 +166,7 @@ def test_shadow_logs_high_similarity_and_never_changes_routing(ident, words, cap
 @pytest.mark.parametrize("mode", ["off", "shadow", "scrutiny"])
 @pytest.mark.parametrize("ident,words", MULTI, ids=[k for k, _ in MULTI])
 def test_no_refusal_from_similarity_alone(mode, ident, words):
-    clean = '{"in_scope": false, "category": "off_topic", "reason": "general question"}'
+    clean = '{"safe_request": true, "category": "safe_request", "reason": "general question"}'
     out = catstep.categorise(_two(words), cfg_sim(mode=mode), chat=_chat(clean), model="m")
     assert out.status in ("anchor", "unassigned")
 
@@ -238,16 +238,16 @@ HIGH_Q = next(_two(w) for _k, w in MULTI if sr.intent_clean(_two(w)))  # passes 
 
 
 @pytest.mark.parametrize("reply,status,reason,cat", [
-    ('{"in_scope": false, "category": "harmful", "reason": "x"}', "refuse", "refuse:recheck:harmful", "harmful"),
-    ('{"in_scope": true, "category": "advice"}', "refuse", "refuse:recheck:advice", "advice"),  # category_conflict
-    ('{"in_scope": false, "category": "off_topic", "x": {"category": "rule_change"}}', "refuse",
+    ('{"safe_request": false, "category": "harmful", "reason": "x"}', "refuse", "refuse:recheck:harmful", "harmful"),
+    ('{"safe_request": true, "category": "advice"}', "refuse", "refuse:recheck:advice", "advice"),  # category_conflict
+    ('{"safe_request": true, "category": "safe_request", "x": {"category": "rule_change"}}', "refuse",
      "refuse:recheck:rule_change", "rule_change"),  # refusal_token
-    ('{"in_scope": false, "category": "off_topic", "reason": "general"}', "clean", "", ""),
-    ('{"in_scope": true, "category": "in_scope", "reason": "field"}', "clean", "", ""),
-    ('{"in_scope": false, "reason": ', "retrieval_only", "retrieval_only:recheck_malformed", ""),
-    ('{"in_scope": false, "category": "off_topic", "category": "harmful"}', "retrieval_only",
+    ('{"safe_request": true, "category": "safe_request", "reason": "general"}', "clean", "", ""),
+    ('{"safe_request": true, "category": "safe_request", "reason": "field"}', "clean", "", ""),
+    ('{"safe_request": false, "reason": ', "retrieval_only", "retrieval_only:recheck_malformed", ""),
+    ('{"safe_request": true, "category": "safe_request", "category": "harmful"}', "retrieval_only",
      "retrieval_only:recheck_malformed", ""),  # duplicate key: invalid output, never read as malicious intent
-    ('{"in_scope": false, "category": "off_topic", "reason": "not advice"}', "retrieval_only",
+    ('{"safe_request": true, "category": "safe_request", "reason": "not advice"}', "retrieval_only",
      "retrieval_only:recheck_refusal_word", ""),
     (RuntimeError("chain down"), "retrieval_only", "retrieval_only:recheck_unavailable", ""),
 ])
@@ -341,16 +341,17 @@ def _chat_seq(monkeypatch, *replies):
 
 
 @pytest.mark.parametrize("q,key", [(Q_ANCHOR, "registry:epi-infectious-outbreak"), (Q_NONE, "unassigned")])
-def test_dp10b_reply_goes_to_research_not_the_reading_list(monkeypatch, acq_on, q, key, caplog):
+def test_dp10b_reply_declines_neutrally_no_research_no_list(monkeypatch, acq_on, q, key, caplog):
+    """SCOPE-GATE-1104 S2 D2a (was: goes to research): the catstep "ok" outcome no longer relabels to off_topic; a reply
+    naming no category stays category "" -> neutral decline: no corpus attempt, no acquisition, no reading list."""
     caplog.set_level(logging.INFO, "vera")
     calls = _chat_seq(monkeypatch, P10B, P10B)  # the existing single retry still happens first
     seen = _spy_fulldoc(monkeypatch)
     monkeypatch.setattr(ask_service, "_offtopic_reading_list", lambda *a, **k: pytest.fail("reading list"))
+    monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: pytest.fail("inline"))
     r = ask_service.answer_in_scope(q, "m", PRICING)
-    assert r is STOP and len(calls) == 2
-    dec, acquired_only = seen[0]
-    assert dec.accepted is True and acquired_only is False  # normal path: base corpus first (CT-1)
-    assert dec.category == "off_topic" and dec.reason == catstep.REASON_OK and dec.topic_key == key
+    assert len(calls) == 2 and seen == []
+    assert r.result_kind == "decline" and r.answer == sr.decline_text() and r.acquire_trigger is None and r.sources == ()
     no_raw(caplog, q)
 
 
@@ -362,7 +363,7 @@ def test_dp10b_with_step_off_keeps_the_previous_behaviour(monkeypatch, acq_on):
     lists = []
     monkeypatch.setattr(ask_service, "_offtopic_reading_list", lambda *a, **k: lists.append(1) or None)
     r = ask_service.answer_in_scope(Q_NONE, "m", PRICING)
-    assert r.result_kind == "decline" and seen == [] and lists == [1]
+    assert r.result_kind == "decline" and seen == [] and lists == []  # S2: no unsupported use -> no scholarly list either
 
 
 def _assert_declined_untouched(monkeypatch, *replies, q=Q_NONE):
@@ -381,13 +382,13 @@ def _assert_declined_untouched(monkeypatch, *replies, q=Q_NONE):
 
 @pytest.mark.parametrize("cat", sorted(set(sr.REFUSE_CATEGORIES) - {"programming_task"}))
 def test_safety_refusal_categories_still_decline(monkeypatch, acq_on, cat):
-    _assert_declined_untouched(monkeypatch, json.dumps({"in_scope": False, "category": cat, "reason": "x"}))
+    _assert_declined_untouched(monkeypatch, json.dumps({"safe_request": False, "category": cat, "reason": "x"}))
 
 
 def test_programming_task_is_unsupported_use_not_catstep(monkeypatch, acq_on):
     # NEXTREL-1028: REFUSE-FIX-1028 (release) makes a clean programming_task verdict the unsupported-use reading list
     # (no code, no acquisition); the catstep must still not touch it.
-    _chat_seq(monkeypatch, json.dumps({"in_scope": False, "category": "programming_task", "reason": "x"}))
+    _chat_seq(monkeypatch, json.dumps({"safe_request": False, "category": "programming_task", "reason": "x"}))
     seen = _spy_fulldoc(monkeypatch)
     cats = []
     real = catstep.categorise
@@ -401,18 +402,18 @@ def test_programming_task_is_unsupported_use_not_catstep(monkeypatch, acq_on):
 
 
 @pytest.mark.parametrize("replies", [
-    ('{"in_scope": false, "category": "harmful", "category": "off_topic"}',) * 2,  # duplicate key, nullified twice
-    ('{"in_scope": false, "reason": ', '{"in_scope": false, "reason": '),  # malformed twice
-    ('{"in_scope": true, "category": "harmful"}',),  # category_conflict
-    ('{"in_scope": false, "category": "off_topic", "x": {"category": "harmful"}}',),  # refusal_token
+    ('{"safe_request": false, "category": "harmful", "category": "off_topic"}',) * 2,  # duplicate key, nullified twice
+    ('{"safe_request": false, "reason": ', '{"safe_request": false, "reason": '),  # malformed twice
+    ('{"safe_request": true, "category": "harmful"}',),  # category_conflict
+    ('{"safe_request": true, "category": "safe_request", "x": {"category": "harmful"}}',),  # refusal_token
 ])
 def test_attack_and_nullified_replies_decline_exactly_as_before(monkeypatch, acq_on, replies):
     _assert_declined_untouched(monkeypatch, *replies)
 
 
 @pytest.mark.parametrize("reply", [
-    '{"in_scope": false, "reason": "it is not \\"harmful\\" but odd"}',  # refusal word in raw text: no retry
-    '{"in_scope": false, "category": "mystery", "reason": "advice-ish"}',  # unknown category + refusal word
+    '{"safe_request": false, "reason": "it is not \\"harmful\\" but odd"}',  # refusal word in raw text: no retry
+    '{"safe_request": false, "category": "mystery", "reason": "advice-ish"}',  # unknown category + refusal word
 ])
 def test_refusal_named_dp10b_reply_never_reaches_the_step_and_keeps_its_previous_path(monkeypatch, acq_on, reply):
     """plan s27.1 C1: the step never runs; the previous path (decline or the record-only list, no acquisition) stays."""
@@ -441,15 +442,16 @@ def test_shadow_end_to_end_researches_a_high_similarity_question(monkeypatch, ac
     calls = _chat_seq(monkeypatch, P10B, P10B)
     seen = _spy_fulldoc(monkeypatch)
     r = ask_service.answer_in_scope(q, "m", PRICING)
-    assert r is STOP and len(calls) == 2 and seen[0][0].accepted is True
+    # S2 D2a: shadow never changes routing, and the "ok" outcome no longer relabels: neutral decline, no corpus attempt
+    assert r.result_kind == "decline" and r.answer == sr.decline_text() and len(calls) == 2 and seen == []
     assert "signal=proximity mode=shadow high=1" in caplog.text
     no_raw(caplog, q)
 
 
 @pytest.mark.parametrize("reply,expect", [
-    ('{"in_scope": false, "category": "harmful", "reason": "x"}', "decline"),
-    ('{"in_scope": false, "category": "off_topic", "reason": "general"}', "research"),
-    ('{"in_scope": false, "reason": ', "retrieval_only"),
+    ('{"safe_request": false, "category": "harmful", "reason": "x"}', "decline"),
+    ('{"safe_request": true, "category": "safe_request", "reason": "general"}', "neutral_decline"),  # S2 D2a: was "research"
+    ('{"safe_request": false, "reason": ', "retrieval_only"),
 ])
 def test_scrutiny_end_to_end(monkeypatch, acq_on, reply, expect, caplog):
     caplog.set_level(logging.INFO, "vera")
@@ -466,17 +468,15 @@ def test_scrutiny_end_to_end(monkeypatch, acq_on, reply, expect, caplog):
     if expect == "decline":
         assert r.result_kind == "decline" and r.answer == sr.decline_text() and seen == [] and r.sources == ()
         assert "reason=refuse:recheck:harmful" in caplog.text
-    elif expect == "research":
-        assert r is STOP and seen[0][0].accepted is True
-    else:  # retrieval only: the record-only list, no generated answer, no acquisition
-        assert seen == [] and lists == [1] and r.result_kind in ("reading_list", "decline") and r.sources == ()
-        assert r.acquire_trigger is None and r.accepted is False
+    else:  # S2 D2a: scrutiny "ok" and retrieval_only both keep category "": neutral decline, no list, no answer, no acquisition
+        assert r.result_kind == "decline" and r.answer == sr.decline_text() and seen == [] and lists == [] and r.sources == ()
+        assert r.acquire_trigger is None
     no_raw(caplog, HIGH_Q)
 
 
 def test_route_flags_raw_refusal_only_on_the_dp10b_shape():
     cfg = sr.load_config()
-    d = sr.route(Q_NONE, "m", cfg=cfg, chat=_chat('{"in_scope": false, "reason": "not advice, just odd"}'))
+    d = sr.route(Q_NONE, "m", cfg=cfg, chat=_chat('{"safe_request": false, "reason": "not advice, just odd"}'))
     assert d.reason.startswith("llm_out:") and d.category == "" and d.raw_refusal_named is True
     d = sr.route(Q_NONE, "m", cfg=cfg, chat=_chat(P10B))
     assert d.raw_refusal_named is False and d.llm_calls == 2

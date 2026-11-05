@@ -142,5 +142,5 @@ def test_corpus_description_chain_dup_key_fails_like_malformed(monkeypatch):
     monkeypatch.setattr(asv, "_get_client", lambda: None, raising=False)
     for bad in (BAD, '{"summary": "a", "summary": "b"}'):
         with pytest.raises(RuntimeError, match="no provider produced"):
-            cd.generate_with_chain([entry(bad)])([])
-    assert cd.generate_with_chain([entry('{"summary": "S", "topics": ["t"]}')])([]) == ("S", ["t"], "L")
+            cd.json_with_chain([entry(bad)])([])  # CORPUS-DIGEST-1104: the digest pipeline's chain caller
+    assert cd.json_with_chain([entry('{"summary": "S", "topics": ["t"]}')])([]) == ({"summary": "S", "topics": ["t"]}, "L")

@@ -51,7 +51,7 @@ def seams(monkeypatch):
 
 
 def _fd(calls, ret):
-    def fake(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None):
+    def fake(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None, lanes=None):  # INTEGRATE-1104: _fulldoc signature (NONASK-1103 lanes)
         calls["fulldoc"].append({"model": model, "client": chained.get("client"), "grace": px.GRACE.get() is not None,
                                  "ephemeral": ephemeral})
         if isinstance(ret, Exception):

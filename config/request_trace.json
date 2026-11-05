@@ -1,0 +1,146 @@
+{
+  "_comment": "PERF-MISS-1104-TRACE / OD-1104-TRACE: per-request diagnostic trace (vera/request_trace.py). The question text is kept owner-only and purged after 30 days by an owner-run script (work/PERF-MISS-1104/trace/purge_trace.sh). The request id is owner-visible only: response header X-VERA-Trace-Id, logs and the DB, never the UI.",
+  "_calibration": "PROVISIONAL size bounds, not decision thresholds (nothing is accepted or rejected by them; they only cap diagnostic payloads). No live trace data exists yet. max_events_per_request 400: today's closed progress stage set is about 10 stages x 2 providers plus up to 31 inline ACQUIRE updates (progress.json note), so 400 leaves room for the planned wiring events; the finish event is always kept. max_detail_bytes 2048 / max_str_chars 200 / max_list_items 20: a detail holds ids, scores and reason codes, never text. max_question_chars 4000: equals AskRequest.question max_length (main.py), so nothing valid is cut. recent_max 50 / recent_ttl_s 900: owner route window only. queue_max 5000, batch_max 200, flush_interval_s 2: one background writer; a full queue drops rows (counted), it never blocks a request. Data that would change them: dropped-row counters, events per request seen in the first week of vera_trace log lines.",
+  "enabled": true,
+  "log_sink": {
+    "_comment": "include_question ships FALSE pending owner decision: host logs cannot be purged by purge_trace.sh (so the About page's 30-day promise would not hold for them) and the existing R-028 tests (test_ask_progress_api, test_disclosure_persistence) assert the question never reaches logs. While false the start line carries question_chars only; the full text is in the owner route /trace/request/{id} (recent window) and, once 015 is applied, the DB.",
+    "enabled": true,
+    "include_question": false
+  },
+  "db_sink": {
+    "_comment": "ON since 2026-11-04: the owner applied migration 015 (db/migrations/pending/015-DRAFT-request-trace.sql.draft; owner-reported, verify output not seen by agents). App-path INSERT only, write-only account. request_trace.db_view (read through db_url_env_ro) exists and is tested but is NOT wired to the owner route in this increment (deferred; it also needs SELECT for vera_vjay_ro, which 015 does not grant).",
+    "enabled": true,
+    "db_url_env_ro": "VERA_DB_URL_RO",
+    "db_url_env_wo": "VERA_DB_URL_WO",
+    "requests_table": "vera_vjay.request_trace_requests",
+    "events_table": "vera_vjay.request_trace_events",
+    "queue_max": 5000,
+    "batch_max": 200,
+    "flush_interval_s": 2,
+    "connect_timeout_s": 2,
+    "statement_timeout_ms": 2000
+  },
+  "digest_store": {
+    "_comment": "Latest corpus digest persisted in the DB (owner rule: runtime state lives in the DB). Table exists since migration 015 (2026-11-04, owner-reported) but this flag stays OFF for this increment (coordinator: deferred). When true, vera/corpus_description.py reuses the stored digest for the same corpus state and prompt version after a restart and saves each new digest (code + offline tests in place). Write: write-only account (INSERT). Read: read-only account (SELECT).",
+    "enabled": false,
+    "db_url_env_wo": "VERA_DB_URL_WO",
+    "db_url_env_ro": "VERA_DB_URL_RO",
+    "table": "vera_vjay.corpus_digest_state",
+    "max_digest_bytes": 65536,
+    "connect_timeout_s": 2,
+    "statement_timeout_ms": 2000
+  },
+  "key_allowlist": {
+    "_comment": "DENYALL-TRACE-1104 (owner standard 2026-11-04: Deny All; approve specified exceptions-from-Deny). Event detail keys are stored only if listed here for the event's stage; others are dropped and counted in detail.dropped_keys. A missing stage lists nothing (all detail keys dropped). String values must also fullmatch ^[a-z0-9_:.-]{1,64}$ else '<str>' (request_trace.py). Keys inside nested maps (codes, ms, per_claim items, acquisition) are limited to identifier tokens. Question text is never allowed in any stage; it is stored only in the requests table question column (OD-1104-TRACE). Derived from every rt.event / _rt_event call site in vera/ on 2026-11-04. Adding a key requires a reason here. Optional 'nested' maps a key to the allowed keys inside its mapping; keys without an entry (codes, ms) accept identifier-token keys only.",
+    "start": {
+      "keys": [],
+      "reason": "start event carries no detail; client id and endpoint go to the log line / requests row only"
+    },
+    "finish": {
+      "keys": [
+        "message_code"
+      ],
+      "reason": "terminal event: closed message code from request_trace.finish"
+    },
+    "acquire": {
+      "keys": [
+        "status",
+        "codes",
+        "ms",
+        "provider",
+        "outcome",
+        "reason",
+        "diag",
+        "acquisition",
+        "lanes",
+        "fallback"
+      ],
+      "reason": "inline_acquire._trace_done, ask_service acquire/outcome/candidate/answer_fallback/off/retry_skipped: status, reason-code counts (codes), phase ms, per-candidate provider/outcome/reason/diag tokens, nested acquisition summary, lanes flag, fallback token. 'reason' also used by off and retry_skipped events.",
+      "nested": {
+        "acquisition": [
+          "status",
+          "stored",
+          "target",
+          "rounds",
+          "stop"
+        ]
+      }
+    },
+    "search": {
+      "keys": [
+        "provider",
+        "status",
+        "latency_ms"
+      ],
+      "reason": "search_and_fetch and search_providers: provider name, status and latency per provider/portal/seed fallback"
+    },
+    "premise": {
+      "keys": [
+        "verdict",
+        "cited"
+      ],
+      "reason": "fulldoc_answer premise check: verdict token and whether the reason cited a source"
+    },
+    "passages": {
+      "keys": [
+        "span_ids",
+        "relevance",
+        "cited_span_ids"
+      ],
+      "reason": "fulldoc_answer: span ids and relevance scores sent to the writer / cited; ids and numbers only, never text"
+    },
+    "writer": {
+      "keys": [
+        "fallback",
+        "model",
+        "cost_usd"
+      ],
+      "reason": "fulldoc_answer writer draft/fall: fallback token, model id, cost"
+    },
+    "claim_check": {
+      "keys": [
+        "checker",
+        "exc",
+        "per_claim"
+      ],
+      "reason": "claim_check: checker label, exception class name, per-claim id/verdict/cites (nested keys id, verdict, cites)",
+      "nested": {
+        "per_claim": [
+          "id",
+          "verdict",
+          "cites"
+        ]
+      }
+    },
+    "scope": {
+      "keys": [
+        "basis",
+        "layer",
+        "class",
+        "accepted",
+        "refusal"
+      ],
+      "reason": "ask_service scope gate: basis, layer and class tokens, accepted flag, refusal token"
+    },
+    "outcome": {
+      "keys": [
+        "category",
+        "fallback",
+        "branch",
+        "cause",
+        "inline_status"
+      ],
+      "reason": "ask_service outcome events: decline category, fallback token, branch, cause, inline status"
+    }
+  },
+  "limits": {
+    "max_question_chars": 4000,
+    "max_events_per_request": 400,
+    "max_detail_bytes": 2048,
+    "max_detail_keys": 24,
+    "max_str_chars": 200,
+    "max_list_items": 20,
+    "recent_max": 50,
+    "recent_ttl_s": 900
+  }
+}

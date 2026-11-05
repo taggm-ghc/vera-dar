@@ -405,7 +405,7 @@ def test_FIX_abstractless_original_reaches_acquisition_through_the_ask_boundary_
     web.records.clear()  # no open-access record: acquisition cannot produce text
     rig.cfg["inline"]["use_discovered"] = True
     rig.setup(web=web, cands=[])
-    _decide(rig.mp, False, "layer2_llm", "llm_out:x", "off_topic")
+    _decide(rig.mp, True, "layer2_llm", "llm_in:x", "safe_request")
     monkeypatch.setattr(main, "answer_via_chain", lambda q, e, g: (
         ask_service.answer_in_scope(q, "m", PRICING, grounding=g), "x"))  # g is main.py's own (sources_fn, GROUNDING)
     resp = TestClient(main.app).post("/ask", json={"question": Q_EPI}, headers={"X-API-Key": key})

@@ -210,11 +210,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     question, _removed = strip_instructions(question)  # INJ-SEP-1028 (owner 2026-10-28, OD-1028(21) c3): a reliably
     if _removed:  # separated injection sentence is discarded; the rest goes through every gate. Category-only log
         from vera.scope_router import INSTRUCTION_REMOVED_TOKEN
-        logging.getLogger("vera").info("scope %s", INSTRUCTION_REMOVED_TOKEN)
+        logging.getLogger("vera").info("scope %s rid=%s", INSTRUCTION_REMOVED_TOKEN, _rid())
     question, _claims = nullify_mode_claims(question)  # SEC-V3-1028 / owner 2026-10-28: a mode-switch claim is
     if _claims:  # stripped (never obeyed) and the rest is routed, answered and searched as usual; token-only log
         from vera.scope_router import MODE_CLAIM_TOKEN
-        logging.getLogger("vera").info("scope %s", MODE_CLAIM_TOKEN)
+        logging.getLogger("vera").info("scope %s rid=%s", MODE_CLAIM_TOKEN, _rid())
 
     def chat(messages, model_, l2):
         return default_chat(messages, model_, l2, client=client, extra_body=extra_body)
@@ -225,7 +225,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     if _sr_self.self_reflective(question) and not _sr_self.injection_unstripped(original):  # SELFREF-1028: fixed public text; no LLM, search, storage or memory
         _txt = _sr_self.self_reflective_text()
         if _txt:
-            logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective")
+            logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective rid=%s", _rid())
+            _rt_event("outcome", "self_description")
             return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     if _stream_ctx.active() and budget.deadline != float("inf"):
@@ -235,89 +236,30 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(decision=decision)  # OD-1031-EXHAUST-GRACE: work has started; the decision is what a completion reuses
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
-    _log_basis(decision)  # PATHA-1028 CT-4: the topic label is a log tag only (class tokens, never reason text)
-    if _research_eligible(decision, question, acq):  # DDFIX-1023/SCOPE: corpus coverage is not research eligibility
-        decision = replace(decision, accepted=True)
-        _pxw.note_work(decision=decision)  # EXG-FIX-1031 D1: the completion must see the research-eligible override
+    _log_basis(decision)  # SCOPE-GATE-1104 S2: basis=safe|none (class tokens only, never reason text)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
-    offline_spent: dict = {}  # PATHA-1028 CT-2: spend of a corpus attempt that produced no checked answer
-    offline_text = ""  # REFUSE-FIX-1028 V4: that attempt's fixed insufficient-evidence text (config text, never model text)
-    if acq is None and _offline_coverage_eligible(decision, question):  # PATHA-1028 CT-2 (plan s26.2(6), P10)
-        # acquisition off: a clean layer-2 verdict that is only about the topic is answered from the existing corpus
-        # through the unchanged admission, writer and claim check. No inline search, no background job; when the
-        # corpus does not cover the question the neutral reading list below is returned (sources=(), persists nothing).
-        fd = _fulldoc(question, model, pricing, replace(decision, accepted=True), chained, grounding)
-        if isinstance(fd, AskResult):
-            return fd
-        if isinstance(fd, tuple) and len(fd) == 5:
-            offline_spent = {"tokens_used": int(fd[2] or 0), "cost_usd": round(float(fd[3] or 0.0), 6)}
-            offline_text = fd[4] if isinstance(fd[4], str) else ""
     if not decision.accepted:
-        trig = None
-        inline_note = None  # DAR-INLINE-1021: set only when an inline search was made for this request
-        ia: dict = {"status": "off"} if acq is None else {}  # P0-B1b: inline outcome for a declined non-answer (Report)
+        # SCOPE-GATE-1104 S2 (owner amendment 1, 2026-11-04): only a safety refusal (advice, harmful, rule_change), an
+        # unsupported-use request, a layer-1 deny/injection/marker hit or a fail-closed verdict (malformed after the
+        # retry, classifier unavailable, layer2_mode none, a reply naming no category: D2a) reaches this branch. Subject
+        # matter never does: every question that passes safety takes the normal path below, and whether the corpus
+        # can answer is decided after retrieval. The decline branch itself is unchanged (decline_text, or the fixed
+        # unsupported-use sentence plus the scholarly reading list); it never acquires.
         from vera import scope_router as _sru
-        if acq is not None and not _sru.unsupported_use(decision):  # REFUSE-FIX-1028 V1: unsupported use never acquires
-            from vera import acq_config
-            if (acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question)
-                    and acq_config.layer2_category_ok(acq, decision)):  # DAR-1021 category gate (fails closed)
-                trig = "decline"
-                if decision.layer != "layer1" and acq_config.override_layer2_declines(acq):  # ships OFF (plan V1)
-                    used: dict = {}  # R2: the served acquired corpus this attempt actually tried (None = not loaded yet)
-                    out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, used=used)
-                    if isinstance(out, AskResult):  # DAR-1021 SEC M1: scope notice first; no memory (accepted=False)
-                        from vera import answer_contract as _ac
-                        ans, nts = _ac.add_note(out.answer, out.notes, "offtopic_warning",
-                                                acq_config.override_answer_prefix(acq), "prefix")
-                        return replace(out, answer=ans, notes=nts, accepted=False,
-                                       contract={**(out.contract or {}), "offtopic": True, "acquired_only": True})
-                    info: dict = {}
-                    inl = None
-                    if not budget.inline_used:  # CMF-1022 CR-3: at most one _inline per request across the chain
-                        budget.inline_used = True
-                        inl = _inline(question, model, pricing, decision, chained, grounding, acq,
-                                      tried=_doc_keys(used.get("acq")), info=info)
-                    if isinstance(inl, AskResult):
-                        return inl
-                    inline_note = inl
-                    ia = info.get("outcome") or {}
+        ia: dict = {"status": "off"} if acq is None else {}  # P0-B1b: inline outcome for a declined non-answer (Report)
         iac = {"inline_acquisition": ia} if ia else {}
-        # DAR-1021 (FIX1 + P1.7): a qualifying layer-2 out-of-scope verdict shows the FIX1 notice + scholarly reading
-        # list AND keeps P1.7's background acquisition trigger (same trig as the refusal would carry). The list itself
-        # never admits anything (sources=()); acquired documents never answer a declined question unless
-        # override_layer2_declines is true (ships false).
-        _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
-        off = _offtopic_reading_list(decision, grounding)  # FIX1-1021 (config-gated); None = keep the refusal
+        _INLINE_OUT.set(ia)
+        off = _offtopic_reading_list(decision, grounding) if _sru.unsupported_use(decision) else None
         if off is not None:
-            if not trig:
-                if acq is None:  # PATHA-1028 CT-2: say plainly that automatic search is off (neutral, no topic text)
-                    from vera import scope_router as _sr
-                    note = _sr.acquisition_off_note()
-                    # non-answer notices ARE the answer (ANS-LAYERS-1101 B): kept in `answer` whatever the flag
-                    off = replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer, **offline_spent)
-                return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
-            from vera import acq_config
-            note = acq_config.reading_list_notice(acq) if inline_note is None else inline_note
-            _a, _n = _nonanswer_note(off.answer, off.notes, note)
-            return replace(off, answer=_a, notes=_n,
-                           contract={**(off.contract or {}), **_inline_trace(inline_note), **iac} if (_inline_trace(inline_note) or iac) else off.contract,
-                           acquire_trigger=trig if inline_note is None else None,  # inline searched: no 2nd job
-                           **_spent(inline_note))
-        if acq is None and _offline_coverage_eligible(decision, question):
-            # REFUSE-FIX-1028 V4 (OD-1028(21)): a harmless off_topic/coverage question whose reading list is unavailable
-            # (no grounding seam or a search failure) is not a refusal: return the existing insufficient-evidence text
-            # and/or acquisition_off_note, never decline_template. Refusal reasons never reach this (eligibility gate).
-            from vera import answer_contract as _ac
-            from vera import scope_router as _sr
-            text = " ".join(t for t in (offline_text.strip(), _sr.acquisition_off_note()) if t)
-            res = _ac.reading_list_result((), decision.tokens_used, decision.cost_usd, accepted=False,
-                                          empty_text=text or None)
-            return replace(res, sources=(), contract={**(res.contract or {}), "offtopic": True, **iac},
-                           **offline_spent)
-        return replace(AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
-                                 result_kind="decline", acquire_trigger=trig if inline_note is None else None,
-                                 **({"contract": iac} if iac and acq is not None else {})),  # feature off: the bare refusal stays byte-identical
-                       **_spent(inline_note))
+            if acq is None:  # PATHA-1028 CT-2: say plainly that automatic search is off (neutral, no topic text)
+                note = _sru.acquisition_off_note()
+                # non-answer notices ARE the answer (ANS-LAYERS-1101 B): kept in `answer` whatever the flag
+                off = replace(off, answer=f"{off.answer} {note}".strip() if note else off.answer)
+            _rt_event("outcome", "unsupported_use_reading_list")
+            return replace(off, contract={**(off.contract or {}), **iac}) if iac else off
+        _rt_event("outcome", "decline", detail={"category": _rt_token(decision.category)})
+        return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
+                         result_kind="decline")
     from vera import answer_contract as contract
 
     used_in: dict = {}
@@ -328,43 +270,32 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
             return fd
         return _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in,
                                    budget)
-    if fd is None:
-        return _with_cause(_reading_list(question, model, pricing, decision, chained, grounding, contract),
-                           "reading_list", "VERA-DAR could not write an answer to this question. The sources below may still help; read them yourself.")
-    ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
+    not_configured = fd is None  # the full-document path is not configured (or its base corpus is not loaded)
+    if not_configured:
+        ev, token, tokens, cost, text = None, None, decision.tokens_used, decision.cost_usd, _NOT_CONFIGURED_TEXT
+        _rt_event("outcome", "fulldoc_not_configured")
+    else:
+        ev, token, tokens, cost, text = fd  # fail closed: no generated answer, never an abstract fallback
+        _rt_event("outcome", "fulldoc_fallback", counts={"tokens": int(tokens or 0)}, detail={"fallback": _rt_token(token)})
     inline_note = None
     ia: dict = {}  # P0-B1: the inline outcome for a non-answer, so the Report can say whether a search was made
     if acq is None:
         ia = {"status": "off"}  # automatic acquisition effectively off (flag, kill switch or DB env): not attempted
-    elif _layer1_clean(question):  # DAR-INLINE-1021-R2 must-have 1: in-scope, nothing answered
-        from vera import inline_acquire
-        from vera import fulldoc_corpus
-        ft = fulldoc_corpus.load_config()["fallback_tokens"]
-        # INT-1022-B (orchestrator-approved): a base-corpus 'nonresponsive' result (RESP-1022: every verified claim was
-        # off-question) also starts inline acquisition. _inline is called at most ONCE per request: if its own answer
-        # is nonresponsive too, it returns a notice and the request falls through to the reading list (no loop).
-        # CMF-1022 R1: also three post-writer failure tokens (premise, claim_check_disabled and checker_unavailable stay out: HITL-CMF-6, OD-CMF-1022g).
-        retry_tokens = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"), ft.get("no_valid_citations"),
-                        ft.get("claim_check_insufficient"), ft.get("model_insufficient"))
-        if inline_acquire.icfg_of(acq).get("in_scope") is True and token and token in retry_tokens \
-                and not budget.inline_used:  # CMF-1022 CR-3: one _inline per request
-            need = inline_need_s(acq, grounding)
-            remaining = budget.deadline - time.monotonic()
-            if need is None or remaining < need:  # fail closed: unknown budget or too little time -> skip the retry
-                ia = {"status": "budget_unknown" if need is None else "deadline"}
-                logging.getLogger("vera").info("inline retry skipped: %s", ia["status"])
-            else:
-                budget.inline_used = True
-                info: dict = {}
-                inl = _inline(question, model, pricing, decision, chained, grounding, acq,
-                              tried=_doc_keys(used_in.get("acq")), in_scope=True, info=info)
-                if isinstance(inl, AskResult):
-                    return _research_on_insufficient(inl, ev, acq, info.get("outcome"), answered=True,
-                                                     held_ev=used_in.get("ev_acq"))
-                inline_note = inl
-                ia = info.get("outcome") or {}
+    elif _layer1_clean(question):  # DAR-INLINE-1021-R2 must-have 1: nothing answered from the held corpus
+        res_inl = _acquire_rounds(question, model, pricing, decision, chained, grounding, acq, budget, used_in, token,
+                                  not_configured)
+        if isinstance(res_inl, AskResult):
+            return _research_on_insufficient(res_inl, ev, acq, (res_inl.contract or {}).get("inline_acquisition"),
+                                             answered=True,
+                                             held_ev=used_in.get("ev_acq"))
+        inline_note, ia = res_inl
     _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
+    if not_configured and inline_note is None:  # unchanged pre-S2 result when nothing was searched inline
+        # the corpus was not consulted, so the acquisition-off note ("looked only in its documents") is not added
+        out = _with_cause(res, "reading_list", _NOT_CONFIGURED_TEXT)
+        _rt_event("outcome", "reading_list", detail={"branch": "fulldoc_not_configured"})
+        return out
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
     _a, _n = _nonanswer_note(text, res.notes, inline_note, strip=False)
     out = replace(res, answer=_a, notes=_n, evidence=ev,
@@ -373,7 +304,152 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
                             **_fd_trace_contract()}, **trig,
                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
     out = _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
-    return _with_cause(out, _CAUSE_CODE.get(token, "no_supported_answer"), text)
+    cause = "reading_list" if not_configured else _CAUSE_CODE.get(token, "no_supported_answer")
+    _rt_event("outcome", "no_answer", detail={"cause": _rt_token(cause), "fallback": _rt_token(token),
+                                              "inline_status": _rt_token((ia or {}).get("status"))})
+    return _with_off_note(_with_cause(out, cause, text), acq)
+
+
+_NOT_CONFIGURED_TEXT = ("VERA-DAR could not write an answer to this question. The sources below may still help; read them "
+                        "yourself.")
+
+
+def _with_off_note(res, acq):
+    """SCOPE-GATE-1104 S2-T2: with automatic acquisition effectively off, a non-answer is the corpus attempt plus the
+    normal reading list AND the fixed acquisition_off_note (never decline_template). Unchanged when acquisition is on,
+    for an answer, or when the note is not configured. Non-answer notices ARE the answer (ANS-LAYERS-1101 B)."""
+    if acq is not None or getattr(res, "result_kind", "answer") == "answer":
+        return res
+    try:
+        from vera import scope_router as _sr
+        note = _sr.acquisition_off_note()
+    except Exception:  # noqa: BLE001
+        note = ""
+    if not note or note in (res.answer or ""):
+        return res
+    return replace(res, answer=f"{res.answer} {note}".strip())
+
+
+def _retry_tokens(question, token, not_configured: bool) -> bool:
+    """Whether a non-answer of the held corpus starts inline acquisition. Owner rules: an insufficient corpus goes to
+    acquisition and the other lanes (project_ingest_six_then_answer; SCOPE-GATE-1104 amendment 1). Every evidence-miss
+    token does (insufficient, corpus_unusable, nonresponsive (INT-1022-B), no_valid_citations, claim_check_insufficient,
+    model_insufficient, premise_unverified (OD-1104-TRACE)); so does a full-document path that is not configured or
+    whose base corpus is not loaded (fd None; _inline itself still never acquires when the flag is off, VER L6).
+    claim_check_disabled and checker_unavailable never do (OD-CMF-1022g: the checker, not the evidence, failed).
+    NEWS-LANE-1104 W1: with the reporting lane on, a news-intent question retries on any other non-answer token."""
+    from vera import fulldoc_corpus
+    from vera.fulldoc_answer import PREMISE_FALLBACK
+    ft = fulldoc_corpus.load_config()["fallback_tokens"]
+    excluded = tuple(t for t in (ft.get("claim_check_disabled"), ft.get("checker_unavailable"),
+                                 "claim_check_disabled", "checker_unavailable") if t)
+    if not_configured:
+        return True
+    if not token or token in excluded:
+        return False
+    retry = (ft["insufficient"], ft["corpus_unusable"], ft.get("nonresponsive"), ft.get("no_valid_citations"),
+             ft.get("claim_check_insufficient"), ft.get("model_insufficient"), PREMISE_FALLBACK)
+    if token in retry:
+        return True
+    try:
+        from vera import news_intent, reporting_lane  # NEWS-LANE-1104 W1
+        return bool(reporting_lane.lane_enabled() and news_intent.news_intent(question))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _round_acq(acq: dict, seconds: float) -> dict:
+    """A copy of the acquisition config whose inline deadline_s is the time this round may use (never more than the
+    configured deadline_s). The request budget (RequestBudget.deadline) is the only bound applied; nothing new."""
+    inl = dict(acq.get("inline") or {})
+    from vera import inline_acquire
+    inl["deadline_s"] = min(float(inline_acquire._b(acq, "deadline_s", 45)), float(seconds))
+    return {**acq, "inline": inl}
+
+
+def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq, budget, used_in, token,
+                    not_configured):
+    """INTEGRATE-1104 step 2 (owner: ingest >= 6 full texts, then answer; acquisition until the target is met or the
+    request time budget runs out). Repeated inline acquisition rounds after a held-corpus non-answer. Returns an
+    AskResult (an answer), else (inline_note, inline outcome dict).
+
+    Stops when: an answer is produced; the round target (acq_rounds.target_of, 6) of answer-eligible documents is met;
+    the acquisition reports anything other than a deadline stop (met, resource_limited: its own variant rounds ran out
+    of routes; off, busy, error, capped); a round adds no new document (no progress, so another identical round cannot
+    help); or the request budget cannot hold another round plus the post-inline tail (inline_need_s minus the inline
+    deadline: writer, claim checks, reading-list fallback). Each round's inline deadline is the configured deadline_s
+    or, when less time is left, the remaining time minus that tail. No new cap: the request deadline, the configured
+    deadline_s, the job caps inside inline_acquire and the finite candidate/variant lists bound the loop.
+    CMF-1022 CR-3 is kept across the provider chain: budget.inline_used marks that this request's acquisition ran,
+    so a chained provider retry never starts a second series."""
+    from vera import acq_rounds, inline_acquire
+    ia: dict = {}
+    if inline_acquire.icfg_of(acq).get("in_scope") is not True or not _retry_tokens(question, token, not_configured):
+        return None, ia
+    if budget.inline_used:
+        _rt_event("acquire", "budget_used")
+        return None, ia
+    target = acq_rounds.target_of(acq)
+    tried = set(_doc_keys(used_in.get("acq")))
+    eligible = 0
+    note = None
+    spent_t, spent_c = 0, 0.0
+    rounds = 0
+    while True:
+        need = inline_need_s(acq, grounding)
+        remaining = budget.deadline - time.monotonic()
+        if remaining == float("inf"):  # streamed path (OD-1031-NODEADLINE): no request deadline
+            secs = float(inline_acquire._b(acq, "deadline_s", 45))
+        elif need is None:  # fail closed: a budget term is unreadable, so the request deadline cannot be honoured
+            if rounds == 0:
+                ia = {"status": "budget_unknown"}
+            break
+        else:
+            secs = remaining - (need - float(inline_acquire._b(acq, "deadline_s", 45)))
+            if secs <= 0:
+                if rounds == 0:
+                    ia = {"status": "deadline"}
+                break
+        budget.inline_used = True
+        info: dict = {}
+        t0 = time.monotonic()
+        inl = _inline(question, model, pricing, decision, chained, grounding, _round_acq(acq, secs),
+                      tried=set(tried), in_scope=True, info=info)
+        rounds += 1
+        out = info.get("outcome") or {}
+        _rt_event("acquire", "round", counts={"round": rounds, "latency_ms": int((time.monotonic() - t0) * 1000)},
+                  detail={"status": _rt_token(out.get("status"))})
+        if isinstance(note, _Note):  # the previous round's writer/check spend is kept (DAR-TRACE-1022); its total
+            # includes the classifier spend (base_tokens), which the final result already counts once
+            spent_t += max(note.tokens - int(decision.tokens_used or 0), 0)
+            spent_c += max(note.cost - float(decision.cost_usd or 0.0), 0.0)
+            note = _InlineNotice(str(note))
+        if isinstance(inl, AskResult):
+            if spent_t or spent_c:
+                inl = replace(inl, tokens_used=int(inl.tokens_used or 0) + spent_t,
+                              cost_usd=round(float(inl.cost_usd or 0.0) + spent_c, 6))
+            return inl
+        note, ia = inl, out
+        new_keys = set(info.get("tried_keys") or ()) - tried
+        tried |= new_keys
+        eligible += int(out.get("admitted", 0) or 0) + int(out.get("reused", 0) or 0)
+        stop = str(((out.get("acquisition") or {}).get("status")) or "")
+        if inl is None or eligible >= target or stop != "incomplete_deadline" or not new_keys:
+            break
+    if (spent_t or spent_c) and isinstance(note, str):
+        t, c = (note.tokens, note.cost) if isinstance(note, _Note) else (int(decision.tokens_used or 0),
+                                                                          float(decision.cost_usd or 0.0))
+        merged = _Note(str(note), t + spent_t, c + spent_c)
+        merged.token = getattr(note, "token", None)
+        if getattr(note, "bg_note", None):
+            merged.bg_note = note.bg_note
+        note = merged
+    if ia and rounds > 1:
+        ia = {**ia, "rounds": rounds}
+    if not rounds and ia:
+        logging.getLogger("vera").info("inline retry skipped: %s rid=%s", ia["status"], _rid())
+        _rt_event("acquire", "retry_skipped", detail={"reason": _rt_token(ia["status"])})
+    return note, ia
 
 
 class _InlineNotice(str):
@@ -435,23 +511,41 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     just-admitted documents through the unchanged admission, answer writer and claim check. Returns an AskResult (an
     answer), else the honest reading-list notice (str) when a search was made, else None (no search: today's path).
     P0-B1: `info` (a dict) receives "outcome", the public inline outcome ({"status": ...}), for the non-answer contract."""
-    from vera import acq_config, fulldoc_corpus, inline_acquire
+    from vera import fulldoc_corpus, inline_acquire
 
     if not fulldoc_corpus.flag_enabled(fulldoc_corpus.load_config()):  # VER L6: no answer path -> never acquire inline
+        _rt_event("acquire", "off", detail={"reason": "fulldoc_flag_off"})
         if info is not None:
             info["outcome"] = {"status": "off"}
         return None
     from vera import acq_discovered
     kw = {}  # P0-5 (inline.use_discovered, default off): the request's own cached discovery results; off = unchanged call
     if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):  # E5: no discovery search when acquire() is off; the off-topic path lists the restricted search, in-scope the full one
-        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=not in_scope)
+        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)  # S2: never topic-restricted
     if getattr(decision, "topic_key", ""):  # ROUNDS-1028: catstep's key, used only to label the acquisition round
         kw["topic_key"] = decision.topic_key
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     lanes = inline_acquire.with_web(o, inline_acquire.lane_pass(question, acq))  # NONASK-1103 (+A6-W web pages): request-local only
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
+    try:  # PERF-MISS-1104-TRACE: per inline attempt (counts, status, reason codes; never DOIs, URLs or titles)
+        _rt_event("acquire", "outcome",
+                  counts={"admitted": int(getattr(o, "admitted", 0) or 0), "stored": int(getattr(o, "stored", 0) or 0),
+                          "reused": int(getattr(o, "reused", 0) or 0),
+                          "candidates": len(getattr(o, "candidates", None) or [])},
+                  detail={"status": _rt_token(getattr(o, "status", "")),
+                          "acquisition": {k: v for k, v in (getattr(o, "acquisition", None) or {}).items()
+                                          if k in ("status", "stored", "target", "rounds", "stop")},
+                          "lanes": lanes is not None})
+        for c in list(getattr(o, "candidates", None) or [])[:20]:
+            if isinstance(c, dict):
+                _rt_event("acquire", "candidate", detail={"provider": _rt_token(c.get("portal")),
+                                                          "outcome": _rt_token(c.get("outcome")),
+                                                          "reason": _rt_token(str(c.get("reason") or "").lower())})
+    except Exception:  # noqa: BLE001
+        pass
     if info is not None:
+        info["tried_keys"] = _doc_keys(o.corpus)  # INTEGRATE-1104 step 2: the next round skips these documents
         st = str(getattr(o, "status", "error"))  # "off" carries no counts: identical whether the flag or the run said off
         info["outcome"] = o.public() if st != "off" and hasattr(o, "public") else {"status": st}
         if lanes is not None:
@@ -484,14 +578,14 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         _INLINE_COUNTS.reset(tok_c)
     lanes = None  # page text is dropped with the request (R-037)
     if not isinstance(out, AskResult):
-        # post-writer fallback: keep the specific token (response telemetry + log); user text stays the generic
-        # "unanswered" notice except for premise_unverified, which has its own fixed text. INT-1022-B merge: the
-        # DAR-TRACE-1022 _Note (an _InlineNotice subclass) also carries the inline writer/check spend.
+        # post-writer fallback: keep the specific token (response telemetry + log); user text is the generic
+        # "unanswered" notice (OD-1104-TRACE: premise_unverified is an evidence miss too, no premise refusal text).
+        # INT-1022-B merge: the DAR-TRACE-1022 _Note (an _InlineNotice subclass) also carries the inline writer/check spend.
         tok = out[1] if isinstance(out, tuple) and len(out) > 1 and isinstance(out[1], str) else None
-        logging.getLogger("vera").info("inline answer fallback token=%s", tok)
-        from vera.fulldoc_answer import PREMISE_FALLBACK, PREMISE_UNVERIFIED_TEXT
-        text = PREMISE_UNVERIFIED_TEXT if tok == PREMISE_FALLBACK else inline_acquire.notice(acq, "unanswered")
-        if hon and counts is not None and tok != PREMISE_FALLBACK and isinstance(out, tuple) and len(out) == 5 \
+        logging.getLogger("vera").info("inline answer fallback token=%s rid=%s", tok, _rid())
+        _rt_event("acquire", "answer_fallback", detail={"fallback": _rt_token(tok)})
+        text = inline_acquire.notice(acq, "unanswered")
+        if hon and counts is not None and isinstance(out, tuple) and len(out) == 5 \
                 and tok not in tuple((_cfg_h or {}).get("fallback_tokens", {}).get(x) for x in ("checker_unavailable", "nonresponsive")):
             text = " ".join(x for x in (text, _honest_text(_cfg_h, counts)) if x)  # A6-4: existing wording kept, split counts appended; never "tried"
         if text is None:
@@ -500,47 +594,16 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
                 else _InlineNotice(text))
         note.token = tok
         return note
-    if in_scope:  # R2 must-have 1: the normal in-scope wording (no off-topic prefix); memory rules as any in-scope answer
-        ans, nts = out.answer, out.notes
-        items = (("acquisition", inline_acquire.answer_note(acq, o)), ("background", bg))
-        for kind, t in (items if contract.notes_separate() else reversed(items)):  # same recorded order as off-topic; legacy text order ACQ, BG, answer
-            ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
-        return replace(out, answer=ans, notes=nts,
-                       contract={**(out.contract or {}), "acquired_only": True,
-                                 "inline_acquisition": {**o.public(), **({"counts": counts} if hon else {})}})
+    # R2 must-have 1 / SCOPE-GATE-1104 S2: the normal wording (there is no off-topic prefix: a question that passed
+    # safety is never warned or downgraded for its subject); memory rules as any answer
+    _rt_event("outcome", "inline_answer")
     ans, nts = out.answer, out.notes
-    # prefix order preserved when concatenating: warning, acquisition note, background note
-    items = (("offtopic_warning", acq_config.override_answer_prefix(acq)),
-             ("acquisition", inline_acquire.answer_note(acq, o)), ("background", bg))
-    for kind, t in (items if contract.notes_separate() else reversed(items)):  # recorded order warning, acquisition, background
+    items = (("acquisition", inline_acquire.answer_note(acq, o)), ("background", bg))
+    for kind, t in (items if contract.notes_separate() else reversed(items)):  # legacy text order ACQ, BG, answer
         ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
-    return replace(out, answer=ans, notes=nts, accepted=False,
-                   contract={**(out.contract or {}), "offtopic": True, "acquired_only": True,
+    return replace(out, answer=ans, notes=nts,
+                   contract={**(out.contract or {}), "acquired_only": True,
                              "inline_acquisition": {**o.public(), **({"counts": counts} if hon else {})}})
-
-
-def _research_eligible(decision, question: str, acq) -> bool:
-    """DDFIX-1023/SCOPE (owner directive 2026-10-23): curated corpus coverage is not research eligibility. A WELL-FORMED
-    layer-2 verdict that a question is only outside the curated subject domains (category "off_topic": harmless; PATHA-1028
-    CT-4: either topic label in _COVERAGE_LABELS, the label has no routing effect) takes
-    the normal research path: corpus attempt, unrestricted discovery, inline full-text acquisition and the unchanged
-    admission, answer writer and claim check (no answer without admitted evidence). Refusal categories (advice, harmful,
-    programming_task, rule_change), layer-1 deny/injection hits, data markers, malformed or contradictory verdicts, a
-    missing category and layer2_mode none keep the decline path. It applies only where the shipped switches already
-    authorise researching AND answering such a question (acquisition effectively on, scope_expansion
-    override_layer2_declines, decline trigger and layer-2 category gate), so every existing kill switch still applies;
-    what changes is that the research runs as the normal path, not as a refusal with a reading list. Fails closed."""
-    try:
-        from vera import acq_config
-        return (acq is not None and decision.accepted is False and decision.layer == "layer2_llm"
-                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
-                and decision.category not in _NO_LIST_CATEGORIES
-                and acq_config.override_layer2_declines(acq) and acq_config.layer2_category_ok(acq, decision)
-                and acq_config.trigger_for_decline(acq, decision.layer, decision.reason) and _layer1_clean(question))
-    except Exception:  # noqa: BLE001
-        return False
-
-
 
 
 _PREFILTER_LICENCE = ("ineligible_not_open_access", "ineligible_licence_prefilter")
@@ -650,14 +713,17 @@ def _catstep(decision, question: str, model: str, pricing, chat):
             return replace(decision, reason=catstep.decision_reason(out), category=out.refuse_category, **spend)
         if out.status == "retrieval_only":  # scrutiny re-check unavailable/malformed or a fault: list only, no answer
             return replace(decision, reason=catstep.RETRIEVAL_ONLY_REASON, category="", **spend)
-        return replace(decision, category="off_topic", reason=catstep.REASON_OK, topic_key=out.key, **spend)
+        # SCOPE-GATE-1104 S2 (D2a): no topical relabel. A reply that named no category is not a safety pass; with no
+        # refusal category found it stays the neutral decline (category "", fail closed), never an off-topic path.
+        return replace(decision, reason=catstep.REASON_OK, topic_key=out.key, **spend)
     except Exception:  # noqa: BLE001
         return decision
 
 
-# PATHA-1028 CT-4 (plan s26.2(1), s26.4 CT-4): the classifier's topic labels. A clean layer-2 verdict carrying either
-# label is routed identically (coverage decides, never the label); the label survives only as a log tag.
-_COVERAGE_LABELS = ("in_scope", "off_topic")
+# INTEGRATE-1104 round 2 (safety fix): only an ACCEPTED decision passes safety. A declined decision is never re-read
+# as a pass from its label: the legacy labels in_scope / off_topic are off-schema in scope_router (retry, then the
+# neutral decline). Kept as a constant for the record; nothing routes on it.
+_LEGACY_LABELS = ("in_scope", "off_topic")
 
 
 _REFUSAL_VERDICTS = ("classifier_malformed:refusal_token", "classifier_malformed:category_conflict")
@@ -667,7 +733,10 @@ def _log_basis(decision) -> None:
     """PATHA-1028 CT-4: log the routing basis as class tokens only (feeds B-SCOPE-2 counts). Never raises."""
     try:
         cat = getattr(decision, "category", "")
-        basis = cat if getattr(decision, "layer", "") == "layer2_llm" and cat in _COVERAGE_LABELS else "none"
+        from vera.scope_router import SAFE_CATEGORY
+        # SCOPE-GATE-1104 S2: basis=safe (passed the safety check) | none; never a topic label
+        basis = "safe" if getattr(decision, "accepted", False) is True and getattr(decision, "layer", "") == "layer2_llm" \
+            and cat == SAFE_CATEGORY else "none"
         reason = str(getattr(decision, "reason", ""))
         cls = reason.split(":", 1)[0] if reason.startswith(("llm_in:", "llm_out:")) else reason[:48]
         # REFUSE-FIX-1028 V5 (OD-1028(22)): a layer-2 refusal (a clean refusal-category verdict, or a refusal_token /
@@ -677,25 +746,39 @@ def _log_basis(decision) -> None:
             else None
         if ref and not (reason.startswith("llm_out:") or reason in _REFUSAL_VERDICTS):
             ref = None
-        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s%s", basis, getattr(decision, "layer", ""), cls,
-                                       f" refusal={ref}" if ref else "")
+        logging.getLogger("vera").info("scope basis=%s layer=%s class=%s%s rid=%s", basis, getattr(decision, "layer", ""),
+                                       cls, f" refusal={ref}" if ref else "", _rid())
+        _rt_event("scope", "basis", detail={"basis": basis, "layer": _rt_token(getattr(decision, "layer", "")),
+                                            "class": _rt_token(cls), "accepted": bool(getattr(decision, "accepted", False)),
+                                            **({"refusal": ref} if ref else {})})
     except Exception:  # noqa: BLE001
         pass
 
 
-def _offline_coverage_eligible(decision, question: str) -> bool:
-    """PATHA-1028 CT-2 (plan s26.2(6), s26.4 CT-2, owner Q4): with automatic acquisition effectively off, a CLEAN
-    layer-2 verdict (strictly decoded, reason llm_out:, a topic label in _COVERAGE_LABELS (CT-4), no refusal category,
-    layer 1 clean) is
-    answered from the existing corpus instead of the topic reading list. Refusal categories, layer-1 deny/injection
-    and marker hits, every classifier_malformed* verdict, a missing category and layer2_mode none keep the decline
-    path. Fails closed."""
+def _rt_event(stage, code, counts=None, detail=None) -> None:
+    """PERF-MISS-1104-TRACE: one request-trace event (a no-op outside a traced request; never raises). detail carries
+    only class tokens, counts, scores and latency, never question, passage, URL, host or model text."""
     try:
-        return (decision.accepted is False and decision.layer == "layer2_llm"
-                and str(decision.reason).startswith("llm_out:") and decision.category in _COVERAGE_LABELS
-                and decision.category not in _NO_LIST_CATEGORIES and _layer1_clean(question))
+        from vera import request_trace
+        request_trace.event(stage, code, counts=counts, detail=detail)
     except Exception:  # noqa: BLE001
-        return False
+        pass
+
+
+def _rid() -> str:
+    """PERF-MISS-1104-TRACE: this request's trace ID for log lines ("-" outside a traced request; never raises)."""
+    try:
+        from vera import request_trace
+        return request_trace.current_id() or "-"
+    except Exception:  # noqa: BLE001
+        return "-"
+
+
+def _rt_token(v) -> str:
+    """A closed-enum-shaped token for trace detail ("" / "other" for anything that is not label-shaped)."""
+    import re as _re
+    v = str(v or "")
+    return v if _re.fullmatch(r"[a-z][a-z0-9_:]{0,47}", v) else ("" if not v else "other")
 
 
 def _base_warming() -> bool:
@@ -826,8 +909,8 @@ def _log_acquisition_counts(candidates) -> None:
         out = [c for c in candidates if c.get("acquisition") == contract.ACQ_NOT_ACQUIRED]
         allowed = contract.acquisition_log_providers()
         by = Counter(p if p in allowed else "other" for p in (str(c.get("provider") or "").lower() for c in out))
-        logging.getLogger(__name__).info("acquisition candidates: %s", json.dumps(
-            {"listed": len(candidates), "not_in_collection": len(out), "by_provider": dict(sorted(by.items()))}))
+        logging.getLogger(__name__).info("acquisition candidates: %s rid=%s", json.dumps(
+            {"listed": len(candidates), "not_in_collection": len(out), "by_provider": dict(sorted(by.items()))}), _rid())
     except Exception:  # noqa: BLE001  (a counts log never fails the request)
         pass
 
@@ -939,10 +1022,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
         return replace(out.result, evidence=ev, accepted=True,
                        contract={**(out.result.contract or {}), "layers": contract.layers(), "fallback": None})  # NONASK-1103: MERGE; only layers+fallback are overridden (all other keys, e.g. trace, kept)
     _FD_TRACE.set(getattr(out, "trace", None))  # NONASK-1103 E4m: no answer, so the body carries the reasons
-    if getattr(out, "premise", None) and out.fallback:  # DAR-PREMISE-1022: flagged premise, correction unverifiable
-        from vera.fulldoc_answer import PREMISE_UNVERIFIED_TEXT
-
-        return (ev, out.fallback, out.tokens_used, out.cost_usd, PREMISE_UNVERIFIED_TEXT)
+    # OD-1104-TRACE: a flagged but unverifiable premise (DAR-PREMISE-1022) is an evidence miss: it keeps its
+    # premise_unverified token (telemetry, retry gate) but gets the same "could not write a supported answer" text.
     tok = out.fallback or tokens_["insufficient"]
     # NONASK-1103 WP-C: passages WERE selected and the writer or checker declined, so never "found no passage"
     key = "verification_unavailable_text" if tok == tokens_.get("checker_unavailable") else "unsupported_text"
@@ -969,7 +1050,7 @@ def _with_count(text: str, ev, selected: bool = False) -> str:
 
 # NONASK-1103 WP-C (stream B contract E5): fallback token -> no_answer_cause code
 _CAUSE_CODE = {"insufficient_full_document_evidence": "no_passages", "full_document_corpus_unusable": "corpus_unusable",
-               "checker_unavailable": "verification_unavailable", "premise_unverified": "premise_unverified"}
+               "checker_unavailable": "verification_unavailable"}  # OD-1104-TRACE: premise_unverified -> default no_supported_answer
 
 
 def _portal_counts(contract_: dict) -> tuple[int, int]:

@@ -41,7 +41,9 @@ def _route(monkeypatch, cfg_raw, reply):
     monkeypatch.setattr(sr, "default_chat", lambda m, mo, l2: (reply, 10, 1))
 
 
-OUT = '{"in_scope": false, "reason": "sports"}'
+# SCOPE-GATE-1104 S2: the restricted AND-profiled list is now reached only by unsupported use (programming_task);
+# a topic label (sports / off_topic) takes the normal path and never the restricted list.
+OUT = '{"safe_request": false, "category": "programming_task", "reason": "code"}'
 
 
 def test_shipped_profile_present_without_pmc_filter():
@@ -93,7 +95,7 @@ def test_profile_is_reset_after_the_offtopic_list_even_on_error(monkeypatch):
 
 
 def test_in_scope_search_is_byte_identical(monkeypatch):
-    _route(monkeypatch, RAW, '{"in_scope": true, "reason": "ok"}')
+    _route(monkeypatch, RAW, '{"safe_request": true, "category": "safe_request", "reason": "ok"}')
     seen = []
     monkeypatch.setattr(ask_service, "_fulldoc", lambda *a, **k: None)
 
@@ -160,7 +162,7 @@ def test_fallback_error_resets_profile(monkeypatch):
 
 
 def test_in_scope_never_falls_back(monkeypatch):
-    _route(monkeypatch, RAW, '{"in_scope": true, "reason": "ok"}')
+    _route(monkeypatch, RAW, '{"safe_request": true, "category": "safe_request", "reason": "ok"}')
     monkeypatch.setattr(ask_service, "_fulldoc", lambda *a, **k: None)
     seen = []
     ask_service.answer_in_scope(Q, "m", PRICING, grounding=_seq([[], SRC], seen))
@@ -242,3 +244,17 @@ def test_main_repeated_identical_call_is_cached(monkeypatch):
     r, calls = _main_ask(monkeypatch, chain, lambda prof: MSRC if prof else [])
     assert r.status_code == 200, r.text
     assert len(calls) == 2 and seen == [MSRC, MSRC, [], []]
+
+
+def test_topic_label_never_uses_the_restricted_profiled_list(monkeypatch):
+    """SCOPE-GATE-1104 S2 (new, replaces the old 'sports verdict gets the AND list' input): a legacy off_topic verdict
+    or a reply naming no category never reaches the restricted OpenAlex AND-profile list."""
+    for reply, kind in (('{"in_scope": false, "category": "off_topic", "reason": "sports"}', None),
+                        ('{"in_scope": false, "reason": "sports"}', "decline")):
+        _route(monkeypatch, RAW, reply)
+        seen = []
+        res = ask_service.answer_in_scope(Q, "m", PRICING, grounding=_seq([[], SRC], seen))
+        assert all(restricted is False and prof is None for restricted, prof in seen)
+        assert "offtopic" not in (res.contract or {})
+        if kind:
+            assert res.result_kind == kind and seen == []

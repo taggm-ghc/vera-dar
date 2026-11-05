@@ -13,8 +13,8 @@ CFG = sr.load_config()
 CODE_Q = "Write a Python function to parse CSV files"
 
 
-def _reply(in_scope, category, **extra):
-    return json.dumps({"in_scope": in_scope, "category": category, "reason": "x", **extra})
+def _reply(safe_request, category, **extra):
+    return json.dumps({"safe_request": safe_request, "category": category, "reason": "x", **extra})
 
 
 class Count:
@@ -27,15 +27,25 @@ class Count:
 
 
 # ------------------------------------------------------------------------------------------------ 1 coding hint
-@pytest.mark.parametrize("reply", [_reply(False, "programming_task"), _reply(False, "off_topic"),
-                                   _reply(True, "in_scope")])
+@pytest.mark.parametrize("reply", [_reply(False, "programming_task"),
+                                   _reply(True, "safe_request")])
 def test_coding_hint_confirmed_by_clean_layer2_gives_unsupported_list(stubs, monkeypatch, reply):
     chat = Count(reply)
     monkeypatch.setattr(sr, "default_chat", chat)
     monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: pytest.fail("inline acquisition must not run"))
     d = sr.route(CODE_Q, "m")
     assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task", 1)
-    assert sr.unsupported_use(d) and sr.offtopic_applies(d) and not sr.intent_clean(CODE_Q)
+    assert sr.unsupported_use(d) and sr.offtopic_applies(d)
+
+
+def test_coding_hint_true_verdict_out_of_enum_twice_is_the_fixed_decline(stubs, monkeypatch):
+    # DENYALL-AUDIT-1104 A1: a true verdict without category safe_request is never a pass; under a coding hint it is
+    # the l2_malformed fallback decline (no unsupported-use list, no answer, no acquisition)
+    chat = Count(_reply(True, "novel_subject"))
+    monkeypatch.setattr(sr, "default_chat", chat)
+    d = sr.route(CODE_Q, "m")
+    assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task:l2_malformed", 2)
+    assert not sr.unsupported_use(d) and not sr.intent_clean(CODE_Q)
     r, search = run(CODE_Q)
     assert r.result_kind == "reading_list" and r.answer.startswith(RAW["unsupported_use_text"])
     assert search.calls == [True] and r.sources == () and r.accepted is False and r.acquire_trigger is None
@@ -56,9 +66,12 @@ def test_coding_hint_with_other_refusal_category_is_refused(stubs, monkeypatch, 
     assert r.result_kind == "decline" and r.answer == RAW["decline_template"] and search.calls == []
 
 
-@pytest.mark.parametrize("reply", ["not json", json.dumps({"in_scope": False, "reason": "x"}),
-                                   _reply(False, "off_topic", extra="category: programming_task"),  # refusal_token pt
-                                   json.dumps({"in_scope": True, "reason": "x"})])  # in_scope without category
+@pytest.mark.parametrize("reply", ["not json", json.dumps({"safe_request": False, "reason": "x"}),
+                                   _reply(True, "safe_request", extra="category: programming_task"),  # refusal_token pt
+                                   json.dumps({"safe_request": True, "reason": "x"}),  # safe_request without category
+                                   # R2: legacy / off-schema replies are malformed (never a pass)
+                                   json.dumps({"in_scope": False, "category": "off_topic", "reason": "x"}),
+                                   json.dumps({"in_scope": True, "category": "in_scope", "reason": "x"})])
 def test_coding_hint_malformed_layer2_falls_back_to_decline_and_logs(stubs, monkeypatch, caplog, reply):
     monkeypatch.setattr(sr, "default_chat", chat_returning(reply))
     with caplog.at_level(logging.INFO, logger="vera"):
@@ -153,10 +166,20 @@ def test_coding_task_is_the_last_deny_category():
 
 
 # FINAL-REVIEW-1028 D4 (OD-1028(21) c1, (38)): a label-only-invalid reply twice under a coding hint is unsupported use
-@pytest.mark.parametrize("reply", [_reply(False, "dangerous"), _reply(True, "novel_subject")])
+@pytest.mark.parametrize("reply", [_reply(False, "dangerous")])  # A1: the true + out-of-enum case is the test below
 def test_coding_hint_label_only_invalid_twice_takes_unsupported_use_path(stubs, monkeypatch, reply):
     chat = Count(reply)
     monkeypatch.setattr(sr, "default_chat", chat)
     d = sr.route(CODE_Q, "m")
     assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task", 2)
     assert sr.unsupported_use(d) and sr.offtopic_applies(d)
+
+
+def test_coding_hint_true_verdict_out_of_enum_twice_is_the_fixed_decline(stubs, monkeypatch):
+    # DENYALL-AUDIT-1104 A1: a true verdict without category safe_request is never a pass; under a coding hint it is
+    # the l2_malformed fallback decline (no unsupported-use list, no answer, no acquisition)
+    chat = Count(_reply(True, "novel_subject"))
+    monkeypatch.setattr(sr, "default_chat", chat)
+    d = sr.route(CODE_Q, "m")
+    assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task:l2_malformed", 2)
+    assert not sr.unsupported_use(d)

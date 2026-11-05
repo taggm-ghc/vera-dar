@@ -16,7 +16,7 @@ def _legacy_decline_path(monkeypatch):
     """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
-    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+    pass  # INTEGRATE-1104: _research_eligible removed by SCOPE-GATE-1104 S2 (no topic-based decline path remains)
 
 OTHER_Q = "What are the different types of horses?"
 
@@ -250,7 +250,7 @@ def test_in_scope_tokens_used_adds_the_inline_spend_to_the_base_attempt(monkeypa
 
 def test_off_topic_tokens_used_is_the_inline_total(monkeypatch):
     from vera import acq_config, scope_router
-    dec = scope_router.ScopeDecision(False, "layer2_llm", "llm_out:x", 400, 0.004, 1, "off_topic")
+    dec = scope_router.ScopeDecision(True, "layer2_llm", "llm_in:x", 400, 0.004, 1, "safe_request")
     monkeypatch.setattr(scope_router, "route", lambda *a, **k: dec)
     monkeypatch.setattr(ask_service, "_acq_cfg_if_on", lambda: acq_config.load_config())
     monkeypatch.setattr(ask_service, "_layer1_clean", lambda q: True)

@@ -258,7 +258,7 @@
     "attribution_changes_text": "Short excerpt; the full text was converted from {format} to plain text with no other change.",
     "max_total_quote_chars": 1200,
     "premise_check": {
-      "_note": "DAR-PREMISE-1022: lets the model flag a false/unsupported/ill-posed question premise as a first-line PREMISE reply; the cited correction goes through the same claim check, and an unverified flag shows only a fixed fallback. UNCALIBRATED on live models (stub-tested only): set enabled=false to restore the previous behaviour. The prefix and fallback wording are fixed in code, not configurable.",
+      "_note": "DAR-PREMISE-1022: lets the model flag a false (contradicted by a cited passage) or ill-posed question premise as a first-line PREMISE reply; the cited correction goes through the same claim check. OD-1104-TRACE: 'unsupported' is no longer a premise verdict (absence of support -> insufficient marker), and an unverified flag (premise_unverified) is an evidence miss that starts the single inline-acquisition retry (reverses HITL-CMF-6); the writer and checker get the current UTC date and must not judge premises or event recency from model knowledge. UNCALIBRATED on live models (stub-tested only): set enabled=false to restore the previous behaviour. The prefix and fallback wording are fixed in code, not configurable.",
       "enabled": true
     },
     "responsiveness": {

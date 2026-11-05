@@ -24,7 +24,7 @@
   "scope_expansion": {
     "enabled": true,
     "override_layer2_declines": true,
-    "layer2_categories_allowed": ["off_topic", "in_scope"],
+    "layer2_categories_allowed": ["safe_request", "off_topic", "in_scope"],
     "_dar1021_note": "DAR-1021: a layer-2 decline starts acquisition (and, only when override_layer2_declines is true, may later be answered from acquired documents alone through the unchanged full-document admission, claim check and citation path) ONLY when the classifier's category is in layer2_categories_allowed (closed enum; missing or unknown = no). Layer-1 declines, malformed replies, other categories and layer2_none never acquire or answer. UNCALIBRATED: the classifier's category accuracy has not been measured on live traffic.",
     "inline_answer_note": "VERA-DAR found and added these documents while answering this question.",
     "inline_answer_note_stored": "VERA-DAR answered from open-access documents it had already added to its collection for an earlier question.",

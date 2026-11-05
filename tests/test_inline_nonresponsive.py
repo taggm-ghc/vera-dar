@@ -34,7 +34,7 @@ def wired(monkeypatch):
 
 
 def _fd(calls, base_token, inline_token):
-    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None):
+    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None, lanes=None):  # INTEGRATE-1104: _fulldoc signature (NONASK-1103 lanes)
         calls["fulldoc"].append("inline" if ephemeral is not None else "base")
         return (None, inline_token if ephemeral is not None else base_token, 1, 0.0, "TEXT")
     return fulldoc

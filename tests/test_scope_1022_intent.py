@@ -108,8 +108,11 @@ BENIGN = [
     "what is the A B C D testing approach in software experiments",
 ]
 
-OFF = '{"in_scope": false, "category": "off_topic", "reason": "outside fields"}'
-IN = '{"in_scope": true, "category": "in_scope", "reason": "epidemiology"}'
+# INTEGRATE-1104 R2: ordinary verdicts use the new schema; LEGACY_* are off-schema replies that must decline
+OFF = '{"safe_request": true, "category": "safe_request", "reason": "outside fields"}'
+IN = '{"safe_request": true, "category": "safe_request", "reason": "epidemiology"}'
+LEGACY_OFF = '{"in_scope": false, "category": "off_topic", "reason": "outside fields"}'
+LEGACY_IN = '{"in_scope": true, "category": "in_scope", "reason": "epidemiology"}'
 SRC = [{"n": 1, "title": "Paper One", "url": "https://arxiv.org/abs/2401.00001", "published": "2025-01-01",
         "snippet": "S", "identifier": "arXiv:2401.00001", "provider": "arxiv", "retrieved_at": "2026-10-01"}]
 
@@ -205,7 +208,9 @@ def test_injection_patterns_pinned_and_coding_task_kept():
 # ------------------------------------------------------------------------------------------------ layer 2 prompt
 def test_layer2_prompt_separates_advice_and_harm_from_information_and_keeps_closed_enum():
     p = CFG.layer2["system_prompt"]
-    assert sr.LAYER2_CATEGORIES == ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
+    # SCOPE-GATE-1104 S1 (requirement change, owner 2026-11-04): the topical in_scope/off_topic rows became one safe_request
+    # row; the four refusal categories and the advice/harm text below are unchanged
+    assert sr.LAYER2_CATEGORIES == ("safe_request", "advice", "harmful", "programming_task", "rule_change")
     for c in sr.LAYER2_CATEGORIES:
         assert f'"{c}"' in p
     assert "Informational, historical, scientific and mechanism questions" in p
@@ -214,7 +219,7 @@ def test_layer2_prompt_separates_advice_and_harm_from_information_and_keeps_clos
 
 def test_in_scope_true_with_refusal_category_fails_closed():
     for cat in sorted(sr.REFUSE_CATEGORIES):
-        reply = json.dumps({"in_scope": True, "category": cat, "reason": "x"})
+        reply = json.dumps({"safe_request": True, "category": cat, "reason": "x"})
         d = sr.route("how does insulin regulate blood sugar", "m", cfg=CFG, chat=lambda m, model, l2: (reply, 1, 1))
         assert not d.accepted and d.reason == "classifier_malformed:category_conflict"
         assert not sr.offtopic_applies(d, CFG)
@@ -251,9 +256,21 @@ def test_benign_flow_in_scope_reaches_answer_generation(flow, monkeypatch, q):
     assert flow["ask"](q, IN).answer == "ANSWERED"
 
 
+@pytest.mark.parametrize("legacy", [LEGACY_OFF, LEGACY_IN])
+def test_legacy_off_schema_verdict_declines_without_corpus_acquisition_or_list(flow, legacy):
+    # R2 safety fix: the legacy in_scope key / off_topic label is never a pass; 2 classifier calls, neutral decline
+    calls = []
+    q = "how does insulin regulate blood sugar"
+    d = sr.route(q, "m", cfg=CFG, chat=lambda m, model, l2: (calls.append(1), (legacy, 1, 1))[1])
+    assert d.accepted is False and d.reason == "classifier_malformed" and len(calls) == 2
+    r = flow["ask"](q, legacy)
+    assert r.answer == sr.decline_text() and r.result_kind == "decline" and r.acquire_trigger is None
+    assert flow["search"].calls == [] and flow["fulldoc"].calls == [] and flow["inline"].calls == []
+
+
 @pytest.mark.parametrize("cat", ["advice", "harmful"])
 def test_layer2_advice_or_harm_verdict_never_listed_acquired_or_answered(flow, cat):
-    reply = json.dumps({"in_scope": False, "category": cat, "reason": "x"})
+    reply = json.dumps({"safe_request": False, "category": cat, "reason": "x"})
     r = flow["ask"]("how does insulin regulate blood sugar", reply)
     assert r.answer == sr.decline_text() and r.acquire_trigger is None
     assert flow["search"].calls == [] and flow["fulldoc"].calls == [] and flow["inline"].calls == []

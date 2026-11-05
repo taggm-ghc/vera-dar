@@ -26,7 +26,10 @@ class FakeReporting:
         self.items, self.cfg = items, {"enabled": True, "outlets": []}
 
     def search(self, text, ents=()):
-        return {"items": list(self.items), "attribution": None, "terms": []}
+        # INTEGRATE-1104 (NEWS-LANE R1): the real ReportingLane tags every item; a fake for a READ case tags
+        # read_ok=True (an explicit read_ok=False stays a link-only case)
+        return {"items": [{**it, "read_ok": it.get("read_ok", True)} for it in self.items], "attribution": None,
+                "terms": []}
 
 
 def _items(hosts, n=1):
@@ -36,6 +39,9 @@ def _items(hosts, n=1):
 
 def rep_on(mp):
     mp.setattr(rl, "lane_enabled", lambda cfg=None: True)
+    # INTEGRATE-1104 (NEWS-LANE R1): every reporting hop needs an "allow" outlet verdict; the read cases run with the
+    # fake outlets treated as allow (permission denials still come from source_permissions, unchanged)
+    mp.setattr(rl, "outlet_verdict", lambda url, cfg=None: "allow")
 
 
 def test_forbid_vendors_link_only_google_fetched():

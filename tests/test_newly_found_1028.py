@@ -26,7 +26,7 @@ def _run(monkeypatch, base, merged):
     fd = NS(evidence=base, sources=())
     res = NS(evidence=merged, sources=(), answer="A")
     monkeypatch.setattr(a, "_research_attempt", lambda *x: ({"status": "ok"}, NS(corpus=object())))
-    monkeypatch.setattr(a, "_combined_answer", lambda *x: (res, False))
+    monkeypatch.setattr(a, "_combined_answer", lambda *x, **k: (res, False))  # INTEGRATE-1104: lanes kwarg
     monkeypatch.setattr(a, "_annotate", lambda r, fr: r)
     monkeypatch.setattr(a, "_with_research", lambda r, rec, suffix=None: seen.update(rec=rec) or r)
     monkeypatch.setattr(a, "_source_freshness", lambda *x: [])

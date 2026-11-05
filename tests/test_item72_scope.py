@@ -23,7 +23,7 @@ def cfg(mode="llm"):
     return sr.parse_config(RAW, layer2_mode=mode)
 
 
-def fake_chat(reply='{"in_scope": true, "reason": "ok"}', calls=None):
+def fake_chat(reply='{"safe_request": true, "category": "safe_request", "reason": "ok"}', calls=None):
     def chat(messages, model, l2):
         if calls is not None:
             calls.append(messages)
@@ -58,7 +58,7 @@ def test_layer1_coding_hint_runs_layer2():
     d = sr.route(q, "m", cfg=cfg(), chat=boom_chat)
     assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task:l2_unavailable", 0)
     assert not sr.unsupported_use(d) and not sr.offtopic_applies(d)
-    d = sr.route(q, "m", cfg=cfg(), chat=fake_chat('{"in_scope": false, "category": "programming_task", "reason": "x"}'))
+    d = sr.route(q, "m", cfg=cfg(), chat=fake_chat('{"safe_request": false, "category": "programming_task", "reason": "x"}'))
     assert (d.accepted, d.layer, d.reason, d.llm_calls) == (False, "layer1", "deny:coding_task", 1)
 
 
@@ -67,15 +67,20 @@ def test_layer1_coding_hint_runs_layer2():
     "Do AI coding assistants make experienced developers slower?",
     "Are LLM-written pull requests buggier?",
 ])
-def test_layer1_accepts_clear_in_scope(q):
-    d = sr.route(q, "m", cfg=cfg(), chat=boom_chat)
-    assert d.accepted and d.layer == "layer1"
+def test_former_layer1_accepts_now_get_the_layer2_safety_check(q):
+    # SCOPE-GATE-1104 S1 (requirement change; owner 2026-11-04): the topical layer-1 ACCEPT is removed, so these
+    # questions are UNSURE at layer 1 and the layer-2 safety check always runs (it used to be skipped for them)
+    assert sr.layer1(q, cfg())[0] == sr.UNSURE
+    calls = []
+    d = sr.route(q, "m", cfg=cfg(), chat=fake_chat('{"safe_request": true, "category": "safe_request", "reason": "ok"}',
+                                                   calls))
+    assert d.accepted and d.layer == "layer2_llm" and len(calls) == 1
 
 
 def test_unsure_goes_to_llm_and_counts_cost():
     calls = []
     d = sr.route("Who won the World Cup in 2014?", "m", _pricing(), cfg=cfg(), chat=fake_chat(
-        '{"in_scope": false, "reason": "trivia"}', calls))
+        '{"safe_request": false, "reason": "trivia"}', calls))
     # Q2 / Path A: a reply with no category is a nullified verdict -> exactly one retry; both calls are counted
     assert not d.accepted and d.layer == "layer2_llm" and d.llm_calls == 2 and d.tokens_used == 220 and len(calls) == 2
     assert d.cost_usd == pytest.approx(2 * (100 / 1e6 * 0.1 + 10 / 1e6 * 0.4))
@@ -84,7 +89,7 @@ def test_unsure_goes_to_llm_and_counts_cost():
     assert "Who won" not in sys_msg["content"]  # question only in the delimited user turn
 
 
-@pytest.mark.parametrize("reply", ["not json", '{"in_scope": "yes"}', "[]", ""])
+@pytest.mark.parametrize("reply", ["not json", '{"safe_request": "yes"}', "[]", ""])
 def test_malformed_classifier_fails_closed(reply):
     d = sr.route("Who won the World Cup in 2014?", "m", cfg=cfg(), chat=fake_chat(reply))
     assert not d.accepted and d.reason == "classifier_malformed"
@@ -117,18 +122,20 @@ def test_answer_in_scope_accept_without_grounding_never_uses_bare_model(monkeypa
     # K2 V2: grounding unavailable -> the L0 no-sources result, never the bare model's answer
     monkeypatch.setattr(ask_service, "answer_question",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("bare model called")))
+    monkeypatch.setattr(sr, "default_chat", fake_chat())  # SCOPE-GATE-1104 S1: layer 2 now runs for this question
     r = ask_service.answer_in_scope("Do AI coding assistants help developers?", "m", _pricing())
     assert r.result_kind == "reading_list" and r.claims == () and r.candidates == () and r.answer
 
 
 def test_answer_in_scope_llm_decline_uses_template_not_model_text(monkeypatch):
-    monkeypatch.setattr(sr, "default_chat", fake_chat('{"in_scope": false, "reason": "MODEL TEXT"}'))
+    monkeypatch.setattr(sr, "default_chat", fake_chat('{"safe_request": false, "reason": "MODEL TEXT"}'))
     monkeypatch.setattr(ask_service, "answer_question", lambda *a: (_ for _ in ()).throw(AssertionError("answered")))
     r = ask_service.answer_in_scope("Who painted the Mona Lisa?", "m", _pricing())
-    # Q2 / Path A: no category -> nullified -> one retry (tokens of both calls). NEXTREL-1028 (requirement change from
-    # CATSTEP-1028): the well-formed in_scope:false/no-category verdict is then categorised and takes the coverage path;
-    # with acquisition off the reply is the fixed acquisition-off note, never the model text.
-    assert r.answer == RAW["acquisition_off_note"] and "MODEL TEXT" not in r.answer and r.tokens_used == 220
+    # Q2 / Path A: no category -> nullified -> one retry (tokens of both calls). INTEGRATE-1104 / SCOPE-GATE-1104 S2
+    # (orchestrator D2a, requirement change from NEXTREL-1028): a reply naming no category is not a safety pass and
+    # is no longer relabelled off_topic; it fails closed as the neutral decline template, never the model text.
+    assert r.answer == RAW["decline_template"] and "MODEL TEXT" not in r.answer and r.tokens_used == 220
+    assert r.result_kind == "decline"
 
 
 def test_main_ask_routes_through_scope_router():

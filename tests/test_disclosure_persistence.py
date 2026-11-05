@@ -141,6 +141,12 @@ def test_shipped_config_public_ask_makes_zero_writes(monkeypatch, recorder, kind
     """Verified by test (mocked): no engine is even created, so no write to questions, runs, candidates,
     canonical_sources, sources, licence_observations, claims, answers (or evidence_spans); no DAR hook; no file write."""
     spies = []
+    # INTEGRATE-1104: migration 015 is applied and request_trace db_sink ships ON. Its owner-only diagnostic rows
+    # (question kept up to 30 days, disclosed in _NO_SAVE) are written by an asynchronous writer thread and are covered
+    # by tests/test_request_trace_core.py; they are pinned off here so this test keeps proving deterministically that
+    # the public /ask path writes NOTHING to the corpus, memory, runs, candidates or any other table.
+    from vera import request_trace as _rt
+    monkeypatch.setattr(_rt, "CFG", {**_rt.CFG, "db_sink": {**(_rt.CFG.get("db_sink") or {}), "enabled": False}})
     r = _post(monkeypatch, _results()[kind], spies)
     assert r.status_code == 200, r.text
     # the only engine allowed is the read-only DAR registry/health probe (SELECT); no statement may be a write

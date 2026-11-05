@@ -31,7 +31,7 @@ from vera import acq_config, acq_discovered, arxiv_fulltext, ask_service, discov
 Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
 REAL_ROUTE = scope_router.route  # captured before the rig replaces it with a fixed decision
 # The layer-2 classifier's realistic verdict under the shipped prompt (multi-agent orchestration is not a listed field)
-VERDICT = {"in_scope": False, "category": "off_topic", "reason": "multi-agent orchestration is outside the listed fields"}
+VERDICT = {"safe_request": True, "category": "safe_request", "reason": "multi-agent orchestration is a benign research question"}
 
 FP = [  # (doi, title, arxiv_id or None): the live run's five lexical false positives
     ("10.48550/arXiv.2512.02349", "ACM COMPUTE 2025 Best Practices Track Proceedings", "2512.02349v2"),
@@ -110,6 +110,11 @@ def acc(rig, monkeypatch):  # noqa: F811
     getattr(arxiv_fulltext, "_HOST_LAST", {}).clear()
     monkeypatch.setattr(arxiv_fulltext, "_sleep", lambda s: None)
     monkeypatch.setattr(scope_router, "route", REAL_ROUTE)  # the REAL scope gate decides
+    # INTEGRATE-1104: the reporting lane ships on (NEWS-LANE-1104) and this rig has no lane stub, so the lane would
+    # make a real GDELT request (refused by the test boundary; without the runner it waits on socket timeouts, the
+    # observed hang). These acceptance tests are about scope/research routing; lanes have their own suites.
+    from vera import inline_acquire as _ia_mod
+    monkeypatch.setattr(_ia_mod, "lane_pass", lambda *a, **k: None)
     calls = []
 
     def classifier(messages, model, l2, client=None, extra_body=None):  # the layer-2 LLM boundary only

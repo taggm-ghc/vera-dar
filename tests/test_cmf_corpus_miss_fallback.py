@@ -23,12 +23,13 @@ from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, inline_a
 TRIGGER_TODAY = ["insufficient", "corpus_unusable", "nonresponsive"]  # already start _inline (guard)
 # OWNER DIRECTION: answer-failure gate = no_valid_citations, claim_check_insufficient, model_insufficient AND
 # checker_unavailable must start discovery; premise must NOT; claim_check_disabled is OPEN-OWNER (xfail, not strict).
-TRIGGER_NEW = ["no_valid_citations", "claim_check_insufficient", "model_insufficient"]  # checker_unavailable removed (OD-CMF-1022g)
-# premise and claim_check_disabled stay OUT (HITL-CMF-6); checker_unavailable removed from the gate (OD-CMF-1022g).
-# The premise entry is the REAL token (fulldoc_answer.PREMISE_FALLBACK), so adding it to retry_tokens would fail this test;
+# OD-1104-TRACE: the REAL premise token (fulldoc_answer.PREMISE_FALLBACK) now starts _inline too (reverses HITL-CMF-6:
+# an unverified premise flag is an evidence miss under the 2026-11-03 ingest-six-then-answer rule).
 # _wire resolves config keys through fallback_tokens.get(token, token) and passes any other string through unchanged.
 from vera.fulldoc_answer import PREMISE_FALLBACK  # noqa: E402
-NO_TRIGGER = [PREMISE_FALLBACK, "claim_check_disabled", "checker_unavailable"]
+TRIGGER_NEW = ["no_valid_citations", "claim_check_insufficient", "model_insufficient", PREMISE_FALLBACK]  # checker_unavailable removed (OD-CMF-1022g)
+# claim_check_disabled stays OUT; checker_unavailable removed from the gate (OD-CMF-1022g).
+NO_TRIGGER = ["claim_check_disabled", "checker_unavailable"]
 Q_OFF = "What is the best recipe for sourdough bread with rye flour and a long overnight proof?"
 
 
@@ -82,7 +83,7 @@ L2_REFUSE = sorted(scope_router.REFUSE_CATEGORIES)
 
 # level: L1. off_topic already starts discovery today (positive regression, no xfail).
 def test_A_off_topic_decline_starts_discovery(monkeypatch):
-    dec = scope_router.ScopeDecision(False, "layer2_llm", "llm_out:not about research", category="off_topic")
+    dec = scope_router.ScopeDecision(True, "layer2_llm", "llm_in:x", category="safe_request")
     # OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): off_topic now takes the normal research path; a corpus miss there starts the in-scope inline
     calls = _wire(monkeypatch, token="insufficient", decision=dec, override=True)
     ask_service.answer_in_scope(Q_OFF, "m", _pr())
@@ -92,7 +93,7 @@ def test_A_off_topic_decline_starts_discovery(monkeypatch):
 # level: L1. in_scope (the only practical widening) starts discovery; "" (unknown/invalid category) must NOT (V1 dissent;
 # matches tests/test_acq_serve.py:123).
 def test_A_in_scope_layer2_decline_starts_discovery(monkeypatch):
-    dec = scope_router.ScopeDecision(False, "layer2_llm", "llm_out:not about research", category="in_scope")
+    dec = scope_router.ScopeDecision(True, "layer2_llm", "llm_in:x", category="safe_request")
     # OD-1028(6) Path A CT-4: the label has no routing effect, so in_scope takes the research path like off_topic;
     # a corpus miss there starts the in-scope inline (same adaptation as test_A_off_topic_decline_starts_discovery)
     calls = _wire(monkeypatch, token="insufficient", decision=dec, override=True)
@@ -133,8 +134,8 @@ def test_A_refuse_categories_closed_even_when_listed_in_config(monkeypatch, cat)
     assert not calls and res.acquire_trigger is None
 
 
-def test_A_shipped_config_allows_exactly_off_topic_and_in_scope():
-    assert acq_config.load_config()["scope_expansion"]["layer2_categories_allowed"] == ["off_topic", "in_scope"]
+def test_A_shipped_config_allows_exactly_safe_request_and_its_legacy_aliases():  # INTEGRATE-1104 S2
+    assert acq_config.load_config()["scope_expansion"]["layer2_categories_allowed"] == ["safe_request", "off_topic", "in_scope"]
 
 
 # level: L1 guard
@@ -382,7 +383,7 @@ def wired(monkeypatch):
 
 
 def _fd(calls, base_token, inline_result):
-    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None):
+    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None, lanes=None):  # INTEGRATE-1104: _fulldoc signature (NONASK-1103 lanes)
         calls["fulldoc"].append("inline" if ephemeral is not None else "base")
         if ephemeral is not None:
             return inline_result
@@ -420,10 +421,12 @@ def _clock(monkeypatch, elapsed):
 
 # level: L1 (stubs). Latency bound from existing values only: need = inline deadline_s (45) + 3 x chain timeout_s (20)
 # + 2 x grounding deadline_s (10, when grounded) -> 105 s ungrounded here; skipped retry reports {"status": "deadline"}.
+# INTEGRATE-1104 step 2: below `need` the round runs with a trimmed inline deadline (remaining - post-inline tail,
+# tail = need - deadline_s = 60 s here); only when no inline time is left (remaining <= 60 s) is it skipped.
 def test_latency_inline_retry_skipped_when_remaining_time_is_short(wired, monkeypatch):
     tok = fulldoc_corpus.load_config()["fallback_tokens"]["no_valid_citations"]
     monkeypatch.setattr(ask_service, "_fulldoc", _fd(wired, tok, None))
-    _clock(monkeypatch, 80.0)  # 100 s left < 105 s
+    _clock(monkeypatch, 125.0)  # 55 s left <= 60 s post-inline tail
     r = ask_service.answer_in_scope("What is X?", "m", _pr())
     assert wired["acquire"] == 0 and wired["fulldoc"] == ["base"] and r.result_kind == "reading_list"
     assert r.contract["inline_acquisition"] == {"status": "deadline"} and r.contract["fallback"] == tok
@@ -437,7 +440,8 @@ def test_latency_inline_retry_runs_when_enough_time_remains(wired, monkeypatch):
     assert wired["acquire"] == 1
 
 
-@pytest.mark.parametrize("elapsed,runs", [(74.9, True), (75.0, True), (75.1, False)])  # need 105: remaining need+0.1/need/need-0.1
+@pytest.mark.parametrize("elapsed,runs", [(74.9, True), (75.0, True), (75.1, True), (119.9, True), (120.0, False),
+                                          (120.1, False)])  # INTEGRATE-1104: runs while remaining > tail 60 s
 def test_latency_boundary_need_plus_minus_point_one(wired, monkeypatch, elapsed, runs):
     tok = fulldoc_corpus.load_config()["fallback_tokens"]["no_valid_citations"]
     monkeypatch.setattr(ask_service, "_fulldoc", _fd(wired, tok, None))
@@ -487,7 +491,7 @@ def test_deadline_elapsed_carries_over_between_providers(wired, monkeypatch):
     tok = fulldoc_corpus.load_config()["fallback_tokens"]["no_valid_citations"]
     monkeypatch.setattr(ask_service, "_fulldoc", _fd(wired, tok, None))
     b = ask_service.RequestBudget(deadline=1000.0)
-    monkeypatch.setattr(ask_service.time, "monotonic", lambda: 1000.0 - 104.0)  # 104 s left < 105 s
+    monkeypatch.setattr(ask_service.time, "monotonic", lambda: 1000.0 - 59.0)  # 59 s left <= 60 s tail (INTEGRATE-1104)
     r = ask_service.answer_in_scope("What is X?", "m", _pr(), budget=b)
     assert wired["acquire"] == 0 and r.contract["inline_acquisition"] == {"status": "deadline"}
 

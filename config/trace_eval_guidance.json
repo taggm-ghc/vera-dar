@@ -17,7 +17,7 @@
   },
   "variant_descriptions_description": "One public sentence per variant for the page's Context section (keyed by raw variant name; never shown raw).",
   "variant_descriptions": {
-    "baseline": "a single call to a third-party hosted language model, with no search (historical capture shape)",
+    "baseline": "a single call to an externally hosted language model, with no search (historical capture shape)",
     "grounded_v1": "the historical search-grounded prompt: numbered abstracts and a cite-only rule",
     "ask_api": "VERA-DAR's live answer route, exactly as a user receives it (scope routing, retrieval and claim checks included)"
   },

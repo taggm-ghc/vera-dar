@@ -108,6 +108,7 @@ def _stub_lanes(mp, env, outlets=False, fetched=None):
                 "content_type": "text/html"}
     mp.setattr(public_fetch, "fetch", fetch)
     mp.setattr(reporting_lane, "_default_http_get", _gdelt_get)
+    mp.setattr(reporting_lane, "_SHARED", reporting_lane._new_state())  # NEWS-LANE-1104: per-process lane state
     cfg = reporting_lane.load_config()
     cfg["enabled"] = True
     cfg["outlets"] = ([{"host": "news.example.org", "terms_verdict": "allow", "terms_evidence": "test"}]
@@ -196,14 +197,14 @@ def _module_state():
 def test_end_to_end_inline_route_never_stores(monkeypatch, env, sinks, caplog):
     """Full real path: lane_pass -> collect -> _fulldoc -> merge -> admit -> writer -> claim check -> citations."""
     _enable(monkeypatch)
-    fetched = _stub_lanes(monkeypatch, env)
+    fetched = _stub_lanes(monkeypatch, env, outlets=True)  # NEWS-LANE-1104: only allow-listed outlets are read
     cache0 = len(inline_acquire._I.results)
     caplog.set_level(0)
     info: dict = {}
     with ls.capture_logs() as logs:
         out, seen = _run_inline(monkeypatch, env, info)
     assert isinstance(out, ask_service.AskResult), out
-    assert out.result_kind == "answer" and sorted(fetched) == sorted([OFFICIAL_URL, NEWS_URL]), fetched  # unknown outlet is read (I-A6)
+    assert out.result_kind == "answer" and sorted(fetched) == sorted([OFFICIAL_URL, NEWS_URL]), fetched  # allow-listed outlet is read
     # positive control: the lane passage really reached the writer prompt (so the sinks below are being tested)
     prompt = json.dumps(seen["messages"])
     assert env.inn in prompt and env.out not in prompt
@@ -305,15 +306,21 @@ def test_background_queue_never_receives_lane_items(monkeypatch, env, sinks):
     assert env.out not in ls.flatten(inline_acquire._I.results) and env.inn not in ls.flatten(inline_acquire._I.results)
 
 
-def test_reporting_outlets_empty_unknown_outlet_read_not_leaked(monkeypatch, env, sinks):
+def test_reporting_unknown_outlet_link_only_never_read(monkeypatch, env, sinks):
+    """NEWS-LANE-1104 (owner terms rule): an unlisted outlet is link-only. Shipped emit_link_only=false: not listed at
+    all; with emit_link_only=true: a link, never fetched (lane_evidence honours read_ok, W2)."""
     _enable(monkeypatch, official=False, reporting=True)
     fetched = _stub_lanes(monkeypatch, env, outlets=False)
     res = lane_evidence.collect(Q, fetch=public_fetch.fetch)
-    assert fetched == [NEWS_URL], "empty outlets config: unknown outlet is readable (I-A6)"
-    assert len(res.pages) == 1 and [lk["url"] for lk in res.links] == [NEWS_URL]
-    assert res.links[0]["read"] is True and res.links[0]["label"] == "Reported"
+    assert fetched == [] and res.pages == []
+    cfg = dict(reporting_lane.load_config(), emit_link_only=True, outlet_query="all")
+    monkeypatch.setattr(reporting_lane, "load_config", lambda path=reporting_lane.CONFIG_PATH: dict(cfg))
+    monkeypatch.setattr(reporting_lane, "_SHARED", reporting_lane._new_state())
+    res = lane_evidence.collect(Q, fetch=public_fetch.fetch)
+    assert fetched == [] and res.pages == [] and [lk["url"] for lk in res.links] == [NEWS_URL]
+    assert res.links[0]["read"] is False and res.links[0]["label"] == "Reported"
     pub = res.public()
-    assert pub["n_read"] == 1 and env.out not in ls.flatten(pub) and env.inn not in ls.flatten(pub)
+    assert pub["n_read"] == 0 and env.out not in ls.flatten(pub) and env.inn not in ls.flatten(pub)
     assert sinks.calls == []
 
 

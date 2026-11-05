@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Protocol
 from urllib.parse import urlsplit
 
+from vera import request_trace as rt
 from vera.search_query import build_query_terms
 
 # Why: names the cost basis recorded on every ledger record of a keyless provider. Research found no
@@ -1198,6 +1199,8 @@ def record_portal(name: str, status: str, results: int = 0) -> None:
         lst = PORTALS.get()
         if lst is not None:
             lst.append({"portal": str(name), "status": str(status), "results": int(results or 0)})
+        rt.event("search", "portal", counts={"results": int(results or 0)},
+                 detail={"provider": str(name), "status": str(status)})
     except Exception:  # noqa: BLE001
         pass
 

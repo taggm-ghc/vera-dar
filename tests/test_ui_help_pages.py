@@ -43,7 +43,7 @@ def test_required_notice_keeps_the_seven_groups_verbatim_and_drops_the_movable_o
     for moved in ("first searches a small collection", "Licences for documents in its own collection",
                   "For listed records, only the indexing", "in the same request"):
         assert moved in full and moved not in req, moved
-    assert len(req.split()) < len(full.split()) // 2
+    assert len(req.split()) < int(len(full.split()) * 0.55)  # NEWS-LANE-1104 / retention sentence: both texts grew; still well under the full text
 
 
 def test_required_notice_follows_flags(tmp_path):
@@ -145,14 +145,21 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     _, cfg = _howto_text()
     t = " ".join(p for s in cfg["about"]["after_disclosure"] for p in s["paragraphs"])
     assert "never names an individual document" not in t.lower() and "totals only" not in t
-    for shown in ("number of sources", "newest source", "licence note", "language model", "scope", "topics"):
+    for shown in ("number of sources", "newest source", "licence note", "language model", "current coverage", "topics",
+                  "link to this page", "Trace Eval"):
         assert shown in t, shown
-    assert "last updated" not in t
+    assert "last updated" not in t and "scope" not in t.lower()  # CORPUS-DIGEST-1104: no fixed Scope text
     from vera import sources_sidebar as sb  # each claimed element exists in the renderer
     import inspect
-    src = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar)
-    for el in ("newest source", "LICENCE_SIDEBAR", "topics", "agentic_model", "scope_text"):
-        assert el in src, el
+    side = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar) + inspect.getsource(sb._about_link)
+    for el in ("newest source", "topics", "CHECKED", "ABOUT_LINK_LABEL"):
+        assert el in side, el
+    for gone in ("LICENCE_SIDEBAR", "scope_text", "how_answers_text", "how_answers_base", "trace_eval_line"):
+        assert gone not in side, gone  # moved off the sidebar
+    notes = inspect.getsource(sb.corpus_notes_lines)  # ... to the About page
+    for el in ("LICENCE_SIDEBAR", "how_answers_base", "trace_eval_line", "coverage_text"):
+        assert el in notes, el
+    assert "render_corpus_notes" in inspect.getsource(help_pages.render_about)
 
 
 def test_wake_time_comes_from_config(monkeypatch):
@@ -200,7 +207,7 @@ def test_disclosure_state_equivalence_96(monkeypatch, fd, off, corp, auto, layer
     full, req = disclosure.disclosure_text(), disclosure.required_notice_text()
     secs = " ".join(t for _, t in disclosure.disclosure_sections())
     assert _NORM(secs) == _NORM(full)
-    bf = disclosure._BASE_FULLDOC
+    bf = disclosure.base_fulldoc()
     s2 = bf[bf.index("For each"):bf.index("Answers and lists")]
     s4 = bf[bf.index("Licences for documents"):bf.index("VERA-DAR keeps no")]
     expect = full
@@ -252,12 +259,16 @@ def test_live_stats_line_only_when_flag_on(tmp_path):
         def info(self, x): pass
         def subheader(self, x): pass
         def markdown(self, x): self.md.append(x)
+    from vera import sources_sidebar as sb_mod
+    orig_corpus = sb_mod._corpus
     for on in (False, True):
         s = St()
+        sb_mod.__dict__["_corpus"] = lambda st: None  # offline: no corpus description fetch
         orig = help_pages.live_stats_enabled
         help_pages.live_stats_enabled = lambda *a, **k: on
         try:
             help_pages.render_about(s)
         finally:
             help_pages.live_stats_enabled = orig
+            sb_mod._corpus = orig_corpus
         assert s.md.count(help_pages.LIVE_STATS_LINE) == (1 if on else 0)

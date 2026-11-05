@@ -170,15 +170,29 @@ def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None,
                        page_signals={"login_required": True} if _login_wall(text, cfg) else None)
 
 
-def gated_fetch(url: str, *, fetch=None, registry=None, deny_list=None, cfg=None, robots_cache=None):
+def gated_fetch(url: str, *, fetch=None, registry=None, deny_list=None, cfg=None, robots_cache=None,
+                hop_allowed=None):
     """One public page for a lane: the pre-request login path check, then fetch with the per-hop gate. Returns the
-    fetch dict; raises public_fetch.FetchRefused (reason = a short code) when a hop is refused."""
+    fetch dict; raises public_fetch.FetchRefused (reason = a short code) when a hop is refused.
+    NEWS-LANE-1104 W6 (SEC S1): `hop_allowed(hop_url) -> bool`, when given, is checked first on every hop (the start
+    URL, each redirect target and its robots.txt request) BEFORE anything is sent; False refuses the hop."""
     from vera import public_fetch
     cfg = cfg if cfg is not None else load_config()
     f = fetch or public_fetch.fetch
     if _login_path(url, cfg):
         raise public_fetch.FetchRefused("read_login_paywall")
-    kw = {"hop_gate": make_hop_gate(url, registry=registry, deny_list=deny_list, cfg=cfg)}
+    if hop_allowed is not None and not hop_allowed(url):
+        raise public_fetch.FetchRefused("read_lane_hop_refused")
+    base = make_hop_gate(url, registry=registry, deny_list=deny_list, cfg=cfg)
+
+    def _gate(hop: str):
+        try:
+            if hop_allowed is not None and not hop_allowed(hop):
+                return "read_lane_hop_refused"
+        except Exception:  # noqa: BLE001  a failing predicate refuses (fail closed)
+            return "read_lane_hop_refused"
+        return base(hop)
+    kw = {"hop_gate": _gate}
     if robots_cache is not None:
         kw["robots_cache"] = robots_cache
     return f(url, **kw) if _takes_kwargs(f) else f(url)

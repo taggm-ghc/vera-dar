@@ -6,7 +6,9 @@ and rationale; only `fetch` decisions that the licence gate allows become corpus
 abstract, never full text). Runs after the /ask response, so visitors never wait for it.
 
 Privacy (#74): the visitor's question is used in memory for scoring only. Rows are filed under one fixed
-corpus question per process (config `corpus.question_text`); the visitor's text is never written.
+corpus question per process (config `corpus.question_text`); this module never writes the visitor's text.
+Superseded project-wide by OD-1104-TRACE (owner, 2026-11-04): the per-request trace (vera/request_trace.py) keeps the
+full question text, owner-only, purged after 30 days by an owner-run script; corpus rows here still never carry it.
 
 Account: the production write-only role (vera_pipeline_wo), URL from the env var named in config
 `corpus.db_url_env` (never printed). That role may INSERT and read back ids but not read content, and ON CONFLICT

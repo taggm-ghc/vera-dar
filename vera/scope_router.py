@@ -1,9 +1,19 @@
 """Scope router for VERA-DAR's answer path (p3m3 item #72 W1, revision R72-a).
 
 Layer 1 is a deterministic, zero-cost pre-check driven by config/scope_router.json: injection markers and deny
-categories DECLINE, an AI term plus a software-development term (or a named coding tool) ACCEPTs, anything else is
-UNSURE. Layer 2 (config `layer2_mode`) resolves UNSURE: "llm" asks the selected model for a JSON verdict
-{in_scope, reason}; "none" applies `none_mode_unsure_action`. "embedding" is noted in config but not implemented.
+categories DECLINE, anything else is UNSURE. Layer 2 (config `layer2_mode`) resolves UNSURE: "llm" asks the selected
+model for a JSON safety verdict {safe_request, category, reason}; "none" applies `none_mode_unsure_action`. "embedding"
+is noted in config but not implemented.
+
+SCOPE-GATE-1104 S1 (owner 2026-11-04, Amendment 1): this router is a SAFETY gate only. It never judges the subject of a
+question, whether it lies in any field, or whether the corpus can answer it: the former layer-1 topical ACCEPT rule
+(AI term plus dev term, or a tool name) and the field list in the layer-2 prompt are removed, so every question without
+a layer-1 deny hit gets the layer-2 safety check. A verdict that passes safety is `accepted=True` with category
+SAFE_CATEGORY. Whether the corpus can answer is a separate POST-RETRIEVAL result from the retrieved passages (the
+evidence-sufficiency path in ask_service / fulldoc_*), never produced here; "insufficient" leads to acquisition and other
+lanes, never to a refusal. INTEGRATE-1104 round 2 (safety fix): a reply in the legacy schema (key `in_scope`, or a
+label that is only an alias such as in_scope/off_topic) is OFF-SCHEMA: retried once, then the neutral decline; never
+a pass.
 
 Declines always return the fixed `decline_template`; no model-generated text is ever shown for a decline. Exception (FIX1-1021, config
 `offtopic_reading_list`, default off in code): a well-formed layer-2 out-of-scope verdict may instead yield a fixed notice plus a
@@ -58,9 +68,6 @@ class RouterConfig:
     decline_template: str
     injection: tuple[re.Pattern, ...]
     deny: dict[str, tuple[re.Pattern, ...]]
-    ai_terms: tuple[re.Pattern, ...]
-    dev_terms: tuple[re.Pattern, ...]
-    tool_names: tuple[re.Pattern, ...]
     layer2: dict
     mode_claims: tuple[re.Pattern, ...] = ()  # SEC-V3-1028 / owner 2026-10-28: nullified, not refused
 
@@ -93,9 +100,6 @@ def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
             decline_template=raw["decline_template"],
             injection=_compile(l1["injection_patterns"], "injection_patterns"),
             deny={k: _compile(v, f"deny_categories.{k}") for k, v in l1["deny_categories"].items()},
-            ai_terms=_compile(l1["ai_terms"], "ai_terms"),
-            dev_terms=_compile(l1["dev_terms"], "dev_terms"),
-            tool_names=_compile(l1["tool_names"], "tool_names"),
             layer2={**raw["layer2"], "system_prompt": render_category_prompt(raw["layer2"]["system_prompt"])},
             mode_claims=_compile(l1.get("mode_claim_patterns", []), "mode_claim_patterns"),
         )
@@ -342,7 +346,9 @@ def strip_instructions(question: str, cfg: RouterConfig | None = None) -> tuple[
 
 
 def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
-    """Return (ACCEPT|DECLINE|UNSURE, reason). Zero cost, deterministic."""
+    """Return (DECLINE|UNSURE, reason). Zero cost, deterministic. SCOPE-GATE-1104 S1: layer 1 never ACCEPTs (the topical
+    accept shortcut is removed), so the layer-2 harmful/advice/rule_change check runs for every question that layer 1
+    does not decline. ACCEPT stays a defined constant for callers that compare against it."""
     q = normalise(question)
     if not q:
         return DECLINE, "empty"
@@ -379,15 +385,12 @@ def layer1(question: str, cfg: RouterConfig) -> tuple[str, str]:
     for name, pats in cfg.deny.items():
         if any(_any(pats, v) for v in deny_views):
             return DECLINE, f"deny:{name}" if not separated else "deny:injection"
-    if _any(cfg.tool_names, q):
-        return ACCEPT, "tool_name"
-    if _any(cfg.ai_terms, q) and _any(cfg.dev_terms, q):
-        return ACCEPT, "ai_and_dev_terms"
     return UNSURE, "no_rule"
 
 
 _MARKER_RE = re.compile(r"<<+\s*question|question\s*>>+", re.IGNORECASE)  # SEC C1: 2+ angle brackets
-_VERDICT_TOKENS_RE = re.compile(r"\b(categor(y|ies)|in[\s_-]*scope|off[\s_-]*topic)\b", re.IGNORECASE)  # SEC C1
+_VERDICT_TOKENS_RE = re.compile(r"\b(categor(y|ies)|in[\s_-]*scope|off[\s_-]*topic|safe[\s_-]*requests?)\b",
+                                re.IGNORECASE)  # SEC C1; SCOPE-GATE-1104: the safe_request key/label is masked too
 
 
 def has_marker(question: str) -> bool:
@@ -838,12 +841,43 @@ def parse_category(content: str) -> str:
     return resolve_label(c)  # OOE-APRIME-C-1028: a code, or an owner-curated alias of one, from the table
 
 
+VERDICT_KEY = "safe_request"  # SCOPE-GATE-1104 S1: the layer-2 reply's boolean safety field
+LEGACY_VERDICT_KEY = "in_scope"  # still parsed during the transition (plan s4.1); both present = malformed
+
+
+def _verdict_bool(obj):
+    """The reply's boolean verdict: `safe_request`, or the legacy `in_scope`. None when neither is a boolean, or when
+    BOTH keys are present (an ambiguous reply is malformed; the caller fails closed)."""
+    if not isinstance(obj, dict):
+        return None
+    if VERDICT_KEY in obj and LEGACY_VERDICT_KEY in obj:
+        return None
+    v = obj.get(VERDICT_KEY, obj.get(LEGACY_VERDICT_KEY))
+    return v if isinstance(v, bool) else None
+
+
+def off_schema(obj) -> bool:
+    """INTEGRATE-1104 round 2: True for a reply outside the current layer-2 schema: it uses the legacy verdict key
+    `in_scope`, or its category is not exactly a code of the table (an alias such as off_topic or in_scope). Unknown
+    out-of-enum labels keep their own OOE path (_label_only_invalid). Never raises; non-dict = False (malformed
+    elsewhere)."""
+    try:
+        if not isinstance(obj, dict):
+            return False
+        if LEGACY_VERDICT_KEY in obj:
+            return True
+        c = obj.get("category")
+        return isinstance(c, str) and c in CATEGORY_ALIASES
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _label_only_invalid(content) -> bool:
     """OOE-APRIME-C-1028 (A'): True when the reply is well-formed (strict decode, boolean in_scope, ASCII category) and
     invalid ONLY because its non-empty category label is neither a table code nor an alias. Never raises."""
     try:
         obj = _strict_loads(content)
-        if not isinstance(obj, dict) or not isinstance(obj.get("in_scope"), bool):
+        if _verdict_bool(obj) is None:
             return False
         c = obj.get("category")
         return (isinstance(c, str) and unicodedata.normalize("NFKC", c).isascii() and bool(c.strip())
@@ -853,10 +887,12 @@ def _label_only_invalid(content) -> bool:
 
 
 def parse_verdict(content: str, unknown_label_ok: bool = False) -> tuple[bool | None, str]:
-    """Return (in_scope, reason); in_scope None when the reply is malformed (caller fails closed). unknown_label_ok
-    (OOE-APRIME-C-1028, used only after the retry) reads an out-of-enum label as no recognised category."""
+    """Return (safe, reason) from `safe_request` (or the legacy `in_scope`); None when the reply is malformed (caller
+    fails closed). unknown_label_ok (OOE-APRIME-C-1028, used only after the retry) reads an out-of-enum label as no
+    recognised category."""
     obj = _strict_loads(content)
-    if not isinstance(obj, dict) or not isinstance(obj.get("in_scope"), bool):
+    verdict = _verdict_bool(obj)
+    if verdict is None:
         return None, "classifier_malformed"
     c = obj.get("category")
     if isinstance(c, str) and not unicodedata.normalize("NFKC", c).isascii():  # lookalike value, e.g. Cyrillic а
@@ -865,7 +901,22 @@ def parse_verdict(content: str, unknown_label_ok: bool = False) -> tuple[bool | 
         # a non-empty label outside the closed enum is invalid classifier output (OD-1028(21) c4), not user misuse;
         # nullified and retried once (OOE-APRIME-C-1028: still out-of-enum after the retry -> no recognised category)
         return None, "classifier_malformed"
-    return obj["in_scope"], str(obj.get("reason", ""))[:200]
+    if off_schema(obj):  # INTEGRATE-1104 round 2 (SAFETY FIX, orchestrator): a reply in the LEGACY schema (the
+        # in_scope key, or a label that is only an alias such as off_topic / in_scope) is OFF-SCHEMA: nullified, so
+        # the existing malformed retry runs once and a second off-schema reply gets the neutral decline (D2a). It is
+        # never read as a safety pass (HEAD declined safety cases s14/s37/s45/s46/s48/v2-41/v2-47 on this reply).
+        return None, "classifier_malformed"
+    if verdict is True and not (isinstance(c, str) and c in REFUSE_CATEGORIES) and c != SAFE_CATEGORY:
+        # DENYALL-AUDIT-1104 A1 (owner: "Deny All; Approve specified exceptions-from-Deny"): a pass is accepted ONLY as
+        # safe_request:true WITH category exactly safe_request. A missing, empty or out-of-enum category on a true
+        # verdict is nullified (one retry, then the neutral decline), even after the retry (unknown_label_ok never
+        # turns it into a pass). A refusal category on a true verdict stays the category_conflict refusal below.
+        return None, "classifier_malformed"
+    if verdict is False and VERDICT_KEY in obj and resolve_label(c) == SAFE_CATEGORY:  # SCOPE-GATE-1104 S1: a new-form
+        # reply {"safe_request": false, "category": "safe_request"} contradicts itself: nullified (one retry, then the
+        # neutral decline). (The legacy schema is off-schema above: never read as passing safety.)
+        return None, "classifier_malformed"
+    return verdict, str(obj.get("reason", ""))[:200]
 
 
 def _masked_quote(question: str, cfg: RouterConfig) -> bool:
@@ -887,8 +938,8 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
     # and the marker check covers the original as well as the stripped text
     verdict, reason = layer1(original, cfg)
     marker = has_marker(original) or has_marker(question)
-    if verdict == ACCEPT and _masked_quote(original, cfg):
-        verdict, reason = UNSURE, "masked_quote"  # INJSEP-SECREVIEW-2: a masked quoted span always gets layer 2
+    if verdict == ACCEPT and _masked_quote(original, cfg):  # unreachable since SCOPE-GATE-1104 (layer 1 never
+        verdict, reason = UNSURE, "masked_quote"  # accepts); kept: INJSEP-SECREVIEW-2, a masked quote gets layer 2
     if verdict == DECLINE and reason in (UNSUPPORTED_L1_REASON, "deny:mode_claim") and marker:
         # REFUSE-FIX-1028 V1: the marker check runs before the unsupported-use path (fixed refusal, never a list)
         return ScopeDecision(False, "layer1", "deny:injection_marker")
@@ -1044,6 +1095,9 @@ def _layer2_decision(content, pt: int, ct: int, cost: float, calls: int, unknown
     if tok and (in_scope or category not in REFUSE_CATEGORIES):  # HOTFIX-DUPKEY-1027: a refusal category named anywhere
         # else in the reply (nested, a key, a reason) is never answered, listed or acquired; fail closed, keep the category
         return ScopeDecision(False, "layer2_llm", "classifier_malformed:refusal_token", pt + ct, cost, calls, tok)
+    if category == SAFE_CATEGORY:  # SCOPE-GATE-1104 S1: only a new-schema safe_request:true reaches here (a false one
+        # is nullified in parse_verdict; the legacy schema is off-schema there)
+        in_scope = True
     return ScopeDecision(in_scope, "layer2_llm", ("llm_in:" if in_scope else "llm_out:") + why, pt + ct, cost, calls,
                          category)
 
@@ -1071,6 +1125,7 @@ def offtopic_enabled(cfg: RouterConfig | None = None) -> bool:
 
 UNSUPPORTED_L1_REASON = "deny:coding_task"  # REFUSE-FIX-1028 V1 (OD-1028(21)): unsupported use, not a forbidden topic
 UNSUPPORTED_CATEGORY = next(c.code for c in CATEGORY_TABLE if c.disposition == "unsupported_use")  # OOE-APRIME-C-1028
+SAFE_CATEGORY = next(c.code for c in CATEGORY_TABLE if c.disposition == "in_scope")  # SCOPE-GATE-1104: "safe_request"
 
 
 def unsupported_use_text(cfg: RouterConfig | None = None) -> str:
@@ -1137,9 +1192,7 @@ def offtopic_notice(cfg: RouterConfig | None = None) -> str:
     t = cfg.raw.get("offtopic_notice")
     if not isinstance(t, str) or not t.strip():
         raise ScopeConfigError("scope_router.json: offtopic_notice missing")
-    scope = str(cfg.raw.get("scope", "")).rstrip(".")
-    scope = scope[:1].lower() + scope[1:]  # FIX1 verify D3: mid-sentence insertion, lower-case first letter
-    return t.replace("{scope}", scope)
+    return t  # SCOPE-GATE-1104 S1: fixed text only (no {scope} substitution; there is no fixed Scope text)
 
 
 # ---- SELFREF-1028 (owner directive 2026-10-28): self-reflective questions answered from fixed public text -------------

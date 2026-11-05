@@ -233,7 +233,7 @@ def test_t7_zero_spend_guard(monkeypatch, recorder, caplog, main_off, latched):
         assert cc.judge(CLAIMS, SRC, CHECK_CFG) == (None, None)
         # corpus description generator over the same chain
         with pytest.raises(RuntimeError, match="no provider produced"):
-            cd.generate_with_chain(entries)([{"role": "user", "content": "x"}])
+            cd.json_with_chain(entries)([{"role": "user", "content": "x"}])
         # the API route, end to end with real chain and router
         monkeypatch.setattr(main, "ASK_CHAIN", entries)
         monkeypatch.setattr(main, "GROUNDING", None)

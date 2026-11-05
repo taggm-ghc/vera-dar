@@ -40,7 +40,7 @@ def rig(monkeypatch):
     monkeypatch.setattr(fulldoc_corpus, "flag_enabled", lambda cfg: True)
     ft = fulldoc_corpus.load_config()["fallback_tokens"]
 
-    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None):
+    def fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=False, ephemeral=None, used=None, lanes=None):  # INTEGRATE-1104: _fulldoc signature (NONASK-1103 lanes)
         return (None, ft["insufficient"], 1, 0.0, RL_TEXT)
     monkeypatch.setattr(ask_service, "_fulldoc", fulldoc)
 
@@ -72,7 +72,10 @@ def test_threshold_is_derived_from_config_not_hardcoded():
     assert ask_service.inline_need_s({"inline": {"deadline_s": 45}}, (None, {})) == 105.0 + ask_service.READING_LIST_SEARCHES * gd == 125.0
 
 
-@pytest.mark.parametrize("remaining,skipped", [(105.1, False), (105.0, False), (104.9, True)])
+# INTEGRATE-1104 step 2: an insufficient corpus acquires while the request budget lasts. Below need (105 s) the round
+# runs with a trimmed inline deadline (remaining - post-inline tail 60 s); it is skipped only when remaining <= 60 s.
+@pytest.mark.parametrize("remaining,skipped", [(105.1, False), (105.0, False), (104.9, False), (60.1, False),
+                                               (60.0, True), (59.9, True)])
 def test_boundary_105s(rig, remaining, skipped):
     # elapsed values are exactly representable for 75.0; 74.9/75.1 differ from 105.0 by 0.1, far above float error
     r = rig.run(remaining=remaining)
@@ -83,9 +86,9 @@ def test_boundary_105s(rig, remaining, skipped):
 
 
 def test_exact_boundary_uses_strict_less_than(rig):
-    rig.run(elapsed=75.0)  # remaining 105.0 == need 105.0 -> runs
+    rig.run(elapsed=119.9999)  # INTEGRATE-1104: remaining just above the 60 s post-inline tail -> runs (trimmed)
     assert rig.calls["inline"] == 1
-    rig.run(elapsed=75.0001)  # remaining just below need -> skipped
+    rig.run(elapsed=120.0)  # remaining == tail: no inline time left -> skipped
     assert rig.calls["inline"] == 1
 
 
@@ -119,14 +122,23 @@ def test_skipped_retry_abstention_path_is_unchanged(rig, monkeypatch):
 
 
 def test_threshold_follows_config_values(rig, monkeypatch):
-    rig.acq["inline"]["deadline_s"] = 10  # need = 10 + 60 = 70
-    rig.run(remaining=70.0)
+    rig.acq["inline"]["deadline_s"] = 10  # need = 10 + 60 = 70; post-inline tail 60 (INTEGRATE-1104)
+    rig.run(remaining=60.1)
     assert rig.calls["inline"] == 1
-    rig.run(remaining=69.9)
-    assert rig.calls["inline"] == 1  # unchanged: second run skipped
-    monkeypatch.setattr(ask_service, "_chain_timeout_s", lambda: 30.0)  # need = 10 + 90 = 100
-    rig.run(remaining=99.9)
+    rig.run(remaining=60.0)
+    assert rig.calls["inline"] == 1  # unchanged: second run skipped (no inline time left)
+    monkeypatch.setattr(ask_service, "_chain_timeout_s", lambda: 30.0)  # need = 10 + 90 = 100; tail 90
+    rig.run(remaining=90.0)
     assert rig.calls["inline"] == 1
+
+
+def test_short_budget_round_uses_trimmed_inline_deadline(rig, monkeypatch):
+    """INTEGRATE-1104 step 2: the round's inline deadline is min(deadline_s, remaining - tail); never above deadline_s."""
+    seen = []
+    monkeypatch.setattr(ask_service, "_inline", lambda *a, **k: seen.append(a[6]["inline"]["deadline_s"]) or "N")
+    rig.run(remaining=80.0)  # tail 60 -> 20 s
+    rig.run(elapsed=0.0)  # 180 s left -> the configured 45 s
+    assert seen == [20.0, 45.0]
 
 
 def test_unreadable_chain_config_skips_with_budget_unknown(rig, monkeypatch):

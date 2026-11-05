@@ -3,6 +3,7 @@ import requests
 import pytest
 
 from vera import api_triage as at, corpus_description as cd
+from tests.digest_fakes import FakeLLM
 
 HOST = "sentinel-host-do-not-show.example"
 BASE = f"https://{HOST}"
@@ -67,7 +68,7 @@ class Describer(cd.CorpusDescriber):
     def current(self, generate):
         import vera.corpus_description as mod
         orig = mod.stamp_and_profile
-        mod.stamp_and_profile = lambda e, n: (dict(self.overview), {"titles": ["T"], "published_years": ["2024", "2026"]})
+        mod.stamp_and_profile = lambda e, n, *a: (dict(self.overview), {"titles": ["Coral reef ecology survey"], "published_years": ["2024", "2026"]})
         try:
             return super().current(generate)
         finally:
@@ -75,17 +76,18 @@ class Describer(cd.CorpusDescriber):
 
 
 def test_regenerates_only_when_the_corpus_changes():
-    calls = []
-    gen = lambda m: calls.append(1) or (f"summary {len(calls)}", ["topic"], "groq:m")
+    llm = FakeLLM([("marine ecology", [1])], ["The collection covers marine ecology."])
     d = Describer({"source_count": 2, "corpus_updated_at": "A"})
-    assert d.current(gen)["summary"] == "summary 1" and d.current(gen)["summary"] == "summary 1"
+    assert d.current(llm)["summary"] == "The collection covers marine ecology." and d.current(llm)["summary_source"] == cd.CHECKED
+    assert llm.steps() == ["cluster", "draft", "check"]  # one bounded pipeline run, cached
     d.overview["corpus_updated_at"] = "B"
-    assert d.current(gen)["summary"] == "summary 2" and len(calls) == 2
+    d.current(llm)
+    assert llm.steps().count("cluster") == 2
 
 
 def test_empty_corpus_needs_no_model_and_says_so():
     d = Describer({"source_count": 0, "corpus_updated_at": None})
-    out = d.current(lambda m: (_ for _ in ()).throw(AssertionError("called")))
+    out = d.current(lambda m, **k: (_ for _ in ()).throw(AssertionError("called")))
     assert out["summary_source"] == "deterministic_fallback" and "no stored sources yet" in out["summary"]
 
 
@@ -94,7 +96,7 @@ def test_model_failure_falls_back_and_cools_down():
     d = Describer({"source_count": 3, "corpus_updated_at": "A"}, clock=lambda: t[0])
     calls = []
 
-    def boom(m):
+    def boom(m, **k):
         calls.append(1)
         raise RuntimeError("down")
     assert d.current(boom)["summary_source"] == "deterministic_fallback"
@@ -106,7 +108,7 @@ def test_model_failure_falls_back_and_cools_down():
 
 
 def test_not_connected_without_ro_url():
-    out = cd.CorpusDescriber(CFG, env={}).current(lambda m: ("x", [], "m"))
+    out = cd.CorpusDescriber(CFG, env={}).current(lambda m, **k: ({}, "m"))
     assert out["summary_source"] == "not_connected"
 
 

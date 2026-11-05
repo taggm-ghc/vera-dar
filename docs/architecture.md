@@ -1,4 +1,4 @@
-# Public architecture and research scope
+# Public architecture
 
 [← Project overview](../README.md)
 
@@ -6,11 +6,11 @@ VERA-DAR explores provenance-grounded context engineering: discovering evidence,
 
 ## Current question-answering workflow
 
-The public `/ask` path accepts or declines a bounded question and then answers from full documents when it can, or returns a reading list when it cannot. The steps, in order (the diagram in the [project overview](../README.md#how-it-works) shows the same flow; [API and data use](api.md#default-behaviour) describes the behaviour as seen by a caller):
+The public `/ask` path checks a question for safety and then answers from full documents when it can, or returns a reading list when it cannot. The steps, in order (the diagram in the [project overview](../README.md#how-it-works) shows the same flow; [API and data use](api.md#default-behaviour) describes the behaviour as seen by a caller):
 
-1. **Scope router.** A rule layer and then a model verdict decide whether the question is in scope. The router loads at API start and fails closed on bad configuration. A declined question gets a fixed text. A question the second layer judges off-topic may instead go to inline acquisition (step 3), when acquisition is enabled.
+1. **Safety check (scope router module).** A rule layer and then a model verdict decide only whether the request is safe to handle (injection, harmful intent, personal advice, rule changes, code-writing requests). Subject matter is never a reason to decline. The router loads at API start and fails closed on bad configuration or an unreadable verdict. A declined request gets a fixed text. Whether the collection can answer is decided after retrieval (steps 2 and 3), never by subject.
 2. **Full-document retrieval and admission.** Passages are retrieved from the configured full-document corpus (a verified bundle or the database-backed corpus) and each passage is admitted or rejected with a reason code. This path is enabled in the shipped configuration (`fulldoc.enabled` in config/fulldoc_answer.json) but takes effect only when exactly one corpus source is configured; configuring both is refused and the corpus is reported unusable. No admitted passage means no generated answer.
-3. **Acquisition.** When the corpus has no usable passages, the service can try to acquire and vet further full documents, subject to its licence, content and relevance gates. The acquisition is offline-tested only and has not been validated live in production; it also depends on configuration and a kill switch, so whether it runs in a given deployment is not established by this document.
+3. **Acquisition.** When the corpus has no usable passages (an insufficient corpus), the service can try to acquire and vet further full documents, subject to its licence, content and relevance gates. The acquisition is offline-tested only and has not been validated live in production; it also depends on configuration and a kill switch, so whether it runs in a given deployment is not established by this document.
 4. **Answer and claim check.** When passages are admitted, an answer with citations is generated from them and each cited claim is checked; unsupported sentences are removed.
 5. **Reading list.** When nothing is admitted or acquired, the response is a reading list of candidate documents with links, with no generated answer and no claim check. Abstracts and snippets are not used as evidence. A no-sources or decline result is returned when nothing usable is found.
 

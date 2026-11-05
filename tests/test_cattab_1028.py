@@ -53,7 +53,7 @@ def test_db_path_loads_active_rows_in_order():
     cats = sr.load_category_table(ON, reader=lambda: _rows())
     assert cats == SEED
     cats = sr.load_category_table(ON, reader=lambda: _rows() + [_runtime()])
-    assert [c.code for c in cats][-1] == "reading_group" and len(cats) == 7
+    assert [c.code for c in cats][-1] == "reading_group" and len(cats) == len(SEED) + 1  # SCOPE-GATE-1104: seed size
     assert "reading_group" not in sr.REFUSE_CATEGORIES
 
 
@@ -165,7 +165,7 @@ def test_new_version_activation_replaces_old_version():
     rows.append(_new_version("harmful", 2, "active", description=desc))
     cats = sr.load_category_table(ON, reader=lambda: rows)
     h = next(c for c in cats if c.code == "harmful")
-    assert h.description == desc and h.disposition == "refuse" and h.refusal_rank == 1 and len(cats) == 6
+    assert h.description == desc and h.disposition == "refuse" and h.refusal_rank == 1 and len(cats) == len(SEED)
 
 
 def test_draft_new_version_is_ignored_old_stays_active():
@@ -243,7 +243,7 @@ class _FakeEngine:
 def test_reader_uses_select_only_through_engine():
     eng = _FakeEngine(True, _rows())
     out = sr.read_category_rows(eng)
-    assert len(out) == 6
+    assert len(out) == len(SEED)  # SCOPE-GATE-1104: one row per seed category
     assert eng.log[0] == "SET TRANSACTION READ ONLY"  # D8: read-only transaction first
     assert all(q.lstrip().upper().startswith("SELECT") for q in eng.log[1:])
     assert sr.read_category_rows(_FakeEngine(False)) is None  # table absent -> None (seed fallback)
@@ -357,6 +357,10 @@ def test_enrolment_runs_lock_read_insert_in_one_transaction():
 SQL = MIG.read_text()
 
 
+@pytest.mark.xfail(strict=True, reason="INTEGRATE-1104: SCOPE-GATE-1104 S1 replaced the in_scope/off_topic seed rows by "
+                   "safe_request (aliases in_scope, off_topic); db/migrations/pending/012-DRAFT is owner-gated and was "
+                   "deliberately not changed. Seed change needed: work/INTEGRATE-1104/test-changes.md. strict: passes "
+                   "again (and must lose this mark) once the draft seed is updated.")
 def test_migration_seed_matches_json_seed_with_version_and_active():
     m = re.search(r"INSERT INTO vera_vjay\.clscat_categories.*?\(VALUES\s*(.*?)\)\s+AS v\(", SQL, re.S)
     rows = re.findall(r"\('([a-z_]+)', 1, '([^']*)', '([a-z_]+)', (NULL::integer|\d+), '\{\}'::text\[\], 'seed', 'active'\)", m.group(1))

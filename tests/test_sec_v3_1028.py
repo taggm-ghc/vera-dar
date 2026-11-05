@@ -66,7 +66,7 @@ def test_mode_claim_question_is_researched_and_log_carries_token_only(stubs, mon
 
     def chat(messages, model, l2):
         seen.append(messages[1]["content"])
-        return json.dumps({"in_scope": False, "category": "off_topic", "reason": "SECRET MODEL TEXT"}), 1, 1
+        return json.dumps({"safe_request": True, "category": "safe_request", "reason": "SECRET MODEL TEXT"}), 1, 1
     monkeypatch.setattr(sr, "default_chat", chat)
     monkeypatch.setattr(ask_service, "_acq_cfg_if_on", lambda: None)
     got = []
@@ -76,7 +76,7 @@ def test_mode_claim_question_is_researched_and_log_carries_token_only(stubs, mon
     assert r.result_kind == "reading_list" and r.answer != RAW["decline_template"]
     assert got == [PHOTO] and all("mode" not in s.lower() for s in seen) and len(seen) == 1
     msgs = [x.getMessage() for x in caplog.records]
-    assert f"scope {sr.MODE_CLAIM_TOKEN}" in msgs
+    assert f"scope {sr.MODE_CLAIM_TOKEN} rid=-" in msgs  # INTEGRATE-1104: request ID suffix
     assert not any("Developer" in m or "photosynthesis" in m for m in msgs)
 
 

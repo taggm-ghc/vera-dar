@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from vera import disclosure
-from vera.sources_sidebar import plain, scope_text
+from vera import sources_sidebar
 
 logger = logging.getLogger(__name__)
 HELP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "ui_help_pages.json"
@@ -54,23 +54,25 @@ def live_stats_enabled(path: Path = LIVE_STATS_CONFIG_PATH) -> bool:
         return False
 
 
-def _fill(text: str) -> str:
+def _fill(text: str, coverage: str | None = None) -> str:
     # WP6 (orchestrator decision): the third-party point appears once on non-About pages, in the short notice; the
     # Privacy section keeps the no-save point and points to About for the services that receive the question.
+    # CORPUS-DIGEST-1104: {coverage} is the generated coverage description (already escaped); no fixed Scope text.
     privacy = disclosure._NO_SAVE.strip()
-    scope = scope_text()
     return (text.replace("{privacy}", privacy)
             .replace("{answer_sources}", answer_sources())
             .replace("{wake_minutes}", str(wake_minutes()))
-            .replace("{scope}", plain(scope) if scope else "not available right now."))
+            .replace("{coverage}", coverage or ""))
 
 
-def _section(st, sec: dict) -> None:
+def _section(st, sec: dict, coverage: str | None = None) -> None:
     st.subheader(str(sec.get("heading", "")))
     for p in sec.get("paragraphs") or []:
         if "{wake_minutes}" in str(p) and wake_minutes() is None:
             continue  # no hardcoded fallback figure: omit the sentence if the config cannot be read
-        st.markdown(_fill(str(p)))
+        if "{coverage}" in str(p) and not coverage:
+            continue  # owner 2026-11-04: no fixed Scope text exists; no generated coverage yet = omit the line
+        st.markdown(_fill(str(p), coverage))
 
 
 def render_about(st, cfg=_UNSET) -> None:
@@ -84,6 +86,7 @@ def render_about(st, cfg=_UNSET) -> None:
     for heading, text in disclosure.disclosure_sections():
         st.subheader(heading)
         st.markdown(text)
+    sources_sidebar.render_corpus_notes(st, sources_sidebar._corpus(st))  # CORPUS-DIGEST-1104: moved from the sidebar
     for sec in page.get("after_disclosure") or []:
         _section(st, sec)
     if live_stats_enabled():
@@ -98,5 +101,6 @@ def render_how_to_use(st, cfg=_UNSET) -> None:
         st.info(FALLBACK)
         return
     st.markdown(str(page.get("intro", "")))
+    coverage = sources_sidebar.coverage_text(sources_sidebar._corpus(st))
     for sec in page.get("sections") or []:
-        _section(st, sec)
+        _section(st, sec, coverage)

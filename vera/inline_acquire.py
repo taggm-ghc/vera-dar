@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 
 from vera import acq_config, acq_rounds, rate_limit
 from vera import auto_acquire as aa
+from vera import request_trace as rt
 from vera import research_outcome, search_providers, source_type, stream_ctx
 
 logger = logging.getLogger("vera.autoacq")
@@ -155,6 +156,22 @@ _I = _Inline()
 def reset_for_tests() -> None:
     global _I
     _I = _Inline()
+
+
+def _trace_done(o, st) -> None:
+    """Trace one inline acquisition attempt: counts, status, reason-code counts, phase ms and up to 20 candidates as
+    provider/outcome/reason-code/status only (never doi, url, title or free text). Never raises."""
+    try:
+        rt.event("acquire", "done",
+                 counts={"admitted": int(o.admitted or 0), "stored": int(o.stored or 0), "reused": int(o.reused or 0),
+                         "candidates": len(o.candidates or [])},
+                 detail={"status": str(o.status), "codes": dict(o.codes or {}), "ms": dict(o.ms or {})})
+        for c in (o.candidates or [])[:20]:
+            rt.event("acquire", "candidate",
+                     detail={"provider": c.get("portal"), "outcome": c.get("outcome"), "reason": c.get("reason"),
+                             "diag": c.get("status")})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def icfg_of(acq: dict | None) -> dict:
@@ -578,6 +595,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 n_answer_eligible=o.n_answer_eligible, n_persisted=o.n_persisted,
                 n_below_persist_min=o.answer_only, reused=o.reused,
                 **{f"n_{k}": v for k, v in o.codes.items()}, **{f"ms_{k}": v for k, v in ms.items()})
+        _trace_done(o, st)
         try:  # RATE-1022 E2: portal names and counters only
             logger.info("autoacq %s", rate_limit.get_registry().log_line())
         except Exception:  # noqa: BLE001  telemetry never breaks the run
@@ -628,6 +646,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 if not portals_l:
                     search_providers.record_portal("acquisition_search", "failed", 0)
                 count(acq_config.reason(acq, "search_failed"))
+                rt.event("acquire", "search_failed")
                 st["search_failed"] = True  # SA-FIX: read by done() (acquisition status)
                 if not (disc is not None and disc[0]):
                     return done(Outcome("search_failed"))
@@ -992,6 +1011,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                 if not pl:
                     search_providers.record_portal("acquisition_search", "failed", 0)
                 count(acq_config.reason(acq, "search_failed"))
+                rt.event("acquire", "search_failed")
                 stop = "search_failed"
                 st["portals"].extend(pl)
                 break

@@ -29,6 +29,7 @@ import os
 import requests
 
 from vera import rate_limit
+from vera import request_trace as rt
 from vera.cost_ledger import CostLedger
 from vera.search_providers import (ProviderResponseError, ProviderUnavailable, SearchConfigError as _SCE,
                                     build_chain)
@@ -499,6 +500,7 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
                         cfg_soft if soft_max_share is None else soft_max_share)
     notes, tried, best = [], [], None
     for i, p in enumerate(chain):
+        t0 = time.monotonic()
         try:
             raw = _attempts(p, question, num_results, **kw)
         except _SCE as e:  # unusable config of a route we need: never skipped silently
@@ -506,8 +508,10 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
         except _ProviderFailed as f:
             notes += [f"{p.name}: {x}" for x in f.notes]
             tried.append({"provider": p.name, "outcome": "failed"})
+            _trace_provider(p.name, t0, notes=f.notes)
             continue
         items = _finalize(raw, p.name, num_results)
+        _trace_provider(p.name, t0, items=items)
         tried.append({"provider": p.name, "outcome": "ok", "count": len(items)})
         if best is None or len(items) > len(best[1]):
             best = (p, items)
@@ -527,6 +531,23 @@ def search_question(question: str, num_results: int = 10, *, ledger: CostLedger 
     return SearchResults(items, meta)
 
 
+def _trace_provider(name, t0, items=None, notes=None) -> None:
+    """Trace one provider attempt: provider name, status ok/empty/error/rate_limited/timeout, latency_ms, result count.
+    Never carries notes, URLs or result text. No-op outside a traced request; never raises."""
+    try:
+        ms = int((time.monotonic() - t0) * 1000)
+        if items is not None:
+            rt.event("search", "provider", counts={"results": len(items)},
+                     detail={"provider": str(name), "status": "ok" if items else "empty", "latency_ms": ms})
+        else:
+            st = _failure_status(notes or [])
+            rt.event("search", "provider", counts={"results": 0},
+                     detail={"provider": str(name), "status": "rate_limited" if st == "quota" else st,
+                             "latency_ms": ms})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _failure_status(notes) -> str:
     """ROUTE-R3: quota (daily cap, budget, 429, rate limit) | timeout | error, from a failed provider's notes."""
     t = " ".join(notes).lower()
@@ -543,6 +564,7 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
     seeds = [p for p in chain if p.name.startswith("seed:")]
     notes, tried, per = [], [], {}
     for p in live:
+        t0 = time.monotonic()
         try:
             raw = _attempts(p, question, n, **kw)
         except _SCE as e:
@@ -550,8 +572,10 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
         except _ProviderFailed as f:
             notes += [f"{p.name}: {x}" for x in f.notes]
             tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(f.notes)})
+            _trace_provider(p.name, t0, notes=f.notes)
             continue
         items = _finalize(raw, p.name, n)
+        _trace_provider(p.name, t0, items=items)
         per[p.name] = items
         tried.append({"provider": p.name, "outcome": "ok", "count": len(items), "status": "completed"})
     merged = rrf_merge(per, rrf_k, max(n * len(per), n)) if per else []
@@ -563,6 +587,7 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
     fallback = False
     if not merged and seeds:
         s = seeds[0]
+        t0 = time.monotonic()
         try:
             raw = _attempts(s, question, n, **kw)
         except _SCE as e:
@@ -570,8 +595,11 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
         except _ProviderFailed as f:
             notes += [f"{s.name}: {x}" for x in f.notes]
             tried.append({"provider": s.name, "outcome": "failed"})
+            _trace_provider(s.name, t0, notes=f.notes)
         else:
             merged = _finalize(raw, s.name, n)
+            _trace_provider(s.name, t0, items=merged)
+            rt.event("search", "seed_fallback", counts={"results": len(merged)}, detail={"provider": str(s.name)})
             tried.append({"provider": s.name, "outcome": "ok", "count": len(merged)})
             used, fallback = [s.name], True
     elif not per:

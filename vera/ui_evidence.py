@@ -24,6 +24,7 @@ _TOKEN_TEXT = {
     "checker_unavailable": None,
     "claim_check_insufficient": None,
     "claim_check_disabled": None,
+    "premise_unverified": "insufficient_text",  # OD-1104-TRACE: an evidence miss, never premise refusal text
     "model_insufficient": "unsupported_text",  # NONASK-1103: passages were selected; never "found no passage"
 }
 _TOKEN_DEFAULT = {
@@ -34,9 +35,8 @@ _TOKEN_DEFAULT = {
     "claim_check_insufficient": "The automated claim check did not support enough of the draft, so no answer is shown.",
     "claim_check_disabled": "The automated claim check is off, so no answer is shown.",
     "model_insufficient": "The documents inspected did not give enough to answer, so no answer is shown.",
-    # mirrors vera.fulldoc_answer.PREMISE_UNVERIFIED_TEXT (a test ties the two)
-    "premise_unverified": "VERA-DAR's draft flagged a possible problem with the question's premise, but no cited correction could be verified, so no answer is shown. You may want to rephrase the question.",
 }
+_TOKEN_DEFAULT["premise_unverified"] = _TOKEN_DEFAULT["insufficient_full_document_evidence"]  # OD-1104-TRACE
 GENERIC_FALLBACK = "VERA-DAR did not write an answer to this question. The sources below may still help; read them yourself."
 ANSWER_SCOPE_NOTE = ("Automated checks, not human review, compared each claim with the passages shown, and can be wrong. "
                      "Quotes are short excerpts, not whole documents. Open the sources and read them before relying on a claim.")

@@ -24,11 +24,17 @@ class FakeReporting:
 
     def search(self, text, ents=()):
         self.calls.append(text)
-        return {"items": list(self.items), "attribution": None, "terms": []}
+        # INTEGRATE-1104 (NEWS-LANE R1): the real ReportingLane tags every item; a fake for a READ case tags
+        # read_ok=True (an explicit read_ok=False stays a link-only case)
+        return {"items": [{**it, "read_ok": it.get("read_ok", True)} for it in self.items], "attribution": None,
+                "terms": []}
 
 
 def rep_on(monkeypatch):
     monkeypatch.setattr(rl, "lane_enabled", lambda cfg=None: True)
+    # INTEGRATE-1104 (NEWS-LANE R1): every reporting hop needs an "allow" outlet verdict; the read cases run with the
+    # fake outlets treated as allow (permission denials still come from source_permissions, unchanged)
+    monkeypatch.setattr(rl, "outlet_verdict", lambda url, cfg=None: "allow")
 
 
 class Fetch:

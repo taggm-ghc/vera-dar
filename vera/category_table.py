@@ -148,8 +148,10 @@ def parse_categories(raw, attestation=None, sem_cfg=None, check_attestation: boo
     if len(ranks) != len(set(ranks)):
         raise ScopeConfigError(f"{where}: refusal_rank values must be unique")
     for k in ("in_scope", "off_topic", "unsupported_use"):  # the code paths keyed on these need exactly one row each
-        if sum(c.disposition == k and c.code not in runtime_codes for c in out) != 1 or \
-                (k == "unsupported_use" and sum(c.disposition == k for c in out) != 1):
+        n = sum(c.disposition == k and c.code not in runtime_codes for c in out)
+        if k == "off_topic" and n == 0:  # SCOPE-GATE-1104 S1: no topical off_topic row is needed (safety-only classifier)
+            continue
+        if n != 1 or (k == "unsupported_use" and sum(c.disposition == k for c in out) != 1):
             raise ScopeConfigError(f"{where}: exactly one row must have disposition {k!r}")
     for i, a in enumerate(out):
         for b in out[i + 1:]:

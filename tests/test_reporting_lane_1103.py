@@ -10,8 +10,12 @@ SENTENCE = "Can John Smith at john.smith@example.com or +1 (415) 555-0199 accoun
 
 
 def cfg(**kw):
+    """The portal client itself (NEWS-LANE-1104: the shipped config is GDELT-only with an outlet allowlist; these
+    tests keep exercising both portals and every item, so they pass the pre-policy settings explicitly)."""
     c = rl.load_config(ROOT / "config" / "reporting_lane.json")
-    c.update(enabled=True, **kw)
+    c.update(enabled=True, fallback_order=["gdelt", "hn"], outlets=[], outlet_query="all", emit_link_only=True,
+             min_interval_s=0)
+    c.update(**kw)
     return c
 
 
@@ -43,10 +47,10 @@ def lane(fake, **kw):
     return L, sl
 
 
-def test_flag_ships_off_and_no_call():
-    assert rl.load_config(ROOT / "config" / "reporting_lane.json")["enabled"] is False
+def test_flag_off_rollback_makes_no_call():
+    assert rl.load_config(ROOT / "config" / "reporting_lane.json")["enabled"] is True  # NEWS-LANE-1104: shipped ON
     f = Fake()
-    L = rl.ReportingLane(rl.load_config(ROOT / "config" / "reporting_lane.json"), http_get=f)
+    L = rl.ReportingLane(dict(rl.load_config(ROOT / "config" / "reporting_lane.json"), enabled=False), http_get=f)
     assert L.search("kubernetes outage")["items"] == [] and f.urls == []
 
 
@@ -88,44 +92,61 @@ def test_user_agent_sent():
     assert "VERA-DAR" in f.headers[0]["User-Agent"]
 
 
-def test_429_backoff_then_success():
-    f = Fake((429, {}, b""), (429, {}, b""), (200, {}, GD))
-    L, sl = lane(f)
+# NEWS-LANE-1104 SEC B1: no backoff sleep inside a request; a failure opens an availability window instead
+# (60/120/240 s +-jitter, Retry-After when longer, then the 15-minute circuit; all clamped to circuit_open_s).
+
+def test_429_opens_backoff_window_then_success():
+    t = [0.0]
+    f = Fake((429, {}, b""), (200, {}, GD))
+    sl = []
+    L = rl.ReportingLane(cfg(fallback_order=["gdelt"]), http_get=f, sleep=sl.append, clock=lambda: t[0], rand=lambda: 0.5)
+    assert L.search("kubernetes")["items"] == [] and not L.available("gdelt")
+    t[0] = 60.0
     assert L.search("kubernetes")["items"]
-    assert sl == [60, 120] and len(f.urls) == 3
+    assert sl == [] and len(f.urls) == 2
 
 
-def test_circuit_open_after_3_retries_then_hn_fallback_and_skip():
-    f = Fake(*[(429, {}, b"")] * 4, (200, {}, HN))
+def test_circuit_after_3_failures_then_hn_fallback_and_skip():
+    f = Fake((429, {}, b""), (200, {}, HN))
     t = [0.0]
     sl = []
     L = rl.ReportingLane(cfg(), http_get=f, sleep=sl.append, clock=lambda: t[0], wall=lambda: 1_793_500_000, rand=lambda: 0.5)
-    r = L.search("kubernetes")
-    assert sl == [60, 120, 240] and r["attribution"] is None
+    r = L.search("kubernetes")  # GDELT 429 -> unavailable -> HN in the same request
+    assert sl == [] and r["attribution"] is None
     assert [i["outlet"] for i in r["items"]][0] == "z.com" and "hn.algolia.com" in f.urls[-1]
     assert "tags=story" in f.urls[-1] and "numericFilters=created_at_i%3E" in f.urls[-1]
     assert not L.available("gdelt")
+    for _ in range(3):  # three more failures -> the 15-minute circuit
+        t[0] = L._open_until["gdelt"]
+        f.r[:0] = [(429, {}, b""), (200, {}, HN)]
+        L.search("kubernetes")
+    assert L._open_until["gdelt"] - t[0] == 900.0
     n = len(f.urls)
     f.r.append((200, {}, HN))
     L.search("kubernetes")
     assert not any("gdeltproject" in u for u in f.urls[n:])  # circuit holds
-    t[0] = 901.0
-    assert L.available("gdelt")
+    t[0] += 901.0
+    assert L.available("gdelt") and sl == []
 
 
-def test_timeout_and_5xx_retry_and_retry_after_and_jitter():
-    f = Fake(TimeoutError(), (503, {}, b""), (429, {"Retry-After": "300"}, b""), (200, {}, GD))
-    L, sl = lane(f)
-    L._rand = lambda: 1.0  # +20%
-    assert L.search("kubernetes")["items"]
-    assert sl == [72.0, 144.0, 360.0]
+def test_timeout_5xx_retry_after_and_jitter_windows():
+    t = [0.0]
+    f = Fake(TimeoutError(), (503, {}, b""), (429, {"Retry-After": "300"}, b""))
+    L = rl.ReportingLane(cfg(fallback_order=["gdelt"]), http_get=f, sleep=lambda s: None, clock=lambda: t[0],
+                         rand=lambda: 1.0)  # +20%
+    waits = []
+    for _ in range(3):
+        L.search("kubernetes")
+        waits.append(L._open_until["gdelt"] - t[0])
+        t[0] = L._open_until["gdelt"]
+    assert waits == [72.0, 144.0, 360.0]
 
 
 def test_both_down_returns_empty():
     f = Fake(*[(429, {}, b"")] * 8)
     L, _ = lane(f)
     r = L.search("kubernetes")
-    assert r["items"] == [] and len(f.urls) == 8
+    assert r["items"] == [] and len(f.urls) == 2  # one attempt per portal, no in-request retries
 
 
 def test_hn_item_link_for_text_posts():

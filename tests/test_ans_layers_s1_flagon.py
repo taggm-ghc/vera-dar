@@ -125,7 +125,7 @@ def test_unchecked_note_in_limitations_not_answer():
 
 
 # ---------------------------------------------------------------- off-topic safety warning (real _inline site)
-def test_offtopic_warning_in_limitations_acquisition_in_process_notes(monkeypatch):
+def test_no_offtopic_warning_acquisition_in_process_notes(monkeypatch):  # INTEGRATE-1104 S2: renamed (no warning)
     from vera import acq_config, acq_discovered, fulldoc_corpus, inline_acquire, provider_exhaustion
     monkeypatch.setattr(fulldoc_corpus, "flag_enabled", lambda cfg: True)
     monkeypatch.setattr(fulldoc_corpus, "load_config", lambda *a, **k: {})
@@ -145,11 +145,13 @@ def test_offtopic_warning_in_limitations_acquisition_in_process_notes(monkeypatc
     monkeypatch.setattr(ask_service, "_fulldoc",
                         lambda *a, **k: AskResult(answer="ANS", tokens_used=1, cost_usd=0.0, result_kind="answer"))
     r = ask_service._inline("q", "m", None, SimpleNamespace(topic_key=""), None, None, object(), in_scope=False)
-    assert r.answer == "ANS" and r.accepted is False
+    # INTEGRATE-1104 / SCOPE-GATE-1104 S2: _inline has no off-topic wording any more (a safe question is never warned
+    # for its subject); the acquisition and background notes stay process notes, out of the answer text
+    assert r.answer == "ANS" and "offtopic" not in (r.contract or {})
     for t in ("WARN-OFFTOPIC may be wrong", "ACQ-NOTE", "BG-NOTE"):
         assert t not in r.answer
     lim, proc = _lists(r)
-    assert lim == ["WARN-OFFTOPIC may be wrong"] and proc == ["ACQ-NOTE", "BG-NOTE"]
+    assert lim == [] and proc == ["ACQ-NOTE", "BG-NOTE"]
 
 
 # ---------------------------------------------------------------- main.py wiring into AskResponse

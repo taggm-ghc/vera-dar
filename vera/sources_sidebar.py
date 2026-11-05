@@ -15,7 +15,6 @@ from pathlib import Path
 logger = logging.getLogger("vera")
 
 ROOT = Path(__file__).resolve().parent.parent
-SCOPE_PATH = ROOT / "config" / "scope_router.json"
 CHAIN_PATH = ROOT / "config" / "ask-provider-chain.json"
 SELECTION_PATH = ROOT / "config" / "model-selection.json"
 SNAPSHOT_PATH = ROOT / "eval_results" / "trace_eval_v1.json"
@@ -57,22 +56,22 @@ def plain_url(text: str) -> str:
     return _MD_URL_SPECIAL.sub(r"\\\1", t) if _URLISH.fullmatch(t) and not _CTRL.search(t) else plain(t)
 
 
-def scope_text(path: Path = SCOPE_PATH) -> str | None:
-    cfg = _read(path)
-    return str(cfg["scope"]) if cfg and cfg.get("scope") else None
-
-
 # K3.I: UI labels for the page links (labels, not data). Order is the order shown.
 NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"),
        ("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"))
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
-CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at"})
+CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
+                           "coverage", "topic_shares"})
+ABOUT_LINK_LABEL = "How VERA-DAR answers and its limits → About"
+# D7: the digest sample (corpus_description.stamp_and_profile) never includes full documents stored as passages
+SAMPLE_EXCLUSION = "full documents stored as passages are not in the sample"
+ABOUT_LINK_FALLBACK = "How VERA-DAR answers and its limits: see the About page."
 
 LICENCE_SIDEBAR = ("For listed records, only the indexing services' metadata licence was checked; the articles' own "
                    "licences were not verified with the publisher.")
 LICENCE_UNDER_ANSWER = LICENCE_SIDEBAR
-MODEL_LINE = "A third-party hosted language model may be used to decide whether a question is in scope."
+MODEL_LINE = "A third-party hosted language model may be used to check whether a request is safe to handle."
 NO_DESCRIPTION = "description not available right now."
 # Public text is constant or derived from allowlisted fields. Model-written text matching these is dropped (defence in depth).
 _BACKEND_WORDS = re.compile(r"\b(?:groq|openai|anthropic|claude|llama|mistral|gemini|gpt|qwen|openrouter|gate [abc]|"
@@ -164,32 +163,97 @@ def _corpus(st) -> dict | None:
     return data
 
 
+# Deny-All audit G1: model-written text (summary, topics, topic labels in the shares line, coverage) is shown ONLY when
+# the digest carries this marker, which vera.corpus_description sets when every model-written field passed the
+# claim/evidence check (cited cluster, checker approval with verified title ids, numbers only as approved facts or
+# code-confirmed derivations). Anything else shows code-built lines only.
+CHECKED = "agentic_checked"
+CODE_ONLY_SOURCES = ("deterministic_fallback",)  # summary text built by code, not a model
+
+
+def _model_text_ok(line) -> bool:
+    return bool(line) and not _BACKEND_WORDS.search(str(line))
+
+
+def coverage_text(data: dict | None) -> str | None:
+    """CORPUS-DIGEST-1104: the generated description of current coverage, or None. Never the configured scope string:
+    with no generated description the caller omits the line (owner: no fixed Scope text)."""
+    if not data or data.get("summary_source") != CHECKED:
+        return None
+    cov = data.get("coverage")
+    return plain(cov) if isinstance(cov, str) and cov.strip() and _model_text_ok(cov) else None
+
+
+def _share_lines(shares) -> list[str]:
+    """Main topics (smallest set reaching 80% of sampled documents, computed in code) and the remainder lines."""
+    if not isinstance(shares, dict) or not isinstance(shares.get("main"), list) or not shares["main"]:
+        return []
+    try:
+        n = int(shares["basis_documents"])
+        main = ", ".join(f"{plain(t['label'])} {int(t['pct'])}%" for t in shares["main"] if _model_text_ok(t.get("label")))
+        if not main or n <= 0:
+            return []
+        reach = f"{int(shares.get('main_pct') or 0)}%"
+        lines = [f"**Main topics** ({reach} of documents; share of the {n} sampled sources, each counted once under "
+                 f"its main topic; {SAMPLE_EXCLUSION}): {main}."]
+        o = shares.get("other") or {}
+        if int(o.get("topics") or 0) > 0:
+            k = int(o["topics"])
+            lines.append(f"Other topics: {int(o.get('pct') or 0)}% across {k} smaller topic{'s' if k != 1 else ''}.")
+        u = shares.get("ungrouped") or {}
+        if int(u.get("documents") or 0) > 0:
+            lines.append(f"Not grouped under a topic: {int(u.get('pct') or 0)}%.")
+        return lines
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
 def render_corpus(st, data: dict | None) -> None:
+    """CORPUS-DIGEST-1104: count/newest line, the digest, subject topics with shares, and the model-written line.
+    The licence note, scope, how-it-answers and Trace Eval lines moved to the About page (render_corpus_notes)."""
     if not data or data.get("summary_source") in (None, "disabled", "unavailable", "not_connected"):
         st.caption(f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
         return
     data = {k: v for k, v in data.items() if k in CORPUS_FIELDS}
     when = f", newest source {plain(data['corpus_updated_at'][:10])}" if data.get("corpus_updated_at") else ""
-    st.caption(f"**VERA-DAR's corpus:** {int(data.get('source_count') or 0)} sources{when}. {LICENCE_SIDEBAR}")
-    for line in (data.get("summary"), ("Topics: " + ", ".join(data["topics"])) if data.get("topics") else None):
-        if line:
-            st.caption(f"**VERA-DAR's corpus:** {NO_DESCRIPTION}" if _BACKEND_WORDS.search(str(line)) else plain(line))
-    if data.get("summary_source") == "agentic_model":
+    st.caption(f"**VERA-DAR's corpus:** {int(data.get('source_count') or 0)} sources{when}.")
+    checked = data.get("summary_source") == CHECKED
+    if data.get("summary") and data.get("summary_source") in CODE_ONLY_SOURCES:
+        st.caption(plain(data["summary"]))  # code-built text
+    if not checked:  # default deny: no model-written field without the checker-pass marker
+        return
+    if data.get("summary"):
+        st.caption(plain(data["summary"]) if _model_text_ok(data["summary"]) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
+    shares = _share_lines(data.get("topic_shares"))
+    if shares:
+        for line in shares:
+            st.caption(line)
+    elif data.get("topics"):
+        line = "Topics: " + ", ".join(data["topics"])
+        st.caption(plain(line) if _model_text_ok(line) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
+    if checked:
         st.caption(f"Description written by a language model on {plain((data.get('summary_generated_at') or '')[:10])}; "
                    "refreshed when the corpus changes.")
 
 
-_HOW_LIST = ("**How VERA-DAR answers:** for each in-scope question the Ask page searches published scholarly sources "
+_HOW_LIST = ("**How VERA-DAR answers:** for each question the Ask page searches published scholarly sources "
              "and the web live and lists the ones that may be relevant, with links. VERA-DAR has not read the full "
              "documents, so it does not use abstracts or snippets as evidence and does not write an answer from "
              "them. If no usable source is found it says so instead of answering from memory. Open the sources "
              "and read them yourself before relying on any claim.")
-_HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of "
+_HOW_FULLDOC = ("**How VERA-DAR answers:** for each question the Ask page first searches a small collection of "
                 "full documents that the operator selected and licence-checked in advance. If passages in them address "
                 "the question, it writes a short answer from up to six passages, cites them with brief quotes, and has "
                 "an AI model check each cited sentence; unsupported sentences are removed. Otherwise it searches "
                 "published scholarly sources and the web and lists documents it has not read. Open the sources and "
                 "read them yourself before relying on any claim.")
+
+
+def how_answers_base() -> str:
+    """The How-VERA-DAR-answers paragraph without the off-topic sentence: on the About page that sentence already has
+    its own disclosure section, so it is not repeated (each disclosure text appears exactly once there)."""
+    from vera.disclosure import fulldoc_enabled
+    return _HOW_FULLDOC if fulldoc_enabled() else _HOW_LIST
 
 
 def how_answers_text() -> str:
@@ -199,24 +263,51 @@ def how_answers_text() -> str:
     return (_HOW_FULLDOC if fulldoc_enabled() else _HOW_LIST) + offtopic_sentence()
 
 
+def trace_eval_line() -> str:
+    snap = snapshot_summary()
+    if snap and snap["count"] is None:  # aggregate-only run summary: no per-source count is published
+        when = f", captured {snap['captured']}" if snap["captured"] else ""
+        return f"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered {snap['questions']} test questions{when}."
+    if not snap or not snap["count"]:
+        return "**Trace Eval sources:** not available"
+    span = f", first posted {snap['years'][0]} to {snap['years'][1]}" if snap["years"] else ""
+    when = f", captured {snap['captured']} (UTC; replaced when the evaluation is re-run)" if snap["captured"] else ""
+    return (f"**Trace Eval sources:** historical snapshot: {snap['count']} distinct sources "
+            f"retrieved for {snap['questions']} test questions{span}{when}.")
+
+
+CORPUS_NOTES_HEADING = "VERA-DAR's corpus: coverage, licences and how it answers"
+
+
+def corpus_notes_lines(data: dict | None) -> list[str]:
+    """CORPUS-DIGEST-1104: the lines moved from the sidebar to the About page, wording kept. The fixed Scope line is
+    replaced by the generated coverage description, and omitted when none exists (owner amendment)."""
+    cov = coverage_text(data)
+    return ([f"**Current coverage:** {cov}"] if cov else []) + [
+        LICENCE_SIDEBAR, how_answers_base() + " " + MODEL_LINE, trace_eval_line()]
+
+
+def render_corpus_notes(st, data: dict | None = None) -> None:
+    st.subheader(CORPUS_NOTES_HEADING)
+    for line in corpus_notes_lines(data):
+        st.markdown(line)
+
+
+def _about_link(st) -> None:
+    from streamlit.errors import StreamlitPageNotFoundError
+    link = getattr(st, "page_link", None)
+    try:
+        if link is None:
+            raise KeyError("page_link")
+        link("pages/about.py", label=ABOUT_LINK_LABEL)
+    except (StreamlitPageNotFoundError, KeyError):  # not found relative to the running script (AppTest of a page)
+        st.caption(ABOUT_LINK_FALLBACK)
+
+
 def render_sources_sidebar(st) -> None:
     with st.sidebar.expander("📚 What VERA-DAR draws on", expanded=False):
         render_corpus(st, _corpus(st))
-        scope = scope_text()
-        st.caption(f"**Scope:** {plain(scope)}" if scope else "**Scope:** not available")
-        st.caption(how_answers_text() + " " + MODEL_LINE)
-        snap = snapshot_summary()
-        if snap and snap["count"] is None:  # aggregate-only run summary: no per-source count is published
-            when = f", captured {snap['captured']}" if snap["captured"] else ""
-            st.caption(f"**Trace Eval sources:** historical snapshot: per-source counts are not published; the latest posted run covered {snap['questions']} test questions{when}.")
-            return
-        if not snap or not snap["count"]:
-            st.caption("**Trace Eval sources:** not available")
-            return
-        span = f", first posted {snap['years'][0]} to {snap['years'][1]}" if snap["years"] else ""
-        when = f", captured {snap['captured']} (UTC; replaced when the evaluation is re-run)" if snap["captured"] else ""
-        st.caption(f"**Trace Eval sources:** historical snapshot: {snap['count']} distinct sources "
-                   f"retrieved for {snap['questions']} test questions{span}{when}.")
+        _about_link(st)
 
 
 def _link(title: str, url: str) -> str:

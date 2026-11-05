@@ -21,7 +21,7 @@ def _legacy_decline_path(monkeypatch):
     """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
-    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+    pass  # INTEGRATE-1104: _research_eligible removed by SCOPE-GATE-1104 S2 (no topic-based decline path remains)
 
 REAL_GATE = auto_acquire.relevance_gate
 
@@ -109,7 +109,8 @@ def test_mixed_one_and_two_passage_documents(rig, monkeypatch):
 def test_zero_qualifying_passages_gives_reading_list(rig, monkeypatch):
     _cap(monkeypatch, 0)
     r = rig.run()
-    assert r.result_kind == "reading_list" and r.evidence is None
+    # SCOPE-GATE-1104 S2: the non-answer carries the corpus attempt (its evidence bundle, nothing admitted), not None
+    assert r.result_kind == "reading_list" and not (r.evidence and r.evidence.admitted)
     assert rig.cfg["scope_expansion"]["inline_notice_none"] in r.answer
     o = rig.outcomes[0]
     assert o.status == "none" and o.corpus is None and o.n_answer_eligible == 0 and rig.store.plans == []

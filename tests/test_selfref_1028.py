@@ -54,6 +54,9 @@ def test_reply_contains_no_secrets_or_internals():
     assert len(env_names) > 6
     for n in env_names:
         assert n not in t
+    from vera import disclosure as _disc  # INTEGRATE-1104: the exact GDELT credit constant (GDELT terms: "credit GDELT
+    t = t.replace(_disc._LANE_GDELT_CREDIT, "")  # with a link"), shown while the reporting lane is on, is the one public
+    # third-party attribution link in the disclosure; every other URL/host/internal pattern below is still forbidden
     for pat in (r"https?://", r"onrender\.com", r"\.env", r"API_?KEY", r"postgres(ql)?://", r"\bsk-", r"gsk_",
                 r"gpt-", r"llama", r"qwen", r"openai", r"groq", r"anthropic", r"claude", r"\.json", r"\.py\b", r"/home/",
                 r"config/", r"threshold", r"temperature", r"max_tokens"):

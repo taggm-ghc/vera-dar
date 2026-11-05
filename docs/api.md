@@ -17,7 +17,7 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 | `GET /trace/private` | Private TRACE evaluation view | Separate trace-viz key (`VERA_TRACE_VIZ_KEY`) |
 | `POST /ask` | Research question: grounded answer from admitted full-document passages, otherwise a reading list or decline (see [Default behaviour](#default-behaviour)) | `VERA_API_KEY` |
 | `POST /ask/stream` | Same request body as `POST /ask`; answers with newline-delimited JSON progress lines, then one result line (see below) | `VERA_API_KEY` |
-| `GET /corpus-summary` | Aggregated summary of admitted source records | `VERA_API_KEY` |
+| `GET /corpus-summary` | Agentic digest of the stored corpus (CORPUS-DIGEST-1104): counts, model-written digest checked against recorded facts, subject topics with document shares (topics covering 80% of sampled documents, computed in code), and a generated description of current coverage | `VERA_API_KEY` |
 | `GET /memory/pending` | Pending findings for owner review | Owner key |
 | `POST /memory/{claim_id}/confirm` | Confirm a pending finding | Owner key |
 | `POST /memory/{claim_id}/reject` | Reject a finding | Owner key |

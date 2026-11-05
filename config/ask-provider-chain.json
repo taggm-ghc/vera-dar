@@ -158,10 +158,12 @@
     "note": "Item #83 (ported from AI-Internship #80): a model-written description of VERA-DAR's own corpus (vera_vjay.sources), from titles and provenance metadata only, regenerated only when the source count, newest created_at or prompt_version change. Read with the read-only account (URL in the env var named read_db_url_env; unset = not connected). Cached in memory; on model failure a deterministic description is served and generation retries after retry_s (echo_retry_s after a generated text that reproduced a source title; code fallback 3600 when absent).",
     "enabled": true,
     "read_db_url_env": "VERA_DB_URL_RO",
-    "prompt_version": "vera-corpus-description-v1",
+    "prompt_version": "vera-corpus-digest-v2",
     "max_titles": 150,
     "retry_s": 300,
-    "echo_retry_s": 3600
+    "echo_retry_s": 3600,
+    "note_digest_1104": "CORPUS-DIGEST-1104: agentic digest (vera/corpus_description.py run_digest_pipeline): cluster, draft, check; at most 3 model calls over the /ask chain (free providers first). agentic.* are work bounds (time, tokens, caps), not decision thresholds. sample_excerpt_chars 0 = titles only (abstract excerpts are not sent; a value above 0 needs an owner decision). Failure keeps the previous digest in memory, else the deterministic description. Supersedes the one-shot description in note above.",
+    "agentic": {"deadline_s": 25, "cluster_max_tokens": 900, "draft_max_tokens": 700, "check_max_tokens": 500, "max_clusters": 8, "sample_per_cluster": 5, "max_sentences": 6, "sample_excerpt_chars": 0}
   },
   "memory": {
     "note": "Item #84 write gate (vera/memory_gate.py): structural filter thresholds and lists. Detector lists ported from AI-Internship intake_detectors.json. Not a security guarantee. calibration note: the owner's private planning notes (not published) (statuses PROVISIONAL/UNCALIBRATED; D-038 ACCEPTED by R1 (RD-3) to 2026-10-25 or 20 owner-confirmed rows; values PROVISIONAL/UNCALIBRATED).",

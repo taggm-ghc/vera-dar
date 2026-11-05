@@ -508,16 +508,17 @@ def test_offtopic_discovery_reuses_the_reading_list_search_exactly(rig, monkeypa
     monkeypatch.setattr(acq_discovered, "discovery_results", tagged)
     # OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): the restricted (decline-path) discovery is what this test pins; an off_topic verdict now takes
     # the research path, so the reroute is switched off here (still reached by other allowed layer-2 out verdicts)
-    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+    # INTEGRATE-1104: SCOPE-GATE-1104 S2 removed _research_eligible and the restricted off-topic discovery: discovery is
+    # never restricted and still reuses the reading list's call sequence exactly (now the unrestricted one)
     rig.cfg["inline"]["use_discovered"] = True
     rig.setup(topic="clim")
     r = rig.run()
     assert r.result_kind != "answer"
     d = [c[1:] for c in calls if c[0] == "disc"]
     rl = [c[1:] for c in calls if c[0] == "list"]
-    # the discovery call sequence is exactly the reading list's (restricted, off-topic profile): main.py's
+    # the discovery call sequence is exactly the reading list's (unrestricted, never the scholarly-only list): main.py's
     # per-request cache then serves both from one provider search
-    assert d and d == rl and all(x[0] is True for x in d)
+    assert d and d == rl and all(x[0] is False for x in d)
 
 
 def test_provenance_gate_a_is_the_computed_decision():

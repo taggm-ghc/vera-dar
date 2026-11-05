@@ -19,7 +19,7 @@ def _legacy_decline_path(monkeypatch):
     """OD-1028(6) Path A (DDFIX-1023/SCOPE precedent): an off_topic layer-2 verdict now takes the normal research path (tests/test_ddfix_scope_1023.py
     covers it). This module keeps covering the decline-path machinery, which other allowed layer-2 out-of-scope
     verdicts (e.g. category in_scope with in_scope=false) still reach, so the reroute is switched off here."""
-    monkeypatch.setattr(ask_service, "_research_eligible", lambda *a, **k: False)
+    pass  # INTEGRATE-1104: _research_eligible removed by SCOPE-GATE-1104 S2 (no topic-based decline path remains)
 
 REAL = inline_acquire.acquire  # the shared fixture h stubs it to "off"; these tests restore the real one
 OFF_Q = e2e.Q_EPI
@@ -85,14 +85,15 @@ def rig(h, monkeypatch):
 def test_inline_answer_in_the_same_request(rig):
     rig.cfg["inline"]["acq6_rounds_enabled"] = False  # A6 kill switch off: the pre-A6 single-search contract (rounds: test_acq6_rounds_1103)
     r = rig.run()
-    assert r.result_kind == "answer" and r.accepted is False and r.acquire_trigger is None
+    # SCOPE-GATE-1104 S2 item 5: no off-topic wording: accepted stays the answer's, no override prefix, no offtopic flag
+    assert r.result_kind == "answer" and r.accepted is not False and r.acquire_trigger is None
     assert r.evidence is not None and r.evidence.admitted
     assert all(a["document_id"].startswith("acq-") for a in r.evidence.admitted)
     se = rig.cfg["scope_expansion"]
-    assert r.answer.startswith(se["override_answer_prefix"] + " " + se["inline_answer_note"])
+    assert r.answer.startswith(se["inline_answer_note"]) and se["override_answer_prefix"] not in r.answer
     ia = r.contract["inline_acquisition"]
     assert ia["status"] == "ok" and ia["admitted"] == 1 and ia["stored"] == 1 and ia["persisted"] is True
-    assert set(ia["ms"]) >= {"total"} and r.contract["offtopic"] is True and r.contract["acquired_only"] is True
+    assert set(ia["ms"]) >= {"total"} and "offtopic" not in r.contract
     assert len(rig.store.plans) == 1 and len(rig.search_calls) == 1
     assert len(rig.h.answer_calls) == 1 and len(rig.h.check_calls) == 1  # the unchanged writer and claim check ran
 
@@ -107,7 +108,7 @@ def test_deadline_expiry_gives_reading_list_with_deadline_notice(rig):
     rig.setup(web=Slow(base.records, base.jats))
     rig.cfg["inline"]["deadline_s"] = 0.05
     r = rig.run()
-    assert r.result_kind == "reading_list" and r.evidence is None and r.acquire_trigger is None
+    assert r.result_kind == "reading_list" and not (r.evidence and r.evidence.admitted) and r.acquire_trigger is None  # S2: corpus attempt's evidence (0 admitted) is kept
     assert rig.cfg["scope_expansion"]["inline_notice_deadline"] in r.answer
     assert rig.outcomes[0].status == "deadline" and rig.store.plans == []
     assert rig.h.answer_calls == []
@@ -127,7 +128,7 @@ def test_search_failure_gives_search_failed_notice(rig):
 def test_nothing_admitted_gives_none_notice_and_no_background_job(rig):
     rig.setup(topic="clim")  # a licensed document on an unrelated topic: the relevance gate rejects it
     r = rig.run()
-    assert r.result_kind == "reading_list" and r.evidence is None and r.acquire_trigger is None
+    assert r.result_kind == "reading_list" and not (r.evidence and r.evidence.admitted) and r.acquire_trigger is None  # S2: as above
     assert rig.cfg["scope_expansion"]["inline_notice_none"] in r.answer
     o = rig.outcomes[0]
     assert o.status == "none" and o.corpus is None and rig.store.plans == []
@@ -258,7 +259,7 @@ def test_kill_switch_means_no_search_no_inline(rig, monkeypatch):
 def test_inline_flag_off_restores_background_only(rig):
     rig.cfg["inline"]["enabled"] = False
     r = rig.run()
-    assert rig.search_calls == [] and r.result_kind == "reading_list" and r.acquire_trigger == "decline"
+    assert rig.search_calls == [] and r.result_kind == "reading_list" and r.acquire_trigger == "insufficient"  # S2: the normal-path trigger replaces "decline"
 
 
 # ------------------------------------------------------------------------------------------------ 6. concurrency, dedupe
@@ -384,18 +385,21 @@ def test_other_declines_never_call_inline(rig, layer, reason, cat):
     assert "inline_acquisition" not in (r.contract or {})
 
 
-def test_missing_category_is_categorised_and_calls_inline(rig):
-    """CATSTEP-1028 (plan s27): the D-P10b reply researches in the same request, exactly like a clean off_topic."""
+def test_missing_category_declines_neutrally_and_never_calls_inline(rig):
+    """SCOPE-GATE-1104 S2 D2a (was: CATSTEP-1028 researches it inline like a clean off_topic): a reply naming no category
+    stays category "" and gets the neutral decline: no inline acquisition, no search, no answer."""
     r = rig.run(category="")
-    assert r.result_kind == "answer" and rig.outcomes and r.evidence is not None and r.evidence.admitted
-    assert "inline_acquisition" in (r.contract or {})
+    assert r.result_kind == "decline" and r.answer == scope_router.decline_text()
+    assert rig.outcomes == [] and rig.search_calls == [] and r.evidence is None and r.acquire_trigger is None
+    assert "inline_acquisition" not in (r.contract or {})
 
 
-def test_override_off_never_calls_inline(rig):
+def test_override_flag_no_longer_gates_inline(rig):
+    """SCOPE-GATE-1104 S2-T4 (was: override off never calls inline): the legacy off_topic verdict is a safety pass and
+    takes the normal path, so inline acquisition runs in both flag states."""
     rig.cfg["scope_expansion"]["override_layer2_declines"] = False
     r = rig.run()
-    assert rig.outcomes == [] and rig.search_calls == [] and r.result_kind == "reading_list"
-    assert r.acquire_trigger == "decline"
+    assert rig.outcomes and rig.search_calls and r.result_kind == "answer" and "offtopic" not in (r.contract or {})
 
 
 # ------------------------------------------------------------------------------------------------ 9. claim check corpus

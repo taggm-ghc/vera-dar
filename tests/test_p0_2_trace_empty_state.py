@@ -58,8 +58,11 @@ def test_sidebar_caption_not_unavailable_with_public_file():
     with mock.patch.object(sb, "render_corpus"), mock.patch.object(sb, "_corpus"):
         sb.render_sources_sidebar(st)
     caps = " ".join(str(c.args[0]) for c in st.caption.call_args_list)
-    assert "not available" not in caps.split("Trace Eval")[-1]
-    assert "per-source counts are not published" in caps
+    assert "Trace Eval" not in caps  # CORPUS-DIGEST-1104: the line moved to the About page
+    lines = sb.corpus_notes_lines(None)
+    line = next(x for x in lines if "Trace Eval" in x)
+    assert "not available" not in line
+    assert "per-source counts are not published" in line
 
 
 def test_explicit_old_path_still_works(tmp_path):

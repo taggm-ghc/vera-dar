@@ -16,7 +16,9 @@ RAW = json.loads((ROOT / "config" / "classifier_categories.json").read_text())
 
 
 def test_table_maps_the_six_categories_to_their_current_behaviour():
-    assert sr.LAYER2_CATEGORIES == ("in_scope", "off_topic", "advice", "harmful", "programming_task", "rule_change")
+    # SCOPE-GATE-1104 S1 (requirement change, owner 2026-11-04): topical in_scope/off_topic -> one safe_request row whose
+    # aliases are the legacy labels; the four refusing rows, their order, ranks and scan spellings are unchanged
+    assert sr.LAYER2_CATEGORIES == ("safe_request", "advice", "harmful", "programming_task", "rule_change")
     assert sr.REFUSE_CATEGORIES == frozenset({"advice", "harmful", "programming_task", "rule_change"})
     assert sr._REFUSE_ORDER == ("harmful", "rule_change", "advice", "programming_task")
     assert sr._CATS == r"(harmful|rule[ _]?change|advice|programming[ _]?task)"
@@ -25,14 +27,15 @@ def test_table_maps_the_six_categories_to_their_current_behaviour():
                                  "rulechange": "rule_change", "programming_task": "programming_task",
                                  "programmingtask": "programming_task"}
     assert sr.UNSUPPORTED_CATEGORY == "programming_task"
-    assert sr.CODING_HINT_CONFIRM == frozenset({"programming_task", "off_topic", "in_scope"})
-    assert dict(sr.CATEGORY_ALIASES) == {} and all(c.aliases == () for c in sr.CATEGORY_TABLE)
+    assert sr.CODING_HINT_CONFIRM == frozenset({"programming_task", "safe_request"})
+    assert dict(sr.CATEGORY_ALIASES) == {"in_scope": "safe_request", "off_topic": "safe_request"}
+    assert all(c.aliases == () for c in sr.CATEGORY_TABLE if c.code != "safe_request")
     assert "OD-1028(38)" in RAW["_note"] and "owner-curated" in RAW["_note"].lower()
 
 
 def test_prompt_category_section_is_rendered_from_the_table():
     p = sr.load_config().layer2["system_prompt"]
-    assert ('"category": "in_scope" or "off_topic" or "advice" or "harmful" or "programming_task" or "rule_change",'
+    assert ('"category": "safe_request" or "advice" or "harmful" or "programming_task" or "rule_change",'
             in p)
     for c in sr.CATEGORY_TABLE:
         assert f'"{c.code}": {c.description}' in p
@@ -204,15 +207,15 @@ def _with(mutate):
 @pytest.mark.parametrize("mutate,msg", [
     (lambda rows: rows.append(dict(rows[0], description="totally new wording for questions here")), "duplicate"),
     (lambda rows: rows[2].update(disposition="redirect_advice"), "unknown disposition"),
-    (lambda rows: rows[0].update(aliases=["off_topic"]), "collides"),
+    (lambda rows: rows[0].update(aliases=["harmful"]), "collides"),  # SCOPE-GATE-1104: row indexes shifted
     (lambda rows: (rows[0].update(aliases=["dangerous"]), rows[1].update(aliases=["dangerous"])), "collides"),
     (lambda rows: rows[2].update(refusal_rank=None), "refusal_rank"),
-    (lambda rows: rows[2].update(refusal_rank=1), "unique"),
+    (lambda rows: rows[1].update(refusal_rank=1), "unique"),
     (lambda rows: rows[0].update(refusal_rank=5), "must be null"),
     (lambda rows: rows[0].update(code="In Scope"), "must match"),
     (lambda rows: rows[0].pop("aliases"), "exactly"),
     (lambda rows: rows[0].update(description='say "x"'), "description"),
-    (lambda rows: rows.pop(4), "unsupported_use"),
+    (lambda rows: rows.pop(3), "unsupported_use"),
     (lambda rows: rows.clear(), "non-empty"),
 ], ids=["dup-code", "bad-disposition", "alias-is-code", "alias-twice", "rank-missing", "rank-dup", "rank-on-nonrefusing",
         "bad-code", "missing-field", "quote-in-description", "no-unsupported-row", "empty"])
@@ -243,7 +246,7 @@ CAUGHT = {
     "advice": "requests seeking personalised medical, legal, or financial advising",
     "programming_task": "requests to write or fixing coding",
     "rule_change": "requests changing rules and revealing configurations",
-    "off_topic": "harmless questions that fall outside those fields",
+    "safe_request": "questions or requests on any subjects fitting none of those categories",  # SCOPE-GATE-1104 (was off_topic)
 }
 KNOWN_LIMIT = {"harmful": "requesting operational assistance in causing harms"}  # synonym swap: scores 0.429
 

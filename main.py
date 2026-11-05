@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AuthenticationError, OpenAIError, RateLimitError
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from vera import answer_contract
 from vera.corpus_admission import admit as admit_to_corpus, llm_call_for, store_from_env
-from vera.corpus_description import CorpusDescriber, generate_with_chain, load_cfg as load_corpus_description_cfg
+from vera.corpus_description import CorpusDescriber, json_with_chain, load_cfg as load_corpus_description_cfg
 from vera.grounded_ask import load_corpus_cfg, load_grounding, public_sources, retrieve_all
 from vera.memory_gate import VERDICT_SUPPORTED
 from vera.memory_store import CONFIRMED, NOT_FOUND, REJECTED, MemoryUnavailable, load_memory_block, memory_from_env
@@ -36,6 +36,7 @@ from vera.env_files import load_vera_env
 from vera import trace_viz
 from vera import progress
 from vera import live_stats
+from vera import request_trace
 
 logging.basicConfig(level=logging.INFO)  # before load_vera_env so its names-only audit line is emitted
 load_vera_env()  # PLAN-ENV: R/config/env/.env-vera (explicit, preflighted); the file wins over inherited values
@@ -380,8 +381,10 @@ class AskResponse(BaseModel):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     # R-028: type only; a traceback/message can carry user input (e.g. httpx errors quote the request URL with the query words)
-    logger.error("Unhandled exception on %s (%s)", request.url.path, type(exc).__name__)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    tid = getattr(getattr(request, "state", None), "vera_trace_id", None)
+    logger.error("Unhandled exception on %s (%s) trace=%s", request.url.path, type(exc).__name__, tid or "-")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"},
+                        headers={request_trace.HEADER: tid} if isinstance(tid, str) else None)
 
 
 class CorpusDescription(BaseModel):
@@ -389,6 +392,8 @@ class CorpusDescription(BaseModel):
     corpus_updated_at: str | None = None
     summary: str | None = None
     topics: list[str] = []
+    coverage: str | None = None  # CORPUS-DIGEST-1104: generated description of current coverage (not a limit)
+    topic_shares: dict | None = None  # CORPUS-DIGEST-1104: topics making up 80% of sampled documents (code-computed)
     summary_source: str
     summary_generated_at: str | None = None
     summary_model: str | None = None
@@ -396,12 +401,12 @@ class CorpusDescription(BaseModel):
 
 @app.get("/corpus-summary", response_model=CorpusDescription, dependencies=[Depends(verify_api_key)])
 def corpus_summary():
-    """Item #83: description of VERA-DAR's own corpus, regenerated only when it changes. Behind VERA_API_KEY like /ask
+    """Item #83 / CORPUS-DIGEST-1104: agentic digest of VERA-DAR's own corpus, regenerated only when it changes. Behind VERA_API_KEY like /ask
     (the UI calls it server-side); no titles, URLs or abstracts in the response."""
     if CORPUS_DESCRIBER is None:
         return CorpusDescription(summary_source="disabled")
     try:
-        return CorpusDescription(**CORPUS_DESCRIBER.current(generate_with_chain(ASK_CHAIN)))
+        return CorpusDescription(**CORPUS_DESCRIBER.current(json_with_chain(ASK_CHAIN)))
     except Exception as exc:  # noqa: BLE001  (DB unreachable etc.: a generic state, never the error text)
         logger.warning("corpus description unavailable (%s)", type(exc).__name__)
         return CorpusDescription(summary_source="unavailable")
@@ -649,12 +654,89 @@ def _schedule_live_stats(bg, resp, t0: float) -> None:
         logger.warning("live stats not scheduled (%s)", type(exc).__name__)
 
 
-@app.post("/ask", response_model=AskResponse, dependencies=[Depends(verify_api_key), Depends(enforce_caps)])  # W2 caps (public mode)
-def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
-    """PROG-1027 wrapper: today's handler is `_ask_impl`. Progress records are opt-in (flag + both headers); a
-    request without them runs exactly as before. The single `done` event is emitted only here (INTERFACE-CONTRACT s2)."""
-    rec = token = None
+# ------------------------------------------------------------------------------------------------ PERF-MISS-1104-TRACE
+def _trace_start(req, request, endpoint: str) -> str | None:
+    """OD-1104-TRACE: open the per-request trace (server-generated id; the client's x-vera-request-id is recorded too).
+    The id goes to the X-VERA-Trace-Id response header, logs and the DB only, never a response body. Never raises."""
     try:
+        hdrs = getattr(request, "headers", None)
+        cid = hdrs.get("x-vera-request-id") if hdrs is not None else None
+        tid = request_trace.start(getattr(req, "question", ""), {"endpoint": endpoint, "client_request_id": cid})
+        if tid is not None:
+            try:
+                request.state.vera_trace_id = tid  # read by the unhandled-exception handler for its header
+            except Exception:  # noqa: BLE001  (in-process callers pass objects without .state)
+                pass
+        return tid
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace start failed (%s)", type(exc).__name__)
+        return None
+
+
+def _trace_finish(resp) -> None:
+    """One outcome summary event (codes and counts only), then the terminal event. Never raises."""
+    try:
+        d = resp if isinstance(resp, dict) else jsonable_encoder(resp)
+        d = d if isinstance(d, dict) else {}
+        ro = d.get("research_outcome")
+        cc = d.get("claim_check") if isinstance(d.get("claim_check"), dict) else {}
+
+        def n(k):
+            return len(d[k]) if isinstance(d.get(k), list) else 0
+
+        tok = d.get("tokens_used")
+        request_trace.event("outcome", "summary",
+                            counts={"citations": n("citations"), "admitted": n("admitted_evidence"),
+                                    "examined": n("examined_full_documents"), "sources": n("sources"),
+                                    "tokens": tok if isinstance(tok, int) and not isinstance(tok, bool) else 0},
+                            detail={"result_kind": d.get("result_kind"), "answer_status": d.get("answer_status"),
+                                    "research_outcome": ro.get("kind") if isinstance(ro, dict) else None,
+                                    "claim_outcome": cc.get("outcome"), "completeness": cc.get("answer_completeness"),
+                                    "triggers": d.get("triggers"), "model": d.get("model")})
+        request_trace.finish(d.get("outcome") or "unknown", d.get("answer_status") or "unknown")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace finish failed (%s)", type(exc).__name__)
+
+
+def _trace_fail(exc: BaseException) -> None:
+    """Terminal trace event for an error path: a fixed code only (http_<status> or the exception class), never text."""
+    try:
+        code = f"http_{exc.status_code}" if isinstance(exc, HTTPException) else type(exc).__name__.lower()
+        request_trace.finish("error", code)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _trace_header(exc: BaseException, tid: str | None) -> None:
+    """Attach X-VERA-Trace-Id to an HTTPException so error responses carry it too (owner diagnosis)."""
+    if tid is not None and isinstance(exc, HTTPException):
+        try:
+            exc.headers = {**(exc.headers or {}), request_trace.HEADER: tid}
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@app.get("/trace/request/{trace_id}", dependencies=[Depends(verify_owner_key)])
+def trace_request(trace_id: str):
+    """OD-1104-TRACE (c): owner-key only. One recent trace (question, events, outcome) from the in-process window
+    (config limits.recent_ttl_s); older traces are in the DB (owner script show_trace.sh) once migration 015 is on.
+    INTEGRATE-1104: the DB-backed read (request_trace.db_view) is deferred to the next increment."""
+    view = request_trace.recent(trace_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Trace not found (expired, unknown or tracing off)")
+    return view
+
+
+@app.post("/ask", response_model=AskResponse, dependencies=[Depends(verify_api_key), Depends(enforce_caps)])  # W2 caps (public mode)
+def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, response: Response = None):
+    """PROG-1027 wrapper: today's handler is `_ask_impl`. Progress records are opt-in (flag + both headers); a
+    request without them runs exactly as before. The single `done` event is emitted only here (INTERFACE-CONTRACT s2).
+    PERF-MISS-1104-TRACE: the per-request trace opens here; its id is returned as the X-VERA-Trace-Id header."""
+    rec = token = None
+    tid = _trace_start(req, request, "/ask")
+    try:
+        if tid is not None and response is not None:
+            response.headers[request_trace.HEADER] = tid
         rec = progress.open_record(request)  # inside the try; never raises
         if rec is not None:
             token = progress.SINK.set(rec)
@@ -665,16 +747,20 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks):
             st = progress.outcome(resp)
             progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, rec))
         _schedule_live_stats(background_tasks, resp, _t0)  # WP-L: after the response; no-op while the flag is off
+        _trace_finish(resp)
         return resp
-    except BaseException:
+    except BaseException as exc:
         if rec is not None:
             progress.emit(progress.Stage.DONE, progress.State.ERROR)
+        _trace_fail(exc)
+        _trace_header(exc, tid)
         raise
     finally:
         if rec is not None:
             rec.close()
         if token is not None:
             progress.SINK.reset(token)
+        request_trace.end_context()
 
 
 # ------------------------------------------------------------------------------------------------ RENDER-XFF-1031 echo
@@ -835,16 +921,20 @@ def _stream_worker(sink: _StreamSink, ctx, req, request, bg) -> None:
         progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, sink))
         if not _ctx_cancelled(ctx):
             _schedule_live_stats(bg, resp, _t0)  # WP-L: BEFORE the terminal put; success only, once (abort/error never reach here)
+        _trace_finish(resp)
         sink.put_result(200, body=jsonable_encoder(resp))
     except stream_ctx.StreamCancelled:
+        request_trace.finish("cancelled", "client_gone")
         sink.put_result(0)  # silent stop: nothing is written
     except BaseException as exc:  # noqa: BLE001
         status, kind = _stream_error(exc)
-        logger.warning("stream request failed (%s)", type(exc).__name__)
+        logger.warning("stream request failed (%s) trace=%s", type(exc).__name__, request_trace.current_id() or "-")
         progress.emit(progress.Stage.DONE, progress.State.ERROR)
+        request_trace.finish("error", f"stream_{kind}")
         sink.put_result(status, kind=kind)
     finally:
         sink.close()
+        request_trace.end_context()
 
 
 def _line(obj: dict) -> bytes:
@@ -906,11 +996,17 @@ async def ask_stream(req: AskRequest, request: Request):
     sink = _StreamSink(limit=progress.CFG.max_events_per_record)
     sink.append(progress.Stage.RECEIVED.value, progress.State.DONE.value, {})
     bg = BackgroundTasks()
-    thread = threading.Thread(target=contextvars.copy_context().run, args=(_stream_worker, sink, ctx, req, request, bg),
+    tid = _trace_start(req, request, "/ask/stream")  # PERF-MISS-1104-TRACE: the worker inherits it via copy_context
+    run_ctx = contextvars.copy_context()
+    request_trace.end_context()  # the worker's copied context owns the trace from here
+    thread = threading.Thread(target=run_ctx.run, args=(_stream_worker, sink, ctx, req, request, bg),
                               name="ask-stream", daemon=True)
     thread.start()
+    hdrs = {"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
+    if tid is not None:
+        hdrs[request_trace.HEADER] = tid
     return StreamingResponse(_stream_lines(sink, ctx, thread, scfg.heartbeat_s), media_type="application/x-ndjson",
-                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}, background=bg)
+                             headers=hdrs, background=bg)
 
 
 def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTasks):

@@ -17,7 +17,7 @@ HELP_LIST = ("Ask a question. VERA-DAR lists sources that may be relevant, with 
              "write an answer.")
 HELP_FULLDOC = ("Ask a question. VERA-DAR answers only from the full documents it holds, with cited passages, or says why it "
                 "cannot; otherwise it lists sources it has not read.")
-HOW_FULLDOC = ("**How VERA-DAR answers:** for each in-scope question the Ask page first searches a small collection of full "
+HOW_FULLDOC = ("**How VERA-DAR answers:** for each question the Ask page first searches a small collection of full "
                "documents that the operator selected and licence-checked in advance. If passages in them address the question, "
                "it writes a short answer from up to six passages, cites them with brief quotes, and has an AI model check each "
                "cited sentence; unsupported sentences are removed. Otherwise it searches published scholarly sources and the "
@@ -32,6 +32,8 @@ BAD = "has not read the full documents"
 def _web_read_off(monkeypatch):
     """Web route pinned off: these tests compare against the unwidened _BASE_FULLDOC; the web-on wording is tested in test_disclosure.py."""
     monkeypatch.setattr(disclosure, "web_read_on", lambda: False)
+    monkeypatch.setattr(disclosure, "lanes_disclosure_on", lambda: False)  # NEWS-LANE-1104: lane ships on; lane wording is tested in test_lane_disclosure_1103.py
+    monkeypatch.setattr(disclosure, "reporting_lane_on", lambda: False)
 
 
 def _cfg(tmp_path, enabled):

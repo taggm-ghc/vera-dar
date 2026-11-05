@@ -114,7 +114,8 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                 for pg in got["pages"]:
                     pg.part = p.label
                     res.pages.append(pg)
-            current = p.temporal or temporality.detect(p.text).current
+            # NEWS-LANE-1104 W3: a news / current-events question also reaches the reporting lane (vera.news_intent)
+            current = p.temporal or temporality.detect(p.text).current or _news(p.text) or _news(question)
             if rl is None or not current:
                 continue
             found = rl.search(p.text, p.entities)
@@ -128,12 +129,18 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                 lk = {"lane": "reporting", "label": "Reported", "title": it.get("title"), "url": url,
                       "published": it.get("published") or "date unknown", "outlet": it.get("outlet"), "read": False,
                       "part": p.label}
-                perm = _outlet_gate(url)  # vera.source_permissions: read unless restricted; use unless barred
+                # NEWS-LANE-1104 W2 (SEC S2): an item the lane marks read_ok=False (links_only / unlisted outlet, or an
+                # allow outlet inside its crawl delay) is a link only, never fetched.
+                # NEWS-LANE-1104 R1: read only an item the lane explicitly tagged read_ok=True (an untagged item, e.g.
+                # from a future or injected lane, is a link only: fail closed)
+                perm = _outlet_gate(url) if it.get("read_ok") is True else None
+                # vera.source_permissions: read unless restricted; use unless barred
                 if perm is not None and perm.read and perm.use_for_answer and n_reads[0] < _read_cap():
                     n_reads[0] += 1
                     try:
                         from vera import web_route
-                        page = web_route.gated_fetch(url, fetch=fetch or _public_fetch, robots_cache=robots_cache)
+                        page = web_route.gated_fetch(url, fetch=fetch or _public_fetch, robots_cache=robots_cache,
+                                                     hop_allowed=_reporting_hop(url, it))  # W6 (SEC S1)
                         final = str(page.get("url") or url)
                         post = web_route.evaluate_fetched(final, page)  # WP6-P2b D3: noai, Content-Signal, derivative
                         if (_host(final) == _host(url) and post.read and post.use_for_answer
@@ -149,6 +156,28 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
     except Exception:  # noqa: BLE001  a lane never breaks the answer path
         return LaneResult(links=list(res.links))
     return res
+
+
+def _news(text: str) -> bool:
+    try:
+        from vera import news_intent
+        return news_intent.news_intent(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _reporting_hop(url: str, item: dict):
+    """NEWS-LANE-1104 W6 (SEC S1): hop predicate for a reporting-lane page. Every hop (redirect target, robots.txt)
+    must stay on the start host AND be an "allow" outlet (NEWS-LANE-1104 R1: always, tagged or not; a predicate error
+    refuses). Checked by web_route.gated_fetch BEFORE any request to the hop."""
+    start = _host(url)
+
+    def ok(hop: str) -> bool:
+        try:
+            return _host(hop) == start and reporting_lane.outlet_verdict(hop) == "allow"
+        except Exception:  # noqa: BLE001
+            return False
+    return ok
 
 
 def _outlet_gate(url: str):

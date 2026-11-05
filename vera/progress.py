@@ -26,6 +26,8 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 
+from vera import request_trace as _request_trace  # PERF-MISS-1104-TRACE: stage events also feed the per-request trace
+
 log = logging.getLogger("vera.progress")
 
 CONTRACT_VERSION = "1"
@@ -345,7 +347,13 @@ SINK: ContextVar[Record | None] = ContextVar("vera_progress_sink", default=None)
 
 # ------------------------------------------------------------------------------------------------ producer API
 def emit(stage, state, **counts) -> None:
-    """Append one contract event to this context's record. No-op without a sink; never raises; never blocks."""
+    """Append one contract event to this context's record. No-op without a sink; never raises; never blocks.
+    PERF-MISS-1104-TRACE: every call is also handed to request_trace.on_progress (stage, state and counts only), with or
+    without a progress sink; that hook is a no-op outside a traced request and never raises."""
+    try:
+        _request_trace.on_progress(stage, state, counts)
+    except Exception:  # noqa: BLE001
+        _drop("trace")
     rec = SINK.get()
     if rec is None:
         return

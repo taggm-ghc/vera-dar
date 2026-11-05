@@ -3,12 +3,20 @@
 Links-only: each item is title, url, published date, outlet domain; the portal label is kept internal (need-to-know).
 One call per sub-query and portal, extracted terms only (vera.query_terms), never the user's sentence.
 429/5xx/timeout: backoff 60/120/240 s with +-20% jitter, max 3 retries, then a 15-minute circuit-open (in process).
-Fallback order GDELT then HN. The lane flag ships OFF (config/reporting_lane.json).
+Fallback order from config (shipped: GDELT only). The lane flag ships ON since NEWS-LANE-1104 (config/reporting_lane.json).
 
-TODO gate (confirm format before enable): the GDELT JSON artlist field names (url, title, seendate, domain, ...) are
-UNVERIFIED (both 2026-11-03 probes returned HTTP 429). Parsing is defensive; confirm against a live 200 before enable.
-Enabling also needs SD.1 (disclosure) done and SEC passed. HTTP is injected (`http_get`); the default uses urllib and
-is never exercised by tests.
+GDELT JSON artlist field names (url, url_mobile, title, seendate, socialimage, domain, language, sourcecountry) were
+confirmed by a live 200 on 2026-11-04 (work/NEWS-LANE-1104/compliance.md); parsing stays defensive. HTTP is injected
+(`http_get`); the default uses urllib and is never exercised over the network by tests.
+
+NEWS-LANE-1104 (owner 2026-11-04 "enable"): HN is out of fallback_order (no first-party terms; work/NEWS-LANE-1104/
+compliance.md). Outlet terms policy (outlet_verdict): each item's host is matched (exact or subdomain) against the
+`outlets` list; "exclude" items are dropped; "links_only" and unlisted items (unlisted_verdict) carry read_ok=False and
+are emitted only when emit_link_only is true (set once vera.lane_evidence honours read_ok, wiring W2); "allow" items
+carry read_ok=True. A per-host crawl_delay_s (from robots.txt) limits how often items of that host are emitted for
+reading. With outlet_query "allowlist" the GDELT query is restricted to the allow hosts (domain: operators).
+GDELT calls keep min_interval_s apart in process (first-party 429 text: "one every 5 seconds").
+The default HTTP client follows no redirects and only calls the two fixed API hosts.
 """
 from __future__ import annotations
 
@@ -31,6 +39,8 @@ GDELT_ATTRIBUTION = {"text": "News index: GDELT Project", "url": "https://www.gd
 
 _DEFAULTS = {"enabled": False, "fallback_order": ["gdelt", "hn"], "user_agent": "VERA-DAR/1.0",
              "backoff_s": [60, 120, 240], "jitter_frac": 0.2, "max_retries": 3, "circuit_open_s": 900,
+             "outlets": [], "unlisted_verdict": "links_only", "emit_link_only": False, "outlet_query": "all",
+             "min_interval_s": 6,
              "gdelt": {"maxrecords": 50, "timespan": "3months", "connect_timeout_s": 5, "read_timeout_s": 20},
              "hn": {"hitsPerPage": 20, "window_days": 90, "connect_timeout_s": 5, "read_timeout_s": 10}}
 
@@ -56,7 +66,7 @@ def gdelt_attribution() -> dict:
 
 def _domain(url: str) -> str:
     try:
-        h = (urlsplit(url).hostname or "").lower()
+        h = (urlsplit(url).hostname or "").lower().rstrip(".")
     except ValueError:
         return ""
     return h[4:] if h.startswith("www.") else h
@@ -107,7 +117,7 @@ def parse_gdelt(body: Any) -> list[dict]:
         url = _http_url(a.get("url") or a.get("url_mobile"))
         if not url:
             continue
-        outlet = str(a.get("domain") or "").strip().lower() or _domain(url)
+        outlet = _domain(url)  # SEC minor: the label comes from the URL host, never GDELT's own domain field
         out.append(_item(a.get("title"), url, _parse_date(a.get("seendate") or a.get("date")), outlet, "gdelt"))
     return out
 
@@ -144,13 +154,97 @@ def _neg(d: str | None) -> str:
     return "".join(chr(0x10FFFF - ord(c)) for c in d) if d else ""
 
 
+VERDICTS = ("allow", "links_only", "exclude")
+API_HOSTS = frozenset({"api.gdeltproject.org", "hn.algolia.com"})
+MAX_BODY = 2_000_000
+
+
+def _new_state() -> dict:
+    return {"open": {}, "last": {}, "emit": {}, "fails": {}, "lock": threading.Lock()}
+
+
+_SHARED = _new_state()  # per-process lane state (circuit, backoff, spacing, crawl delay); never holds page text
+
+
+def _host_match(host: str, entry: Any) -> bool:
+    e = str(entry or "").lower().strip().rstrip(".")
+    e = e[4:] if e.startswith("www.") else e
+    return bool(e) and (host == e or host.endswith("." + e))
+
+
+def outlet_row(url: str, cfg: dict | None = None) -> dict | None:
+    """The outlets row for the URL host (exact host or a parent domain; www. ignored), else None."""
+    h = _domain(url)
+    if not h:
+        return None
+    for o in (cfg or load_config()).get("outlets") or []:
+        if isinstance(o, dict) and _host_match(h, o.get("host")):
+            return o
+    return None
+
+
+def outlet_verdict(url: str, cfg: dict | None = None) -> str:
+    """allow | links_only | exclude. An unlisted host gets unlisted_verdict (default links_only). An "allow" row
+    without terms_evidence, or any unknown verdict, counts as links_only (fail closed)."""
+    cfg = cfg or load_config()
+    if not _domain(url):
+        return "exclude"
+    row = outlet_row(url, cfg)
+    if row is None:
+        v = cfg.get("unlisted_verdict", "links_only")
+        return v if v in ("links_only", "exclude") else "links_only"
+    v = row.get("terms_verdict")
+    if v == "allow" and not row.get("terms_evidence"):
+        return "links_only"
+    return v if v in VERDICTS else "links_only"
+
+
+def allow_hosts(cfg: dict | None = None) -> list[str]:
+    cfg = cfg or load_config()
+    return [str(o["host"]).lower() for o in cfg.get("outlets") or [] if isinstance(o, dict) and o.get("host")
+            and outlet_verdict("https://" + str(o["host"]) + "/", cfg) == "allow"]
+
+
+def _no_redirect_handler():
+    """urllib redirect handler that refuses every redirect (a 3xx is returned as an HTTPError, never followed)."""
+    import urllib.request
+
+    class _H(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):
+            return None
+    return _H()
+
+
 def _default_http_get(url: str, headers: dict, timeout: tuple) -> tuple[int, dict, bytes]:
     import urllib.error
     import urllib.request
-    req = urllib.request.Request(url, headers=headers)
+    sp = urlsplit(url)
     try:
-        with urllib.request.urlopen(req, timeout=timeout[1]) as r:  # nosec - fixed https hosts only
-            return r.status, dict(r.headers), r.read(2_000_000)
+        port = sp.port
+    except ValueError:
+        return 0, {}, b""
+    if (sp.scheme != "https" or (sp.hostname or "").lower() not in API_HOSTS or port not in (None, 443)
+            or sp.username is not None or sp.password is not None):
+        return 0, {}, b""  # only the two fixed API hosts, https, default port, no userinfo
+    opener = urllib.request.build_opener(_no_redirect_handler())
+    req = urllib.request.Request(url, headers=headers)
+    deadline = time.monotonic() + float(timeout[0]) + float(timeout[1])  # total wall-clock bound for the body read
+    try:
+        with opener.open(req, timeout=timeout[1]) as r:  # nosec - fixed https API hosts only, no redirects
+            ctype = str(r.headers.get("Content-Type", "")).lower()
+            parts, n = [], 0
+            while n <= MAX_BODY:
+                if time.monotonic() > deadline:
+                    return 0, {}, b""
+                chunk = r.read(min(65536, MAX_BODY + 1 - n))
+                if not chunk:
+                    break
+                parts.append(chunk)
+                n += len(chunk)
+            body = b"".join(parts)
+            if len(body) > MAX_BODY or not any(t in ctype for t in ("json", "javascript", "text/plain")):
+                return 0, {}, b""  # oversize or not JSON: not used, not retried
+            return r.status, dict(r.headers), body
     except urllib.error.HTTPError as e:
         return e.code, dict(e.headers or {}), b""
 
@@ -164,8 +258,12 @@ class ReportingLane:
         self.cfg = cfg or load_config()
         self._get = http_get or _default_http_get
         self._sleep, self._clock, self._wall, self._rand = sleep, clock, wall, rand
-        self._open_until: dict[str, float] = {}
-        self._lock = threading.Lock()
+        # NEWS-LANE-1104 SEC B1: the production lane (default HTTP client, default clock) shares one per-process
+        # state, so the circuit, backoff and min interval hold across requests (lane_evidence builds a lane per
+        # request). An injected http_get or clock (tests) gets its own state.
+        st = _SHARED if (http_get is None and clock is time.monotonic) else _new_state()
+        self._open_until, self._last_call, self._last_emit, self._fails = st["open"], st["last"], st["emit"], st["fails"]
+        self._lock = st["lock"]
 
     def available(self, portal: str) -> bool:
         with self._lock:
@@ -182,29 +280,48 @@ class ReportingLane:
         j = float(self.cfg["jitter_frac"])
         return base * (1.0 + j * (2.0 * self._rand() - 1.0))
 
-    def _call(self, portal: str, url: str, timeout: tuple) -> Any | None:
-        """One logical call with 429/5xx/timeout backoff. None = unavailable (circuit opened)."""
-        retries = int(self.cfg["max_retries"])
-        for attempt in range(retries + 1):
-            status, headers, body, retry_after = None, {}, b"", None
-            try:
-                status, headers, body = self._get(url, self._headers(), timeout)
-            except Exception:  # timeout / network error counts as a transient failure
-                status = None
-            if status == 200:
-                return body
-            if status is not None and status not in (429,) and not 500 <= status < 600:
-                return None  # other 4xx: not retryable, not a circuit event
-            ra = {str(k).lower(): v for k, v in (headers or {}).items()}.get("retry-after")
-            try:
-                retry_after = float(ra) if ra is not None else None
-            except ValueError:
-                retry_after = None
-            if attempt == retries:
-                break
-            self._sleep(self._backoff(attempt, retry_after))
+    def _space(self, portal: str) -> bool:
+        """Keep calls to one portal at least min_interval_s apart (per process). Never sleeps in the request path:
+        a call inside the interval is skipped (False = portal unavailable for this call, the caller falls through)."""
+        gap = float(self.cfg.get("min_interval_s") or 0)
         with self._lock:
-            self._open_until[portal] = self._clock() + float(self.cfg["circuit_open_s"])
+            now = self._clock()
+            last = self._last_call.get(portal)
+            if last is not None and now - last < gap:
+                return False
+            self._last_call[portal] = now
+        return True
+
+    def _call(self, portal: str, url: str, timeout: tuple) -> Any | None:
+        """One attempt per logical call; never sleeps for backoff inside the request (SEC B1). On 429/5xx/timeout
+        the portal is marked unavailable for the next backoff step (60/120/240 s +-jitter, or Retry-After when
+        longer), and after max_retries consecutive failures for circuit_open_s; every wait is clamped to
+        circuit_open_s. None = unavailable (the caller falls through)."""
+        if not self._space(portal):
+            return None
+        status, headers, body = None, {}, b""
+        try:
+            status, headers, body = self._get(url, self._headers(), timeout)
+        except Exception:  # timeout / network error counts as a transient failure
+            status = None
+        if status == 200:
+            with self._lock:
+                self._fails[portal] = 0
+            return body
+        if status is not None and status not in (0, 429) and not 500 <= status < 600:
+            return None  # other 4xx: not retryable, not a circuit event
+        # 0 (client refused: oversize, non-JSON, read deadline) counts as a transient failure (SEC-RR R3)
+        ra = {str(k).lower(): v for k, v in (headers or {}).items()}.get("retry-after")
+        try:
+            retry_after = float(ra) if ra is not None else None
+        except ValueError:
+            retry_after = None
+        cap = float(self.cfg["circuit_open_s"])
+        with self._lock:
+            n = self._fails.get(portal, 0)
+            self._fails[portal] = n + 1
+            wait = cap if n >= int(self.cfg["max_retries"]) else self._backoff(n, retry_after)
+            self._open_until[portal] = self._clock() + max(0.0, min(wait, cap))
         return None
 
     def gdelt(self, terms: list[str]) -> list[dict] | None:
@@ -212,6 +329,12 @@ class ReportingLane:
         q = build_query(terms)
         if not q:
             return None
+        if self.cfg.get("outlet_query") == "allowlist":
+            hosts = allow_hosts(self.cfg)
+            if not hosts:
+                return []
+            dq = " OR ".join("domain:" + h for h in hosts)
+            q = f"{q} ({dq})" if len(hosts) > 1 else f"{q} {dq}"
         url = GDELT_URL + "?" + urlencode({"query": q, "mode": "artlist", "format": "json", "sort": "datedesc",
                                            "maxrecords": c["maxrecords"], "timespan": c["timespan"]})
         body = self._call("gdelt", url, (c["connect_timeout_s"], c["read_timeout_s"]))
@@ -248,8 +371,32 @@ class ReportingLane:
             items = fn(terms)
             if items is None:
                 continue
-            res["items"] = sort_items(items)
+            res["items"] = self._apply_outlet_policy(sort_items(items))
             if portal == "gdelt":
                 res["attribution"] = gdelt_attribution()
             return res
         return res
+
+    def _apply_outlet_policy(self, items: list[dict]) -> list[dict]:
+        """Drop exclude; tag read_ok; drop read_ok=False items unless emit_link_only; per-host crawl delay for reads."""
+        out, now = [], self._clock()
+        emit_link = self.cfg.get("emit_link_only") is True
+        for it in items:
+            v = outlet_verdict(it.get("url", ""), self.cfg)
+            if v == "exclude":
+                continue
+            if v == "allow":
+                row = outlet_row(it["url"], self.cfg) or {}
+                delay = float(row.get("crawl_delay_s") or 0)
+                key = str(row.get("host") or "").lower()
+                with self._lock:
+                    last = self._last_emit.get(key)
+                    ok = delay <= 0 or last is None or now - last >= delay
+                    if ok and delay > 0:
+                        self._last_emit[key] = now
+                if ok:
+                    out.append(dict(it, read_ok=True))
+                    continue
+            if emit_link:  # links_only, unlisted, or an allow host inside its crawl delay: link only
+                out.append(dict(it, read_ok=False))
+        return out

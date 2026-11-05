@@ -164,7 +164,7 @@ def test_capture_error_is_fixed_text(tmp_path):
 def test_context_has_no_model_identity(tmp_path):
     r, v = _write(tmp_path, _results())
     text = _page_text(_run(r, v))
-    assert "third-party hosted language model" in text
+    assert "externally hosted language model" in text  # INTEGRATE-1104: reworded so "third-party" appears once per page (disclosure)
     for bad in ("gpt", "nano", "/ask", "keyless"):
         assert bad not in text.lower(), bad
     assert "checks_version" not in text and "questions_sha256" not in text and "Snapshot captured" in text

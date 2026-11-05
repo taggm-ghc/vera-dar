@@ -1,0 +1,196 @@
+-- 015_vera_request_trace.sql -- DRAFT. NOT EXECUTED. Not a live migration: it sits in pending/ and is invisible to the runner.
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (same convention as 007/011-014 drafts); rename only at approval.
+-- PERF-MISS-1104-TRACE (owner decision OD-1104-TRACE, 2026-11-04). Three additive tables in schema vera_vjay:
+--   request_trace_requests  one row per /ask or /ask/stream request: server request id, the client's x-vera-request-id,
+--                           endpoint, the FULL QUESTION TEXT (OD-1104-TRACE (b): owner-only, purged after 30 days by the
+--                           owner-run work/PERF-MISS-1104/trace/purge_trace.sh), outcome branch and message code.
+--   request_trace_events    append-only per-request events (stage, code, counts jsonb, bounded detail jsonb: ids, scores,
+--                           reason codes, provider status, latency, model, tokens; never URLs, hosts or secrets).
+--   corpus_digest_state     the latest corpus digest (owner rule: runtime state lives in the DB); public description only.
+-- The app flags (config/request_trace.json db_sink.enabled, digest_store.enabled) ship false; the owner flips them after this applies.
+-- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py
+-- --dry-run (HZ-DAR-1). Use the owner script work/PERF-MISS-1104/trace/apply_migration.sh (dry run by default).
+-- NUMBERING: 008 bootstrap (reserved), 009 portal discovery, 010 dynamic state (gap, reserved), 011 topic registry, 012 classifier
+-- categories, 013 live ask stats, 014 source registries, 015 = this file (next free number in pending/ on 2026-11-04;
+-- confirm against the owner's sequence before approval).
+-- ROLES: grants go to the GROUP roles vera_vjay_wo (INSERT on all three tables) and vera_vjay_ro (SELECT on corpus_digest_state ONLY).
+-- No app role can SELECT, UPDATE or DELETE the two trace tables: the question text is readable by the owner/admin account only.
+-- The LOGIN roles are named by psql variables (defaults from db/accounts/create_vera_accounts.sql): app_wo_login=vera_pipeline_wo,
+-- app_ro_login=vera_eval_ro. The preflight RAISEs unless each group and login exists and each login inherits its group.
+-- No role is created or altered; GRANT/REVOKE on the new tables is part of this owner-run DDL, not a privilege change to any role.
+-- APPEND-ONLY: UPDATE and TRUNCATE raise for every role. DELETE raises unless the row is older than 30 days (the purge window),
+-- and no app login holds DELETE; only the owner/admin account (table owner) can purge.
+-- UNTESTED against a real PostgreSQL: the CHECKs and triggers have never been executed.
+-- Rollback (destructive, separate approval): db/migrations/rollback/015-DRAFT-request-trace-rollback.sql.draft
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_wo_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_wo_login}
+\else
+  \set app_wo_login vera_pipeline_wo
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SELECT set_config('vera015.wo', :'app_wo_login', true), set_config('vera015.ro', :'app_ro_login', true);
+
+-- Collision preflight (strictly additive): schema must exist; nothing this file creates may exist.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '015 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.request_trace_requests') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.request_trace_events') IS NOT NULL
+     OR pg_catalog.to_regclass('vera_vjay.corpus_digest_state') IS NOT NULL
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                 WHERE ns.nspname = 'vera_vjay' AND p.proname IN ('request_trace_append_only_trgfn','request_trace_no_truncate_trgfn')) THEN
+    RAISE EXCEPTION '015 already applied or name collision';
+  END IF;
+END $$;
+
+-- Role preflight: groups and logins exist; each login inherits its group.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_wo', current_setting('vera015.wo')],
+                                              ['vera_vjay_ro', current_setting('vera015.ro')]];
+BEGIN
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '015 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '015 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '015: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+END $$;
+
+CREATE TABLE vera_vjay.request_trace_requests (
+    row_id             BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT request_trace_requests_pk PRIMARY KEY,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    request_id         TEXT NOT NULL CONSTRAINT request_trace_requests_rid_chk CHECK (request_id ~ '^[0-9a-f]{32}$'),
+    client_request_id  TEXT CONSTRAINT request_trace_requests_cid_chk CHECK (client_request_id ~ '^[A-Za-z0-9_-]{1,64}$'),
+    endpoint           TEXT NOT NULL CONSTRAINT request_trace_requests_ep_chk CHECK (endpoint IN ('/ask','/ask/stream','other')),
+    started_at         TIMESTAMPTZ NOT NULL,
+    question           TEXT NOT NULL CONSTRAINT request_trace_requests_q_chk CHECK (length(question) <= 4000),
+    outcome_branch     TEXT NOT NULL CONSTRAINT request_trace_requests_ob_chk CHECK (outcome_branch ~ '^[a-z][a-z0-9_]{0,39}$'),
+    message_code       TEXT NOT NULL CONSTRAINT request_trace_requests_mc_chk CHECK (message_code ~ '^[a-z][a-z0-9_]{0,39}$'),
+    event_count        INTEGER NOT NULL CONSTRAINT request_trace_requests_ec_chk CHECK (event_count >= 0),
+    dropped_events     INTEGER NOT NULL CONSTRAINT request_trace_requests_de_chk CHECK (dropped_events >= 0),
+    elapsed_ms         INTEGER NOT NULL CONSTRAINT request_trace_requests_ms_chk CHECK (elapsed_ms >= 0),
+    CONSTRAINT request_trace_requests_rid_uq UNIQUE (request_id)
+);
+CREATE INDEX request_trace_requests_created_idx ON vera_vjay.request_trace_requests (created_at);
+COMMENT ON COLUMN vera_vjay.request_trace_requests.question IS
+  'OD-1104-TRACE: full visitor question for diagnosing errors; owner-only (no app SELECT grant); purged after 30 days by purge_trace.sh.';
+
+CREATE TABLE vera_vjay.request_trace_events (
+    event_row_id  BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT request_trace_events_pk PRIMARY KEY,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    request_id    TEXT NOT NULL CONSTRAINT request_trace_events_rid_chk CHECK (request_id ~ '^[0-9a-f]{32}$'),
+    seq           INTEGER NOT NULL CONSTRAINT request_trace_events_seq_chk CHECK (seq >= 1),
+    ts            TIMESTAMPTZ NOT NULL,
+    stage         TEXT NOT NULL CONSTRAINT request_trace_events_stage_chk CHECK (stage ~ '^[a-z][a-z0-9_]{0,39}$'),
+    code          TEXT NOT NULL CONSTRAINT request_trace_events_code_chk CHECK (code ~ '^[a-z][a-z0-9_]{0,39}$'),
+    counts        JSONB NOT NULL DEFAULT '{}'::jsonb CONSTRAINT request_trace_events_counts_chk
+                    CHECK (jsonb_typeof(counts) = 'object' AND length(counts::text) <= 4096),
+    detail        JSONB CONSTRAINT request_trace_events_detail_chk
+                    CHECK (detail IS NULL OR (jsonb_typeof(detail) = 'object' AND length(detail::text) <= 8192)),
+    CONSTRAINT request_trace_events_rid_seq_uq UNIQUE (request_id, seq)
+);
+CREATE INDEX request_trace_events_created_idx ON vera_vjay.request_trace_events (created_at);
+-- (request_id, seq) lookups use the unique constraint's index.
+
+CREATE TABLE vera_vjay.corpus_digest_state (
+    digest_id      BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT corpus_digest_state_pk PRIMARY KEY,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    cache_key      TEXT NOT NULL CONSTRAINT corpus_digest_state_key_chk CHECK (cache_key ~ '^[A-Za-z0-9_.:|+-]{1,200}$'),
+    digest         JSONB NOT NULL CONSTRAINT corpus_digest_state_digest_chk
+                     CHECK (jsonb_typeof(digest) = 'object' AND length(digest::text) <= 65536),
+    digest_sha256  TEXT NOT NULL CONSTRAINT corpus_digest_state_sha_chk CHECK (digest_sha256 ~ '^[0-9a-f]{64}$')
+);
+COMMENT ON TABLE vera_vjay.corpus_digest_state IS 'Latest corpus digest (public description); newest digest_id wins.';
+
+-- Append-only for both trace tables: UPDATE always raises; DELETE raises unless the row is past the 30-day purge window.
+CREATE FUNCTION vera_vjay.request_trace_append_only_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF TG_OP = 'DELETE' AND OLD.created_at < pg_catalog.now() - interval '30 days' THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION '% is append-only: % not allowed (DELETE only for rows older than 30 days)', TG_TABLE_NAME, TG_OP;
+END $f$;
+CREATE FUNCTION vera_vjay.request_trace_no_truncate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION '% is append-only: TRUNCATE not allowed', TG_TABLE_NAME;
+END $f$;
+CREATE TRIGGER request_trace_requests_append_only_trg BEFORE UPDATE OR DELETE ON vera_vjay.request_trace_requests
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.request_trace_append_only_trgfn();
+CREATE TRIGGER request_trace_requests_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.request_trace_requests
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.request_trace_no_truncate_trgfn();
+CREATE TRIGGER request_trace_events_append_only_trg BEFORE UPDATE OR DELETE ON vera_vjay.request_trace_events
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.request_trace_append_only_trgfn();
+CREATE TRIGGER request_trace_events_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.request_trace_events
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.request_trace_no_truncate_trgfn();
+
+REVOKE ALL ON vera_vjay.request_trace_requests, vera_vjay.request_trace_events, vera_vjay.corpus_digest_state
+  FROM PUBLIC, vera_vjay_wo, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.request_trace_requests, vera_vjay.request_trace_events, '
+                            'vera_vjay.corpus_digest_state FROM %I, %I',
+                            current_setting('vera015.wo'), current_setting('vera015.ro'));
+END $$;
+GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_wo, vera_vjay_ro;
+GRANT INSERT ON vera_vjay.request_trace_requests, vera_vjay.request_trace_events, vera_vjay.corpus_digest_state TO vera_vjay_wo;
+GRANT SELECT ON vera_vjay.corpus_digest_state TO vera_vjay_ro;
+-- TRACE-SECREV-1104: the rw group (dev/eval account) gets nothing on the trace tables either; revoke defensively in case
+-- live default privileges differ from the repo, then assert the ACLs: on the two trace tables no grantee other than the
+-- table owner holds any privilege except INSERT for vera_vjay_wo, and there are no column-level grants.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    REVOKE ALL ON vera_vjay.request_trace_requests, vera_vjay.request_trace_events FROM vera_vjay_rw;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+              WHERE c.oid IN ('vera_vjay.request_trace_requests'::regclass, 'vera_vjay.request_trace_events'::regclass)
+                AND a.grantee <> c.relowner
+                AND NOT (a.privilege_type = 'INSERT'
+                         AND a.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo')))
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+                 WHERE attrelid IN ('vera_vjay.request_trace_requests'::regclass, 'vera_vjay.request_trace_events'::regclass)
+                   AND attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '015 ACL check failed: a non-owner role holds a privilege other than vera_vjay_wo INSERT on a trace table.';
+  END IF;
+END $$;
+
+-- Final privilege check against the actual logins (a RAISE rolls everything back).
+DO $$
+DECLARE t text; p text; wo constant text := current_setting('vera015.wo'); ro constant text := current_setting('vera015.ro');
+BEGIN
+  FOREACH t IN ARRAY ARRAY['vera_vjay.request_trace_requests','vera_vjay.request_trace_events','vera_vjay.corpus_digest_state'] LOOP
+    IF NOT pg_catalog.has_table_privilege(wo, t, 'INSERT') THEN
+      RAISE EXCEPTION '015 grant check failed: wo login lacks INSERT on %.', t;
+    END IF;
+    FOREACH p IN ARRAY ARRAY['UPDATE','DELETE','TRUNCATE'] LOOP
+      IF pg_catalog.has_table_privilege(wo, t, p) OR pg_catalog.has_table_privilege(ro, t, p) THEN
+        RAISE EXCEPTION '015 grant check failed: an app login holds % on %.', p, t;
+      END IF;
+    END LOOP;
+    IF pg_catalog.has_table_privilege(ro, t, 'INSERT') THEN
+      RAISE EXCEPTION '015 grant check failed: ro login holds INSERT on %.', t;
+    END IF;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['vera_vjay.request_trace_requests','vera_vjay.request_trace_events'] LOOP
+    IF pg_catalog.has_table_privilege(wo, t, 'SELECT') OR pg_catalog.has_table_privilege(ro, t, 'SELECT') THEN
+      RAISE EXCEPTION '015 grant check failed: an app login can SELECT % (question text must stay owner-only).', t;
+    END IF;
+  END LOOP;
+  IF NOT pg_catalog.has_table_privilege(ro, 'vera_vjay.corpus_digest_state', 'SELECT') THEN
+    RAISE EXCEPTION '015 grant check failed: ro login lacks SELECT on corpus_digest_state.';
+  END IF;
+END $$;
+
+COMMIT;

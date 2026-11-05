@@ -4,31 +4,30 @@ import pytest
 
 from vera import corpus_description as cd
 from vera import fulldoc_corpus
+from tests.digest_fakes import FakeLLM
 
 TITLES = ["Nowcasting and Ensemble Forecasting of Seasonal Respiratory Hospitalisations",
           "Estimating Rt in Real Time: Forecast Evaluation Across Epidemic Waves",
           "Workflow Capture and Provenance for Reproducible Analysis Pipelines"]
 OVERVIEW = {"source_count": 3, "corpus_updated_at": "2026-10-19T00:00:00"}
 PROFILE = {"titles": TITLES, "published_years": ["2020", "2025"]}
-CLEAN = "A small collection of epidemic forecasting and reproducible analysis papers from 2020 to 2025."
+CLEAN = "A small collection of epidemic forecasting sources."  # D6: words the cited clusters support
 
 
 def _describer(monkeypatch, summary, topics=()):
-    monkeypatch.setattr(cd, "stamp_and_profile", lambda engine, n: (dict(OVERVIEW), dict(PROFILE)))
+    monkeypatch.setattr(cd, "stamp_and_profile", lambda engine, n, *a: (dict(OVERVIEW), dict(PROFILE)))
     d = cd.CorpusDescriber({"read_db_url_env": "X", "max_titles": 3, "prompt_version": "v1", "retry_s": 60},
                            engine_factory=lambda *a, **k: object(), env={"X": "stub://"}, clock=lambda: 1000.0)
-    calls = []
-
-    def gen(messages):
-        calls.append(messages)
-        return summary, list(topics), "stub-model"
-    return d, gen, calls
+    # CORPUS-DIGEST-1104: the digest is now a pipeline; `summary` is the drafted sentence, `topics` the cluster labels
+    gen = FakeLLM([(t, [i]) for i, t in enumerate(topics or ["epidemic forecasting"], 1)], [summary])
+    return d, gen, gen.calls
 
 
 def test_clean_summary_passes(monkeypatch):
     d, gen, calls = _describer(monkeypatch, CLEAN, ["Epidemic forecasting", "Short-term epidemic forecasts"])
     out = d.current(gen)
-    assert out["summary_source"] == "agentic_model" and out["summary"] == CLEAN and len(out["topics"]) == 2 and len(calls) == 1
+    assert out["summary_source"] == cd.CHECKED and out["summary"] == CLEAN and len(out["topics"]) == 2
+    assert [c["step"] for c in calls] == ["cluster", "draft", "check"]
 
 
 @pytest.mark.parametrize("summary", [
@@ -91,7 +90,7 @@ def test_echo_uses_longer_cooldown_and_is_distinct(monkeypatch):
     assert d._retry_at == 1000.0 + 3600 and issubclass(cd.TitleEchoError, ValueError)
     now[0] = 1000.0 + 600  # past retry_s (60) but inside the echo cooldown: no new model call
     d.current(gen)
-    assert len(calls) == 1
+    assert len(calls) == 3  # cluster, draft and check (labels) of the first run only; the echo cooldown blocks a second run
 
 
 def test_missing_fulldoc_enabled_key_is_disabled(monkeypatch, tmp_path):

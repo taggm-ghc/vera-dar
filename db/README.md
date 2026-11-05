@@ -4,7 +4,7 @@
 
 **Status as of 2026-10-30.** This file owns migration status. Migrations 007 (domain registry) and 009 (portal discovery) are not applied; 007 is **pending owner decision**. Sections dated earlier than 2026-10-29 are history. Details from 2026-10-29 (DOCS-1029-W2): Production database `vera_dar_db` (schema `vera_vjay`): migrations 001u, 003, 004, 005 applied earlier; 006, 011 and 012 applied by the owner on 2026-10-29 and verified (see "Migration apply history per database"). Migrations 007 (domain registry) and 009 (portal discovery) are DRAFT and NOT applied; the decision on 007 (apply, revise or keep as draft) is pending the owner. Sections below dated earlier are history and are kept as written unless marked. Files keep their `pending/` locations and `.sql.draft` names; they are not renamed after application.
 
-## Migration apply history per database (current state; as of 2026-10-30)
+## Migration apply history per database (current state; as of 2026-11-04: 015 added)
 VERA-DAR uses the database `vera_dar_db`; `vera_vjay` is the schema inside it. The earlier VERA-era database, in which the schema was also named `vera_vjay`, is the historical legacy VERA database and is not VERA-DAR; its column is kept as history.
 The files stay where they are (`pending/`, `.sql.draft` names unchanged); this table records where each was applied. Numbers and file contents are not changed after application.
 
@@ -13,6 +13,7 @@ The files stay where they are (`pending/`, `.sql.draft` names unchanged); this t
 | 006 licence observations | `pending/006_vera_licence_observations.sql` (`c7c55a43`) | applied 2026-10-09 (owner-approved, commit f1f044a) | applied 2026-10-29 by the owner, verified (OD-1028(59)) |
 | 011 topic registry | `pending/011-DRAFT-topic-registry.sql.draft` (`311b1cdc`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
 | 012 classifier categories | `pending/012-DRAFT-classifier-categories.sql.draft` (`f8267e6c`) | not applied | applied 2026-10-29 by the owner, verified (OD-1028(60)) |
+| 015 request trace + corpus digest state | `pending/015-DRAFT-request-trace.sql.draft` (`ac6e2559`; rollback `rollback/015-DRAFT-request-trace-rollback.sql.draft`, kept) | not applied | applied 2026-11-04 by the owner via `work/PERF-MISS-1104/trace/apply_migration.sh --apply` (owner reported "completed --apply"; the verify output was not seen by agents: **verification not recorded**). `db_sink.enabled` set true by INTEGRATE-1104; `digest_store.enabled` stays false (deferred) |
 
 Not applied to `vera_dar_db` (state recorded 2026-10-29, not re-checked against the database 2026-10-30):
 

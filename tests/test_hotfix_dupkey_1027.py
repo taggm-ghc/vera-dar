@@ -30,19 +30,19 @@ def _route(reply):
 
 
 def _off(**extra):
-    return json.dumps({"in_scope": False, "category": "off_topic", **extra})
+    return json.dumps({"safe_request": True, "category": "safe_request", **extra})
 
 
 # ------------------------------------------------------------------------------------------------ duplicate / bad keys
 @pytest.mark.parametrize("reply", [
-    '{"in_scope":false,"category":"harmful","category":"off_topic"}',  # T1
-    '{"in_scope":true,"in_scope":false,"category":"in_scope"}',  # T2
-    '{"in_scope":false,"Category":"harmful","category":"off_topic"}',  # T3: duplicate after case folding
-    '{"in_scope":false,"cаtegory":"harmful","category":"off_topic"}',  # T5: Cyrillic a in the key
-    '{"in_scope":false,"ｃategory":"harmful","category":"off_topic"}',  # T5: fullwidth c in the key
-    '{"in_scope":false,"category":"hаrmful"}',  # T6: lookalike value (C3a)
-    '{"in_scope":false,"category":"harmf',  # T7: truncated
-    '{"in_scope":false,"category":"off_topic"',  # T7
+    '{"safe_request":false,"category":"harmful","category":"safe_request"}',  # T1
+    '{"safe_request":true,"safe_request":false,"category":"safe_request"}',  # T2
+    '{"safe_request":false,"Category":"harmful","category":"safe_request"}',  # T3: duplicate after case folding
+    '{"safe_request":false,"cаtegory":"harmful","category":"safe_request"}',  # T5: Cyrillic a in the key
+    '{"safe_request":false,"ｃategory":"harmful","category":"safe_request"}',  # T5: fullwidth c in the key
+    '{"safe_request":false,"category":"hаrmful"}',  # T6: lookalike value (C3a)
+    '{"safe_request":false,"category":"harmf',  # T7: truncated
+    '{"safe_request":true,"category":"safe_request"',  # T7
 ])
 def test_ambiguous_or_lookalike_reply_is_malformed(reply):
     d = _route(reply)
@@ -58,7 +58,7 @@ def _decline_gate(d, question, cfg):
 
 
 def test_duplicate_key_reply_is_not_research_eligible(rig):  # T1 end to end
-    reply = '{"in_scope":false,"category":"harmful","category":"off_topic"}'
+    reply = '{"safe_request":false,"category":"harmful","category":"safe_request"}'
     _real_router(rig, {})
     rig.mp.setattr(sr, "default_chat", lambda messages, model, l2, **k: (reply, 10, 2))
     d = sr.route(LIVE_Q, "m")
@@ -66,10 +66,11 @@ def test_duplicate_key_reply_is_not_research_eligible(rig):  # T1 end to end
 
 
 def test_off_topic_control_stays_research_eligible(rig):  # T11 end to end: proves the T1 test is not vacuous
-    _real_router(rig, {"in_scope": False, "category": "off_topic", "reason": "cooking, not harmful advice"})
+    _real_router(rig, {"safe_request": True, "category": "safe_request", "reason": "cooking, not harmful advice"})
     d = sr.route(LIVE_Q, "m")
-    assert d.reason == "llm_out:cooking, not harmful advice" and d.category == "off_topic"
-    assert _decline_gate(d, LIVE_Q, rig.cfg)
+    # SCOPE-GATE-1104 S1 (requirement change): a legacy topic-only verdict now passes safety (accepted), which is the
+    # research path itself; T1 above stays declined and not research eligible
+    assert d.accepted and d.reason == "llm_in:cooking, not harmful advice" and d.category == "safe_request"
 
 
 # ------------------------------------------------------------------------------------------------ refusal token anywhere
@@ -81,7 +82,7 @@ def test_off_topic_control_stays_research_eligible(rig):  # T11 end to end: prov
     (_off(note="harm​ful"), "harmful"),  # Cf
     (_off(note="harm\u0000ful"), "harmful"),  # Cc
     (_off(note="harm͏ful"), "harmful"),  # Mn (CGJ)
-    ('{"in_scope":false,"category":"off_topic","note":"\\u0068armful"}', "harmful"),  # escape
+    ('{"safe_request":true,"category":"safe_request","note":"\\u0068armful"}', "harmful"),  # escape
     (_off(reason="category: harmful"), "harmful"),  # T9
     (_off(reason="categories=rule change"), "rule_change"),
     (_off(reason=json.dumps({"category": "harmful"})), "harmful"),  # T10 (i)
@@ -96,7 +97,7 @@ def test_off_topic_control_stays_research_eligible(rig):  # T11 end to end: prov
     (_off(reason='{"category":"advice"}'), "advice"),  # rule (c): embedded JSON
     (_off(reason='see ["harmful"]'), "harmful"),  # rule (c): quoted label inside a list
     (_off(note='say "harmful" here'.join(["{", "}"])), "harmful"),  # non-reason value with a brace
-    ('{"in_scope":false,"category":"off_topic","x":' + "[" * 600 + '"harmful"' + "]" * 600 + "}", "harmful"),  # T14 ii
+    ('{"safe_request":true,"category":"safe_request","x":' + "[" * 600 + '"harmful"' + "]" * 600 + "}", "harmful"),  # T14 ii
 ])
 def test_refusal_category_anywhere_declines(reply, cat):
     d = _route(reply)
@@ -105,7 +106,7 @@ def test_refusal_category_anywhere_declines(reply, cat):
 
 
 def test_in_scope_true_with_nested_refusal_declines():
-    d = _route(json.dumps({"in_scope": True, "category": "in_scope", "x": {"y": "programming task"}}))
+    d = _route(json.dumps({"safe_request": True, "category": "safe_request", "x": {"y": "programming task"}}))
     assert not d.accepted and d.reason == "classifier_malformed:refusal_token" and d.category == "programming_task"
 
 
@@ -115,8 +116,8 @@ def test_raw_quoted_regex_pins_escaped_quotes(s):  # T10 (iii), SEC-H-4
 
 
 @pytest.mark.parametrize("reply", [
-    '{"category":"harmful","category":"off_topic"}',  # T10c: lenient decoder keeps both pairs
-    '{"category":"\\u0068armful","category":"off_topic"}',  # escaped value: only the decoded walk sees it
+    '{"category":"harmful","category":"safe_request"}',  # T10c: lenient decoder keeps both pairs
+    '{"category":"\\u0068armful","category":"safe_request"}',  # escaped value: only the decoded walk sees it
 ])
 def test_refusal_token_keeps_duplicate_pairs(reply):
     assert sr.refusal_token(reply) == "harmful"
@@ -132,15 +133,15 @@ def test_refusal_token_category_subset():  # T13: the SCOPE v3 seam
 # ------------------------------------------------------------------------------------------------ unchanged controls
 @pytest.mark.parametrize("reason", ["evaluating LLM harmful-output classifiers", "categorical advice on taxonomy"])
 def test_in_scope_reply_mentioning_harmful_is_not_over_refused(reason):  # T11a
-    d = _route(json.dumps({"in_scope": True, "category": "in_scope", "reason": reason}))
+    d = _route(json.dumps({"safe_request": True, "category": "safe_request", "reason": reason}))
     assert d.accepted and d.reason == "llm_in:" + reason
 
 
 @pytest.mark.parametrize("verdict,reason,accepted,cat", [  # T12: reasons byte-identical to before the hotfix
-    ({"in_scope": True, "category": "in_scope", "reason": "ok"}, "llm_in:ok", True, "in_scope"),
-    ({"in_scope": False, "category": "harmful", "reason": "x"}, "llm_out:x", False, "harmful"),
-    ({"in_scope": True, "category": "advice", "reason": "x"}, "classifier_malformed:category_conflict", False, "advice"),
-    ({"in_scope": False, "reason": "trivia"}, "llm_out:trivia", False, ""),
+    ({"safe_request": True, "category": "safe_request", "reason": "ok"}, "llm_in:ok", True, "safe_request"),  # SCOPE-GATE-1104 alias
+    ({"safe_request": False, "category": "harmful", "reason": "x"}, "llm_out:x", False, "harmful"),
+    ({"safe_request": True, "category": "advice", "reason": "x"}, "classifier_malformed:category_conflict", False, "advice"),
+    ({"safe_request": False, "reason": "trivia"}, "llm_out:trivia", False, ""),
 ])
 def test_well_formed_replies_unchanged(verdict, reason, accepted, cat):
     d = _route(json.dumps(verdict))
@@ -168,7 +169,7 @@ def test_recursion_error_path_is_reached_under_the_cap():  # R2-1: the fixture r
         json.loads(reply)
 
 
-@pytest.mark.parametrize("content", [b'{"in_scope":false,"category":"off_topic"}', None, 123])
+@pytest.mark.parametrize("content", [b'{"safe_request":true,"category":"safe_request"}', None, 123])
 def test_non_str_reply_fails_closed(content):  # T14 (iii)
     assert sr._strict_loads(content) is None
     assert sr.parse_verdict(content) == (None, "classifier_malformed") and sr.parse_category(content) == ""
@@ -178,9 +179,9 @@ def test_non_str_reply_fails_closed(content):  # T14 (iii)
 
 
 def test_oversize_reply_fails_closed_quickly():  # T14 (iv)
-    head = '{"in_scope":false,"category":"off_topic","reason":"'
+    head = '{"safe_request":true,"category":"safe_request","reason":"'
     reply = head + "a" * (sr.MAX_REPLY_CHARS + 1 - len(head) - 2) + '"}'
-    assert len(reply) == sr.MAX_REPLY_CHARS + 1 and json.loads(reply)["category"] == "off_topic"
+    assert len(reply) == sr.MAX_REPLY_CHARS + 1 and json.loads(reply)["category"] == "safe_request"
     t0 = time.monotonic()
     d = _route(reply)
     assert not d.accepted and d.reason == "classifier_malformed"
@@ -211,7 +212,8 @@ def test_refusal_token_internal_fault_fails_closed(monkeypatch):  # T14 (v), SEC
 ])
 def test_v2_prose_reason_is_not_over_refused(reason):
     d = _route(_off(reason=reason))
-    assert d.reason == "llm_out:" + reason[:200] and d.category == "off_topic" and sr.refusal_token(_off(reason=reason)) == ""
+    # SCOPE-GATE-1104 S1: the legacy off_topic label is an alias of safe_request (passes safety, accepted)
+    assert d.reason == "llm_in:" + reason[:200] and d.category == "safe_request" and sr.refusal_token(_off(reason=reason)) == ""
 
 
 @pytest.mark.parametrize("reason,cat", [  # probe_reason.log steered reasons that still decline (rules a/b/c)
@@ -226,7 +228,7 @@ def test_v2_steered_reason_declines(reason, cat):
 
 @pytest.mark.parametrize("reply", [
     _off(reason="ok", **{"x": "advice"}),
-    '{"in_scope":false,"category":"off_topic","reason":"a","reason":"harmful"}',  # duplicate reason: malformed
+    '{"safe_request":true,"category":"safe_request","reason":"a","reason":"harmful"}',  # duplicate reason: malformed
 ])
 def test_v2_non_reason_fields_still_scanned(reply):
     d = _route(reply)
@@ -260,7 +262,7 @@ def test_v2_assignment_form_declines_anywhere(reason, cat):
                                     "categories (advice, harmful) do not apply", "categories (harmful)"])
 def test_v2_separatorless_prose_stays_allowed(reason):
     d = _route(_off(reason=reason))
-    assert d.reason == "llm_out:" + reason and d.category == "off_topic"
+    assert d.reason == "llm_in:" + reason and d.category == "safe_request"  # SCOPE-GATE-1104 S1: legacy alias
 
 
 @pytest.mark.parametrize("reason", ["category: \u201charmful\u201d", "category: \u00abharmful\u00bb", "category \u2010 harmful",
@@ -278,4 +280,4 @@ def test_v2r3_general_separator_declines(reason):
                                     "not in any refusal category; advice? no, informational"])
 def test_v2r3_prose_stays_allowed(reason):
     d = _route(_off(reason=reason))
-    assert d.reason == "llm_out:" + reason and d.category == "off_topic"
+    assert d.reason == "llm_in:" + reason and d.category == "safe_request"  # SCOPE-GATE-1104 S1: legacy alias

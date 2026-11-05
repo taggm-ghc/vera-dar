@@ -33,8 +33,18 @@ FULLDOC_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "fulld
 _THIRD_PARTY = (" Your question is sent to third-party AI and search services to generate a response. These services "
                 "have their own data-handling and retention policies.")
 # NONASK-1103 SD.1 (R-038): added at render time only while a lane flag is on (both ship off).
-_LANE_SEARCH = (" Search terms derived from your question may also be sent to GDELT (a news index) and Hacker News "
-                "search (Algolia).")
+_LANE_SEARCH = " Search terms derived from your question may also be sent to GDELT (a news index)."
+# NEWS-LANE-1104 W4: Hacker News search is named only while it is in the reporting lane's fallback_order.
+_LANE_SEARCH_HN = (" Search terms derived from your question may also be sent to GDELT (a news index) and Hacker News "
+                   "search (Algolia).")
+
+
+def _lane_search() -> str:
+    try:
+        from vera import reporting_lane
+        return _LANE_SEARCH_HN if "hn" in (reporting_lane.load_config().get("fallback_order") or []) else _LANE_SEARCH
+    except Exception:  # noqa: BLE001  over-disclose on error
+        return _LANE_SEARCH_HN
 _LANE_PAGES = (" VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only "
                "for your answer, and page text is not saved.")
 _LANE_LICENCE = " Pages read for one answer are not licence-cleared or stored."
@@ -90,7 +100,7 @@ def lane_third_party() -> str:
     """Extra third-party sentences for the lanes only (also used by the short notice); empty while both lanes are off."""
     if not lanes_disclosure_on():
         return ""
-    return (_LANE_SEARCH if reporting_lane_on() else "") + _LANE_PAGES
+    return (_lane_search() if reporting_lane_on() else "") + _LANE_PAGES
 
 
 def third_party_text() -> str:
@@ -99,16 +109,17 @@ def third_party_text() -> str:
     return _THIRD_PARTY + lane_third_party() + (_web_sentence() if web_read_on() else "")
 
 
-_NO_SAVE = " VERA-DAR does not save your question or information identifying you."
+_NO_SAVE = (" To help diagnose errors, VERA-DAR keeps the text of your question for up to 30 days; only the service owner can read it. "
+            "It does not save information identifying you.")
 _DEMO_NO_STORAGE = (" During this demonstration, VERA-DAR does not save newly discovered documents or research notes from "
                     "your questions.")
-_CORPUS_MAY_STORE = " VERA-DAR may add documents found for your question to its own collection; it does not store the question."
+_CORPUS_MAY_STORE = " VERA-DAR may add documents found for your question to its own collection; the question itself is not added to it."
 # WED-ACQ2 / P1.7 (owner approval 2026-10-21 of "the new disclosure wording"; text chosen per plan D-2): replaces
 # _DEMO_NO_STORAGE while automatic acquisition is switched on in config/auto_acquire.json. Accurate to what the code
 # stores (document chunks, source and licence provenance, acquisition time and trigger kind; never the question).
 _AUTO_ACQUIRE_MAY_STORE = (" Its collection also grows automatically: VERA-DAR may add open-access full-text documents "
                            "found while searching for your question, after automated licence and content checks, recording "
-                           "each document's source, licence and the time it was added; it does not store your question.")
+                           "each document's source, licence and the time it was added; the question itself is not added to it.")
 _EVIDENCE_FINDINGS = " Earlier findings were checked only against the abstract or index record they cite."
 
 
@@ -230,8 +241,18 @@ def disclosure_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,
                     chain_path=answer_contract.CHAIN_CONFIG_PATH, fulldoc_path=FULLDOC_CONFIG_PATH) -> str:
     """Base text (the full-document variant when fulldoc is enabled) (L0 always), the third-party/no-save sentences, then either the demonstration no-storage sentence
     (corpus admission off and L2 off) or the matching storage sentences. `path` is accepted for compatibility."""
-    return ((base_fulldoc() if fulldoc_enabled(fulldoc_path) else _BASE) + offtopic_sentence() + third_party_text() + _NO_SAVE
-            + _tail(path, contract_path, chain_path))
+    # NEWS-LANE-1104: with a lane on, the full text carries the same lane licence sentence and GDELT credit that
+    # disclosure_sections() adds, at the same places (the sections join stays exactly this text).
+    if fulldoc_enabled(fulldoc_path):
+        if lanes_disclosure_on():
+            how, reliance, own_lic, list_lic, profile, passages = _fulldoc_parts()
+            base = how + reliance + own_lic + list_lic.rstrip() + _LANE_LICENCE + " " + profile + passages
+        else:
+            base = base_fulldoc()
+    else:
+        base = _BASE
+    return (base + offtopic_sentence() + third_party_text() + _NO_SAVE + _tail(path, contract_path, chain_path)
+            + (_LANE_GDELT_CREDIT if reporting_lane_on() else ""))
 
 
 # UI-ABOUT-1031 / OD-1029-UI: the full disclosure is split at sentence boundaries (no wording change) so the About page
@@ -273,11 +294,13 @@ def required_notice_text(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_
     produced), licence and off-topic-answering sentences are on the About page instead."""
     if fulldoc_enabled(fulldoc_path):
         how, reliance, _own_lic, _list_lic, profile, passages = _fulldoc_parts()
-        head = how.split(" For each", 1)[0] + " " + reliance.strip() + " " + profile.strip() + " " + passages.strip()
+        lane_lic = (" " + _LANE_LICENCE.strip()) if lanes_disclosure_on() else ""  # NEWS-LANE-1104: same as full text
+        head = (how.split(" For each", 1)[0] + " " + reliance.strip() + lane_lic + " " + profile.strip() + " "
+                + passages.strip())
     else:
         head = _BASE
     return (head + (" " + _REFUSED if offtopic_sentence() else "") + third_party_text() + _NO_SAVE
-            + _tail(path, contract_path, chain_path))
+            + _tail(path, contract_path, chain_path) + (_LANE_GDELT_CREDIT if reporting_lane_on() else ""))
 
 
 def disclosure_sections(path=CONFIG_PATH, contract_path=answer_contract.CONFIG_PATH,

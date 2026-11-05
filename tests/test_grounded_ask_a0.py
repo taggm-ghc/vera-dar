@@ -235,7 +235,7 @@ def test_question_never_reaches_any_log_and_counts_line_has_no_identifiers(caplo
         assert forbidden not in blob
     line = [x.getMessage() for x in caplog.records if x.getMessage().startswith("acquisition candidates:")]
     assert len(line) == 1
-    assert json.loads(line[0].split(": ", 1)[1]) == {"listed": 3, "not_in_collection": 2,
+    assert json.loads(line[0].split(": ", 1)[1].rsplit(" rid=", 1)[0]) == {"listed": 3, "not_in_collection": 2,
                                                        "by_provider": {"arxiv": 1, "openalex": 1}}
 
 
@@ -300,4 +300,4 @@ def test_counts_log_provider_allowlist_comes_from_config(tmp_path, monkeypatch, 
     ask_service._log_acquisition_counts([{"acquisition": "not_acquired", "provider": "onlyone"},
                                          {"acquisition": "not_acquired", "provider": "arxiv"}])
     (x,) = [x for x in caplog.records if x.getMessage().startswith("acquisition candidates:")]
-    assert json.loads(x.getMessage().split(": ", 1)[1])["by_provider"] == {"onlyone": 1, "other": 1}
+    assert json.loads(x.getMessage().split(": ", 1)[1].rsplit(" rid=", 1)[0])["by_provider"] == {"onlyone": 1, "other": 1}

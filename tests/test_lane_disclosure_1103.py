@@ -3,8 +3,7 @@ import pytest
 
 from vera import disclosure, official_lane, reporting_lane
 
-SEARCH = ("Search terms derived from your question may also be sent to GDELT (a news index) and Hacker News search "
-          "(Algolia).")
+SEARCH = "Search terms derived from your question may also be sent to GDELT (a news index)."  # NEWS-LANE-1104 W4: HN out
 PAGES = ("VERA-DAR may read public web pages from vendors and news outlets to answer; these pages are used only for "
          "your answer, and page text is not saved.")
 LINK = "https://www.gdeltproject.org/"
@@ -47,8 +46,15 @@ def test_reporting_on(monkeypatch):
         assert SEARCH in t and PAGES in t
     secs = dict(disclosure.disclosure_sections())
     assert LINK in secs["Your question and what is stored"]
-    assert "Hacker News search (Algolia)" in secs["Your question and what is stored"]
+    assert "Hacker News" not in " ".join(secs.values()) and "Algolia" not in " ".join(secs.values())
     assert "licence-cleared or stored" in " ".join(secs.values())
+
+
+def test_reporting_on_with_hn_in_fallback_names_hn(monkeypatch):
+    _set(monkeypatch, False, True)
+    cfg = reporting_lane.load_config()
+    monkeypatch.setattr(reporting_lane, "load_config", lambda path=None: dict(cfg, fallback_order=["gdelt", "hn"]))
+    assert "Hacker News search (Algolia)." in disclosure.disclosure_text()
 
 
 def test_official_only_has_pages_sentence_not_gdelt(monkeypatch):

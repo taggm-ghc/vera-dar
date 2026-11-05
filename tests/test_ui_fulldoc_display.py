@@ -142,7 +142,7 @@ def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
         for _h, t in disclosure.disclosure_sections():
             assert main.count(t) == 1
     else:  # one short line; the long disclosure is not repeated
-        assert any(c.value == disclosure.SHORT_NOTICE for c in at.main.caption)
+        assert any(c.value == disclosure.short_notice_text() for c in at.main.caption)
         assert disclosure.required_notice_text() not in main
         assert _BASE[:60] not in main and _BASE_FULLDOC[:60] not in main
         # WP6 (orchestrator decision): the third-party point appears exactly once, in the short notice, on every

@@ -1,4 +1,5 @@
-"""DAR-PREMISE-1022: false/unsupported/ill-posed question premises. Stubbed model and checker, no network."""
+"""DAR-PREMISE-1022: false/ill-posed question premises (OD-1104-TRACE: "unsupported" is an evidence miss, not a
+premise verdict). Stubbed model and checker, no network."""
 import json
 
 from tests.test_fulldoc_answer import CFG, GCFG, Stub, bundle, checker, key  # noqa: F401  (key: autouse env fixture)
@@ -39,9 +40,23 @@ def test_false_premise_cited_and_verified_renders_short_no_answer_with_citation(
 
 
 def test_premise_correction_is_claim_checked_unsupported_never_shown():
-    out, _ = run("PREMISE: unsupported - Gamma is long [2].", verdicts=("unsupported",))
+    out, _ = run("PREMISE: false - Gamma is long [2].", verdicts=("unsupported",))
     assert out.result is None and out.fallback == fa.PREMISE_FALLBACK
-    assert out.premise == {"status": "unsupported", "verified": False}
+    assert out.premise == {"status": "false", "verified": False}
+
+
+def test_f2_unsupported_is_not_a_premise_verdict_it_is_an_evidence_miss():
+    assert fa.PREMISE_STATUSES == ("false", "ill_posed")
+    assert "unsupported" not in fa.PREMISE_INSTRUCTION and "NOT a premise problem" in fa.PREMISE_INSTRUCTION
+    cfg = {**CFG, "answer": {**CFG["answer"], "insufficient_marker": "INSUFFICIENT_EVIDENCE"}}
+    _, stub = run("Gamma results are short [2].", cfg=cfg)
+    assert "reply INSUFFICIENT_EVIDENCE" in stub.messages[0]["content"].split("Premise check:")[1]
+    calls = []
+    stub = Stub("PREMISE: unsupported - The passages do not mention this [2].")
+    out = fa.answer("q", bundle(), "m", None, chained={}, grounding_cfg=GCFG, cfg=cfg, base_tokens=5, base_cost=0.5,
+                    complete_fn=stub, check_call=lambda *a: calls.append(a))
+    assert out.result is None and out.premise is None and not calls  # never a premise refusal, no checker call
+    assert out.fallback == CFG["fallback_tokens"]["model_insufficient"]  # an inline-retry token
 
 
 def test_uncited_premise_makes_no_checker_call_and_is_not_shown():
@@ -61,7 +76,7 @@ def test_premise_ok_line_is_stripped_and_answer_proceeds():
 
 def test_p1_prefix_is_status_neutral_and_claims_only_what_was_checked():
     assert "contradict" not in fa.PREMISE_PREFIX and "retrieved passages" not in fa.PREMISE_PREFIX
-    for st in ("false", "unsupported", "ill_posed"):
+    for st in fa.PREMISE_STATUSES:
         out, _ = run(f"PREMISE: {st} - The passage bears on this [2].")
         assert out.result.answer.startswith(fa.PREMISE_PREFIX) and out.result.claim_check["premise_status"] == st
 
@@ -82,7 +97,8 @@ def test_p3_unverified_text_claims_nothing_and_ui_token_matches():
     from vera import ui_evidence
     t = fa.PREMISE_UNVERIFIED_TEXT
     assert "found that" not in t and "do not support" not in t and "flagged" in t and "no answer is shown" in t
-    assert ui_evidence.fallback_text(fa.PREMISE_FALLBACK, cfg={}) == t
+    # OD-1104-TRACE: premise_unverified is an evidence miss; the UI shows the evidence-miss text, never this refusal text
+    assert ui_evidence.fallback_text(fa.PREMISE_FALLBACK, cfg={}) == ui_evidence.fallback_text("insufficient_full_document_evidence", cfg={}) != t
 
 
 def test_p4_premise_line_must_be_the_first_line_and_is_counted():
@@ -93,9 +109,9 @@ def test_p4_premise_line_must_be_the_first_line_and_is_counted():
     assert fa.parse_premise("\n  PREMISE: false - x [2].")[0] == "false"
     before = dict(fa.PREMISE_COUNTS)
     run("PREMISE: false - The passage bears on this [2].")
-    run("PREMISE: unsupported - no cite")
+    run("PREMISE: ill_posed - no cite")
     assert fa.PREMISE_COUNTS.get("false:verified", 0) == before.get("false:verified", 0) + 1
-    assert fa.PREMISE_COUNTS.get("unsupported:unverified", 0) == before.get("unsupported:unverified", 0) + 1
+    assert fa.PREMISE_COUNTS.get("ill_posed:unverified", 0) == before.get("ill_posed:unverified", 0) + 1
 
 
 def test_p5_shipped_config_has_explicit_enabled_key_and_uncalibrated_note():
@@ -129,7 +145,7 @@ def test_inline_post_writer_fallback_keeps_token_and_premise_text(monkeypatch, c
     monkeypatch.setattr(inline_acquire, "acquire", lambda *a, **k: SimpleNamespace(corpus=object(), status="ok"))
     monkeypatch.setattr(inline_acquire, "notice", lambda acq, st: f"generic-{st}")
     for tok, text in (("claim_check_insufficient", "generic-unanswered"), ("model_insufficient", "generic-unanswered"),
-                      ("premise_unverified", fa.PREMISE_UNVERIFIED_TEXT)):
+                      ("premise_unverified", "generic-unanswered")):  # OD-1104-TRACE: no premise refusal text
         monkeypatch.setattr(ask_service, "_fulldoc", lambda *a, _t=tok, **k: (None, _t, 1, 0.0, "x"))
         with caplog.at_level(logging.INFO, logger="vera"):
             n = ask_service._inline("q", "m", None, None, {}, None, {})

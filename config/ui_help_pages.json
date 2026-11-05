@@ -4,9 +4,21 @@
     "intro": "This page holds the full disclosure for VERA-DAR. Other pages show a one-line notice that links here.",
     "after_disclosure": [
       {
+        "heading": "Questions kept for diagnosing errors",
+        "paragraphs": [
+          "To help diagnose errors, VERA-DAR keeps the text of your question for up to 30 days; only the service owner can read it, and it is then deleted."
+        ]
+      },
+      {
         "heading": "What the sidebar entry shows",
         "paragraphs": [
-          "The sidebar entry \"What VERA-DAR draws on\" shows the number of sources in the collection and the date of the newest source, a short licence note, a short description of the collection and its topics, the scope of questions VERA-DAR handles, and a summary of how it answers. When a language model wrote the description, the sidebar says so and gives the date it was written, and the description may be imperfect; otherwise the description is a plain summary and no such line is shown."
+          "The sidebar entry \"What VERA-DAR draws on\" shows the number of sources in the collection and the date of the newest source, a short description of what the collection covers, its main subject topics with each topic's share of a sample of the sources, and a link to this page. When a language model wrote the description, the sidebar says so and gives the date it was written, and the description may be imperfect; otherwise the description is a plain summary and no such line is shown. The licence note, the current coverage, how VERA-DAR answers and the Trace Eval sources line are on this page."
+        ]
+      },
+      {
+        "heading": "News reports",
+        "paragraphs": [
+          "For questions about current events, VERA-DAR may use news reports found through the GDELT news index. It reads a report only from outlets on its allowlist and only where the site's robots rules and terms permit; reports from other outlets are shown as links only."
         ]
       },
       {
@@ -26,7 +38,7 @@
         "heading": "What to ask",
         "paragraphs": [
           "Type one research question in your own words on the Ask VERA-DAR page, then press Enter.",
-          "Scope: {scope}",
+          "Current coverage: {coverage}",
           "VERA-DAR does not write or fix code; it can point to published research instead. A question outside the collection may get a reading list instead of an answer. Some requests are refused for safety reasons."
         ]
       },
