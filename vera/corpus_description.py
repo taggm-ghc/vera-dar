@@ -365,7 +365,14 @@ NUMERIC_WORDS_PATH = Path(__file__).resolve().parent.parent / "config" / "corpus
 def load_numeric_words(path: Path = NUMERIC_WORDS_PATH) -> set[str] | None:
     """Number, fraction, quantity and ranking words; None when unreadable (the caller then denies every sentence)."""
     try:
-        return {str(w).casefold() for w in json.loads(Path(path).read_text(encoding="utf-8"))["numeric_words"]["words"]}
+        words = json.loads(Path(path).read_text(encoding="utf-8"))["numeric_words"]["words"]
+        if Path(path) == NUMERIC_WORDS_PATH:  # LISTS-TO-DB-1104: digest.numeric_words from the DB when enabled
+            try:
+                from vera import list_tables
+                words = list_tables.get("digest.numeric_words", words)
+            except Exception:  # noqa: BLE001  loader missing or faulty: keep the file value
+                pass
+        return {str(w).casefold() for w in words}
     except (OSError, ValueError, KeyError, TypeError):
         logger.warning("corpus digest numeric-word list unreadable; every model sentence will be denied")
         return None
