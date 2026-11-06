@@ -289,7 +289,8 @@ def doc_budget(acq, clock=time.monotonic) -> float:
     cd = float(r.get("max_crawl_delay_s", 15))  # robots not cached yet: assume the configured maximum
     hit = acq_discovered._ROBOTS.get("arxiv.org")
     if hit is not None and hit[1] not in (None, True, False):
-        v = hit[1].crawl_delay(sf.USER_AGENT)
+        from vera import robots_ai  # OD-1106-ROBOTS-AI
+        v = robots_ai.crawl_delay(hit[1], sf.USER_AGENT)
         cd = float(v) if v is not None else float(r.get("min_interval_s", 3))
     return 2 * cd + float(acq_config.bound(acq, "fetch_timeout_s"))
 
@@ -323,7 +324,8 @@ def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, host
         if not allowed:
             raise aa._Stop(acq_config.reason(acq, "robots"))
         rp = (acq_discovered._ROBOTS.get(host) or (0, None))[1]
-        cd = rp.crawl_delay(sf.USER_AGENT) if rp not in (None, True, False) else None
+        from vera import robots_ai  # OD-1106-ROBOTS-AI: largest Crawl-delay incl. AI agent groups
+        cd = robots_ai.crawl_delay(rp, sf.USER_AGENT)
         if cd is not None:
             if float(cd) > float(r.get("max_crawl_delay_s", 15)):
                 raise aa._Stop(acq_config.reason(acq, "robots"))

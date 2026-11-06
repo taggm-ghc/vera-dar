@@ -407,7 +407,8 @@ def crawl_delay_for(cache, host, port, cfg) -> float:
     if rp in (None, True, False):
         return 0.0
     try:
-        v = rp.crawl_delay(cfg["user_agent"])
+        from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI: largest Crawl-delay among the applying groups
+        v = _ra.crawl_delay(rp, cfg["user_agent"])
         return float(v) if v else 0.0
     except Exception:  # noqa: BLE001
         return 0.0
@@ -422,7 +423,7 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
     try:
         if cache is not None and key in cache:
             rp = cache[key]
-            return True if rp is True else rp.can_fetch(cfg["user_agent"], url)
+            return True if rp is True else _ai_ok(rp, cfg["user_agent"], url)
         ru = f"https://{host}{'' if port == 443 else f':{port}'}/robots.txt"
         body, _f, status, _c = _get(ru, cfg, resolve, transport, clock, end, ("text/plain", "text/html", ""),
                                     None, int(cfg.get("max_robots_bytes", 200000)),
@@ -434,16 +435,25 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
         rp = robotparser.RobotFileParser()
         txt = body.decode("utf-8", "replace")
         rp.parse(txt.splitlines())
+        from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI
+        _ra.annotate(rp, txt)
         if cache is not None:
             cache[key] = rp
             from vera import source_permissions as _sp  # WP6-P2b D2: robots.txt Content-Signal, signal text only
             cache[("content_signal",) + key] = signal_value(_sp.robots_content_signal(txt))
-        return rp.can_fetch(cfg["user_agent"], url)
+        return _ai_ok(rp, cfg["user_agent"], url)
     except Exception:  # noqa: BLE001
         return False
 
 
-_SIGNAL_HEADERS = (("x-robots-tag", "X-Robots-Tag"), ("content-signal", "Content-Signal"))
+def _ai_ok(rp, ua, url) -> bool:
+    """Own group / * allow AND no AI agent group or AI statement blocks (OD-1106-ROBOTS-AI)."""
+    from vera import robots_ai as _ra
+    return _ra.allowed(rp, ua, url) and _ra.block_reason(rp, url) is None
+
+
+_SIGNAL_HEADERS = (("x-robots-tag", "X-Robots-Tag"), ("content-signal", "Content-Signal"),
+                    ("tdm-reservation", "TDM-Reservation"))
 _META_TAG = re.compile(r"<meta\b[^>]*>", re.I)
 _META_ATTR = re.compile(r"([a-zA-Z\-:]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
 _META_NAMES = ("robots", "googlebot", "vera-dar", "ai")
@@ -459,9 +469,99 @@ def _meta_robots(html: str) -> list:
     return out
 
 
+_LINK_TAG = re.compile(r"<(?:link|a)\b[^>]*>", re.I)
+
+
+def _tags_attrs(html: str, tag_re) -> list:
+    out = []
+    for m in tag_re.findall(html[:200000]):
+        out.append({k.lower(): (v1 or v2 or v3) for k, v1, v2, v3 in _META_ATTR.findall(m)})
+    return out
+
+
+def _licence_href(html: str, base: str) -> str:
+    """H19 A7: the first <link|a rel~=license href> as an absolute http(s) URL (signal string, max 300 chars), else ''."""
+    for a in _tags_attrs(html, _LINK_TAG):
+        if {"license", "licence"} & set(a.get("rel", "").lower().split()) and a.get("href"):
+            u = urljoin(base, a["href"].strip())
+            if urlsplit(u).scheme in ("http", "https"):
+                return signal_value(u)
+    return ""
+
+
+def _meta_author(html: str) -> str:
+    """H19: byline from <meta name=author> or <meta property=article:author> only (signal string, max 200), else ''."""
+    for a in _tags_attrs(html, _META_TAG):
+        if (a.get("name", "").lower() == "author" or a.get("property", "").lower() == "article:author") \
+                and a.get("content"):
+            return signal_value(a["content"])[:200]
+    return ""
+
+
+def _tdm_meta(html: str) -> bool:
+    """H19 A9: <meta name="tdm-reservation" content="1">."""
+    return any(a.get("name", "").lower() == "tdm-reservation" and a.get("content", "").strip() == "1"
+               for a in _tags_attrs(html, _META_TAG))
+
+
+def _tdm_loc_match(loc: str, path: str) -> bool:
+    """TDMRep location pattern: a path prefix; '*' matches any run; '$' ends the pattern (robots.txt style)."""
+    if not isinstance(loc, str) or not loc.startswith("/"):
+        return False
+    rx = "".join(".*" if ch == "*" else ("$" if ch == "$" else re.escape(ch)) for ch in loc)
+    return re.match(rx, path) is not None
+
+
+def tdmrep_reserved(rules, path: str) -> bool:
+    """True when ANY rule whose location matches `path` has tdm-reservation 1 (fail closed: the stricter of several
+    matching rules applies). `rules` is the parsed /.well-known/tdmrep.json array; anything malformed raises ValueError."""
+    if not isinstance(rules, list):
+        raise ValueError("tdmrep.json is not an array")
+    hit = False
+    for r in rules:
+        if not isinstance(r, dict) or not isinstance(r.get("location"), str):
+            raise ValueError("tdmrep.json rule malformed")
+        if _tdm_loc_match(r["location"], path) and str(r.get("tdm-reservation")).strip() == "1":
+            hit = True
+    return hit
+
+
+def _tdmrep_signal(final, cfg, resolve, tr, clock, end, cache, hop_gate) -> str:
+    """H19 A9: '' (no reservation), '1' (a matching rule reserves) or 'unreadable' (fail closed). /.well-known/tdmrep.json
+    over the same pinned path, hop gate and size cap as robots.txt; fetched at most once per host per request
+    (cache). 404 and 410 = no reservation; every other failure (timeout, 5xx, other 4xx, refused hop, bad JSON) =
+    unreadable."""
+    fp = urlsplit(final)
+    host, port = (fp.hostname or "").lower().rstrip("."), fp.port or 443
+    key = ("tdmrep", host, port)
+    try:
+        if key not in cache:
+            u = f"https://{host}{'' if port == 443 else f':{port}'}/.well-known/tdmrep.json"
+            cap = int(cfg.get("max_robots_bytes", 200000))
+            try:
+                body, _f, status, _c = _get(u, cfg, resolve, tr, clock, end, ("application/json", "text/plain", ""),
+                                            None, cap, cap, ok_robots=True, hop_gate=hop_gate)
+                if status in (404, 410):
+                    cache[key] = []
+                elif status != 200:
+                    cache[key] = "unreadable"
+                else:
+                    rules = json.loads(body.decode("utf-8", "replace"))
+                    tdmrep_reserved(rules, "/")  # validates the shape now; raises ValueError when malformed
+                    cache[key] = rules
+            except Exception:  # noqa: BLE001  refused hop, timeout, 5xx, malformed JSON: reserved
+                cache[key] = "unreadable"
+        rules = cache[key]
+        if rules == "unreadable":
+            return "unreadable"
+        return "1" if tdmrep_reserved(rules, fp.path or "/") else ""
+    except Exception:  # noqa: BLE001
+        return "unreadable"
+
+
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
-          robots_cache: dict | None = None) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"} (the last three are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
+          robots_cache: dict | None = None, tdm_check: bool = False) -> dict:
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation"} (H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
     `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
     `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
     one request (rules only, never page text); default a fresh dict per call."""
@@ -489,9 +589,14 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
     fp = urlsplit(final)
     robots_sig = cache.get(("content_signal", (fp.hostname or "").lower().rstrip("."), fp.port or 443), "")
     cs = ", ".join(v for v in (str(sig.get("content-signal") or "").strip(), robots_sig) if v)  # header + robots.txt
+    html = decoded if ctype != "text/plain" else ""
+    tdm = "1" if (str(sig.get("tdm-reservation") or "").strip() == "1" or _tdm_meta(html)) else ""
+    if tdm_check and not tdm:  # H19 A9: opt-in per caller (reporting lane, Wikipedia-citation reads); fail closed
+        tdm = _tdmrep_signal(final, cfg, resolve, tr, clock, end, cache, hop_gate)
     return {"text": text, "url": final, "content_type": ctype,
             "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(cs),
-            "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else "")}
+            "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else ""),
+            "licence_href": _licence_href(html, final), "meta_author": _meta_author(html), "tdm_reservation": tdm}
 
 
 def signal_value(v) -> str:

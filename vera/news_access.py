@@ -116,7 +116,9 @@ def _commercial(cfg: dict) -> bool:
 def _g_robots(row: dict, acc: dict, page: dict | None) -> list[str]:
     r: list[str] = []
     rb = acc.get("robots") if isinstance(acc.get("robots"), dict) else {}
-    if rb.get("status") != "ALLOWS" or rb.get("ai_agents_blocked") is True:
+    # F7: SUMMARY_UNTESTED_UA = a summary-grade observation that robots.txt allows articles, never tested with our UA; the
+    # live per-hop robots check in public_fetch stays authoritative. ALLOWS (a tested result) is accepted too.
+    if rb.get("status") not in ("ALLOWS", "SUMMARY_UNTESTED_UA") or rb.get("ai_agents_blocked") is True:
         r.append("acc_robots")
     if isinstance(page, dict):
         meta = _s(page.get("meta_robots")).lower()
@@ -155,8 +157,9 @@ def _page_licence_checks(row: dict, fam: str, page: dict) -> list[str]:
     r: list[str] = []
     href = _s(page.get("licence_href"))  # A7
     if href:
-        tail = href.rstrip("/").split("/licenses/", 1)[-1].replace("/", "-") if "/licenses/" in href else href
-        if _family("cc-" + licence_gate.norm_id(tail).removeprefix("cc-")) != fam:
+        # creativecommons.org/licenses/<family>/<version>[/<jurisdiction>]: only the family segment decides (A7)
+        tail = href.split("/licenses/", 1)[-1].strip("/").split("/")[0] if "/licenses/" in href else ""
+        if not tail or _family("cc-" + tail) != fam:
             r.append("acc_page_licence_mismatch")
     text = page.get("text") if isinstance(page.get("text"), str) else ""
     low = text.lower()
@@ -191,7 +194,7 @@ def _g_processing(row: dict, acc: dict, cfg: dict, op: str | None) -> list[str]:
 
 def _prelude(url: str, cfg: dict) -> tuple[dict | None, list[str] | None]:
     row = reporting_lane.outlet_row(url, cfg) if isinstance(url, str) else None
-    if not row or reporting_lane.outlet_verdict(url, cfg) != "allow":
+    if not row or reporting_lane._raw_outlet_verdict(url, cfg) != "allow":
         return None, ["acc_no_allow_row"]
     if not isinstance(row.get("access"), dict):
         return row, ["acc_no_access_block"]
@@ -228,6 +231,14 @@ def verdict(url: str, cfg: dict | None = None, page: dict | None = None) -> dict
     (today's non-ND behaviour; no exception is due). Empty reasons only when mode is full_text."""
     cfg = cfg if cfg is not None else reporting_lane.load_config()
     row, pre = _prelude(url, cfg)
+    if pre == ["acc_no_allow_row"]:
+        # A row that is listed but not "allow" (exception outlets, ProPublica until T0n) and carries an access block still
+        # reports WHY (licence, AI clause, ...) so the exceptions report is complete. Always link_only.
+        r0 = reporting_lane.outlet_row(url, cfg) if isinstance(url, str) else None
+        if r0 and isinstance(r0.get("access"), dict):
+            rs = ["acc_no_allow_row"] + _g_licence(r0, r0["access"], cfg, page) + _g_processing(
+                r0, r0["access"], cfg, "rag_context") + _g_robots(r0, r0["access"], page)
+            return {"mode": LINK_ONLY, "reasons": rs, "has_access": True}
     if pre:
         return {"mode": LINK_ONLY, "reasons": pre, "has_access": False}
     acc = row["access"]
@@ -247,7 +258,7 @@ def reasons(url: str, cfg: dict | None = None, page: dict | None = None) -> list
 def full_text_ok(url: str, cfg: dict | None = None, page: dict | None = None) -> bool:
     """Design section 5: outlet_verdict == allow AND (row has no ND `access` block OR mode == full_text)."""
     cfg = cfg if cfg is not None else reporting_lane.load_config()
-    if reporting_lane.outlet_verdict(url, cfg) != "allow":
+    if reporting_lane._raw_outlet_verdict(url, cfg) != "allow":
         return False
     v = verdict(url, cfg, page)
     return (not v["has_access"]) or v["mode"] == FULL_TEXT

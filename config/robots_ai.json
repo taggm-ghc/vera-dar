@@ -1,0 +1,46 @@
+{
+  "_doc": "OD-1106-ROBOTS-AI: VERA-DAR is an AI assistant. A site is blocked when robots.txt disallows the path for any agent token below (robots_ai_agent_block) or states in a comment that AI crawlers/assistants are blocked (robots_ai_statement). Applies in addition to VERA-DAR's own group and *. Fails closed.",
+  "ai_agent_tokens": [
+    "GPTBot",
+    "ChatGPT-User",
+    "OAI-SearchBot",
+    "ClaudeBot",
+    "Claude-User",
+    "Claude-SearchBot",
+    "anthropic-ai",
+    "CCBot",
+    "Google-Extended",
+    "PerplexityBot",
+    "Perplexity-User",
+    "Applebot-Extended",
+    "Bytespider",
+    "Meta-ExternalAgent",
+    "cohere-ai",
+    "Amazonbot",
+    "Diffbot",
+    "YouBot"
+  ],
+  "ai_statement_phrases": [
+    "block all known ai crawlers",
+    "blocks all known ai crawlers",
+    "blocking all known ai crawlers",
+    "block all ai crawlers",
+    "blocks all ai crawlers",
+    "block all ai bots",
+    "block ai crawlers and assistants",
+    "ai crawlers and assistants are blocked",
+    "ai crawlers are blocked",
+    "ai assistants are blocked",
+    "ai crawlers and assistants are not permitted",
+    "ai crawlers are not permitted",
+    "ai crawlers are not allowed",
+    "disallow all ai crawlers",
+    "ai bots are blocked",
+    "blocking ai crawlers",
+    "ai scrapers are not welcome"
+  ],
+  "reasons": {
+    "agent": "robots_ai_agent_block",
+    "statement": "robots_ai_statement"
+  }
+}

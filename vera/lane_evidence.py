@@ -324,10 +324,17 @@ def _read_cap() -> int:
         return 6
 
 
-def _public_fetch(url: str, **kw) -> dict:
-    """vera.public_fetch.fetch with the per-hop gate kwargs (dropped only for a stub that cannot take them)."""
+def _public_fetch(url: str, tdm_check: bool = False, **kw) -> dict:
+    """vera.public_fetch.fetch with the per-hop gate kwargs (dropped only for a stub that cannot take them).
+    H19 A9 (review R1): `tdm_check` (set by web_route.gated_fetch, default True for outlets with an ND access block)
+    is forwarded so /.well-known/tdmrep.json is read. Fail closed: when it is requested and the fetcher cannot take it,
+    the read is refused (never silently skipped)."""
     from vera import public_fetch, web_route
     f = public_fetch.fetch
+    if tdm_check:
+        if not web_route._takes_named(f, "tdm_check"):
+            raise public_fetch.FetchRefused("tdm_unchecked")
+        kw["tdm_check"] = True
     return f(url, **kw) if web_route._takes_kwargs(f) else f(url)
 
 

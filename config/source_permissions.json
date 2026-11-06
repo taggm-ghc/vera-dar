@@ -5,7 +5,7 @@
  "deny_hosts": [],
  "reason_codes": {
   "read": ["read_ok", "read_robots_disallow", "read_registry_forbid", "read_deny_list", "read_login_paywall", "read_no_crawl"],
-  "use_for_answer": ["use_ok", "use_nd_licence", "use_no_ai_signal", "use_registry_forbid"],
+  "use_for_answer": ["use_ok", "use_ok_nd_news", "use_tdm_reserved", "use_nd_licence", "use_no_ai_signal", "use_registry_forbid"],
   "ingest": ["ingest_ok", "ingest_no_storage_licence", "ingest_registry_forbid", "ingest_not_readable", "ingest_not_usable", "ingest_unevaluated"]
  },
  "public_phrases": {
@@ -19,6 +19,8 @@
   },
   "use_for_answer": {
    "use_ok": "",
+   "use_ok_nd_news": "",
+   "use_tdm_reserved": "not used: the source does not permit reuse",
    "use_nd_licence": "not used: the source does not permit reuse",
    "use_no_ai_signal": "not used: the source does not permit reuse",
    "use_registry_forbid": "not used: the source does not permit reuse"

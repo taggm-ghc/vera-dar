@@ -510,7 +510,8 @@ def test_fetch_returns_noai_header_and_meta_robots_signals_only():
     # WP6-P2: normalised signal strings only; no raw header dict (Set-Cookie, Server never kept)
     assert out["x_robots_tag"] == "noai" and out["content_signal"] == "ai-input=no"
     assert out["meta_robots"] == "noai, noindex, noimageai"
-    assert set(out) == {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots"}
+    assert set(out) == {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href",
+                        "meta_author", "tdm_reservation"}  # H19-T3a: signal strings only
     assert "hello" in out["text"] and "a=b" not in repr(out) and "headers" not in out
 
 

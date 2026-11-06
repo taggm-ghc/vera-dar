@@ -236,9 +236,18 @@ def _read(url, robots_allowed, page_signals, row, deny_list, cfg_deny) -> str:
     return "read_ok"
 
 
+_USE_OK = ("use_ok", "use_ok_nd_news")  # H19: use_ok_nd_news = ND news with a satisfied access verdict (answer-only)
+
+
+def _tdm_reserved(lower_headers: dict) -> bool:
+    """TDM Reservation Protocol signal as a header-style value: "1" (reserved) or "unreadable" (tdmrep.json could not be
+    read; fail closed). Anything else (absent, "", "0") = not reserved."""
+    return str(lower_headers.get("tdm-reservation", "")).strip().lower() in ("1", "unreadable")
+
+
 def _record(cfg, read_c, use_c, ing_c) -> PermissionRecord:
     return PermissionRecord(
-        read_c == "read_ok", use_c == "use_ok", ing_c == "ingest_ok", read_c, use_c, ing_c,
+        read_c == "read_ok", use_c in _USE_OK, ing_c == "ingest_ok", read_c, use_c, ing_c,
         _phrase(cfg, "read", read_c), _phrase(cfg, "use", use_c), _phrase(cfg, "ingest", ing_c))
 
 
@@ -277,18 +286,23 @@ def evaluate(url: str, *, licence=None, headers=None, html_head: str | None = No
     nd = licence_gate.reject_reason(lid, lurl) == "ND (no derivatives)"
     no_ai = (bool({"noai", "noimageai"} & (xrt | meta)) or _content_signal_no_ai(h.get("content-signal", ""))
              or _robots_no_ai(robots_txt_entries))
-    if nd:
+    nd_news = nd and licence_gate.nd_news_permitted(
+        {"url": url, "licence": {"content": {"id": lid, "url": lurl}}})  # H19: looked up from the URL host; flag off = False
+    tdm = _tdm_reserved(h)  # H19 A9 / T2b: a publisher opt-out, bars use for every lane
+    if tdm:
+        use_c = "use_tdm_reserved"
+    elif nd and not nd_news:
         use_c = "use_nd_licence"
     elif no_ai:
         use_c = "use_no_ai_signal"
     elif _verdict(row, "derivative_verdict") == "forbid":
         use_c = "use_registry_forbid"
     else:
-        use_c = "use_ok"
+        use_c = "use_ok_nd_news" if nd_news else "use_ok"
 
     if read_c != "read_ok":
         ing_c = "ingest_not_readable"
-    elif use_c != "use_ok":
+    elif use_c != "use_ok":  # includes use_ok_nd_news: ND news is never ingested (answer-only)
         ing_c = "ingest_not_usable"
     elif _verdict(row, "ingest_verdict") == "forbid":
         ing_c = "ingest_registry_forbid"

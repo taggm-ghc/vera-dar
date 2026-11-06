@@ -33,6 +33,7 @@ ACTIVE = "active"
 RC_ALLOW, RC_REJECT, RC_ARXIV = "licence_allow", "licence_reject", "licence_reject_arxiv_url"
 RC_MISSING, RC_UNKNOWN, RC_NOT_STORABLE = "licence_missing", "licence_unknown", "licence_not_storable"
 RC_CONFLICT, RC_HOST = "licence_id_url_conflict", "licence_host_unnormalisable"
+RC_ND_NEWS = "licence_nd_news_answer_only"  # H19 (OD-1106-NEWS): ND news with a satisfied access verdict; never stored
 
 # Why: arXiv's terms forbid storing/serving e-prints without permission; only /abs/ pages may be stored.
 ARXIV_HOSTS = ("arxiv.org", "www.arxiv.org", "export.arxiv.org")
@@ -198,6 +199,55 @@ def match_entry(licence_id: str | None, licence_url: str | None = None, path: Pa
     return None, "none"
 
 
+def nd_news_enabled(path: Path = RULES_PATH) -> bool:
+    """H19: config/licence_rules.json nd_news.enabled is literally True. Missing, unreadable or anything else = False."""
+    try:
+        nd = json.loads(path.read_text(encoding="utf-8")).get("nd_news")
+        return isinstance(nd, dict) and nd.get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _other_reject(rec: dict) -> bool:
+    """True when the record carries a no-educational-use or fee-only marker (those never get the ND news exception)."""
+    rules = _load_rules()
+    toks = _tokens(f"{rec.get('id') or ''} {rec.get('url') or ''}")
+    return any(_has_run(toks, _tokens(m)) for m in rules["no_educational_use_markers"] + rules["fee_only_markers"])
+
+
+def nd_news_permitted(c: dict) -> bool:
+    """H19 (design section 2): True only when nd_news.enabled, the candidate has a CONTENT licence (the governing record
+    is not the abstract-metadata one), that record normalises to a listed ND family, it carries no other reject marker,
+    and the verdict looked up HERE from the URL host via news_access (A1 to A7, AD-6, NC-BASIS-1) is full_text with the
+    same family. The metadata licence, c["source_class"], c["access"] and c["operations"] are never read (forgeable
+    upstream). A licence version of 3.0 or unknown is the strictest reading and changes nothing here: the exception is
+    answer-only either way, and operations stay governed by news_access.operation_verdict. Any error = False."""
+    try:
+        if not nd_news_enabled() or c.get("stored_text_kind") == METADATA_KIND:
+            return False
+        lic = c.get("licence")
+        content = lic.get("content") if isinstance(lic, dict) else None
+        url = c.get("url")
+        if not isinstance(content, dict) or not isinstance(url, str) or not (content.get("id") or content.get("url")):
+            return False
+        if reject_reason(content.get("id"), content.get("url")) != "ND (no derivatives)" or _other_reject(content):
+            return False
+        from vera import news_access  # lazy: news_access imports this module
+        fam = news_access._family(content.get("id"))
+        rules = json.loads(RULES_PATH.read_text(encoding="utf-8")).get("nd_news") or {}
+        if not content.get("id") or fam not in {news_access._family(f) for f in rules.get("families") or []}:
+            return False
+        cfg = news_access.reporting_lane.load_config()
+        row = news_access.reporting_lane.outlet_row(url, cfg)
+        acc_fam = news_access._family((((row or {}).get("access") or {}).get("licence") or {}).get("id"))
+        if not acc_fam or acc_fam != fam:
+            return False
+        page = {"licence_href": content["url"]} if isinstance(content.get("url"), str) and content["url"] else None
+        return news_access.mode(url, cfg, page) == news_access.FULL_TEXT
+    except Exception:  # noqa: BLE001  fail closed
+        return False
+
+
 def licence_status(c: dict) -> tuple[str, str, str]:
     """(decision, rationale, reason_code). decision is 'allow', 'defer' (link-only / held) or 'reject'."""
     try:
@@ -213,10 +263,17 @@ def licence_status(c: dict) -> tuple[str, str, str]:
         return "reject", "arXiv e-print/PDF/HTML is never stored (arXiv terms); only the abstract page", RC_ARXIV
     lic = c.get("licence") or {}
     meta, content = lic.get("metadata") or {}, lic.get("content") or {}
+    nd_news_ok = False
     for rec in (meta, content):
         why = reject_reason(rec.get("id"), rec.get("url")) if (rec.get("id") or rec.get("url")) else None
+        if why and rec is content and why.startswith("ND") and nd_news_permitted(c):  # H19: flag-gated, off by default
+            nd_news_ok = True
+            continue
         if why:
             return "reject", f"licence {rec.get('id') or rec.get('url')} is {why} (R1 rule)", RC_REJECT
+    if nd_news_ok:
+        return ("defer", f"licence {content.get('id') or content.get('url')} is ND news with a satisfied access verdict: "
+                         "answer-only, not stored (OD-1106-NEWS H19, R-037)", RC_ND_NEWS)
     governing = meta if c.get("stored_text_kind") == METADATA_KIND else content
     if not governing.get("id"):
         return "defer", "no declared licence for the stored text: held for review (#63)", RC_MISSING

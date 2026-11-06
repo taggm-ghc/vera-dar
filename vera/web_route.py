@@ -163,7 +163,8 @@ def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None,
     text = str(got.get("text") or "")
     mr = str(got.get("meta_robots") or "")  # WP6-P2: normalised signal strings only (no raw headers)
     head = f'<meta name="robots" content="{mr}">' if mr and '"' not in mr else ""
-    sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"))
+    sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"),
+                                                  ("TDM-Reservation", "tdm_reservation"))  # H19 A9
            if got.get(f)}
     return sp.evaluate(final, headers=sig, html_head=head, registry=registry, registry_row=registry_row,
                        robots_allowed=True, deny_list=deny_list,
@@ -171,7 +172,7 @@ def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None,
 
 
 def gated_fetch(url: str, *, fetch=None, registry=None, deny_list=None, cfg=None, robots_cache=None,
-                hop_allowed=None):
+                hop_allowed=None, tdm_check=None):
     """One public page for a lane: the pre-request login path check, then fetch with the per-hop gate. Returns the
     fetch dict; raises public_fetch.FetchRefused (reason = a short code) when a hop is refused.
     NEWS-LANE-1104 W6 (SEC S1): `hop_allowed(hop_url) -> bool`, when given, is checked first on every hop (the start
@@ -195,7 +196,23 @@ def gated_fetch(url: str, *, fetch=None, registry=None, deny_list=None, cfg=None
     kw = {"hop_gate": _gate}
     if robots_cache is not None:
         kw["robots_cache"] = robots_cache
+    if tdm_check is None:  # H19 review F5: default ON for outlets that carry an ND access block, else off
+        try:
+            from vera import reporting_lane
+            tdm_check = isinstance((reporting_lane.outlet_row(url) or {}).get("access"), dict)
+        except Exception:  # noqa: BLE001
+            tdm_check = True
+    if tdm_check and _takes_named(f, "tdm_check"):  # a stub without the parameter is left alone
+        kw["tdm_check"] = True
     return f(url, **kw) if _takes_kwargs(f) else f(url)
+
+
+def _takes_named(f, name: str) -> bool:
+    import inspect
+    try:
+        return name in inspect.signature(f).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _takes_kwargs(f) -> bool:

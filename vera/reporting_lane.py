@@ -246,9 +246,10 @@ def outlet_row(url: str, cfg: dict | None = None) -> dict | None:
     return None
 
 
-def outlet_verdict(url: str, cfg: dict | None = None) -> str:
-    """allow | links_only | exclude. An unlisted host gets unlisted_verdict (default links_only). An "allow" row
-    without terms_evidence, or any unknown verdict, counts as links_only (fail closed)."""
+def _raw_outlet_verdict(url: str, cfg: dict | None = None) -> str:
+    """allow | links_only | exclude from the row alone (unlisted host gets unlisted_verdict; an "allow" row without
+    terms_evidence or any unknown verdict counts as links_only). PRIVATE: only vera.news_access (design A1) may call it;
+    every lane must use outlet_verdict(), which adds the ND access checks (H19 review F6)."""
     cfg = cfg or load_config()
     if not _domain(url):
         return "exclude"
@@ -260,6 +261,26 @@ def outlet_verdict(url: str, cfg: dict | None = None) -> str:
     if v == "allow" and not row.get("terms_evidence"):
         return "links_only"
     return v if v in VERDICTS else "links_only"
+
+
+def outlet_verdict(url: str, cfg: dict | None = None) -> str:
+    """allow | links_only | exclude. An unlisted host gets unlisted_verdict (default links_only). An "allow" row
+    without terms_evidence, or any unknown verdict, counts as links_only (fail closed).
+    H19: an "allow" row that carries an ND `access` block is "allow" only when licence_rules.json nd_news.enabled is
+    true (ships off) AND vera.news_access.full_text_ok(url) holds (NC-BASIS-1 SATISFIED and every record-level A-check);
+    otherwise, and on any error, links_only (review F1)."""
+    cfg = cfg or load_config()
+    v = _raw_outlet_verdict(url, cfg)
+    if v == "allow":
+        row = outlet_row(url, cfg)
+        if isinstance(row, dict) and isinstance(row.get("access"), dict):
+            try:
+                from vera import licence_gate, news_access
+                if not (licence_gate.nd_news_enabled() and news_access.full_text_ok(url, cfg)):
+                    return "links_only"
+            except Exception:  # noqa: BLE001  fail closed
+                return "links_only"
+    return v
 
 
 def allow_hosts(cfg: dict | None = None) -> list[str]:

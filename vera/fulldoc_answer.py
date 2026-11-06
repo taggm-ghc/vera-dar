@@ -126,7 +126,8 @@ def _user_payload(question: str, sources: list[dict]) -> str:
     """Untrusted passage text, titles and URLs travel only as JSON data in the user message (as claim_check does)."""
     passages = [{"n": s["n"], "title": s.get("title"), "url": s.get("url"), "published": s.get("published") or "unknown",
                  "text": s["snippet"], **({"lane": s["epistemic"]} if s.get("answer_only") is True and s.get("epistemic")
-                                          else {})} for s in sources]
+                                          else {}),
+                 **({"licence": "ND"} if s.get("licence_class") == "nd" else {})} for s in sources]
     return json.dumps({"question": question, "passages": passages}, ensure_ascii=False)
 
 
@@ -143,6 +144,8 @@ def messages_for(question: str, sources: list[dict], cfg: dict) -> list[dict]:
     if any(s.get("answer_only") is True and s.get("lane") for s in sources):  # NONASK-1103 S8: lane wording
         from vera import lane_evidence
         system = lane_evidence.lane_prompt(system, cfg, per_part=per_part_enabled(cfg))
+    if any(isinstance(x, dict) and x.get("licence_class") == "nd" for x in sources):  # H19 prompt rule (advisory; G1 to G5 enforce)
+        system += str(((cfg.get("answer") or {}).get("nd_guard") or {}).get("prompt_sentence") or "")
     if premise_enabled(cfg):
         system += PREMISE_INSTRUCTION.replace("{insufficient_marker}", str(cfg["answer"].get("insufficient_marker") or
                                                                          "the insufficient-evidence reply"))
@@ -407,6 +410,23 @@ def enforce_verbatim(records, sources, checker, cfg):
     return kept, profs, dropped
 
 
+def _nd_guard(kept, sources, cfg, question):
+    """H19-T5: vera.nd_guard.apply on the kept claim records; (kept, number dropped). Identity without an ND span."""
+    if not any(isinstance(x, dict) and x.get("licence_class") == "nd" for x in sources):
+        return kept, 0
+    from vera import nd_guard
+
+    out, _rep = nd_guard.apply(kept, sources, cfg, question)
+    return out, len(kept) - len(out)
+
+
+def _nd_quotes(citations, sources, cfg) -> None:
+    if any(isinstance(x, dict) and x.get("licence_class") == "nd" for x in sources):
+        from vera import nd_guard
+
+        nd_guard.limit_quotes(citations, sources, cfg)
+
+
 def _separate() -> bool:
     from vera import answer_contract
     return answer_contract.notes_separate()
@@ -557,6 +577,8 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     while True:
         kept, profs, d = enforce_verbatim(cand, sources, checker, cfg)
         dropped += d
+        kept, _nd = _nd_guard(kept, sources, cfg, question)  # H19 G1 to G5, G9: no-op without an ND span
+        dropped += _nd
         answered = {r["part"] for r in kept if r["verdict"] == "supported"
                     or (keep_partial and r["verdict"] == "partial")}
         narrowed = [r for r in kept if r["part"] in answered]
@@ -639,6 +661,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     profiles = [profs[r["id"]] for r in kept if r["id"] in profs] if checker is not None else None
     final = [r for r in kept if r["part"] in {k for k, _ in blocks}]
     citations = build_citations(final, sources, int(a["quote_max_chars"]), total, profiles=profiles)
+    _nd_quotes(citations, sources, cfg)  # H19 G6
     part_of = {r["id"]: r["part"] for r in records}
     for c in citations:
         c["part"] = part_of.get(c["claim_id"])
@@ -794,6 +817,8 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         ref_texts, meta = _bundle_reference(ev, sources, cfg, reference_texts, reference_corpus)
         checker = VerbatimChecker(ref_texts, meta, vcfg)
     kept, profs, dropped = enforce_verbatim([r for r in records if not _off_question(r)], sources, checker, cfg)
+    kept, _nd = _nd_guard(kept, sources, cfg, question)  # H19 G1 to G5, G9: no-op without an ND span
+    dropped += _nd
     rt.event("passages", "verbatim_drop", counts={"dropped": int(dropped or 0), "kept": len(kept)})
     if cfg["answer"].get("require_supported_claim", True):  # D7 (POL hook): >= 1 fully supported claim, else fall back
         from vera.fulldoc_policy import require_supported_claim
@@ -821,6 +846,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     total = int(total) if total is not None else (700 if checker is not None else None)
     profiles = [profs[r["id"]] for r in kept] if checker is not None else None
     citations = build_citations(kept, sources, int(cfg["answer"]["quote_max_chars"]), total, profiles=profiles)
+    _nd_quotes(citations, sources, cfg)  # H19 G6
     if checker is not None:
         from vera.fulldoc_verbatim import combined_total
 

@@ -363,9 +363,16 @@ def parse_crawl_delay(text: str, user_agent=None) -> float | None:
                 cur["delays"].append(v if math.isfinite(v) and v >= 0 else math.inf)
     pick = next((g for g in groups if any(a != "*" and a and a in token for a in g["agents"])), None) \
         or next((g for g in groups if "*" in g["agents"]), None)
-    if pick is None or not pick["delays"]:
-        return None
-    return max(pick["delays"])
+    delays = list(pick["delays"]) if pick else []
+    try:  # OD-1106-ROBOTS-AI: the largest Crawl-delay among the groups that apply, AI agent groups included
+        from vera import robots_ai as _ra
+        ai = {str(t).lower() for t in _ra.load_config()["ai_agent_tokens"]}
+        for g in groups:
+            if any(a in ai for a in g["agents"]):
+                delays += g["delays"]
+    except Exception:  # noqa: BLE001
+        delays.append(math.inf)  # config unreadable: fail closed
+    return max(delays) if delays else None
 
 
 def robots_text_crawl_delay(host: str, user_agent=None) -> float | None:
@@ -411,6 +418,8 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     p = robotparser.RobotFileParser()
                     txt = body.decode("utf-8", "ignore")
                     p.parse(txt.splitlines())
+                    from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI: AI-agent groups and statements
+                    _ra.annotate(p, txt)
                     rp = p
                     remember_robots_text(host, txt)  # ASK-PARALLEL-FIX-1105: non-integer Crawl-delay
                     from vera import source_permissions as _sp
@@ -427,7 +436,28 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                 k = next(iter(_ROBOTS))
                 _ROBOTS.pop(k)
                 _ROBOTS_SIGNAL.pop(k, None)
-    return bool(rp is True or (rp is not False and rp.can_fetch(ua, url)))
+    if rp is True:
+        return True
+    if rp is False:
+        return False
+    try:
+        from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI: RFC 9309 matcher for own UA, * and AI groups
+        return _ra.allowed(rp, ua, url) and _ra.block_reason(rp, url) is None
+    except Exception:  # noqa: BLE001  fail closed
+        return False
+
+
+def robots_ai_reason(url, user_agent=None) -> str | None:
+    """OD-1106-ROBOTS-AI: robots_ai_agent_block / robots_ai_statement when the cached robots.txt of url's host blocks
+    it through an AI rule, else None. Never fetches, never raises."""
+    try:
+        from vera import robots_ai as _ra
+        parts = urlsplit(url)
+        with _ROBOTS_LOCK:
+            hit = _ROBOTS.get((parts.scheme, (parts.hostname or "").lower(), user_agent or USER_AGENT))
+        return None if hit is None else _ra.block_reason(hit[1], url)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def robots_content_signal(url, user_agent=None) -> str:
@@ -462,7 +492,8 @@ def robots_crawl_delay(url, user_agent=None) -> float:
         t = robots_text_crawl_delay(parts.hostname or "", ua)  # ASK-PARALLEL-FIX-1105: fractions; inf = malformed
         if t is not None:
             return float(t)
-        v = rp.crawl_delay(ua)
+        from vera import robots_ai as _ra
+        v = _ra.crawl_delay(rp, ua)
         return float(v) if v else 0.0
     except Exception:  # noqa: BLE001
         return 0.0
@@ -517,7 +548,9 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
                 return None, None, None, hops, None, f"blocked: {why}"
             if not (robots_ok or robots_allowed)(current, http_get=http_get, url_check=url_check, pacer=pacer,
                                                  timeout_s=timeout_s):
-                return None, None, None, hops, None, "blocked: robots.txt disallows or could not be read"
+                ai = robots_ai_reason(current) if robots_ok is None else None  # OD-1106-ROBOTS-AI
+                return None, None, None, hops, None, (f"blocked: {ai}" if ai else
+                                                      "blocked: robots.txt disallows or could not be read")
             if robots_ok is None and robots_no_ai(current):  # WP6-P2b D2: robots.txt Content-Signal ai-input=no
                 return None, None, None, hops, None, "blocked: robots.txt no-AI signal"
             (pacer or _DEFAULT_PACER).wait(current)

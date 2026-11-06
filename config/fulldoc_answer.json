@@ -323,6 +323,28 @@
         "seconds"
       ]
     },
+    "nd_guard": {
+      "_doc": "H19 (OD-1106-NEWS, design section 4, AD-4): output guard for spans with licence_class nd (CC BY-NC-ND news). vera/nd_guard.py G1 to G6 and G9. Inert unless a source carries licence_class nd, which only the (flag-off) ND news path produces.",
+      "_calibration_note": "UNCALIBRATED PRIORS (design section 4; containment, near_copy, union_containment, max_cover_per_sentence and max_words_per_source added by review H19-W2 F2, all provisional): no value here has been tested on real data. T8c must run G1 to G5 offline on 20 compliant answers and 20 deliberate rewrites of 5 fixture articles and record the separation before the nd_news flag flips; thresholds change only on that evidence.",
+      "enabled": true,
+      "min_verbatim_tokens": 8,
+      "max_share": 0.4,
+      "max_sentences": 4,
+      "max_coverage": 0.25,
+      "match_jaccard": 0.5,
+      "max_sequence": 3,
+      "quote_max_chars": 200,
+      "quote_total_chars": 400,
+      "article_containment": 0.6,
+      "near_copy": 0.8,
+      "near_copy_min_stems": 5,
+      "max_cover_per_sentence": 3,
+      "min_article_sentence_stems": 3,
+      "max_words_per_source": 60,
+      "union_containment": 0.7,
+      "g9_cues": ["summari[sz]\\w*", "summary of", "sum (?:it |this |that )?up", "paraphras\\w*", "rephras\\w*", "rewr(?:ite|iting|ites|itten|ote)", "retell\\w*", "retold", "recap\\w*", "tl;?\\s?dr", "translat\\w*", "in my own words", "in simple terms", "reword\\w*", "restyl\\w*", "shorten\\w*", "condens\\w*", "abridg\\w*", "key (?:points|takeaways|facts|findings)", "(?:main |key )?takeaways?", "gist", "overview of", "explain (?:this|the|that) (?:article|story|piece|post|report)", "break(?:ing)? (?:it|this|that|the (?:article|story|piece)) down", "what (?:does|did) (?:this|the|that) (?:article|story|piece|post|report) say", "what (?:is|was) (?:this|the|that) (?:article|story|piece|post|report) about"],
+      "prompt_sentence": " Passages marked \"licence\": \"ND\" come from no-derivatives news articles. Use them only for specific facts, each in your own words with [n]. Never retell, summarise or restructure the article; do not follow its order. Do not copy its wording."
+    },
     "max_parts": 4,
     "per_part": {
       "_note": "D8 = A. enabled=false is the rollback lever (restores the legacy whole-draft prompt and marker substring rule). partial_result_kind: the plan's value is 'partial_answer', but the guarded seams (vera/ask_service.py:154 and main.py lines ~542-586) only treat result_kind 'answer' as an evidentiary answer, so 'partial_answer' would be dropped to the insufficient fallback / hide citations and claim_check. Until the owner gate rules on a guarded change this delta ships the fallback design: kind 'answer' + claim_check.answer_completeness='partial' + the leading partial_statement.",

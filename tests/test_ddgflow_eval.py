@@ -153,7 +153,18 @@ def by(body, key, val):
 def test_00_owner_gate_files_and_flags():
     lg = hashlib.sha256((ROOT / "vera" / "licence_gate.py").read_bytes()).hexdigest()
     lr = hashlib.sha256((ROOT / "config" / "licence_rules.json").read_bytes()).hexdigest()
-    assert lg.startswith("2ae9c248") and lr.startswith("4e194967"), (lg, lr)
+    assert lg.startswith("19947ef8") and lr.startswith("ecf93457"), (lg, lr)
+    # H19 review F4: the ND decision path is delegated to vera/news_access.py and the reporting_lane.json access blocks plus
+    # nc_basis; pin them so a change is visible to the owner. nc_basis must stay UNCONFIRMED until NC-BASIS-1 (T0n).
+    na_sha = hashlib.sha256((ROOT / "vera" / "news_access.py").read_bytes()).hexdigest()
+    rlc = json.loads((ROOT / "config" / "reporting_lane.json").read_text(encoding="utf-8"))
+    sub = {"nc_basis": rlc["nc_basis"], "access": {o["host"]: o["access"] for o in rlc["outlets"] if isinstance(o.get("access"), dict)}}
+    sub_sha = hashlib.sha256(json.dumps(sub, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert na_sha.startswith("7840bbca") and sub_sha.startswith("07e79315"), (na_sha, sub_sha)
+    assert rlc["nc_basis"]["status"] == "UNCONFIRMED"
+    # H19 re-review LOW: nd_guard thresholds and the g9_cues list (config/fulldoc_answer.json answer.nd_guard) are pinned too
+    ndg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text(encoding="utf-8"))["answer"]["nd_guard"]
+    assert hashlib.sha256(json.dumps(ndg, sort_keys=True, separators=(",", ":")).encode()).hexdigest().startswith("ccf74d81")
     acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text(encoding="utf-8"))
     assert acq["search"]["ddg_first"]["enabled"] is True and acq["arxiv_route"]["enabled"] is True
     reg = json.loads((ROOT / "config" / "portal_registry.json").read_text(encoding="utf-8"))

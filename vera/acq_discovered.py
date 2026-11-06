@@ -483,15 +483,26 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
                 rp = True
             else:
                 p = robotparser.RobotFileParser()
-                p.parse(body.decode("utf-8", "ignore").splitlines())
+                txt = body.decode("utf-8", "ignore")
+                p.parse(txt.splitlines())
+                from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI
+                _ra.annotate(p, txt)
                 rp = p
-        except aa._Stop:
+        except Exception:  # noqa: BLE001  aa._Stop and any parse/config error: fail closed
             rp = False
         with _ROBOTS_LOCK:
             _ROBOTS[host] = (now, rp)
             while len(_ROBOTS) > 64:
                 _ROBOTS.pop(next(iter(_ROBOTS)))
-    return bool(rp is True or (rp is not False and rp.can_fetch(sf.USER_AGENT, url)))
+    if rp is True:
+        return True
+    if rp is False:
+        return False
+    try:
+        from vera import robots_ai as _ra
+        return _ra.allowed(rp, sf.USER_AGENT, url) and _ra.block_reason(rp, url) is None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 _META = re.compile(r"<meta\s[^>]*?name=[\"'](citation_xml_url|citation_pdf_url)[\"'][^>]*?>", re.I)
