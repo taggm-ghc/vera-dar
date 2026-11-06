@@ -1,0 +1,737 @@
+-- 016_vera_lists_to_db.sql -- DRAFT. NOT EXECUTED. Not a live migration: it sits under staged/ and is invisible to the runner.
+-- LISTS-TO-DB-1104 (owner directive 2026-11-04: "data in lists and lists should be in a table in the db!"). Authored 2026-11-05 by
+-- LTD-016-AUTHOR-1105 at the owner-approved staged path (denial LTD-1 closed). Design: work/LISTS-TO-DB-1104/design.md; review: review.md.
+-- WHAT: five tables and two views in schema vera_vjay, then seeds 10 config lists (verbatim from the repo config files):
+--   lstreg_lists        one row per list (version, state, payload {shape, combine, policy_class, file, path})
+--   lstreg_items        string lists and the trace key allowlist (news.fallback_order, acquire.search_providers,
+--                       scope.offtopic_providers, trace.key_allowlist, digest.numeric_words, fetch.deny_hosts, permissions.deny_hosts)
+--   licallow_licences   licence.allowlist   (supersedes the separate LICENCE-ALLOWLIST-1104 016 draft)
+--   entreg_entities     entity.registry     (supersedes draft 014 entity_registry)
+--   rptout_outlets      news.outlets
+--   lstreg_active_lists_v / lstreg_active_items_v   the ONLY objects an app role can read (security_barrier, owner-run).
+-- NAMING EXCEPTION (review F10): four prefixes in one file because the owner scripts pin these table names
+--   (scripts/lists_common.sh OBJECTS_SQL); trigger functions are shared under lstreg_.
+-- ROLES / GRANTS: no role is created or altered. SELECT on the two views to the GROUP roles vera_vjay_ro and vera_vjay_rw ONLY.
+--   NO privilege on any base table, identity sequence or function for PUBLIC or any app role (review F4); vera_vjay_wo gets nothing.
+--   Only this file's own new objects are revoked below (the per-object grants that the 001 default privileges put on them);
+--   the 001 default privileges themselves are not changed, and no existing object is touched.
+--   All list changes are owner-run (the migration owner role): app roles cannot write.
+-- SEMANTICS: rows are immutable after insert except `state`; a content change = a new version row. Version is max+1 (a key's
+--   first row may carry any version >= 1, so the seed can keep payload.version). Activating a row retires the other active row
+--   of the same key. DELETE and TRUNCATE are refused (retire instead). created_at/modified_at are set by trigger.
+-- APPLYING NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py.
+--   Use work/LISTS-TO-DB-1104/scripts/apply_016.sh (dry run by default). The app flag config/list_tables.json read_from_db stays false.
+-- UNTESTED against a real PostgreSQL: CHECKs, triggers and views have never been executed (offline review only).
+-- Rollback (destructive, separate approval): staged/db/migrations/rollback/016-DRAFT-lists-to-db-rollback.sql.draft
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; any error leaves nothing applied).
+BEGIN;
+
+-- Preflight 1: schema exists; nothing this file creates may exist (also the idempotence guard: a second run aborts here).
+DO $$
+DECLARE n text;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '016 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['lstreg_lists','lstreg_items','licallow_licences','entreg_entities','rptout_outlets',
+                           'lstreg_active_lists_v','lstreg_active_items_v'] LOOP
+    IF pg_catalog.to_regclass('vera_vjay.' || n) IS NOT NULL THEN
+      RAISE EXCEPTION '016 already applied or name collision: vera_vjay.% exists.', n;
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+              WHERE ns.nspname = 'vera_vjay'
+                AND (c.relname ~ '^(lstreg|licallow|entreg|rptout)_' )) THEN
+    RAISE EXCEPTION '016 name collision: a relation (index, sequence, table) with a lstreg_/licallow_/entreg_/rptout_ prefix exists.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+              WHERE ns.nspname = 'vera_vjay'
+                AND p.proname IN ('lstreg_insert_trgfn','lstreg_update_trgfn','lstreg_no_delete_trgfn','lstreg_no_truncate_trgfn')) THEN
+    RAISE EXCEPTION '016 name collision: a lstreg_ trigger function exists.';
+  END IF;
+END $$;
+
+-- Preflight 2 (review F4/F5, as 012 R1(a)): the three group roles exist, and this session's role (the owner of everything
+-- created here) is neither an app role nor a direct member of one. No role is created or altered.
+DO $$
+DECLARE g text;
+BEGIN
+  FOREACH g IN ARRAY ARRAY['vera_vjay_ro','vera_vjay_rw','vera_vjay_wo'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '016 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+  END LOOP;
+  IF current_user IN ('vera_vjay_ro','vera_vjay_rw','vera_vjay_wo','vera_claude_code_rw','vera_pipeline_wo','vera_eval_ro')
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                  JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+                  JOIN pg_catalog.pg_roles mem ON mem.oid = m.member
+                 WHERE mem.rolname = current_user AND r.rolname IN ('vera_vjay_ro','vera_vjay_rw','vera_vjay_wo')) THEN
+    RAISE EXCEPTION '016 must be run as the owner role, not an application role or a direct member of one.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Tables. Core columns are identical in all five; the typed tables add per-list payload CHECKs.
+-- ---------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.lstreg_lists (
+    row_id       BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT lstreg_lists_pk PRIMARY KEY,
+    list_name    TEXT NOT NULL CONSTRAINT lstreg_lists_list_chk CHECK (list_name ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$'),
+    item_key     TEXT NOT NULL CONSTRAINT lstreg_lists_key_chk CHECK (item_key <> '' AND length(item_key) <= 300),
+    item_rank    INTEGER CONSTRAINT lstreg_lists_rank_chk CHECK (item_rank IS NULL OR item_rank >= 0),
+    version      INTEGER NOT NULL CONSTRAINT lstreg_lists_ver_chk CHECK (version >= 1),
+    state        TEXT NOT NULL CONSTRAINT lstreg_lists_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    origin       TEXT NOT NULL CONSTRAINT lstreg_lists_origin_chk CHECK (origin IN ('seed','owner')),
+    payload      JSONB NOT NULL CONSTRAINT lstreg_lists_payload_chk CHECK (jsonb_typeof(payload) = 'object' AND length(payload::text) <= 65536),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT lstreg_lists_pver_chk CHECK (CASE WHEN payload ? 'version' THEN payload -> 'version' = pg_catalog.to_jsonb(version) ELSE true END),
+    CONSTRAINT lstreg_lists_key_ver_uq UNIQUE (list_name, item_key, version),
+    CONSTRAINT lstreg_lists_self_chk CHECK (item_key = list_name),
+    CONSTRAINT lstreg_lists_def_chk CHECK ((
+      payload ->> 'shape' IN ('strings','records','stage_keys')
+      AND payload ->> 'combine' IN ('replace','union')
+      AND payload ->> 'policy_class' IN ('safety','operational')
+      AND jsonb_typeof(payload -> 'file') = 'string'
+      AND jsonb_typeof(payload -> 'path') = 'array') IS TRUE)
+);
+COMMENT ON TABLE vera_vjay.lstreg_lists IS 'LISTS-TO-DB-1104: one row per config list (versioned). Owner-written; app roles read only the active view.';
+
+CREATE TABLE vera_vjay.lstreg_items (
+    row_id       BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT lstreg_items_pk PRIMARY KEY,
+    list_name    TEXT NOT NULL CONSTRAINT lstreg_items_list_chk CHECK (list_name ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$'),
+    item_key     TEXT NOT NULL CONSTRAINT lstreg_items_key_chk CHECK (item_key <> '' AND length(item_key) <= 300),
+    item_rank    INTEGER CONSTRAINT lstreg_items_rank_chk CHECK (item_rank IS NULL OR item_rank >= 0),
+    version      INTEGER NOT NULL CONSTRAINT lstreg_items_ver_chk CHECK (version >= 1),
+    state        TEXT NOT NULL CONSTRAINT lstreg_items_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    origin       TEXT NOT NULL CONSTRAINT lstreg_items_origin_chk CHECK (origin IN ('seed','owner')),
+    payload      JSONB NOT NULL CONSTRAINT lstreg_items_payload_chk CHECK (jsonb_typeof(payload) = 'object' AND length(payload::text) <= 65536),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT lstreg_items_pver_chk CHECK (CASE WHEN payload ? 'version' THEN payload -> 'version' = pg_catalog.to_jsonb(version) ELSE true END),
+    CONSTRAINT lstreg_items_key_ver_uq UNIQUE (list_name, item_key, version),
+    CONSTRAINT lstreg_items_own_list_chk CHECK (list_name NOT IN ('licence.allowlist','entity.registry','news.outlets')),
+    CONSTRAINT lstreg_items_host_chk CHECK (list_name NOT IN ('fetch.deny_hosts','permissions.deny_hosts')
+                                            OR item_key ~ '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'),
+    CONSTRAINT lstreg_items_trace_chk CHECK ((list_name <> 'trace.key_allowlist'
+      OR (item_key ~ '^[a-z][a-z0-9_]*(:[A-Za-z0-9_]+([.][A-Za-z0-9_]+)?)?$'
+          AND jsonb_typeof(payload -> 'stage') = 'string'
+          AND pg_catalog.split_part(item_key, ':', 1) = payload ->> 'stage')) IS TRUE)
+);
+COMMENT ON TABLE vera_vjay.lstreg_items IS 'LISTS-TO-DB-1104: items of the string lists and the trace key allowlist (item_key = the string, or <stage>, <stage>:<key>, <stage>:<parent>.<key>).';
+
+CREATE TABLE vera_vjay.licallow_licences (
+    row_id       BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT licallow_licences_pk PRIMARY KEY,
+    list_name    TEXT NOT NULL CONSTRAINT licallow_licences_list_chk CHECK (list_name ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$'),
+    item_key     TEXT NOT NULL CONSTRAINT licallow_licences_key_chk CHECK (item_key <> '' AND length(item_key) <= 300),
+    item_rank    INTEGER CONSTRAINT licallow_licences_rank_chk CHECK (item_rank IS NULL OR item_rank >= 0),
+    version      INTEGER NOT NULL CONSTRAINT licallow_licences_ver_chk CHECK (version >= 1),
+    state        TEXT NOT NULL CONSTRAINT licallow_licences_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    origin       TEXT NOT NULL CONSTRAINT licallow_licences_origin_chk CHECK (origin IN ('seed','owner')),
+    payload      JSONB NOT NULL CONSTRAINT licallow_licences_payload_chk CHECK (jsonb_typeof(payload) = 'object' AND length(payload::text) <= 65536),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT licallow_licences_pver_chk CHECK (CASE WHEN payload ? 'version' THEN payload -> 'version' = pg_catalog.to_jsonb(version) ELSE true END),
+    CONSTRAINT licallow_licences_key_ver_uq UNIQUE (list_name, item_key, version),
+    CONSTRAINT licallow_licences_own_list_chk CHECK (list_name = 'licence.allowlist'),
+    CONSTRAINT licallow_licences_id_chk CHECK ((item_key = payload ->> 'id') IS TRUE),
+    CONSTRAINT licallow_licences_flags_chk CHECK ((
+      jsonb_typeof(payload -> 'storable') = 'boolean'
+      AND COALESCE(jsonb_typeof(payload -> 'nd'),     'null') IN ('boolean','null')
+      AND COALESCE(jsonb_typeof(payload -> 'nc'),     'null') IN ('boolean','null')
+      AND COALESCE(jsonb_typeof(payload -> 'sa'),     'null') IN ('boolean','null')
+      AND COALESCE(jsonb_typeof(payload -> 'reject'), 'null') IN ('boolean','null')
+      AND COALESCE(jsonb_typeof(payload -> 'aliases'), 'array') = 'array'
+      AND COALESCE(jsonb_typeof(payload -> 'urls'),    'array') = 'array') IS TRUE),
+    CONSTRAINT licallow_licences_storable_chk CHECK (
+      NOT (COALESCE(payload -> 'storable' = 'true'::jsonb, false)
+           AND (COALESCE(payload -> 'nd' = 'true'::jsonb, false) OR COALESCE(payload -> 'reject' = 'true'::jsonb, false)))),
+    CONSTRAINT licallow_licences_approved_chk CHECK ((
+      state <> 'active' OR (jsonb_typeof(payload -> 'approved_by') = 'string' AND (payload ->> 'approved_by') <> '')) IS TRUE)
+);
+COMMENT ON TABLE vera_vjay.licallow_licences IS 'LISTS-TO-DB-1104: licence.allowlist. storable implies not nd and not reject; an active row needs approved_by.';
+
+CREATE TABLE vera_vjay.entreg_entities (
+    row_id       BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT entreg_entities_pk PRIMARY KEY,
+    list_name    TEXT NOT NULL CONSTRAINT entreg_entities_list_chk CHECK (list_name ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$'),
+    item_key     TEXT NOT NULL CONSTRAINT entreg_entities_key_chk CHECK (item_key <> '' AND length(item_key) <= 300),
+    item_rank    INTEGER CONSTRAINT entreg_entities_rank_chk CHECK (item_rank IS NULL OR item_rank >= 0),
+    version      INTEGER NOT NULL CONSTRAINT entreg_entities_ver_chk CHECK (version >= 1),
+    state        TEXT NOT NULL CONSTRAINT entreg_entities_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    origin       TEXT NOT NULL CONSTRAINT entreg_entities_origin_chk CHECK (origin IN ('seed','owner')),
+    payload      JSONB NOT NULL CONSTRAINT entreg_entities_payload_chk CHECK (jsonb_typeof(payload) = 'object' AND length(payload::text) <= 65536),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT entreg_entities_pver_chk CHECK (CASE WHEN payload ? 'version' THEN payload -> 'version' = pg_catalog.to_jsonb(version) ELSE true END),
+    CONSTRAINT entreg_entities_key_ver_uq UNIQUE (list_name, item_key, version),
+    CONSTRAINT entreg_entities_own_list_chk CHECK (list_name = 'entity.registry'),
+    CONSTRAINT entreg_entities_key_lc_chk CHECK ((item_key = lower(payload ->> 'entity')) IS TRUE),
+    CONSTRAINT entreg_entities_verdicts_chk CHECK (
+      COALESCE(payload ->> 'access_verdict',     'unknown') IN ('allow','forbid','unknown')
+      AND COALESCE(payload ->> 'derivative_verdict', 'unknown') IN ('allow','forbid','unknown')
+      AND COALESCE(payload ->> 'ingest_verdict',     'unknown') IN ('allow','forbid','unknown')
+      AND COALESCE(payload ->> 'terms_verdict',      'unknown') IN ('allow','links_only','unknown')),
+    CONSTRAINT entreg_entities_shape_chk CHECK ((
+      jsonb_typeof(payload -> 'domains') = 'array'
+      AND NOT jsonb_path_exists(payload, '$.domains[*] ? (@.type() != "string" || !(@ like_regex "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"))')
+      AND COALESCE(jsonb_typeof(payload -> 'aliases'), 'array') = 'array'
+      AND COALESCE(jsonb_typeof(payload -> 'allowed_paths'), 'object') = 'object') IS TRUE)
+);
+COMMENT ON TABLE vera_vjay.entreg_entities IS 'LISTS-TO-DB-1104: entity.registry (official-lane entities with access/derivative/ingest verdicts). Domains are exact hosts, no wildcards.';
+
+CREATE TABLE vera_vjay.rptout_outlets (
+    row_id       BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT rptout_outlets_pk PRIMARY KEY,
+    list_name    TEXT NOT NULL CONSTRAINT rptout_outlets_list_chk CHECK (list_name ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$'),
+    item_key     TEXT NOT NULL CONSTRAINT rptout_outlets_key_chk CHECK (item_key <> '' AND length(item_key) <= 300),
+    item_rank    INTEGER CONSTRAINT rptout_outlets_rank_chk CHECK (item_rank IS NULL OR item_rank >= 0),
+    version      INTEGER NOT NULL CONSTRAINT rptout_outlets_ver_chk CHECK (version >= 1),
+    state        TEXT NOT NULL CONSTRAINT rptout_outlets_state_chk CHECK (state IN ('draft','active','suspended','retired')),
+    origin       TEXT NOT NULL CONSTRAINT rptout_outlets_origin_chk CHECK (origin IN ('seed','owner')),
+    payload      JSONB NOT NULL CONSTRAINT rptout_outlets_payload_chk CHECK (jsonb_typeof(payload) = 'object' AND length(payload::text) <= 65536),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT rptout_outlets_pver_chk CHECK (CASE WHEN payload ? 'version' THEN payload -> 'version' = pg_catalog.to_jsonb(version) ELSE true END),
+    CONSTRAINT rptout_outlets_key_ver_uq UNIQUE (list_name, item_key, version),
+    CONSTRAINT rptout_outlets_own_list_chk CHECK (list_name = 'news.outlets'),
+    CONSTRAINT rptout_outlets_host_chk CHECK ((
+      item_key = lower(payload ->> 'host') AND item_key ~ '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$') IS TRUE),
+    CONSTRAINT rptout_outlets_terms_chk CHECK ((payload ->> 'terms_verdict' IN ('allow','links_only','unknown')) IS TRUE),
+    CONSTRAINT rptout_outlets_delay_chk CHECK (COALESCE(jsonb_typeof(payload -> 'crawl_delay_s'), 'null') IN ('number','null'))
+);
+COMMENT ON TABLE vera_vjay.rptout_outlets IS 'LISTS-TO-DB-1104: news.outlets (reporting lane) with terms verdict and crawl delay.';
+
+-- One active row per (list, key) in each table.
+CREATE UNIQUE INDEX lstreg_lists_one_active_uq ON vera_vjay.lstreg_lists (list_name) WHERE state = 'active';
+CREATE UNIQUE INDEX lstreg_items_one_active_uq ON vera_vjay.lstreg_items (list_name, item_key) WHERE state = 'active';
+CREATE UNIQUE INDEX licallow_licences_one_active_uq ON vera_vjay.licallow_licences (list_name, item_key) WHERE state = 'active';
+CREATE UNIQUE INDEX entreg_entities_one_active_uq ON vera_vjay.entreg_entities (list_name, item_key) WHERE state = 'active';
+CREATE UNIQUE INDEX rptout_outlets_one_active_uq ON vera_vjay.rptout_outlets (list_name, item_key) WHERE state = 'active';
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Shared trigger functions (dynamic table via TG_TABLE_NAME; every table has row_id, list_name, item_key, version, state).
+-- ---------------------------------------------------------------------------------------------------------------------
+CREATE FUNCTION vera_vjay.lstreg_insert_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE m integer;
+BEGIN
+  EXECUTE pg_catalog.format('SELECT COALESCE(MAX(version), 0) FROM %I.%I WHERE list_name = $1 AND item_key = $2',
+                            TG_TABLE_SCHEMA, TG_TABLE_NAME) INTO m USING NEW.list_name, NEW.item_key;
+  IF NEW.version IS NULL THEN
+    NEW.version := m + 1;
+  ELSIF m > 0 AND NEW.version <> m + 1 THEN
+    RAISE EXCEPTION '%: version for (%, %) must be % (max+1), got %', TG_TABLE_NAME, NEW.list_name, NEW.item_key, m + 1, NEW.version;
+  END IF;
+  NEW.created_at  := pg_catalog.now();
+  NEW.modified_at := NEW.created_at;
+  IF NEW.state = 'active' THEN
+    EXECUTE pg_catalog.format('UPDATE %I.%I SET state = ''retired'' WHERE list_name = $1 AND item_key = $2 AND state = ''active''',
+                              TG_TABLE_SCHEMA, TG_TABLE_NAME) USING NEW.list_name, NEW.item_key;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.lstreg_update_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  IF (pg_catalog.to_jsonb(NEW) - 'state' - 'modified_at') IS DISTINCT FROM (pg_catalog.to_jsonb(OLD) - 'state' - 'modified_at') THEN
+    RAISE EXCEPTION '%: row content is immutable (insert a new version); only state may change', TG_TABLE_NAME;
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    IF NOT ((OLD.state = 'draft'     AND NEW.state IN ('active','retired'))
+         OR (OLD.state = 'active'    AND NEW.state IN ('suspended','retired'))
+         OR (OLD.state = 'suspended' AND NEW.state IN ('active','retired'))) THEN
+      RAISE EXCEPTION '%: state change % -> % is not allowed', TG_TABLE_NAME, OLD.state, NEW.state;
+    END IF;
+    IF NEW.state = 'active' THEN
+      EXECUTE pg_catalog.format('UPDATE %I.%I SET state = ''retired'' WHERE list_name = $1 AND item_key = $2 AND state = ''active'' AND row_id <> $3',
+                                TG_TABLE_SCHEMA, TG_TABLE_NAME) USING NEW.list_name, NEW.item_key, NEW.row_id;
+    END IF;
+  END IF;
+  NEW.modified_at := pg_catalog.now();
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.lstreg_no_delete_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION '%: DELETE is not allowed (set state to retired instead)', TG_TABLE_NAME;
+END $f$;
+
+CREATE FUNCTION vera_vjay.lstreg_no_truncate_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  RAISE EXCEPTION '%: TRUNCATE is not allowed', TG_TABLE_NAME;
+END $f$;
+
+CREATE TRIGGER lstreg_lists_a_insert_trg BEFORE INSERT ON vera_vjay.lstreg_lists
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_insert_trgfn();
+CREATE TRIGGER lstreg_lists_b_update_trg BEFORE UPDATE ON vera_vjay.lstreg_lists
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_update_trgfn();
+CREATE TRIGGER lstreg_lists_c_no_delete_trg BEFORE DELETE ON vera_vjay.lstreg_lists
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_no_delete_trgfn();
+CREATE TRIGGER lstreg_lists_d_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.lstreg_lists
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.lstreg_no_truncate_trgfn();
+
+CREATE TRIGGER lstreg_items_a_insert_trg BEFORE INSERT ON vera_vjay.lstreg_items
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_insert_trgfn();
+CREATE TRIGGER lstreg_items_b_update_trg BEFORE UPDATE ON vera_vjay.lstreg_items
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_update_trgfn();
+CREATE TRIGGER lstreg_items_c_no_delete_trg BEFORE DELETE ON vera_vjay.lstreg_items
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_no_delete_trgfn();
+CREATE TRIGGER lstreg_items_d_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.lstreg_items
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.lstreg_no_truncate_trgfn();
+
+CREATE TRIGGER licallow_licences_a_insert_trg BEFORE INSERT ON vera_vjay.licallow_licences
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_insert_trgfn();
+CREATE TRIGGER licallow_licences_b_update_trg BEFORE UPDATE ON vera_vjay.licallow_licences
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_update_trgfn();
+CREATE TRIGGER licallow_licences_c_no_delete_trg BEFORE DELETE ON vera_vjay.licallow_licences
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_no_delete_trgfn();
+CREATE TRIGGER licallow_licences_d_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.licallow_licences
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.lstreg_no_truncate_trgfn();
+
+CREATE TRIGGER entreg_entities_a_insert_trg BEFORE INSERT ON vera_vjay.entreg_entities
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_insert_trgfn();
+CREATE TRIGGER entreg_entities_b_update_trg BEFORE UPDATE ON vera_vjay.entreg_entities
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_update_trgfn();
+CREATE TRIGGER entreg_entities_c_no_delete_trg BEFORE DELETE ON vera_vjay.entreg_entities
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_no_delete_trgfn();
+CREATE TRIGGER entreg_entities_d_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.entreg_entities
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.lstreg_no_truncate_trgfn();
+
+CREATE TRIGGER rptout_outlets_a_insert_trg BEFORE INSERT ON vera_vjay.rptout_outlets
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_insert_trgfn();
+CREATE TRIGGER rptout_outlets_b_update_trg BEFORE UPDATE ON vera_vjay.rptout_outlets
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_update_trgfn();
+CREATE TRIGGER rptout_outlets_c_no_delete_trg BEFORE DELETE ON vera_vjay.rptout_outlets
+  FOR EACH ROW EXECUTE FUNCTION vera_vjay.lstreg_no_delete_trgfn();
+CREATE TRIGGER rptout_outlets_d_no_truncate_trg BEFORE TRUNCATE ON vera_vjay.rptout_outlets
+  FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.lstreg_no_truncate_trgfn();
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Views: the only app-readable objects. security_barrier ON, security_invoker OFF (default): owned by the migration owner.
+-- ---------------------------------------------------------------------------------------------------------------------
+CREATE VIEW vera_vjay.lstreg_active_lists_v WITH (security_barrier = true) AS
+  SELECT l.list_name, l.payload ->> 'shape' AS shape, l.payload ->> 'combine' AS combine, l.version
+    FROM vera_vjay.lstreg_lists l
+   WHERE l.state = 'active';
+
+CREATE VIEW vera_vjay.lstreg_active_items_v WITH (security_barrier = true) AS
+  SELECT u.list_name, u.item_key, u.item_rank, u.version, u.payload
+    FROM (
+      SELECT list_name, item_key, item_rank, version, payload FROM vera_vjay.lstreg_items       WHERE state = 'active'
+      UNION ALL
+      SELECT list_name, item_key, item_rank, version, payload FROM vera_vjay.licallow_licences  WHERE state = 'active'
+      UNION ALL
+      SELECT list_name, item_key, item_rank, version, payload FROM vera_vjay.entreg_entities    WHERE state = 'active'
+      UNION ALL
+      SELECT list_name, item_key, item_rank, version, payload FROM vera_vjay.rptout_outlets     WHERE state = 'active'
+    ) u
+   WHERE EXISTS (SELECT 1 FROM vera_vjay.lstreg_lists l WHERE l.list_name = u.list_name AND l.state = 'active');
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Seed (verbatim from the config files named in each list's payload; origin 'seed'). Rank = position in the config list.
+-- ---------------------------------------------------------------------------------------------------------------------
+-- lstreg_lists: 10 list definitions (version 1, active)
+INSERT INTO vera_vjay.lstreg_lists (list_name, item_key, item_rank, version, state, origin, payload) VALUES
+  ('licence.allowlist', 'licence.allowlist', NULL, NULL, 'active', 'seed', $j${"shape":"records","combine":"replace","policy_class":"safety","file":"licence_allowlist.json","path":["entries"]}$j$::jsonb),
+  ('entity.registry', 'entity.registry', NULL, NULL, 'active', 'seed', $j${"shape":"records","combine":"replace","policy_class":"safety","file":"entity_registry.json","path":["entities"]}$j$::jsonb),
+  ('news.outlets', 'news.outlets', NULL, NULL, 'active', 'seed', $j${"shape":"records","combine":"replace","policy_class":"safety","file":"reporting_lane.json","path":["outlets"]}$j$::jsonb),
+  ('news.fallback_order', 'news.fallback_order', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"replace","policy_class":"safety","file":"reporting_lane.json","path":["fallback_order"]}$j$::jsonb),
+  ('acquire.search_providers', 'acquire.search_providers', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"replace","policy_class":"operational","file":"auto_acquire.json","path":["search","providers"]}$j$::jsonb),
+  ('scope.offtopic_providers', 'scope.offtopic_providers', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"replace","policy_class":"operational","file":"scope_router.json","path":["offtopic_providers"]}$j$::jsonb),
+  ('trace.key_allowlist', 'trace.key_allowlist', NULL, NULL, 'active', 'seed', $j${"shape":"stage_keys","combine":"replace","policy_class":"safety","file":"request_trace.json","path":["key_allowlist"]}$j$::jsonb),
+  ('digest.numeric_words', 'digest.numeric_words', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"replace","policy_class":"operational","file":"corpus_digest_numeric_words.json","path":["numeric_words","words"]}$j$::jsonb),
+  ('fetch.deny_hosts', 'fetch.deny_hosts', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"union","policy_class":"safety","file":"public_fetch.json","path":["deny_hosts"]}$j$::jsonb),
+  ('permissions.deny_hosts', 'permissions.deny_hosts', NULL, NULL, 'active', 'seed', $j${"shape":"strings","combine":"union","policy_class":"safety","file":"source_permissions.json","path":["deny_hosts"]}$j$::jsonb);
+
+-- licallow_licences: licence.allowlist (33 active, 2 proposed -> draft); rank = position in config
+INSERT INTO vera_vjay.licallow_licences (list_name, item_key, item_rank, version, state, origin, payload) VALUES
+  ('licence.allowlist', 'CC-BY-4.0', 0, NULL, 'active', 'seed', $j${"id":"CC-BY-4.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by 4.0","cc-by-4.0","creative commons attribution 4.0 international","creative commons attribution 4.0"],"urls":["https://creativecommons.org/licenses/by/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-3.0', 1, NULL, 'active', 'seed', $j${"id":"CC-BY-3.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by/3.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by 3.0","cc-by-3.0","creative commons attribution 3.0 unported","creative commons attribution 3.0"],"urls":["https://creativecommons.org/licenses/by/3.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY', 2, NULL, 'active', 'seed', $j${"id":"CC-BY","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by","by","by"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-SA-4.0', 3, NULL, 'active', 'seed', $j${"id":"CC-BY-SA-4.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":true,"reason":"ShareAlike; attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-sa/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-sa 4.0","cc-by-sa-4.0","creative commons attribution-sharealike 4.0 international","creative commons attribution-sharealike 4.0"],"urls":["https://creativecommons.org/licenses/by-sa/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-SA-3.0', 4, NULL, 'active', 'seed', $j${"id":"CC-BY-SA-3.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":true,"reason":"ShareAlike; attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-sa/3.0/legalcode.en","evidence_read_state":"INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-sa 3.0","cc-by-sa-3.0","creative commons attribution-sharealike 3.0 unported","creative commons attribution-sharealike 3.0"],"urls":["https://creativecommons.org/licenses/by-sa/3.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-SA', 5, NULL, 'active', 'seed', $j${"id":"CC-BY-SA","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":true,"reason":"ShareAlike; attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by-sa/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-sa","by sa","by-sa"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-4.0', 6, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-4.0","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":false,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-nc/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc 4.0","cc-by-nc-4.0","creative commons attribution-noncommercial 4.0 international","creative commons attribution-noncommercial 4.0"],"urls":["https://creativecommons.org/licenses/by-nc/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-3.0', 7, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-3.0","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":false,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-nc/3.0/legalcode.en","evidence_read_state":"INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc 3.0","cc-by-nc-3.0","creative commons attribution-noncommercial 3.0 unported","creative commons attribution-noncommercial 3.0"],"urls":["https://creativecommons.org/licenses/by-nc/3.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC', 8, NULL, 'active', 'seed', $j${"id":"CC-BY-NC","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":false,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by-nc/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc","by nc","by-nc"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-SA-4.0', 9, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-SA-4.0","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":true,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc-sa 4.0","cc-by-nc-sa-4.0","creative commons attribution-noncommercial-sharealike 4.0 international","creative commons attribution-noncommercial-sharealike 4.0"],"urls":["https://creativecommons.org/licenses/by-nc-sa/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-SA-3.0', 10, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-SA-3.0","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":true,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1)","evidence_url":"https://creativecommons.org/licenses/by-nc-sa/3.0/legalcode.en","evidence_read_state":"INFERRED 2026-11-04: terms from the 4.0 deed and the BY 3.0 deed (R1); this 3.0 deed not fetched","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc-sa 3.0","cc-by-nc-sa-3.0","creative commons attribution-noncommercial-sharealike 3.0 unported","creative commons attribution-noncommercial-sharealike 3.0"],"urls":["https://creativecommons.org/licenses/by-nc-sa/3.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-SA', 11, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-SA","status":"active","storable":true,"attribution_required":true,"nc":true,"nd":false,"sa":true,"reason":"NonCommercial: accepted (R1 rule, plain NC accepted); ShareAlike; attribution required; open licence (owner option 1); version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by-nc-sa/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc-sa","by nc sa","by-nc-sa"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-2.0', 12, NULL, 'draft', 'seed', $j${"id":"CC-BY-2.0","status":"proposed","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"PROPOSED: CC BY 2.0 believed attribution-only like 3.0/4.0; terms not fetched, needs approval","evidence_url":"https://creativecommons.org/licenses/by/2.0/legalcode.en","evidence_read_state":"UNVERIFIED: 2.x deed not fetched (R1); SPDX id listed on spdx.org","approved_by":null,"aliases":["cc by 2.0","cc-by-2.0"],"urls":["https://creativecommons.org/licenses/by/2.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-2.5', 13, NULL, 'draft', 'seed', $j${"id":"CC-BY-2.5","status":"proposed","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"PROPOSED: CC BY 2.5 believed attribution-only like 3.0/4.0; terms not fetched, needs approval","evidence_url":"https://creativecommons.org/licenses/by/2.5/legalcode.en","evidence_read_state":"UNVERIFIED: 2.x deed not fetched (R1); SPDX id listed on spdx.org","approved_by":null,"aliases":["cc by 2.5","cc-by-2.5"],"urls":["https://creativecommons.org/licenses/by/2.5/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-ND-4.0', 14, NULL, 'active', 'seed', $j${"id":"CC-BY-ND-4.0","status":"active","storable":false,"attribution_required":true,"nc":false,"nd":true,"sa":false,"reason":"ND: rejected by the R1 marker rule before the allowlist is consulted","evidence_url":"https://creativecommons.org/licenses/by-nd/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nd 4.0","cc-by-nd-4.0","creative commons attribution-noderivatives 4.0 international","creative commons attribution-noderivatives 4.0"],"urls":["https://creativecommons.org/licenses/by-nd/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-ND', 15, NULL, 'active', 'seed', $j${"id":"CC-BY-ND","status":"active","storable":false,"attribution_required":true,"nc":false,"nd":true,"sa":false,"reason":"ND: rejected by the R1 marker rule before the allowlist is consulted; version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by-nd/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nd","by nd"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-ND-4.0', 16, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-ND-4.0","status":"active","storable":false,"attribution_required":true,"nc":true,"nd":true,"sa":false,"reason":"ND: rejected by the R1 marker rule before the allowlist is consulted","evidence_url":"https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc-nd 4.0","cc-by-nc-nd-4.0","creative commons attribution-noncommercial-noderivatives 4.0 international","creative commons attribution-noncommercial-noderivatives 4.0"],"urls":["https://creativecommons.org/licenses/by-nc-nd/4.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-BY-NC-ND', 17, NULL, 'active', 'seed', $j${"id":"CC-BY-NC-ND","status":"active","storable":false,"attribution_required":true,"nc":true,"nd":true,"sa":false,"reason":"ND: rejected by the R1 marker rule before the allowlist is consulted; version not stated: family terms (NC/ND/SA) are the same in every version","evidence_url":"https://creativecommons.org/licenses/by-nc-nd/4.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (R1): 4.0 deed used as the family evidence","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc by-nc-nd","by nc nd"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'CC0-1.0', 18, NULL, 'active', 'seed', $j${"id":"CC0-1.0","status":"active","storable":true,"attribution_required":false,"nc":false,"nd":false,"sa":false,"reason":"public-domain waiver; no conditions (owner option 1)","evidence_url":"https://creativecommons.org/publicdomain/zero/1.0/legalcode.en","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["cc0","cc zero","cc0 1.0 universal","CC0-1.0"],"urls":["https://creativecommons.org/publicdomain/zero/1.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'CC-PDM-1.0', 19, NULL, 'active', 'seed', $j${"id":"CC-PDM-1.0","status":"active","storable":true,"attribution_required":false,"nc":false,"nd":false,"sa":false,"reason":"Public Domain Mark: work marked free of known copyright restrictions (owner option 1: public domain)","evidence_url":"https://creativecommons.org/publicdomain/mark/1.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R1)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["public domain mark","pdm","public domain mark 1.0"],"urls":["https://creativecommons.org/publicdomain/mark/1.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-public-domain', 20, NULL, 'active', 'seed', $j${"id":"LicenseRef-public-domain","status":"active","storable":true,"attribution_required":false,"nc":false,"nd":false,"sa":false,"reason":"declared public domain (owner option 1); cite the source as good practice","evidence_url":"https://www.usa.gov/government-copyright","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["public domain","public-domain","pd","publicdomain"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-us-government-work', 21, NULL, 'active', 'seed', $j${"id":"LicenseRef-us-government-work","status":"active","storable":true,"attribution_required":false,"nc":false,"nd":false,"sa":false,"reason":"17 U.S.C. 105: no US copyright in works of the US Government (federal employees, official duties); contractor/grantee works and third-party images are NOT covered","evidence_url":"https://www.copyright.gov/title17/92chap1.html","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3; page truncated at 100k chars)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["us government work","us-gov-work","work of the us government","united states government work"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'OGL-UK-3.0', 22, NULL, 'active', 'seed', $j${"id":"OGL-UK-3.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"Open Government Licence v3.0: copy, publish, adapt, commercial or not, with attribution; excludes personal data, third-party rights, logos","evidence_url":"https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["open government licence v3.0","ogl v3.0","ogl-uk-3.0","open government licence 3.0"],"urls":["https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"]}$j$::jsonb),
+  ('licence.allowlist', 'MIT', 23, NULL, 'active', 'seed', $j${"id":"MIT","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"permissive open licence; keep the copyright and permission notice","evidence_url":"https://spdx.org/licenses/MIT.html","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["mit license","mit licence"],"urls":["https://opensource.org/licenses/MIT"]}$j$::jsonb),
+  ('licence.allowlist', 'Apache-2.0', 24, NULL, 'active', 'seed', $j${"id":"Apache-2.0","status":"active","storable":true,"attribution_required":true,"nc":false,"nd":false,"sa":false,"reason":"permissive open licence; keep the licence and NOTICE, mark changes","evidence_url":"https://www.apache.org/licenses/LICENSE-2.0","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["apache 2.0","apache license 2.0","apache license, version 2.0"],"urls":["https://www.apache.org/licenses/LICENSE-2.0"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-all-rights-reserved', 25, NULL, 'active', 'seed', $j${"id":"LicenseRef-all-rights-reserved","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"All rights reserved: no reuse grant; link-only (owner option 1)","evidence_url":null,"evidence_read_state":"n/a (owner decision)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["all rights reserved","copyright all rights reserved","(c) all rights reserved","proprietary"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-arxiv-nonexclusive-distrib-1.0', 26, NULL, 'active', 'seed', $j${"id":"LicenseRef-arxiv-nonexclusive-distrib-1.0","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"grants arXiv only a right to distribute; no third-party reuse grant","evidence_url":"https://arxiv.org/licenses/nonexclusive-distrib/1.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["arxiv nonexclusive distrib 1.0","arxiv.org perpetual non-exclusive license"],"urls":["http://arxiv.org/licenses/nonexclusive-distrib/1.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-arxiv-assumed-1991-2003', 27, NULL, 'active', 'seed', $j${"id":"LicenseRef-arxiv-assumed-1991-2003","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"arXiv assumed licence 1991-2003: functionally equivalent to the non-exclusive distribution licence","evidence_url":"https://info.arxiv.org/help/license/reuse.html","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3); metadata string not observed","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["arxiv assumed 1991 2003"],"urls":["http://arxiv.org/licenses/assumed-1991-2003/"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-elsevier-user-license', 28, NULL, 'active', 'seed', $j${"id":"LicenseRef-elsevier-user-license","status":"active","storable":false,"attribution_required":null,"nc":true,"nd":true,"sa":null,"reason":"REJECT (ND class): Elsevier open-archive user licence forbids creating and distributing derivative works and redistribution; read and NC text-mine only","evidence_url":"https://www.elsevier.com/about/policies-and-standards/open-access-licenses","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R2)","approved_by":"coordinator 2026-11-04 (owner criteria: a no-derivatives term is ND, R1 reject class)","aliases":["elsevier user license","elsevier user licence","elsevier open archive"],"urls":["https://www.elsevier.com/open-access/userlicense/1.0/"],"url_note":"urls value from background knowledge (Crossref form), not observed in this research; recognition only (link-only either way)","reject":true}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-elsevier-tdm-1.0', 29, NULL, 'active', 'seed', $j${"id":"LicenseRef-elsevier-tdm-1.0","status":"active","storable":false,"attribution_required":null,"nc":true,"nd":true,"sa":null,"reason":"subscriber TDM licence: forbids retaining or redistributing the dataset and derivatives","evidence_url":"https://www.elsevier.com/tdm/userlicense/1.0/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R2)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["elsevier tdm","elsevier tdm user license"],"urls":["https://www.elsevier.com/tdm/userlicense/1.0/"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-springernature-tdm', 30, NULL, 'active', 'seed', $j${"id":"LicenseRef-springernature-tdm","status":"active","storable":false,"attribution_required":null,"nc":true,"nd":null,"sa":null,"reason":"subscriber TDM terms: store on a secure internal server without third-party access; OA articles carry their own CC licence","evidence_url":"https://www.springernature.com/gp/researchers/text-and-data-mining","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R2)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["springer tdm","springer nature tdm"],"urls":["https://www.springernature.com/gp/researchers/text-and-data-mining","https://www.springer.com/tdm"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-wiley-tdm', 31, NULL, 'active', 'seed', $j${"id":"LicenseRef-wiley-tdm","status":"active","storable":false,"attribution_required":null,"nc":true,"nd":null,"sa":null,"reason":"Wiley TDM licence: NC scholarly TDM via token; reproduction rights reserved; canonical page 403 to the fetcher","evidence_url":"http://onlinelibrary.wiley.com/termsAndConditions#vor","evidence_read_state":"SUMMARY (search snippet / mirror) 2026-11-04 (research-reader R2)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["wiley tdm","wiley tdm license"],"urls":["http://onlinelibrary.wiley.com/termsAndConditions"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-acs-authorchoice', 32, NULL, 'active', 'seed', $j${"id":"LicenseRef-acs-authorchoice","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"standard ACS AuthorChoice: access-and-use permission, no redistribution grant seen; terms page 403 (ACS CC articles carry CC URLs)","evidence_url":"https://pubs.acs.org/page/policy/authorchoice_termsofuse.html","evidence_read_state":"SUMMARY (search snippet) 2026-11-04 (research-reader R2); canonical page not read","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["acs authorchoice","acs author choice","acs authorchoice usage agreement"],"urls":["https://pubs.acs.org/page/policy/authorchoice_termsofuse.html"]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-pmc-author-manuscript', 33, NULL, 'active', 'seed', $j${"id":"LicenseRef-pmc-author-manuscript","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"PMC/NIH author manuscript: free to read and text-mine; no reuse licence (authors keep copyright)","evidence_url":"https://pmc.ncbi.nlm.nih.gov/about/copyright/","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["author manuscript","nihms","pmc author manuscript"],"urls":[]}$j$::jsonb),
+  ('licence.allowlist', 'LicenseRef-generic-open-access', 34, NULL, 'active', 'seed', $j${"id":"LicenseRef-generic-open-access","status":"active","storable":false,"attribution_required":null,"nc":null,"nd":null,"sa":null,"reason":"bare 'open access' / 'free to read' label: not a licence; per-article licence must be checked (PMC/Europe PMC OA subset terms vary per article)","evidence_url":"https://europepmc.org/downloads/openaccess","evidence_read_state":"READ-SUMMARIZER 2026-11-04 (research-reader R3)","approved_by":"owner 2026-11-04 (Deny All option 1; policy approved)","aliases":["open access","open-access","free to read","oa","free"],"urls":[]}$j$::jsonb);
+
+-- entreg_entities: entity.registry (state from config; payload.version kept as the row version)
+INSERT INTO vera_vjay.entreg_entities (list_name, item_key, item_rank, version, state, origin, payload) VALUES
+  ('entity.registry', 'aws', 0, 2, 'active', 'seed', $j${"entity":"AWS","aliases":["AWS","Amazon Web Services"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["aws.amazon.com","docs.aws.amazon.com"],"docs_entry_urls":["https://docs.aws.amazon.com/"],"state":"active","version":2,"full_aliases":["AWS","Amazon Web Services"],"parents":["Amazon"],"context_terms":["ec2","s3","lambda","sagemaker","bedrock","amazon cloud","cloud ai","cloud computing","cloud platform","cloud services"],"generic_phrases":["amazon rainforest"],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar data mining/robots)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (AWS Site Terms bar robots/data mining)","derivative_verdict":"allow","derivative_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Docs CC BY-SA 4.0)","ingest_verdict":"forbid","ingest_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining)","avoid_paths":["*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also disallows old versioned paths.","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 1; work/NONASK-1103/entity-hosts-evidence.md (Site Terms bar data mining, robots)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'google cloud', 1, 2, 'active', 'seed', $j${"entity":"Google Cloud","aliases":["Google Cloud","GCP","Google"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":["it","that","scholar","search","maps"],"domains":["docs.cloud.google.com","cloud.google.com"],"docs_entry_urls":["https://docs.cloud.google.com/docs"],"state":"active","version":2,"full_aliases":["Google Cloud","GCP","Google Cloud Platform"],"parents":["Alphabet"],"context_terms":["cloud ai","cloud platform","cloud services","vertex ai","bigquery","tpu","tpus","gemini","gke","kubernetes engine","compute engine"],"generic_phrases":["google it","googled","google search","just google"],"terms_verdict":"allow","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)","access_verdict":"allow","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0 footer; robots 200; no scraping ban found)","derivative_verdict":"allow","derivative_evidence":"work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)","ingest_verdict":"allow","ingest_evidence":"work/NONASK-1103/entity-hosts-evidence.md (CC BY 4.0)","avoid_paths":["/cpp/docs/reference/*","/dotnet/docs/reference/*","/go/docs/reference/*","/java/docs/reference/*","/nodejs/docs/reference/*","/php/docs/reference/*","/python/docs/reference/*","/ruby/docs/reference/*","*authuser=*","*getstarted=*","/walkthroughs/*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): robots.txt * group (paraphrase). The table's exceptions (/latest/, /help/ under the reference paths) are NOT modelled: the whole reference subtree is avoided (more restrictive).","read_conditions":"Attribution required (CC BY 4.0).","verification":{"status":"verified","date":"2026-11-04","verdict":"read-permitted","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2; https://docs.cloud.google.com/docs (footer: CC BY 4.0, code Apache 2.0)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{"docs.cloud.google.com":{"exact":["/docs"],"prefix":["/docs/"]},"cloud.google.com":{"exact":["/docs"],"prefix":["/docs/"]}},"allowed_paths_note":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 2: robots * has no Disallow on /docs; /docs/ excludes the /<lang>/docs/reference/ trees by construction; no query strings (authuser=, getstarted= never match).","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'nvidia', 2, 2, 'active', 'seed', $j${"entity":"Nvidia","aliases":["Nvidia","NVIDIA"],"entity_class":"vendor","volatile":true,"match_case":false,"exclude_next":[],"domains":["docs.nvidia.com","developer.nvidia.com"],"docs_entry_urls":["https://docs.nvidia.com/"],"state":"active","version":2,"full_aliases":[],"parents":[],"context_terms":["gpu","gpus","cuda","h100","a100","tensor core","dgx","nim","ai platform","ai engineering"],"generic_phrases":[],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms 3.2(f) bar robots/scrapers)","derivative_verdict":"forbid","derivative_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial internal use only)","ingest_verdict":"forbid","ingest_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Terms: personal non-commercial use only)","avoid_paths":["*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only): terms conflict with the robots invitation; restrictive wins.","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 3; work/NONASK-1103/entity-hosts-evidence.md (Terms s.3.2(f) bar robots/scrapers)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'azure', 3, 2, 'active', 'seed', $j${"entity":"Azure","aliases":["Azure","Microsoft Azure"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":["sky","skies","blue"],"domains":["learn.microsoft.com","azure.microsoft.com"],"docs_entry_urls":["https://learn.microsoft.com/azure/"],"state":"active","version":2,"full_aliases":["Microsoft Azure"],"parents":["Microsoft"],"context_terms":["microsoft","cloud ai","cloud platform","cloud services","virtual machines","azure devops","openai","active directory","platform","ai engineering","cloud engineering"],"generic_phrases":["azure sky","azure blue","azure skies","azure water","azure coast"],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial; no copying)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4 (2026-11-04, OD-OL-1); prior: work/NONASK-1103/entity-hosts-evidence.md (Terms of Use: personal, non-commercial use)","derivative_verdict":"forbid","derivative_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying or derivatives without consent)","ingest_verdict":"forbid","ingest_evidence":"work/NONASK-1103/entity-hosts-evidence.md (Terms: no copying)","avoid_paths":["*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots disallows search params only.","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 4; work/NONASK-1103/entity-hosts-evidence.md (personal non-commercial use; no copy)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'kubernetes', 4, 1, 'draft', 'seed', $j${"entity":"Kubernetes","aliases":["Kubernetes","K8s"],"entity_class":"product","volatile":false,"match_case":false,"exclude_next":[],"domains":["kubernetes.io"],"docs_entry_urls":["https://kubernetes.io/docs/"],"state":"draft","version":1,"terms_verdict":"unknown","terms_evidence":null,"access_verdict":"unknown","access_evidence":null,"derivative_verdict":"unknown","derivative_evidence":null,"ingest_verdict":"unknown","ingest_evidence":null}$j$::jsonb),
+  ('entity.registry', 'postgresql', 5, 1, 'draft', 'seed', $j${"entity":"PostgreSQL","aliases":["PostgreSQL","Postgres"],"entity_class":"product","volatile":false,"match_case":false,"exclude_next":[],"domains":["www.postgresql.org"],"docs_entry_urls":["https://www.postgresql.org/docs/"],"state":"draft","version":1,"terms_verdict":"unknown","terms_evidence":null,"access_verdict":"unknown","access_evidence":null,"derivative_verdict":"unknown","derivative_evidence":null,"ingest_verdict":"unknown","ingest_evidence":null}$j$::jsonb),
+  ('entity.registry', 'amazon', 6, 1, 'suspended', 'seed', $j${"entity":"Amazon","aliases":["Amazon"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":["rainforest","river","basin","forest"],"domains":["www.aboutamazon.com"],"docs_entry_urls":[],"state":"suspended","version":1,"terms_verdict":"unknown","terms_evidence":null,"access_verdict":"unknown","access_evidence":null,"derivative_verdict":"unknown","derivative_evidence":null,"ingest_verdict":"unknown","ingest_evidence":null}$j$::jsonb),
+  ('entity.registry', 'snowflake', 7, 2, 'active', 'seed', $j${"entity":"Snowflake","aliases":["Snowflake"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["docs.snowflake.com"],"docs_entry_urls":["https://docs.snowflake.com/"],"state":"active","version":2,"full_aliases":[],"parents":["Snowflake Inc"],"context_terms":["data warehouse","warehouse","data cloud","cortex","snowpark","sql","virtual warehouse"],"generic_phrases":["snowflake schema","snowflake effect","snowflake pattern"],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1)","derivative_verdict":"forbid","derivative_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1) (terms bar copying)","ingest_verdict":"forbid","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5 (2026-11-04, OD-OL-1) (link-only row)","avoid_paths":["*","/*sql-reference/commands-*","/*INCLUDE/*","/*DRAFT/*","/*PREVIEW/*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also blocks sql-reference/commands-*, INCLUDE/, DRAFT/, PREVIEW/.","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 5; https://www.snowflake.com/legal/snowflake-site-terms/ (s.5(i) bars scrape/copy)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'kafka', 8, 2, 'active', 'seed', $j${"entity":"Kafka","aliases":["Kafka","Apache Kafka"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["kafka.apache.org"],"docs_entry_urls":["https://kafka.apache.org/"],"state":"active","version":2,"full_aliases":["Apache Kafka"],"parents":["Apache"],"context_terms":["apache","broker","topic partitions","consumer group","producer","streaming","confluent","message queue","message broker"],"generic_phrases":["franz kafka","kafkaesque"],"terms_verdict":"allow","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1)","access_verdict":"allow","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1)","derivative_verdict":"allow","derivative_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1) (Apache License 2.0)","ingest_verdict":"unknown","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)","avoid_paths":[],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): none: robots.txt * group has no Disallow.","verification":{"status":"verified","date":"2026-11-04","verdict":"read-permitted","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6; https://kafka.apache.org/ (footer: Apache License v2)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{"kafka.apache.org":{"exact":["/","/documentation"],"prefix":["/documentation/"]}},"allowed_paths_note":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 6: robots * has no Disallow and the site is Apache License 2.0; the home page (verified) plus the /documentation/ tree. The /documentation/ path layout was not fetched in verification: an absent path only means nothing is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'pulsar', 9, 2, 'active', 'seed', $j${"entity":"Pulsar","aliases":["Pulsar","Apache Pulsar"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["pulsar.apache.org"],"docs_entry_urls":["https://pulsar.apache.org/"],"state":"active","version":2,"full_aliases":["Apache Pulsar"],"parents":["Apache"],"context_terms":["apache","broker","bookkeeper","streaming","message queue","message broker","topic"],"generic_phrases":["pulsar timing","pulsar star","millisecond pulsar","radio pulsar"],"terms_verdict":"allow","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1)","access_verdict":"allow","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1)","derivative_verdict":"allow","derivative_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1) (Apache License 2.0)","ingest_verdict":"unknown","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)","avoid_paths":["/docs/2.*","/docs/3.*","/docs/4.0.*","/docs/4.1.*","/api/client/*","/api/admin/*","/api/pulsar-functions/*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): robots.txt * group (paraphrase): versioned /docs/ 2.2.0 to 4.1.x and the /api/ trees are disallowed (only 4.0.x, 4.2.x, next indexable). Modelled more restrictively: all /docs/2.*, /docs/3.*, /docs/4.0.*, /docs/4.1.* and the whole /api/client|admin|pulsar-functions trees. Note (SEC3 S3-4): the evidence row says only 4.0.x, 4.2.x and next are indexable, so allowed_paths permits /docs/4.0.x/; the /docs/4.0.* entry in avoid_paths is the earlier, broader reading (documentation only). robots.txt decides live.","verification":{"status":"verified","date":"2026-11-04","verdict":"read-permitted","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7; https://pulsar.apache.org/ (footer: Apache License 2.0)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{"pulsar.apache.org":{"exact":["/"],"prefix":["/docs/4.0.x/","/docs/4.2.x/","/docs/next/"]}},"allowed_paths_note":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 7: only the 4.0.x, 4.2.x and next doc trees are indexable per robots (paraphrase); robots.txt is still enforced per fetch, so a disallowed tree is refused there too.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'teams', 10, 2, 'active', 'seed', $j${"entity":"Teams","aliases":["Teams","Microsoft Teams"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["support.microsoft.com"],"docs_entry_urls":[],"state":"active","version":2,"full_aliases":["Microsoft Teams"],"parents":["Microsoft"],"context_terms":["microsoft","meeting","video call","chat app","channels","collaboration platform"],"generic_phrases":["remote teams","sports teams","team members","teams of"],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1)","derivative_verdict":"forbid","derivative_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1) (terms bar copying)","ingest_verdict":"forbid","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8 (2026-11-04, OD-OL-1) (link-only row)","avoid_paths":["*","/search/*","/api/*","/support/*","*signin*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also bars /search/, /api/, /support/, signin. No docs entry URL: no Teams-specific page was verified, so the row gives no link until the owner adds one.","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 8; https://www.microsoft.com/en-us/legal/terms-of-use (may not copy; personal non-commercial)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'slack', 11, 2, 'active', 'seed', $j${"entity":"Slack","aliases":["Slack"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["api.slack.com","slack.com","docs.slack.dev"],"docs_entry_urls":["https://docs.slack.dev/"],"state":"active","version":2,"full_aliases":[],"parents":["Salesforce"],"context_terms":["workspace","chat app","channels","messaging platform","integrations","bots"],"generic_phrases":["slack time","cut some slack","slack variable"],"terms_verdict":"allow","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1)","access_verdict":"allow","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1)","derivative_verdict":"unknown","derivative_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1) (no derivative terms read; unknown = allowed for answer use, R-049)","ingest_verdict":"unknown","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9 (2026-11-04, OD-OL-1) (not assessed; lane pages are never ingested, R-037)","avoid_paths":["/messages*","/oauth*","/openid*","/files-pri/*","/help/requests/new*","/careers/*","/join/shared_invite*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): slack.com / api.slack.com robots.txt * group. docs.slack.dev robots: Allow: /.","read_conditions":"Docs pages only; never use the Slack API. Honor crawl-delay (public_fetch enforces it). Unique UA VERA-research-fetcher and robots enforced (AUP s.6.A.XXIV condition).","verification":{"status":"verified","date":"2026-11-04","verdict":"read-permitted","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9; https://www.salesforce.com/en-us/wp-content/uploads/sites/4/documents/legal/Agreements/policies/ExternalFacing_Services_Policy.pdf (AUP s.6.A.XXIV)","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{"docs.slack.dev":{"exact":["/"],"prefix":["/"]}},"allowed_paths_note":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 9: docs.slack.dev robots `Allow: /` and AUP s.6.A.XXIV permits identified, robots-honouring reads; slack.com and api.slack.com get no allowed path (api.slack.com 302s to docs.slack.dev, which is then checked on its own).","path_case_insensitive":false}$j$::jsonb),
+  ('entity.registry', 'zoom', 12, 2, 'active', 'seed', $j${"entity":"Zoom","aliases":["Zoom"],"entity_class":"vendor","volatile":true,"match_case":true,"exclude_next":[],"domains":["support.zoom.com"],"docs_entry_urls":["https://support.zoom.com/hc"],"state":"active","version":2,"full_aliases":[],"parents":["Zoom Video"],"context_terms":["meeting","video call","video conferencing","webinar","platform"],"generic_phrases":["zoom lens","zoom in","zoom out","zoom level"],"terms_verdict":"links_only","terms_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1)","access_verdict":"forbid","access_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1)","derivative_verdict":"unknown","derivative_evidence":null,"ingest_verdict":"forbid","ingest_evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10 (2026-11-04, OD-OL-1) (link-only row)","avoid_paths":["*","/search*","/hc/*/search*","/hc*?id=*"],"avoid_paths_note":"DOCUMENTATION ONLY (not consulted by code since the Deny All conversion, owner 2026-11-04): all (link-only); robots also bars /search, /hc/*/search*, /hc*?id= (kb_article_view).","verification":{"status":"verified","date":"2026-11-04","verdict":"link-only","decision":"OD-OL-1 (owner, 2026-11-04)","evidence":"work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md row 10; https://www.zoom.com/en/trust/terms/ (ToS s.8); support.zoom.us 301 -> support.zoom.com","qualification":"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."},"allowed_paths":{},"allowed_paths_note":"link-only row: no path is read.","path_case_insensitive":false}$j$::jsonb);
+
+-- rptout_outlets: news.outlets
+INSERT INTO vera_vjay.rptout_outlets (list_name, item_key, item_rank, version, state, origin, payload) VALUES
+  ('news.outlets', 'globalvoices.org', 0, NULL, 'active', 'seed', $j${"host":"globalvoices.org","terms_verdict":"allow","crawl_delay_s":10,"terms_evidence":"work/NEWS-LANE-1104/compliance.md#global-voices (CC BY 3.0; robots.txt Crawl-delay 10, article paths allowed)"}$j$::jsonb),
+  ('news.outlets', 'en.wikinews.org', 1, NULL, 'active', 'seed', $j${"host":"en.wikinews.org","terms_verdict":"allow","terms_evidence":"work/NEWS-LANE-1104/compliance.md#wikinews (CC BY 4.0 / 2.5; robots.txt allows /wiki/ articles)"}$j$::jsonb),
+  ('news.outlets', 'voanews.com', 2, NULL, 'active', 'seed', $j${"host":"voanews.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#voa (public domain for VOA text, wire items copyrighted; publishing status in 2026 unconfirmed)"}$j$::jsonb),
+  ('news.outlets', 'propublica.org', 3, NULL, 'active', 'seed', $j${"host":"propublica.org","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#propublica (CC BY-NC-ND; bars automatic republishing; site terms unread)"}$j$::jsonb),
+  ('news.outlets', 'theconversation.com', 4, NULL, 'active', 'seed', $j${"host":"theconversation.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#the-conversation (CC BY-ND; robots.txt blocks AI agents)"}$j$::jsonb),
+  ('news.outlets', 'foxnews.com', 5, NULL, 'active', 'seed', $j${"host":"foxnews.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms bar data mining, scraping, bots)"}$j$::jsonb),
+  ('news.outlets', 'nytimes.com', 6, NULL, 'active', 'seed', $j${"host":"nytimes.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms reported to bar robots and scraping)"}$j$::jsonb),
+  ('news.outlets', 'theguardian.com', 7, NULL, 'active', 'seed', $j${"host":"theguardian.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms reported to bar automated TDM and AI use)"}$j$::jsonb),
+  ('news.outlets', 'reuters.com', 8, NULL, 'active', 'seed', $j${"host":"reuters.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (personal-use licence only; terms unread)"}$j$::jsonb),
+  ('news.outlets', 'bbc.com', 9, NULL, 'active', 'seed', $j${"host":"bbc.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unread; blocks AI crawlers)"}$j$::jsonb),
+  ('news.outlets', 'bbc.co.uk', 10, NULL, 'active', 'seed', $j${"host":"bbc.co.uk","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unread; blocks AI crawlers)"}$j$::jsonb),
+  ('news.outlets', 'cnn.com', 11, NULL, 'active', 'seed', $j${"host":"cnn.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unreachable; robots.txt blocks AI agents)"}$j$::jsonb),
+  ('news.outlets', 'washingtonpost.com', 12, NULL, 'active', 'seed', $j${"host":"washingtonpost.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unreachable; robots.txt blocks AI agents)"}$j$::jsonb),
+  ('news.outlets', 'nbcnews.com', 13, NULL, 'active', 'seed', $j${"host":"nbcnews.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unreachable; robots.txt blocks AI agents)"}$j$::jsonb),
+  ('news.outlets', 'npr.org', 14, NULL, 'active', 'seed', $j${"host":"npr.org","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unreachable)"}$j$::jsonb),
+  ('news.outlets', 'politico.com', 15, NULL, 'active', 'seed', $j${"host":"politico.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unread)"}$j$::jsonb),
+  ('news.outlets', 'apnews.com', 16, NULL, 'active', 'seed', $j${"host":"apnews.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unread; commercial wire)"}$j$::jsonb),
+  ('news.outlets', 'usatoday.com', 17, NULL, 'active', 'seed', $j${"host":"usatoday.com","terms_verdict":"links_only","terms_evidence":"work/NEWS-LANE-1104/compliance.md#major-outlets (terms unread)"}$j$::jsonb);
+
+-- lstreg_items: the string lists and the trace key allowlist
+INSERT INTO vera_vjay.lstreg_items (list_name, item_key, item_rank, version, state, origin, payload) VALUES
+  ('news.fallback_order', 'gdelt', 0, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('acquire.search_providers', 'openalex', 0, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('acquire.search_providers', 'arxiv', 1, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('scope.offtopic_providers', 'arxiv', 0, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('scope.offtopic_providers', 'openalex', 1, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('scope.offtopic_providers', 'duckduckgo_lite', 2, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('trace.key_allowlist', 'start', NULL, NULL, 'active', 'seed', $j${"stage":"start","reason":"start event carries no detail; client id and endpoint go to the log line / requests row only"}$j$::jsonb),
+  ('trace.key_allowlist', 'finish', NULL, NULL, 'active', 'seed', $j${"stage":"finish","reason":"terminal event: closed message code from request_trace.finish"}$j$::jsonb),
+  ('trace.key_allowlist', 'finish:message_code', NULL, NULL, 'active', 'seed', $j${"stage":"finish","key":"message_code"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","reason":"inline_acquire._trace_done, ask_service acquire/outcome/candidate/answer_fallback/off/retry_skipped: status, reason-code counts (codes), phase ms, per-candidate provider/outcome/reason/diag tokens, nested acquisition summary, lanes flag, fallback token. 'reason' also used by off and retry_skipped events."}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:status', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"status"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:codes', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"codes"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:ms', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"ms"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:provider', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"provider"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:outcome', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"outcome"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:reason', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"reason"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:diag', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"diag"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"acquisition"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:lanes', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"lanes"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:fallback', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","key":"fallback"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition.status', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","parent":"acquisition","key":"status"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition.stored', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","parent":"acquisition","key":"stored"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition.target', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","parent":"acquisition","key":"target"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition.rounds', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","parent":"acquisition","key":"rounds"}$j$::jsonb),
+  ('trace.key_allowlist', 'acquire:acquisition.stop', NULL, NULL, 'active', 'seed', $j${"stage":"acquire","parent":"acquisition","key":"stop"}$j$::jsonb),
+  ('trace.key_allowlist', 'lane', NULL, NULL, 'active', 'seed', $j${"stage":"lane","reason":"PERF-MISS-1105-FIX2 F2 inline_acquire._trace_lane: the lane pass portal token (gdelt, hn or -), called/skipped, a closed reason token (ok, no_items, outlet_policy, circuit, spacing, throttled, failed, http_4xx, off, no_terms, no_reporting_part, error) and the news-intent flag; item/page/link counts are counts. Never a URL, outlet, title or question text."}$j$::jsonb),
+  ('trace.key_allowlist', 'lane:portal', NULL, NULL, 'active', 'seed', $j${"stage":"lane","key":"portal"}$j$::jsonb),
+  ('trace.key_allowlist', 'lane:status', NULL, NULL, 'active', 'seed', $j${"stage":"lane","key":"status"}$j$::jsonb),
+  ('trace.key_allowlist', 'lane:reason', NULL, NULL, 'active', 'seed', $j${"stage":"lane","key":"reason"}$j$::jsonb),
+  ('trace.key_allowlist', 'lane:news', NULL, NULL, 'active', 'seed', $j${"stage":"lane","key":"news"}$j$::jsonb),
+  ('trace.key_allowlist', 'reading_list', NULL, NULL, 'active', 'seed', $j${"stage":"reading_list","reason":"PERF-MISS-1105-FIX2 F4 ask_service._reading_list start/done: counts only (candidates)"}$j$::jsonb),
+  ('trace.key_allowlist', 'search', NULL, NULL, 'active', 'seed', $j${"stage":"search","reason":"search_and_fetch and search_providers: provider name, status and latency per provider/portal/seed fallback"}$j$::jsonb),
+  ('trace.key_allowlist', 'search:provider', NULL, NULL, 'active', 'seed', $j${"stage":"search","key":"provider"}$j$::jsonb),
+  ('trace.key_allowlist', 'search:status', NULL, NULL, 'active', 'seed', $j${"stage":"search","key":"status"}$j$::jsonb),
+  ('trace.key_allowlist', 'search:latency_ms', NULL, NULL, 'active', 'seed', $j${"stage":"search","key":"latency_ms"}$j$::jsonb),
+  ('trace.key_allowlist', 'premise', NULL, NULL, 'active', 'seed', $j${"stage":"premise","reason":"fulldoc_answer premise check: verdict token and whether the reason cited a source"}$j$::jsonb),
+  ('trace.key_allowlist', 'premise:verdict', NULL, NULL, 'active', 'seed', $j${"stage":"premise","key":"verdict"}$j$::jsonb),
+  ('trace.key_allowlist', 'premise:cited', NULL, NULL, 'active', 'seed', $j${"stage":"premise","key":"cited"}$j$::jsonb),
+  ('trace.key_allowlist', 'passages', NULL, NULL, 'active', 'seed', $j${"stage":"passages","reason":"fulldoc_answer: span ids and relevance scores sent to the writer / cited; ids and numbers only, never text"}$j$::jsonb),
+  ('trace.key_allowlist', 'passages:span_ids', NULL, NULL, 'active', 'seed', $j${"stage":"passages","key":"span_ids"}$j$::jsonb),
+  ('trace.key_allowlist', 'passages:relevance', NULL, NULL, 'active', 'seed', $j${"stage":"passages","key":"relevance"}$j$::jsonb),
+  ('trace.key_allowlist', 'passages:cited_span_ids', NULL, NULL, 'active', 'seed', $j${"stage":"passages","key":"cited_span_ids"}$j$::jsonb),
+  ('trace.key_allowlist', 'writer', NULL, NULL, 'active', 'seed', $j${"stage":"writer","reason":"fulldoc_answer writer draft/fall: fallback token, model id, cost"}$j$::jsonb),
+  ('trace.key_allowlist', 'writer:fallback', NULL, NULL, 'active', 'seed', $j${"stage":"writer","key":"fallback"}$j$::jsonb),
+  ('trace.key_allowlist', 'writer:model', NULL, NULL, 'active', 'seed', $j${"stage":"writer","key":"model"}$j$::jsonb),
+  ('trace.key_allowlist', 'writer:cost_usd', NULL, NULL, 'active', 'seed', $j${"stage":"writer","key":"cost_usd"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","reason":"claim_check: checker label, exception class name, per-claim id/verdict/cites (nested keys id, verdict, cites)"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:checker', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","key":"checker"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:exc', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","key":"exc"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:per_claim', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","key":"per_claim"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:per_claim.id', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","parent":"per_claim","key":"id"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:per_claim.verdict', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","parent":"per_claim","key":"verdict"}$j$::jsonb),
+  ('trace.key_allowlist', 'claim_check:per_claim.cites', NULL, NULL, 'active', 'seed', $j${"stage":"claim_check","parent":"per_claim","key":"cites"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope', NULL, NULL, 'active', 'seed', $j${"stage":"scope","reason":"ask_service scope gate: basis, layer and class tokens, accepted flag, refusal token"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope:basis', NULL, NULL, 'active', 'seed', $j${"stage":"scope","key":"basis"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope:layer', NULL, NULL, 'active', 'seed', $j${"stage":"scope","key":"layer"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope:class', NULL, NULL, 'active', 'seed', $j${"stage":"scope","key":"class"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope:accepted', NULL, NULL, 'active', 'seed', $j${"stage":"scope","key":"accepted"}$j$::jsonb),
+  ('trace.key_allowlist', 'scope:refusal', NULL, NULL, 'active', 'seed', $j${"stage":"scope","key":"refusal"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","reason":"ask_service outcome events: decline category, fallback token, branch, cause, inline status"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome:category', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","key":"category"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome:fallback', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","key":"fallback"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome:branch', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","key":"branch"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome:cause', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","key":"cause"}$j$::jsonb),
+  ('trace.key_allowlist', 'outcome:inline_status', NULL, NULL, 'active', 'seed', $j${"stage":"outcome","key":"inline_status"}$j$::jsonb),
+  ('digest.numeric_words', 'zero', 0, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'one', 1, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'two', 2, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'three', 3, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'four', 4, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'five', 5, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'six', 6, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'seven', 7, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'eight', 8, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'nine', 9, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ten', 10, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'eleven', 11, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'twelve', 12, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thirteen', 13, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fourteen', 14, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fifteen', 15, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'sixteen', 16, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'seventeen', 17, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'eighteen', 18, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'nineteen', 19, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'twenty', 20, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thirty', 21, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'forty', 22, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fifty', 23, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'sixty', 24, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'seventy', 25, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'eighty', 26, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ninety', 27, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'hundred', 28, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'hundreds', 29, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thousand', 30, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thousands', 31, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'million', 32, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'millions', 33, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'billion', 34, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'dozen', 35, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'dozens', 36, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'score', 37, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'scores', 38, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'first', 39, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'second', 40, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'third', 41, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fourth', 42, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fifth', 43, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'sixth', 44, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'seventh', 45, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'eighth', 46, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ninth', 47, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'tenth', 48, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'last', 49, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'half', 50, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'halves', 51, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'quarter', 52, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'quarters', 53, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thirds', 54, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fifths', 55, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'tenths', 56, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fraction', 57, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'percent', 58, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'percentage', 59, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'per', 60, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'cent', 61, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'proportion', 62, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'share', 63, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'shares', 64, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ratio', 65, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'majority', 66, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'minority', 67, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'most', 68, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'mostly', 69, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'mainly', 70, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'largely', 71, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'primarily', 72, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'chiefly', 73, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'predominantly', 74, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'bulk', 75, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'all', 76, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'none', 77, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'every', 78, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'each', 79, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'both', 80, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'either', 81, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'neither', 82, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'single', 83, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'pair', 84, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'couple', 85, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'twice', 86, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'double', 87, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'triple', 88, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'tenfold', 89, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'twofold', 90, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'handful', 91, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'few', 92, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'fewer', 93, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'several', 94, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'many', 95, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'numerous', 96, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'much', 97, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'more', 98, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'less', 99, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'least', 100, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'some', 101, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'multiple', 102, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'largest', 103, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'larger', 104, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'smallest', 105, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'smaller', 106, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'biggest', 107, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'bigger', 108, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'greatest', 109, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'top', 110, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'highest', 111, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'lowest', 112, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'rank', 113, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ranked', 114, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'ranking', 115, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'dominant', 116, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'main', 117, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'major', 118, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'minor', 119, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'thinly', 120, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'sparse', 121, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'count', 122, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'number', 123, NULL, 'active', 'seed', $j${}$j$::jsonb),
+  ('digest.numeric_words', 'total', 124, NULL, 'active', 'seed', $j${}$j$::jsonb);
+
+-- Seed count assertions (a RAISE rolls everything back).
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM vera_vjay.lstreg_lists) <> 10
+     OR (SELECT count(*) FROM vera_vjay.lstreg_items) <> 190
+     OR (SELECT count(*) FROM vera_vjay.licallow_licences) <> 35
+     OR (SELECT count(*) FROM vera_vjay.entreg_entities) <> 13
+     OR (SELECT count(*) FROM vera_vjay.rptout_outlets) <> 18 THEN
+    RAISE EXCEPTION '016 seed count check failed (expected lists 10, items 190, licences 35, entities 13, outlets 18).';
+  END IF;
+  IF EXISTS (SELECT 1 FROM vera_vjay.lstreg_active_lists_v v
+              WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.lstreg_active_items_v i WHERE i.list_name = v.list_name)
+                AND v.list_name NOT IN ('fetch.deny_hosts','permissions.deny_hosts')) THEN
+    RAISE EXCEPTION '016 seed check failed: an active list (other than the two empty deny lists) has no active items.';
+  END IF;
+  IF (SELECT count(*) FROM vera_vjay.lstreg_active_lists_v) <> 10 THEN
+    RAISE EXCEPTION '016 seed check failed: expected 10 active lists.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- Privileges (review F4): revoke everything first (live default privileges may grant ro SELECT on tables, rw USAGE on sequences,
+-- PUBLIC EXECUTE on functions), then grant SELECT on the two views to ro and rw only.
+-- ---------------------------------------------------------------------------------------------------------------------
+REVOKE ALL ON vera_vjay.lstreg_lists, vera_vjay.lstreg_items, vera_vjay.licallow_licences, vera_vjay.entreg_entities,
+              vera_vjay.rptout_outlets, vera_vjay.lstreg_active_lists_v, vera_vjay.lstreg_active_items_v
+  FROM PUBLIC, vera_vjay_ro, vera_vjay_rw, vera_vjay_wo;
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['lstreg_lists','lstreg_items','licallow_licences','entreg_entities','rptout_outlets'] LOOP
+    EXECUTE pg_catalog.format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, vera_vjay_ro, vera_vjay_rw, vera_vjay_wo',
+                              pg_catalog.pg_get_serial_sequence('vera_vjay.' || t, 'row_id'));
+  END LOOP;
+END $$;
+REVOKE EXECUTE ON FUNCTION vera_vjay.lstreg_insert_trgfn(), vera_vjay.lstreg_update_trgfn(),
+                           vera_vjay.lstreg_no_delete_trgfn(), vera_vjay.lstreg_no_truncate_trgfn()
+  FROM PUBLIC, vera_vjay_ro, vera_vjay_rw, vera_vjay_wo;
+DO $$   -- schema USAGE is NOT granted here: it must already exist (from 001); fail closed otherwise
+BEGIN
+  IF NOT (pg_catalog.has_schema_privilege('vera_vjay_ro', 'vera_vjay', 'USAGE')
+          AND pg_catalog.has_schema_privilege('vera_vjay_rw', 'vera_vjay', 'USAGE')) THEN
+    RAISE EXCEPTION '016 refused: vera_vjay_ro/vera_vjay_rw lack USAGE on schema vera_vjay (expected from migration 001); nothing applied.';
+  END IF;
+END $$;
+GRANT SELECT ON vera_vjay.lstreg_active_lists_v, vera_vjay.lstreg_active_items_v TO vera_vjay_ro, vera_vjay_rw;
+
+-- In-transaction ACL assertions (a RAISE rolls everything back; modelled on 015).
+DO $$
+DECLARE ro oid := (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_ro');
+        rw oid := (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw');
+        t text; p text; r text;
+BEGIN
+  -- base tables and identity sequences: no grantee other than the owner (grantee 0 = PUBLIC is also refused); no column grants.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+              WHERE c.oid IN ('vera_vjay.lstreg_lists'::regclass, 'vera_vjay.lstreg_items'::regclass,
+                              'vera_vjay.licallow_licences'::regclass, 'vera_vjay.entreg_entities'::regclass,
+                              'vera_vjay.rptout_outlets'::regclass)
+                AND a.grantee <> c.relowner)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+                 WHERE c.relnamespace = 'vera_vjay'::regnamespace AND c.relkind = 'S'
+                   AND c.relname IN ('lstreg_lists_row_id_seq','lstreg_items_row_id_seq','licallow_licences_row_id_seq',
+                                     'entreg_entities_row_id_seq','rptout_outlets_row_id_seq')
+                   AND a.grantee <> c.relowner)
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_attribute
+                 WHERE attrelid IN ('vera_vjay.lstreg_lists'::regclass, 'vera_vjay.lstreg_items'::regclass,
+                                    'vera_vjay.licallow_licences'::regclass, 'vera_vjay.entreg_entities'::regclass,
+                                    'vera_vjay.rptout_outlets'::regclass,
+                                    'vera_vjay.lstreg_active_lists_v'::regclass, 'vera_vjay.lstreg_active_items_v'::regclass)
+                   AND attacl IS NOT NULL) THEN
+    RAISE EXCEPTION '016 ACL check failed: a non-owner holds a privilege on a base table or identity sequence (or a column grant exists).';
+  END IF;
+  -- views: only SELECT, only for ro and rw.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+              WHERE c.oid IN ('vera_vjay.lstreg_active_lists_v'::regclass, 'vera_vjay.lstreg_active_items_v'::regclass)
+                AND a.grantee <> c.relowner
+                AND NOT (a.privilege_type = 'SELECT' AND a.grantee IN (ro, rw))) THEN
+    RAISE EXCEPTION '016 ACL check failed: a view grant other than SELECT for vera_vjay_ro / vera_vjay_rw.';
+  END IF;
+  IF (SELECT count(*) FROM pg_catalog.pg_class c CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+       WHERE c.oid IN ('vera_vjay.lstreg_active_lists_v'::regclass, 'vera_vjay.lstreg_active_items_v'::regclass)
+         AND a.grantee IN (ro, rw) AND a.privilege_type = 'SELECT') <> 4 THEN
+    RAISE EXCEPTION '016 ACL check failed: expected SELECT on both views for both ro and rw.';
+  END IF;
+  -- functions: owner only (proacl NULL would mean PUBLIC EXECUTE).
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
+              WHERE p.pronamespace = 'vera_vjay'::regnamespace
+                AND p.proname IN ('lstreg_insert_trgfn','lstreg_update_trgfn','lstreg_no_delete_trgfn','lstreg_no_truncate_trgfn')
+                AND (p.proacl IS NULL OR EXISTS (SELECT 1 FROM pg_catalog.aclexplode(p.proacl) a WHERE a.grantee <> p.proowner))) THEN
+    RAISE EXCEPTION '016 ACL check failed: a lstreg_ trigger function is executable by a non-owner or PUBLIC.';
+  END IF;
+  -- view properties: security_barrier on, security_invoker off, owner = this session's role.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+              WHERE c.oid IN ('vera_vjay.lstreg_active_lists_v'::regclass, 'vera_vjay.lstreg_active_items_v'::regclass)
+                AND (NOT COALESCE(c.reloptions @> ARRAY['security_barrier=true'], false)
+                     OR COALESCE(c.reloptions::text ~ 'security_invoker=(true|on)', false)
+                     OR pg_catalog.pg_get_userbyid(c.relowner) <> current_user)) THEN
+    RAISE EXCEPTION '016 view check failed: views must be security_barrier, not security_invoker, and owned by the migration owner.';
+  END IF;
+  -- effective privileges (the group roles; logins inherit them): ro and rw read the views only, wo nothing, nobody writes.
+  FOREACH r IN ARRAY ARRAY['vera_vjay_ro','vera_vjay_rw','vera_vjay_wo'] LOOP
+    FOREACH t IN ARRAY ARRAY['vera_vjay.lstreg_lists','vera_vjay.lstreg_items','vera_vjay.licallow_licences',
+                             'vera_vjay.entreg_entities','vera_vjay.rptout_outlets'] LOOP
+      FOREACH p IN ARRAY ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN
+          RAISE EXCEPTION '016 grant check failed: % holds % on base table %.', r, p, t;
+        END IF;
+      END LOOP;
+    END LOOP;
+    FOREACH t IN ARRAY ARRAY['vera_vjay.lstreg_active_lists_v','vera_vjay.lstreg_active_items_v'] LOOP
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN
+          RAISE EXCEPTION '016 grant check failed: % holds % on view %.', r, p, t;
+        END IF;
+      END LOOP;
+      IF pg_catalog.has_table_privilege(r, t, 'SELECT') <> (r IN ('vera_vjay_ro','vera_vjay_rw')) THEN
+        RAISE EXCEPTION '016 grant check failed: wrong SELECT on view % for %.', t, r;
+      END IF;
+    END LOOP;
+  END LOOP;
+END $$;
+
+COMMIT;

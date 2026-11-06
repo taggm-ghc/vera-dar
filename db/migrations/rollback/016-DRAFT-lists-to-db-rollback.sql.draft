@@ -1,0 +1,58 @@
+-- 016_vera_lists_to_db ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops the two lists views, the five list tables (lstreg_lists,
+-- lstreg_items, licallow_licences, entreg_entities, rptout_outlets) with their triggers, indexes, identity sequences and grants,
+-- and the four lstreg_ trigger functions. Drops exactly what 016 creates and nothing else; never uses CASCADE (a dependent
+-- object outside 016 makes the DROP fail and the whole transaction roll back).
+-- Owner-only, never expected to run, needs the owner's separate same-turn approval. Never run via db/apply_migrations.py.
+-- SAFETY GATE: refuses unless every existing row is an unmodified seed row (origin 'seed', modified_at = created_at, and created_at equal to the one seed transaction time, the minimum of lstreg_lists), so owner
+-- edits (new versions, retired or suspended rows) are never destroyed by accident. Export them first if they must be kept.
+-- Non-destructive rollback first: keep config/list_tables.json read_from_db false (the app then reads only the config files).
+-- The schema vera_vjay is shared and NOT dropped; the USAGE grants on it predate 016.
+-- Owner script: work/LISTS-TO-DB-1104/scripts/rollback_016.sh (dry run by default).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+BEGIN;
+
+DO $$
+DECLARE t text; n bigint;
+BEGIN
+  -- Lock first (same transaction) so no concurrent owner write can commit between the gate and the DROPs.
+  FOREACH t IN ARRAY ARRAY['lstreg_lists','lstreg_items','licallow_licences','entreg_entities','rptout_outlets'] LOOP
+    IF pg_catalog.to_regclass('vera_vjay.' || t) IS NOT NULL THEN
+      EXECUTE pg_catalog.format('LOCK TABLE vera_vjay.%I IN ACCESS EXCLUSIVE MODE', t);
+    END IF;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['lstreg_lists','lstreg_items','licallow_licences','entreg_entities','rptout_outlets'] LOOP
+    IF pg_catalog.to_regclass('vera_vjay.' || t) IS NOT NULL THEN
+      IF (SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c WHERE c.oid = pg_catalog.to_regclass('vera_vjay.' || t)) <> current_user THEN
+        RAISE EXCEPTION '016 rollback refused: run as the owner role of vera_vjay.%.', t;
+      END IF;
+      EXECUTE pg_catalog.format('SELECT count(*) FROM vera_vjay.%I WHERE origin <> ''seed'' OR modified_at <> created_at OR created_at IS DISTINCT FROM (SELECT min(created_at) FROM vera_vjay.lstreg_lists)', t) INTO n;
+      IF n <> 0 THEN
+        RAISE EXCEPTION '016 rollback refused: vera_vjay.% has % row(s) that are not unmodified seed rows. Export them first.', t, n;
+      END IF;
+    END IF;
+  END LOOP;
+END $$;
+
+DROP VIEW IF EXISTS vera_vjay.lstreg_active_items_v;
+DROP VIEW IF EXISTS vera_vjay.lstreg_active_lists_v;
+DROP TABLE IF EXISTS vera_vjay.rptout_outlets;
+DROP TABLE IF EXISTS vera_vjay.entreg_entities;
+DROP TABLE IF EXISTS vera_vjay.licallow_licences;
+DROP TABLE IF EXISTS vera_vjay.lstreg_items;
+DROP TABLE IF EXISTS vera_vjay.lstreg_lists;
+DROP FUNCTION IF EXISTS vera_vjay.lstreg_insert_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.lstreg_update_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.lstreg_no_delete_trgfn();
+DROP FUNCTION IF EXISTS vera_vjay.lstreg_no_truncate_trgfn();
+
+-- Assert nothing of 016 remains (a RAISE rolls the drops back).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace = 'vera_vjay'::regnamespace
+              AND c.relname ~ '^(lstreg|licallow|entreg|rptout)_')
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'vera_vjay'::regnamespace AND p.proname ~ '^lstreg_') THEN
+    RAISE EXCEPTION '016 rollback check failed: an 016 object remains.';
+  END IF;
+END $$;
+
+COMMIT;
