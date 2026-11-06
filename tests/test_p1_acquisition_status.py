@@ -58,7 +58,10 @@ def test_incomplete_deadline_when_the_time_limit_stopped_the_search():
 def test_block_is_counts_only():
     o = _run()
     blk = o.public()["acquisition"]
-    assert set(blk) == {"status", "stored", "target", "rounds", "stop"}  # A6 adds two counts-only keys
+    required = {"status", "stored", "target", "rounds", "stop"}  # A6 adds two counts-only keys
+    optional = {"heuristic", "persist"}  # MIDTERMS-WP8-1106: booleans only (heuristic stop disclosed; keep-searching)
+    assert required <= set(blk) <= required | optional
+    assert all(blk[k] is True for k in optional & set(blk))  # never free text
     assert isinstance(blk["rounds"], int) and isinstance(blk["stop"], str) and len(blk["stop"]) < 40
     assert "http" not in json.dumps(o.public()["acquisition"])
 

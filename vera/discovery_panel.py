@@ -63,6 +63,8 @@ REASON_TEXT = {
     "R-ACQ-DUPLICATE": "Duplicate of another listed source.",
     "R-ACQ-KNOWN": "Already in the collection.",
     "R-ACQ-DEFER_CAP": "Not checked: too many candidates for one request.",
+    "R-ACQ-STOPPED": "Not checked: the search was stopped before it reached this document.",
+    "R-ACQ-NO_PROGRESS": "Not checked: the search ended after further rounds found nothing new.",
     "R-ACQ-WRITE": "Could not be added for this answer.",
     # loader-level refusal codes (config/fulltext_ingest.json reason_codes) that acquisition emits from the fetched document
     "R-LIC-REJECT": "The licence does not permit reuse of the full text.",

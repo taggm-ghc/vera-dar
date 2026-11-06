@@ -150,29 +150,61 @@ def evidence_source_line(data: dict | None) -> str | None:
     return f"Evidence source: {label}." if label else None
 
 
+_STATUS_CLAUSE = {
+    "resource_limited": "supply was limited.",
+    "relevance_rejected": "none of the documents fetched had enough relevant passages to keep.",
+    "no_route": "no identifier VERA-DAR can fetch automatically was available for the sources found.",
+    "incomplete_deadline": "the search stopped at the time limit.",
+    "search_failed": "the search could not be completed.",
+    "capped": "the limit on new acquisition runs was reached.",
+}
+
+
+def _stop_clause(aq: dict) -> str:
+    """MIDTERMS-WP8-1106: vera.inline_acquire.stop_clause (one wording for the shortfall line and the notice)."""
+    from vera import inline_acquire
+    return inline_acquire.stop_clause(aq)
+
+
+def _nat(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool) and x >= 0
+
+
 def acquisition_notice_line(data: dict | None) -> str | None:
-    """OD-1031-P1 item 4: plain notice when a live search stored fewer new sources than targeted. Counts only; no
-    titles, hosts, URLs or provider names. None when the target was met or the block is absent or malformed."""
+    """OD-1031-P1 item 4: plain notice when a live search found fewer sources than targeted. Counts only; no
+    titles, hosts, URLs or provider names. None when the target was met or the block is absent or malformed.
+    MIDTERMS-WP10-1106 (owner D3): with a valid examined-source ledger summary, "Read N of the T sources targeted"
+    counts only qualifying full- or partial-text sources actually examined (deduplicated; news, official and web pages
+    included); otherwise the legacy "Found N of the T new sources targeted" (stored) text. WP8 appends the stop clause."""
     data = data if isinstance(data, dict) else {}
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
     aq = ia.get("acquisition") if isinstance(ia.get("acquisition"), dict) else {}
-    n, t = aq.get("stored"), aq.get("target")
-    if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in (n, t)) or n >= t:
+    clause = _STATUS_CLAUSE.get(aq.get("status"))
+    t = aq.get("target")
+    from vera import evidence_ledger
+    led = ia.get("ledger")
+    if evidence_ledger.valid_summary(led) and _nat(t):
+        c = led["counted"]
+        if c >= t:
+            return None
+        if clause is None:  # review F2: the stop disclosure does not depend on a status clause
+            return _stop_clause(aq).strip() or None
+        head = f"Read {c} of the {t} sources targeted"
+        if led["partial_text"] > 0:
+            head += f" ({led['full_text']} in full, {led['partial_text']} in part)"
+        kinds = [(k, led[k]) for k in evidence_ledger.KINDS if led[k] > 0]
+        if len(kinds) >= 2:
+            head += " (" + ", ".join(f"{k} {v}" for k, v in kinds) + ")"
+        if led["stored"] > 0:
+            head += f", {led['stored']} saved to VERA-DAR's collection"
+        return f"{head}; {clause}{_stop_clause(aq)}"
+    n = aq.get("stored")
+    if not all(_nat(x) for x in (n, t)) or n >= t:
         return None
-    if aq.get("status") == "resource_limited":
-        return f"Found {n} of the {t} new sources targeted; supply was limited."
-    if aq.get("status") == "relevance_rejected":
-        return f"Found {n} of the {t} new sources targeted; none of the documents fetched had enough relevant passages to keep."
-    if aq.get("status") == "no_route":
-        return f"Found {n} of the {t} new sources targeted; no identifier VERA-DAR can fetch automatically was available for the sources found."
-    if aq.get("status") == "incomplete_deadline":
-        return f"Found {n} of the {t} new sources targeted; the search stopped at the time limit."
-    if aq.get("status") == "search_failed":
-        return f"Found {n} of the {t} new sources targeted; the search could not be completed."
-    if aq.get("status") == "capped":
-        return f"Found {n} of the {t} new sources targeted; the limit on new acquisition runs was reached."
-    return None
+    if clause is None:  # review F2
+        return _stop_clause(aq).strip() or None
+    return f"Found {n} of the {t} new sources targeted; {clause}{_stop_clause(aq)}"
 
 
 def inline_counts_line(data: dict | None) -> str | None:

@@ -10,7 +10,9 @@ against earlier variants):
   (a) drop terms: the base AND terms minus one term per step (last term first);
   (b) the existing term-group lexicon (vera.term_expansion via vera.search_query.query_variants);
   (c) entity-central terms: vera.subquery parts/entities (S23), then the anchor run / key concepts (vera.search_query);
-  (d) practitioner seed list (config/acq_variants.json, SEED/FALLBACK, owner-editable): anchor terms + one seed phrase;
+  (d) route-aware seed list (config/acq_variants.json, SEED/FALLBACK, owner-editable): anchor terms + one seed phrase.
+      WP6 (MIDTERMS-WP6-1106): news intent (vera.news_intent, the reporting-lane detector) uses `news_terms`; every other
+      question is the technical route and uses `practitioner_terms`;
   (e) the OR form of the base terms.
 Terms come from vera.search_query (stopwords, meta words and filler words removed); emails, URLs and long digit strings
 are removed from the question BEFORE extraction (PII filter). Not wired into the loop yet (follows I-S23).
@@ -26,19 +28,32 @@ from vera import search_query
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "acq_variants.json"
 FALLBACK_SEEDS = ("best practices", "patterns", "architecture", "guide", "reference", "documentation",
                   "design patterns", "framework")
+FALLBACK_NEWS_SEEDS = ("results", "analysis", "aftermath", "outcome", "reaction")
 FALLBACK_MAX_TERMS = 4
 _WH = frozenset({"where", "when", "which", "while", "what", "whose", "whom", "how", "why"})  # not in the shipped stopwords
 _PII = re.compile(r"https?://\S+|www\.\S+|\S+@\S+|\+?\d[\d\-\s().]{6,}\d|\b\d{5,}\b", re.I)
 
 
-def load_seeds(path: Path = CONFIG_PATH) -> tuple[tuple, int]:
-    """(seed phrases, max terms per query) from config; the built-in fallback when the file is absent or invalid."""
+def load_seeds(path: Path = CONFIG_PATH, *, news: bool = False) -> tuple[tuple, int]:
+    """(seed phrases, max terms per query) from config for the route: `news_terms` when news=True, else
+    `practitioner_terms` (the technical route). The built-in fallback when the file is absent or invalid."""
+    key, fallback = ("news_terms", FALLBACK_NEWS_SEEDS) if news else ("practitioner_terms", FALLBACK_SEEDS)
     try:
         d = json.loads(Path(path).read_text())
-        seeds = tuple(s.strip() for s in d["practitioner_terms"] if isinstance(s, str) and s.strip())
-        return (seeds or FALLBACK_SEEDS), max(int(d.get("max_terms_per_query", FALLBACK_MAX_TERMS)), 1)
+        seeds = tuple(s.strip() for s in d[key] if isinstance(s, str) and s.strip())
+        return (seeds or fallback), max(int(d.get("max_terms_per_query", FALLBACK_MAX_TERMS)), 1)
     except Exception:  # noqa: BLE001  seed/fallback: never fails the loop
-        return FALLBACK_SEEDS, FALLBACK_MAX_TERMS
+        return fallback, FALLBACK_MAX_TERMS
+
+
+def is_news_route(question: str) -> bool:
+    """True when the question has news intent: the same detector as the reporting lane (vera.news_intent). Never
+    raises (False on error, so the technical route applies)."""
+    try:
+        from vera import news_intent
+        return bool(news_intent.news_intent(str(question or "")))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def scrub(question: str) -> str:
@@ -84,7 +99,7 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
     cfg = terms_cfg if terms_cfg is not None else search_query._default_terms_cfg()
     if not cfg:
         return []
-    seed_list, mt = load_seeds()
+    seed_list, mt = load_seeds(news=is_news_route(question))
     seed_list = tuple(seeds) if seeds is not None else seed_list
     mt = int(max_terms) if max_terms else mt
     clean = scrub(question)

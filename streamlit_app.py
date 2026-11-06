@@ -10,6 +10,7 @@ from vera.disclosure import ask_help_text, render_disclosure
 from vera.env_files import load_vera_env
 from vera.discovery_panel import render_discovery
 from vera.m7.live_report import INLINE_STATUS
+from vera.lane_links_ui import render_lane_links
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
 from vera import progress, progress_ui, ui_wake
@@ -216,6 +217,7 @@ def render_result(data: dict) -> None:
                        cited=_view["cited"],
                        claim_check_layer="deferred" if layered else None)
         references_ui.render_references(st, _view["references"])
+        render_lane_links(st, data)  # LANE-LINKS-1106
         render_citations(st, data)  # AE-1020 D2: short quotes, span refs, CC BY attribution
         if full:
             render_answer_scope_note(st)
@@ -227,6 +229,7 @@ def render_result(data: dict) -> None:
     else:
         render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
         render_discovery(st, data)
+        render_lane_links(st, data)  # LANE-LINKS-1106
         if layered:
             _layer2_heading(data, False)
             render_limitations(st, data)

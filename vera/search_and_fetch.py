@@ -106,6 +106,9 @@ def _attempts_once(provider, question, n, *, ledger, max_retries, backoff_s, dea
             # a provider may say a call will be served from its own cache (no request): it then skips the gate
             exempt = getattr(provider, "gate_exempt", None)
             wait = 0.0 if (exempt and exempt(question)) else provider.gate.wait_needed(clock())
+            cooling = getattr(provider, "limiter_cooling_down", None)
+            if wait > 0 and cooling is not None and cooling():
+                wait = 0.0  # NT-2: the limiter cooldown refuses the call anyway; never sleep for a call that can't be sent
             if clock() + wait > deadline_at:
                 notes.append(f"attempt {attempt}: deadline exceeded before call")
                 break
@@ -543,11 +546,36 @@ def _trace_provider(name, t0, items=None, notes=None, ms=None) -> None:
                      detail={"provider": str(name), "status": "ok" if items else "empty", "latency_ms": ms})
         else:
             st = _failure_status(notes or [])
-            rt.event("search", "provider", counts={"results": 0},
-                     detail={"provider": str(name), "status": "rate_limited" if st == "quota" else st,
-                             "latency_ms": ms})
+            why = _failure_why(notes or [])
+            if why in ("http_202", "challenge"):
+                st = "throttled"  # NT-1: the anti-bot answer is a throttle, not a generic error
+            detail = {"provider": str(name), "status": "rate_limited" if st == "quota" else st, "latency_ms": ms}
+            if why:
+                detail["why"] = why  # dropped by the trace's Deny-All key allowlist until `why` is listed there
+            rt.event("search", "provider", counts={"results": 0}, detail=detail)
     except Exception:  # noqa: BLE001
         pass
+
+
+WHY_TOKENS = ("http_202", "challenge", "cooldown", "daily_cap", "robots", "http_429")
+
+
+def _failure_why(notes) -> str | None:
+    """NT-1: a closed token (WHY_TOKENS) saying why a provider failed, from its notes; None when none applies."""
+    t = " ".join(notes).lower()
+    if "rate_limited (cooldown" in t:
+        return "cooldown"
+    if "rate_limited (daily_cap" in t or "daily query cap" in t:
+        return "daily_cap"
+    if "r-acq-robots" in t:
+        return "robots"
+    if re.search(r"\b202\b", t) and "challenge" in t:
+        return "http_202"
+    if "challenge page" in t:
+        return "challenge"
+    if re.search(r"http 429\b", t):
+        return "http_429"
+    return None
 
 
 def _failure_status(notes) -> str:

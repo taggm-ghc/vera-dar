@@ -19,7 +19,9 @@ from typing import Mapping
 from urllib.parse import urlencode
 
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9\-]*")
-_TOKEN_OR_BREAK = re.compile(r"[A-Za-z][A-Za-z0-9\-]*|[|?!.,;:()]")
+# MIDTERMS-WP3-1106: a 4-digit year (1900-2099) is a query term (the only recency signal), not dropped as a non-word.
+_YEAR_TOKEN = re.compile(r"(?:19|20)\d{2}")
+_TOKEN_OR_BREAK = re.compile(r"[A-Za-z][A-Za-z0-9\-]*|(?<!\d)(?:19|20)\d{2}(?!\d)|[|?!.,;:()]")
 
 # DDFIX-1023/REL: discourse IDIOMS that carry no topic ("de facto status quo best practices" made the acquisition query
 # `de AND facto AND status AND quo`). Removed only as whole idioms, never as bare words ("HIV status", "best
@@ -140,7 +142,7 @@ def _extra_terms(text: str, cfg: Mapping, drop: set, *, generic: bool):
     fill = filler_words(cfg)
     extra, seen, runs, cur = [], set(), [], []
     for tok in _TOKEN_OR_BREAK.findall(text):
-        if len(tok) < cfg["min_term_chars"] or tok in drop or not tok[0].isalpha():
+        if len(tok) < cfg["min_term_chars"] or tok in drop or not (tok[0].isalpha() or _YEAR_TOKEN.fullmatch(tok)):
             if cur:
                 runs.append(cur)
             cur = []
@@ -218,11 +220,26 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
             rest = [c for c in out if c not in words]
             out = tuple(rest[:first] + ["|".join(t for t, _a in g.phrases)] + rest[first:])
     w = {c: 1 + sum(1 for d in out if d != c and "|" not in d and c in re.split(r"[\s\-]+", d)) for c in out}
-    cen = entity_concepts(out, central)
-    if cen:
+    cen = entity_concepts(out, central) | _news_central(question, out)
+    if cen and w:
         top = max(w.values())
         w = {c: (top + 1 if c in cen else v) for c, v in w.items()}
     return out, w
+
+
+def _news_central(question: str, concepts) -> set:
+    """MIDTERMS-WP3-1106: when news intent fires, the event nouns ("elections", "midterm") and 4-digit years of the
+    question are CENTRAL concepts (weight top + 1), so framing words cannot carry a candidate to tier 0. set() when
+    news intent does not fire or the detector is unavailable. No new number."""
+    try:
+        from vera import news_intent, reporting_lane
+        if not news_intent.news_intent(str(question or "")):
+            return set()
+        nouns = {str(n).lower().rstrip("s") for n in
+                 (reporting_lane.load_config().get("news_intent") or {}).get("event_nouns", [])}
+    except Exception:  # noqa: BLE001  never breaks relevance ranking
+        return set()
+    return {c for c in concepts if "|" not in c and (_YEAR_TOKEN.fullmatch(c) or c.rstrip("s") in nouns)}
 
 
 def entity_concepts(concepts, entities) -> set:

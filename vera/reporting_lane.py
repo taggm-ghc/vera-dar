@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -160,13 +161,69 @@ def _neg(d: str | None) -> str:
     return "".join(chr(0x10FFFF - ord(c)) for c in d) if d else ""
 
 
+_WORD = re.compile(r"[A-Za-z0-9]+")
+_YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
+
+
+def event_core(text: str, cfg: dict | None = None) -> dict | None:
+    """WP4 (MIDTERMS-WP4-1106): the event core of a news question, or None when it names no event noun.
+
+    Only config event nouns (news_intent.event_nouns) and the latest named year are used, so filler, request or meta
+    words can never reach GDELT. Returns {"phrase": "midterm elections", "words": [...], "year": "2026"|None,
+    "synonyms": [...]} (synonyms come from the optional config news_intent.event_synonyms {noun: [..]}).
+    GDELT DOC 2.0 query syntax used: a double-quoted exact phrase, and OR inside parentheses (the same form this
+    module already uses for domain: operators); terms separated by a space are ANDed.
+    """
+    ni = (cfg if cfg is not None else load_config()).get("news_intent")
+    if not isinstance(ni, dict):
+        return None
+    nouns = [str(n).lower().split() for n in ni.get("event_nouns") or [] if str(n).strip()]
+    if not nouns:
+        return None
+    toks = [t.lower() for t in _WORD.findall(str(text or ""))]
+    run: list[str] = []
+    i = 0
+    while i < len(toks):
+        hit = next((n for n in sorted(nouns, key=len, reverse=True) if toks[i:i + len(n)] == n), None)
+        if hit:
+            run.extend(hit)
+            i += len(hit)
+        elif run:
+            break
+        else:
+            i += 1
+    if not run:
+        return None
+    years = _YEAR.findall(str(text or ""))
+    syn = ni.get("event_synonyms") if isinstance(ni.get("event_synonyms"), dict) else {}
+    syns: list[str] = []
+    for w in run:
+        for x in syn.get(w) or []:
+            x = " ".join(_WORD.findall(str(x))).lower()
+            if x and x not in syns and x != " ".join(run):
+                syns.append(x)
+    return {"phrase": " ".join(run), "words": list(dict.fromkeys(run)), "year": max(years) if years else None,
+            "synonyms": syns}
+
+
+def core_queries(core: dict) -> list[str]:
+    """[precise, broader]: the quoted phrase (with any synonyms OR-ed) plus the year; then the event words OR-ed plus
+    the year. The broader query is dropped when it equals the precise one."""
+    y = " " + core["year"] if core.get("year") else ""
+    alts = [f'"{core["phrase"]}"'] + [f'"{x}"' for x in core.get("synonyms") or []]
+    q1 = (alts[0] if len(alts) == 1 else "(" + " OR ".join(alts) + ")") + y
+    words = list(dict.fromkeys(list(core["words"]) + [w for x in core.get("synonyms") or [] for w in x.split()]))
+    q2 = (words[0] if len(words) == 1 else "(" + " OR ".join(words) + ")") + y
+    return [q1] if q2 == q1 or q2 == core["phrase"] + y else [q1, q2]
+
+
 VERDICTS = ("allow", "links_only", "exclude")
 API_HOSTS = frozenset({"api.gdeltproject.org", "hn.algolia.com"})
 MAX_BODY = 2_000_000
 
 
 def _new_state() -> dict:
-    return {"open": {}, "last": {}, "emit": {}, "fails": {}, "lock": threading.Lock()}
+    return {"open": {}, "last": {}, "emit": {}, "fails": {}, "next": {}, "lock": threading.Lock()}
 
 
 _SHARED = _new_state()  # per-process lane state (circuit, backoff, spacing, crawl delay); never holds page text
@@ -270,6 +327,7 @@ class ReportingLane:
         self.last_why: str | None = None  # PERF-MISS-1105-FIX2 F2: closed token for the last _call (trace only)
         st = _SHARED if (http_get is None and clock is time.monotonic) else _new_state()
         self._open_until, self._last_call, self._last_emit, self._fails = st["open"], st["last"], st["emit"], st["fails"]
+        self._next = st["next"]  # WP4: broader core query deferred to the next call (key: the precise query)
         self._lock = st["lock"]
 
     def available(self, portal: str) -> bool:
@@ -335,9 +393,9 @@ class ReportingLane:
             self._open_until[portal] = self._clock() + max(0.0, min(wait, cap))
         return None
 
-    def gdelt(self, terms: list[str]) -> list[dict] | None:
+    def gdelt(self, terms: list[str], query: str | None = None) -> list[dict] | None:
         c = self.cfg["gdelt"]
-        q = build_query(terms)
+        q = query or build_query(terms)
         if not q:
             return None
         if self.cfg.get("outlet_query") == "allowlist":
@@ -387,17 +445,41 @@ class ReportingLane:
                 res["diag"].append({"portal": portal, "status": "skipped", "reason": "circuit", "items": 0})
                 continue
             self.last_why = None
-            items = fn(terms)
+            core = event_core(sub_query, self.cfg) if portal == "gdelt" else None
+            qs = core_queries(core) if core else []
+            attempts, deferred = 1, False
+            first = qs[0] if qs else None
+            was_deferred = bool(qs and self._next.get(qs[0]))
+            if was_deferred:  # a broader query was deferred earlier: use it now (cleared once a call is made)
+                first = qs[1]
+            items = self.gdelt(terms, first) if qs else fn(terms)
+            if was_deferred and items is not None:
+                self._next.pop(qs[0], None)
+            # an empty precise result earns ONE broader core query. The lane never sleeps in the request path
+            # (SEC B1) and never shortens min_interval_s: if the spacing has not elapsed the broader query is
+            # deferred to the next call (retry_deferred). A GDELT 429 opens the backoff window, so available()
+            # is False and nothing is retried.
+            if qs and first == qs[0] and items is not None and not items and len(qs) > 1 and self.available(portal):
+                self.last_why = None
+                items2 = self.gdelt(terms, qs[1])
+                if items2 is not None:
+                    items, attempts = items2, 2
+                elif self.last_why == "spacing":
+                    self._next[qs[0]] = qs[1]
+                    deferred = True
             if items is None:
                 why = self.last_why or "no_query"
+                src = {"spacing": "local_spacing", "throttled": "gdelt_response"}.get(why)
                 res["diag"].append({"portal": portal, "status": "skipped" if why in ("spacing", "no_query") else "called",
-                                    "reason": why, "items": 0})
+                                    "reason": why, "items": 0, "attempts": attempts,
+                                    **({"throttle_source": src} if src else {})})
                 continue
             raw_n = len(items)
             res["items"] = self._apply_outlet_policy(sort_items(items))
             res["diag"].append({"portal": portal, "status": "called",
                                 "reason": "ok" if res["items"] else ("no_items" if raw_n == 0 else "outlet_policy"),
-                                "items": len(res["items"])})
+                                "items": len(res["items"]), "raw_items": raw_n, "attempts": attempts,
+                                **({"retry_deferred": True} if deferred else {})})
             if portal == "gdelt":
                 res["attribution"] = gdelt_attribution()
             return res

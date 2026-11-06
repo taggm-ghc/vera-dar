@@ -273,6 +273,10 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         elif (drops or {}).get(id(c)) == irrelevant:  # DDFIX-1023/REL: off-topic before the cut (title + abstract)
             f["relevance"] = "no key concept of the question in the title or abstract (deterministic, lexical)"
             dec, reason = "reject", irrelevant
+        elif (drops or {}).get(id(c)) in (acq_config.reason(acq, "duplicate"), acq_config.reason(acq, "no_doi")):
+            # WP7 (MIDTERMS-WP7-1106 c): the ranking stage's own reason (an in-request duplicate, no identifier) is
+            # reported as it is, not folded into the candidate-cut label below
+            dec, reason = "reject", drops[id(c)]
         else:
             why = search_providers.acq_prefilter(c)
             if why:

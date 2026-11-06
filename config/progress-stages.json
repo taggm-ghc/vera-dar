@@ -87,7 +87,8 @@
     "2": "sources are busy right now",
     "3": "today's search limit was reached",
     "4": "no further progress was made",
-    "5": "the answering service is at its limit"
+    "5": "the answering service is at its limit",
+    "6": "stopped after repeated empty searches"
   },
   "activities": {
     "1": "Waiting about {wait_s} s for a search provider's rate limit",

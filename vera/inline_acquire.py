@@ -60,7 +60,8 @@ INF = float("inf")
 HELD_KEYS = ("arxiv_licence_hold", "preprint_licence_unverified", "preprint_not_permitted", "licence_absent", "no_licence")
 # STREAM-1031 closed "why" set for acquire/limited (INTERFACES.md): 1 no more open sources, 2 sources busy, 3 search
 # limit reached, 4 stalled, 5 answering service at its limit.
-WHY_NO_MORE, WHY_BUSY, WHY_CAPPED, WHY_STALLED, WHY_EXHAUSTED = 1, 2, 3, 4, 5
+# MIDTERMS-WP8-1106: 6 = the provisional no-progress heuristic stopped the rounds (disclosed, owner D2).
+WHY_NO_MORE, WHY_BUSY, WHY_CAPPED, WHY_STALLED, WHY_EXHAUSTED, WHY_HEURISTIC = 1, 2, 3, 4, 5, 6
 
 
 def _emit(stage: str, state: str, **counts) -> None:
@@ -158,6 +159,16 @@ def reset_for_tests() -> None:
     _I = _Inline()
 
 
+_REASON_TOKEN = re.compile(r"R-ACQ-[A-Z0-9_]{1,40}(-[A-Z0-9_]{1,40})?\Z")
+
+
+def _trace_reason(code):
+    """WP7: the trace layer redacts any string that is not lower-case token-shaped, so the upper-case reason codes
+    (R-ACQ-DEFER_CAP) all showed as "<str>". A reason code of the fixed R-ACQ-* shape is traced lower-cased
+    (r-acq-defer_cap); anything else is None (never free text, Deny-All)."""
+    return code.lower() if isinstance(code, str) and _REASON_TOKEN.match(code) else None
+
+
 def _trace_done(o, st) -> None:
     """Trace one inline acquisition attempt: counts, status, reason-code counts, phase ms and up to 20 candidates as
     provider/outcome/reason-code/status only (never doi, url, title or free text). Never raises."""
@@ -168,7 +179,7 @@ def _trace_done(o, st) -> None:
                  detail={"status": str(o.status), "codes": dict(o.codes or {}), "ms": dict(o.ms or {})})
         for c in (o.candidates or [])[:20]:
             rt.event("acquire", "candidate",
-                     detail={"provider": c.get("portal"), "outcome": c.get("outcome"), "reason": c.get("reason"),
+                     detail={"provider": c.get("portal"), "outcome": c.get("outcome"), "reason": _trace_reason(c.get("reason")),
                              "diag": c.get("status")})
     except Exception:  # noqa: BLE001
         pass
@@ -287,9 +298,17 @@ def _trace_lane(question: str, lanes) -> None:
         diag = [d for d in (getattr(lanes, "diag", None) or []) if isinstance(d, dict)]
         called = [d for d in diag if d.get("status") == "called"]
         first = (called or diag or [{}])[0]
+        counts = {"items": sum(int(d.get("items", 0) or 0) for d in diag), "pages": len(lanes.pages),
+                  "links": len(lanes.links), "calls": len(called), "skips": len(diag) - len(called)}
+        # WP7 (d): extracted-term and raw (pre outlet policy) item counts, when the lane's diag entries carry them.
+        # Counts keys are identifier tokens (request_trace.clean_counts), so no detail-key allowlist entry is needed;
+        # a diag entry without the key adds nothing (never a guessed zero).
+        for src, dst in (("terms", "terms"), ("raw_items", "raw_items")):
+            vals = [d.get(src) for d in diag if isinstance(d.get(src), int) and not isinstance(d.get(src), bool)]
+            if vals:
+                counts[dst] = max(vals) if dst == "terms" else sum(vals)
         rt.event("lane", "done" if called else "skipped",
-                 counts={"items": sum(int(d.get("items", 0) or 0) for d in diag), "pages": len(lanes.pages),
-                         "links": len(lanes.links), "calls": len(called), "skips": len(diag) - len(called)},
+                 counts=counts,
                  detail={"portal": str(first.get("portal") or "-"), "status": "called" if called else "skipped",
                          "reason": str(first.get("reason") or ("no_reporting_part" if not diag else "-")),
                          "news": news})
@@ -346,7 +365,8 @@ def _with_parts(plan, fn, *a):
 
 
 def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, deps_factory=None,
-            served=None, discovered=None, prefer_recent: bool = False, topic_key: str = "") -> Outcome:
+            served=None, discovered=None, prefer_recent: bool = False, topic_key: str = "",
+            persist: bool = False) -> Outcome:
     """Never raises. See the module docstring for statuses. served (R2): doc keys the caller's stored-corpus attempt
     already tried (skipped here); None = the currently served acquired corpus (deps.corpus_keys). discovered (P0-5):
     the request's discovery results (list of source dicts), used only when inline.use_discovered is true."""
@@ -362,6 +382,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
             if acq_discovered.use_discovered(acq):
                 disc = acq_discovered.discovered_candidates(discovered, acq, question)
         key = _cache_key(question, served, disc) if disc is not None else _cache_key(question, served)
+        if persist:  # MIDTERMS-WP8-1106: a keep-searching request never replays, nor shares a slot with, a plain one
+            key = key + ("persist",)
         now = clock()
         busy = False  # STREAM-1031: a busy refusal is also a stream event (emitted after the lock is released)
         with _I.lock:
@@ -402,7 +424,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         out = _run(question, acq, env, clock, deps_factory, served,
                    **({"disc": disc} if disc is not None else {}),  # P0-5: flag off = the unchanged call
                    **({"prefer_recent": True} if prefer_recent else {}),
-                   **({"topic_key": topic_key} if topic_key else {}))
+                   **({"topic_key": topic_key} if topic_key else {}),
+                   **({"persist": True} if persist else {}))
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
     finally:
@@ -443,6 +466,24 @@ def _supply_status(acq: dict, codes: dict, o) -> str:
     return "resource_limited"  # budget >= target, search worked, routes ran out: supply
 
 
+def _left_reason(acq: dict, ctx, st: dict, late: bool) -> str:
+    """WP7 (b): why a candidate with no recorded outcome was left unevaluated, by the real stop: the deadline, a
+    stream stop (disconnect, stall, providers exhausted), the no-progress round stop, or the document budget. Only a
+    candidate left with none of these is the plain candidate cut (R-ACQ-DEFER_CAP)."""
+    if late:
+        return acq_config.reason(acq, "deadline")
+    if ctx is not None and _stop_reason(ctx, st) is not None:
+        return acq_config.reason(acq, "stopped")
+    stop = (st.get("acq6") or {}).get("stop")
+    if stop == "no_progress":
+        return acq_config.reason(acq, "no_progress")
+    if stop == "ceiling31":
+        return acq_config.reason(acq, "doc_budget")
+    if stop == "disconnect" or (isinstance(stop, str) and stop in (stream_ctx.STALLED, stream_ctx.PROVIDERS_EXHAUSTED)):
+        return acq_config.reason(acq, "stopped")
+    return acq_config.reason(acq, "defer_cap")
+
+
 def _stop_reason(ctx, st: dict):
     return st.get("stop") or getattr(ctx, "_stop", None)
 
@@ -464,6 +505,7 @@ def _emit_final(o: Outcome, acq: dict, codes: dict, stop) -> None:
         _emit("acquire", "done", stored=a["stored"], target=a["target"])
     elif a.get("status") in ("resource_limited", "relevance_rejected", "no_route"):
         why = (WHY_STALLED if stop == stream_ctx.STALLED else WHY_EXHAUSTED if stop == stream_ctx.PROVIDERS_EXHAUSTED
+               else WHY_HEURISTIC if a.get("stop") == "no_progress"
                else WHY_BUSY if _provider_busy(acq, codes) else WHY_NO_MORE)
         _emit("acquire", "limited", stored=a["stored"], target=a["target"], why=why)
 
@@ -484,7 +526,7 @@ def _wait_for_holder(slot, acq) -> None:
 
 
 def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
-         topic_key="") -> Outcome:
+         topic_key="", persist=False) -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     # STREAM-1031 / OD-1031-NODEADLINE: on the streamed path there is no inline deadline (per-wait max_wait_s still applies)
@@ -493,7 +535,8 @@ def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer
         return _run_body(question, acq, env, clock, deps_factory, served,
                          **({"disc": disc} if disc is not None else {}),
                          **({"prefer_recent": True} if prefer_recent else {}),
-                         **({"topic_key": topic_key} if topic_key else {}))
+                         **({"topic_key": topic_key} if topic_key else {}),
+                         **({"persist": True} if persist else {}))
 
 
 QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the background acquisition queue
@@ -593,7 +636,7 @@ def _arxiv_id_str(v):
 
 
 def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
-              topic_key="") -> Outcome:
+              topic_key="", persist=False) -> Outcome:
     from vera import fulltext_loader as fl
     t0 = clock()
     ctx = stream_ctx.current()  # STREAM-1031: set only by POST /ask/stream; None = the legacy path, unchanged below
@@ -620,8 +663,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             for r in st["recs"]:
                 if r["outcome"] is None:
                     r["outcome"] = "not_evaluated"
-                    r["reason"] = r.pop("skip", None) or (  # P0DTA-DIAG: the reason recorded at the skip; else legacy flag
-                        acq_config.reason(acq, "deadline") if late else acq_config.reason(acq, "defer_cap"))
+                    r["reason"] = r.pop("skip", None) or _left_reason(acq, ctx, st, late)  # P0DTA-DIAG: recorded at the skip; else the real stop
             wid = st.get("web_ids") or ()
             for c, r in zip(st["cands"], st["recs"]):  # A6-W N4: web-route candidates stay terminal (never queued)
                 if id(c) in wid:
@@ -667,8 +709,12 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                              **({"stop": stop} if ctx is not None and aq_status == "resource_limited"
                                 and stop in (stream_ctx.STALLED, stream_ctx.PROVIDERS_EXHAUSTED) else {})}
             r6 = st.get("acq6")
-            if r6 and r6["rounds"] > 1:  # A6 D1: telemetry/dev only
+            if r6 and (r6["rounds"] > 1 or r6.get("persist") or r6.get("stop") == "no_progress"):  # A6 D1 telemetry; WP8: always under persist
                 o.acquisition.update({"rounds": int(r6["rounds"]), "stop": r6["stop"]})
+            if r6 and r6.get("persist"):
+                o.acquisition["persist"] = True
+            if r6 and r6.get("stop") == "no_progress":  # WP8 (owner D2): the heuristic caused this stop; disclosed
+                o.acquisition["heuristic"] = True
             if ctx is not None:
                 _emit_final(o, acq, codes, stop)
         elif ctx is not None and o.status in CAPPED:  # the shared job caps refused: nothing searched
@@ -808,7 +854,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         sk: dict = {}  # P0DTA-DIAG: rank index -> why it was skipped, recorded where it happened
         if ctx is not None and _check_stop(ctx, st):  # STREAM-1031: stopped before any fetch: nothing starts
             plans = []
-            sk.update({i: acq_config.reason(acq, "defer_cap") for i in range(len(ranked))})
+            sk.update({i: acq_config.reason(acq, "stopped") for i in range(len(ranked))})  # WP7: the stop, not the cut
         elif fresh_budget > 0 and ranked and deadline - clock() < _b(acq, "per_doc_timeout_s", 25):
             # P0DTA-PRIO D3: one full fetch no longer fits: nothing starts; each candidate is a deadline skip
             # (P0DTA-INTEG: recorded through the DIAG skip map, so done() and annotate_diag give skipped/deadline)
@@ -869,7 +915,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         if rounds_on and fresh_budget > 0 and not search_failed and len(per) >= len(ranked):
             t = clock()
             extra, reused = _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip,
-                                          plans, reused, fresh_budget, route)
+                                          plans, reused, fresh_budget, route, **({"persist": True} if persist else {}))
             ao_ids = {id(p) for p in extra}
             plans = plans + extra
             ms["rounds"] = int((clock() - t) * 1000)
@@ -1025,7 +1071,9 @@ def with_web(o, lanes):
                                     attributions=list(base.attributions))
 
 
-# Orchestrator safety bound (2026-11-04): the round loop ends after NO_PROGRESS_ROUNDS consecutive variant rounds that
+# Provisional stopping heuristic (owner D2, OD-1106-MIDTERMS-D1D4, 2026-11-05): not a hard limit; a keep-searching
+# request (persist, vera.request_intent) overrides it; a stop it causes is disclosed (acquisition.heuristic, why 6).
+# Origin (2026-11-04): the round loop ends after NO_PROGRESS_ROUNDS consecutive variant rounds that
 # yield ZERO new usable documents (no new answer-eligible document: fresh admitted or reused stored), so an empty-result question does not spend the hourly jobs down to the background floor.
 # Exit reason "no_progress" (Outcome.acquisition["stop"], telemetry only). CALIBRATION NOTE: 2 is a structural choice,
 # not a tuned value: one empty round can be a provider blip, two in a row on different variants indicate the variant
@@ -1035,7 +1083,7 @@ NO_PROGRESS_ROUNDS = 2
 
 
 def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip, plans, reused,
-                  fresh_budget, route):
+                  fresh_budget, route, persist=False):
     """NONASK-1103 A6 D1 (A6-2, A6-5): rounds 2 and later. While fewer than the target (acq_rounds, 6) answer-eligible
     documents (fresh + reused + answer-only/lane pages) exist and the previous ranked list is exhausted, take the next
     query variant (vera.query_variants6: finite list V, never the raw sentence) and search again. Every round reserves
@@ -1047,30 +1095,117 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     and fetch start, the job floor and stall_s. NON-STREAM path: `deadline` (45 s from start) is absolute across all
     rounds: a round starts only if its search can end per_doc_timeout_s before it, and no fetch starts if one no longer
     fits (N5), so the worst case is deadline_s + one straggler per_doc_timeout_s.
+    MIDTERMS-WP8-1106 (owner D1/D2): persist (a keep-searching request) lifts ONLY the no-progress heuristic; every
+    other bound above (met, ceiling31, the job floor, stream stops, the deadline, search_failed, the finite variant
+    list) still applies. No new limit.
     Returns (extra answer-only plans, reused). st["acq6"] = {"rounds": searches incl. round 0, "stop": reason}."""
     from vera import query_variants6
     tgt = acq_rounds.target_of(acq)
     per_doc = _b(acq, "per_doc_timeout_s", 25)
     s = acq.get("search") or {}
     tried: set = set()
+    # WP7 (a): round-0 candidates cut by the shortlist (R-ACQ-DEFER_CAP) were never evaluated, so they are NOT tried
+    # yet; they are evaluated, best first, before any new variant search, and join `tried` only once evaluated.
+    pending = _cut_deferred(acq, st)
+    pend_ids = {id(c) for c in pending}
     for c in st["cands"]:
-        tried |= _ckeys(c)
+        if id(c) not in pend_ids:
+            tried |= _ckeys(c)
     extra: list = []
     rounds, stop = 1, "variants_exhausted"
     r6 = st["acq6"] = {"rounds": 1, "stop": stop}
+    if persist:
+        r6["persist"] = True
     idle, last = 0, None  # consecutive variant rounds that added zero new usable documents (NO_PROGRESS_ROUNDS)
     news = news_question(question)  # F5
     try:
         variants = query_variants6.variants(question)
     except Exception:  # noqa: BLE001
         variants = []
-    for q in variants:
+    stop_pre = None
+    passes = 0
+    while pending and passes <= len(pend_ids):  # each pass takes at least one candidate off `pending`; the cap is a guard
+        passes += 1
+        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        remaining = fresh_budget - len(plans) - len(extra)
+        if eligible >= tgt:
+            stop_pre = "met"
+        elif remaining <= 0:
+            stop_pre = "ceiling31"
+        elif ctx is not None and _check_stop(ctx, st):
+            stop_pre = "disconnect" if st.get("stop") == stream_ctx.DISCONNECTED else str(st.get("stop"))
+        elif ctx is None and deadline - clock() < per_doc:  # N5: one full fetch no longer fits: nothing starts
+            count(acq_config.reason(acq, "deadline"))
+            stop_pre = "deadline"
+        if stop_pre:
+            break
+        drops_p: dict = {}
+        ranked = aa.rank_candidates(question, pending, acq, set(skip) | tried, fdcfg, count, drops=drops_p, route=route,
+                                    protected=None)
+        in_ranked = {id(r[2]) for r in ranked}
+        cut_again = acq_config.reason(acq, "defer_cap")
+        nxt = []
+        for c in pending:
+            why = drops_p.get(id(c))
+            if id(c) in in_ranked:
+                continue
+            if why == cut_again:
+                nxt.append(c)  # beyond this pass's cut: stays pending, not tried
+            elif why:
+                _settle(st, id(c), "dropped", why)  # duplicate / known / licence: its real reason
+        pending = nxt
+        reuse_info = {}
+        got_reused, left = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg, clock=clock,
+                                       deadline=deadline, info=reuse_info,
+                                       **({"ctx": ctx, "max_checks": max(0, int(acq_config.live(acq)["max_reuse_checks_per_prompt"])
+                                                                          - sum(1 for r in st["recs"] if r.get("outcome") in ("reused", "reuse_rejected")))}
+                                          if ctx is not None else {}))  # the per-prompt check bound is shared with round 0
+        if got_reused[0]:
+            reused = (list(reused[0]) + list(got_reused[0]), list(reused[1]) + list(got_reused[1]))
+        for cid, (oc, why) in reuse_info.items():
+            _settle(st, cid, oc, why)
+        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + len(reused[0]))))
+        taken = aa.reserve_reads(left, need, acq, route)
+        taken_ids = {id(r[2]) for r in taken}
+        reuse_ids = {cid for cid in reuse_info}
+        for r in ranked:
+            if id(r[2]) in taken_ids or id(r[2]) in reuse_ids:
+                tried |= _ckeys(r[2])  # evaluated (or settled by reuse) now: only then is it tried
+            else:
+                pending.append(r[2])  # trimmed by the read reserve: stays pending for a later pass
+        if not taken:
+            continue
+        per_p: dict = {}
+        sk_p: dict = {}
+        got = _evaluate_parallel(question, taken, acq, deps, icfg, fdcfg, clock, deadline, need, count, ms,
+                                 per=per_p, skips=sk_p, **({"ctx": ctx, "st": st} if ctx is not None else {}))
+        extra += got
+        kept = {id(p) for p in got}
+        for i, r in enumerate(taken):
+            res = per_p.get(i)
+            if isinstance(res, str):
+                _settle(st, id(r[2]), "rejected", res)
+            elif res is not None and id(res) in kept:
+                _settle(st, id(r[2]), "admitted", None)
+            elif res is not None:
+                _settle(st, id(r[2]), "not_used", None)
+            else:  # never finished (stop, budget): not tried, so a later pass or the relabel below sees it
+                pending.append(r[2])
+                tried.difference_update(_ckeys(r[2]))
+                if i in sk_p:
+                    _settle(st, id(r[2]), "not_evaluated", sk_p[i])
+    r6["deferred_evaluated"] = len(pend_ids) - len(pending)
+    if stop_pre:
+        stop = stop_pre
+    for q in ([] if stop_pre else variants):
         cur = len(extra) + len(reused[0])  # usable = answer-eligible documents gained (fresh or reused)
         if last is not None:
             idle = idle + 1 if cur == last else 0
             if idle >= NO_PROGRESS_ROUNDS:  # checked BEFORE the next reservation: no job is spent on a third round
-                stop = "no_progress"
-                break
+                if not persist:
+                    stop = "no_progress"
+                    break
+                r6["heuristic_overridden"] = 1  # WP8: keep-searching overrides the heuristic (telemetry only)
         last = cur
         eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
         remaining = fresh_budget - len(plans) - len(extra)
@@ -1158,9 +1293,38 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                                     per={}, skips={}, **({"ctx": ctx, "st": st} if ctx is not None else {}))
     else:
         eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
-        stop = "met" if eligible >= tgt else "variants_exhausted"
+        stop = stop_pre or ("met" if eligible >= tgt else "variants_exhausted")
     r6["stop"] = stop
+    for c in pending:  # still unevaluated: label by the real stop (WP7 b), not by the cut
+        _relabel_left(acq, ctx, st, c, stop)
     return extra, reused
+
+
+def _cut_deferred(acq: dict, st: dict) -> list:
+    """WP7 (a): the round-0 candidates dropped only by the shortlist cut (outcome dropped, R-ACQ-DEFER_CAP), in the
+    order the ranking stage recorded them (best first). Web-route candidates are terminal and never included."""
+    why = acq_config.reason(acq, "defer_cap")
+    wid = st.get("web_ids") or ()
+    return [c for c, r in zip(st["cands"], st["recs"])
+            if isinstance(c, dict) and id(c) not in wid and r.get("outcome") == "dropped" and r.get("reason") == why]
+
+
+def _settle(st: dict, cid: int, outcome: str, reason) -> None:
+    """WP7 (a): record the real outcome of a formerly cut candidate on its public record."""
+    for c, r in zip(st["cands"], st["recs"]):
+        if id(c) == cid:
+            r["outcome"], r["reason"] = outcome, reason
+            return
+
+
+def _relabel_left(acq: dict, ctx, st: dict, cand, stop) -> None:
+    """WP7 (b): a cut candidate the extra rounds never reached gets the real stop as its reason (outcome
+    not_evaluated, still continue-eligible), unless the loop simply met its target or ran out of variants."""
+    why = {"disconnect": "stopped", stream_ctx.STALLED: "stopped", stream_ctx.PROVIDERS_EXHAUSTED: "stopped",
+           stream_ctx.DISCONNECTED: "stopped", "no_progress": "no_progress", "ceiling31": "doc_budget",
+           "deadline": "deadline"}.get(stop)
+    if why:
+        _settle(st, id(cand), "not_evaluated", acq_config.reason(acq, why))
 
 
 # UNCALIBRATED planner prior: max candidates in the one protect-lookup batch (the discovered/search pool is bounded
@@ -1525,11 +1689,65 @@ BACKGROUND_NOTE = ("Further sources VERA-DAR found for this question may be acqu
                    "basis; any that are added must first pass its licence, content and relevance checks.")
 
 
+BACKGROUND_NOTE_PERSIST = (
+    "VERA-DAR has tried every search available for this question. {n} source(s) it could not finish now were handed "
+    "to a best-effort background queue; any that pass its licence, content and relevance checks are added to its "
+    "collection, and asking again later may use them. This answer will not update.")
+# Review F1: used when the keep-searching rounds stopped for any reason other than exhausting the variants.
+BACKGROUND_NOTE_PERSIST_STOPPED = (
+    "VERA-DAR stopped searching before every search option was tried ({reason}). {n} source(s) it could not finish "
+    "now were handed to a best-effort background queue; any that pass its licence, content and relevance checks are "
+    "added to its collection, and asking again later may use them. This answer will not update.")
+_STOP_REASON_TEXT = {"deadline": "the time limit was reached", "ceiling31": "the per-question reading limit was reached",
+                     "rate": "the current search limit was reached", "disconnect": "the connection ended",
+                     "search_failed": "a search could not be completed", stream_ctx.STALLED: "no further progress was made",
+                     stream_ctx.PROVIDERS_EXHAUSTED: "the answering service reached its limit"}
+_NUM_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"}
+
+
+def stop_clause(aq: dict | None) -> str:
+    """MIDTERMS-WP8-1106 (owner D1/D2): one need-to-know sentence on why the search rounds stopped (no portal,
+    provider, host or internal cause), with a leading space; "" for no stop or any other stop. Shared by the
+    shortfall line (vera.ui_evidence) and the non-answer notice (vera.ask_service._inline_notice)."""
+    aq = aq if isinstance(aq, dict) else {}
+    stop, persist = aq.get("stop"), aq.get("persist") is True
+    if stop == "no_progress" and not persist:
+        n = _NUM_WORDS.get(NO_PROGRESS_ROUNDS, str(NO_PROGRESS_ROUNDS))
+        return (f" VERA-DAR stopped after {n} further searches found nothing new; add \"keep searching\" to your "
+                "question to try every remaining search.")
+    if persist and stop == "variants_exhausted":
+        return " Every search option available for this question was tried."
+    if stop == "ceiling31":
+        return " The per-question reading limit was reached."
+    if stop == "rate":
+        return " The current search limit was reached; try again later."
+    return ""
+
+
 def background_note(acq: dict | None, o) -> str:
     """CONT-1023: one honest sentence when this request queued candidates for background acquisition (best-effort: no
-    claim they will run or succeed); "" otherwise. Override: scope_expansion.inline_notice_background."""
-    if not getattr(o, "queued", 0):
+    claim they will run or succeed); "" otherwise. Override: scope_expansion.inline_notice_background.
+    MIDTERMS-WP8-1106 (owner D1): under persist the hand-off count itself is stated (Outcome.queued, the real
+    best-effort hand-off; nothing is claimed as running: the jobs run no search and their status is not observable).
+    Override: scope_expansion.inline_notice_background_persist ({n} = the count)."""
+    n = int(getattr(o, "queued", 0) or 0)
+    if not n:
         return ""
+    if ((getattr(o, "acquisition", None) or {}).get("persist")
+            and str((getattr(o, "background", None) or {}).get("status") or "") == "ACQ-QUEUED"):
+        stop = (getattr(o, "acquisition", None) or {}).get("stop")
+        se = (acq or {}).get("scope_expansion") or {}
+        if stop == "variants_exhausted":  # review F1: the exhaustion claim only when every variant was searched
+            key, dflt = "inline_notice_background_persist", BACKGROUND_NOTE_PERSIST
+        else:
+            key, dflt = "inline_notice_background_persist_stopped", BACKGROUND_NOTE_PERSIST_STOPPED
+        tp = se.get(key)
+        tp = tp if isinstance(tp, str) and tp else dflt
+        reason = _STOP_REASON_TEXT.get(stop, "it reached a stopping point")
+        try:
+            return tp.format(n=n, reason=reason)
+        except (KeyError, IndexError, ValueError):
+            return dflt.format(n=n, reason=reason)
     t = ((acq or {}).get("scope_expansion") or {}).get("inline_notice_background")
     return t if isinstance(t, str) and t else BACKGROUND_NOTE
 

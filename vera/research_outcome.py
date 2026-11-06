@@ -85,6 +85,8 @@ _CODE_MAP: dict[str, str] = {
     "R-ABSTRACT": "abstract_only",
     # budgets / caps
     "R-ACQ-DEFER_CAP": "candidate_cap", "R-ACQ-SERVECAP": "budget_exhausted",
+    # MIDTERMS-WP7-1106: the real stop of this request (a stream stop; the no-progress round stop): a limit stop, not a source failure
+    "R-ACQ-STOPPED": "budget_exhausted", "R-ACQ-NO_PROGRESS": "budget_exhausted",
     # P0DTA-DIAG: distinct stop reasons (before: all folded into fetch_failed / budget_exhausted)
     "R-ACQ-DEADLINE": "deadline_reached", "R-ACQ-DOC_BUDGET": "doc_budget_reached",
     "R-ACQ-RATE": "quota", "R-ACQ-DAILY": "quota", "R-ACQ-FETCH_TIMEOUT": "fetch_timeout",

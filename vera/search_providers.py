@@ -2042,6 +2042,14 @@ class DuckDuckGoLiteProvider:
         self.news_domains = [d for d in settings["site_groups"].get("news", [])]
         self.source_class_by_domain = dict(settings.get("source_class_by_domain") or {})
 
+    def limiter_cooling_down(self) -> bool:
+        """NT-2: True while the DuckDuckGo adapter's throttle cooldown is active (the call would be refused unsent)."""
+        try:
+            from vera import rate_limit
+            return bool(rate_limit.get_registry().portal("duckduckgo").cooling_down())
+        except Exception:  # noqa: BLE001  unknown state: keep the normal spacing
+            return False
+
     def _spend(self) -> None:
         day = self._today()
         if day != self._day:

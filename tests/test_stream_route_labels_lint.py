@@ -43,7 +43,7 @@ def test_stream_labels_present_and_placeholders_known():
     s = LABELS["stages"]
     assert {"limited", "busy"} <= set(s["acquire"])
     assert s["search"]["done"] == "{found} possible sources found; {shortlisted} to check"
-    assert set(LABELS["why"]) == {"1", "2", "3", "4", "5"}
+    assert set(LABELS["why"]) == {"1", "2", "3", "4", "5", "6"}  # 6: MIDTERMS-WP8-1106 heuristic stop
     for k in ("unavailable", "connection_lost", "never_connected", "stalled", "busy"):
         assert k in LABELS["terminals"]
     known = {"rid", "inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "attempt", "minutes",

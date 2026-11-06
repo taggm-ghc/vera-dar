@@ -1,0 +1,15 @@
+{
+  "_note": "MIDTERMS-WP1-1106 RC1: whole-sentence or trailing-clause request/meta phrases that are split from the research question. persist_phrases set flags.persist; plain_phrases are removed without it. filler_words may surround a phrase.",
+  "persist_phrases": [
+    "keep searching", "keep looking", "keep digging", "keep trying", "keep going",
+    "until you find an answer", "until you find one", "until you find it", "until you find something",
+    "until you have an answer", "until you get an answer", "until you find the answer",
+    "search harder", "dig deeper", "do not give up", "dont give up", "never give up",
+    "search until you find an answer", "dont stop until you find an answer", "do not stop until you find an answer"
+  ],
+  "plain_phrases": [
+    "be thorough", "be as thorough as possible", "be comprehensive", "take your time", "do your best",
+    "try your best", "answer as best you can", "thank you", "thanks"
+  ],
+  "filler_words": ["please", "and", "then", "also", "just", "you", "can", "could", "would", "will", "should", "must", "need", "to", "so", "but", "now", "pls", "kindly", "me", "for", "the", "of", "at", "all", "costs", "with", "a", "an", "it", "is", "important", "very", "really", "thoroughly", "much", "as", "possible"]
+}

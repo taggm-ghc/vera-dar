@@ -399,6 +399,11 @@ class PortalAdapter:
         return int(max(0.0, budget) / float(self.c["poll_s"])) + 1
 
     # ---- public
+    def cooling_down(self) -> bool:
+        """NT-2: True while an active throttle cooldown would make acquire() skip. Read-only: no counters change."""
+        with self._cond:
+            return bool(self.c["enabled"]) and self._clock() < self.cooldown_until
+
     def acquire(self, deadline: float | None = None):
         """Permit or Skip. Blocks at most min(max_wait_s, deadline - now - min_call_s); never longer."""
         deadline = DEADLINE.get() if deadline is None else deadline

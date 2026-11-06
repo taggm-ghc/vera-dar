@@ -71,6 +71,7 @@ class State(str, Enum):
 
 COUNT_KEYS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued", "attempt",
                         "shortlisted", "held", "step", "ceiling", "why",
+                        "counted",  # MIDTERMS-WP10-1106: examined sources counted toward the target (acquire update)
                         "act", "wait_s", "k", "n", "elapsed"})  # EXHAUST-GRACE/NOISY-UI: current-activity code + generic counts
 _LIFECYCLE = frozenset({State.START, State.UPDATE, State.DONE, State.SKIPPED})
 VALID: dict[Stage, frozenset] = {

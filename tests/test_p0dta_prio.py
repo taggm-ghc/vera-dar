@@ -59,10 +59,10 @@ def test_D1_routable_fulltext_candidate_takes_a_slot_before_no_oa_records(env, k
     by = {c["doi"]: c for c in out.public()["candidates"]}
     assert by[good_doi]["outcome"] == "admitted" and out.admitted == 1
     assert any(f"/{good_pmc}/fullTextXML" in u for u in web.urls)
-    # the no-OA records only fill the 5 slots that remain; the 6th is cut and handed to the background (reserve allows)
-    assert sum(by[r["doi"]]["reason"] == "R-ACQ-NOTOA" for r in low) == 5
-    cut = [by[r["doi"]] for r in low if by[r["doi"]]["reason"] == "R-ACQ-DEFER_CAP"]
-    assert len(cut) == 1 and cut[0]["background"] == "queued"
+    # WP7 (MIDTERMS-WP7-1106 a): the 6th record, cut at round 0, is now evaluated in the extra round (before any variant
+    # search) and carries its real reason, so all six no-OA records are R-ACQ-NOTOA and none is left as a cut
+    assert sum(by[r["doi"]]["reason"] == "R-ACQ-NOTOA" for r in low) == 6
+    assert not [c for c in by.values() if c["reason"] == "R-ACQ-DEFER_CAP"]
 
 
 def test_D1_sort_uses_only_existing_oa_signals(env):

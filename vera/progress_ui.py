@@ -457,7 +457,10 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
             log.append(text)
     counts = _latest_counts(list(holder.events))
     bars = []
-    for done_k, total_k, name in (("checked", "shortlisted", "Checked"), ("stored", "target", "Saved")):
+    # MIDTERMS-WP10-1106: once the examined-source count arrives, "Read n of 6" replaces the "Saved" bar
+    pairs = (("checked", "shortlisted", "Checked"),
+             ("counted", "target", "Read") if type(counts.get("counted")) is int else ("stored", "target", "Saved"))
+    for done_k, total_k, name in pairs:
         total = counts.get(total_k)
         if type(total) is int and total > 0 and type(counts.get(done_k)) is int:
             bars.append((f"{name} {min(counts[done_k], total)} of {total}", min(1.0, counts[done_k] / total)))

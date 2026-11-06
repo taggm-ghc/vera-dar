@@ -143,6 +143,7 @@
     },
     "query_terms": {
       "relax_on_zero": false,
+      "filler_words": ["affect", "affects", "affected", "affecting", "drive", "drives", "driven", "driving", "improve", "improves", "improved", "improving", "effective", "interact", "interacts", "influence", "influences", "controlling", "relate", "relates", "related", "implications", "implication", "impact", "impacts", "effects", "effect", "consequences", "consequence", "outcome", "outcomes"],
       "min_term_chars": 2,
       "max_extra_terms": 8,
       "stopwords": [

@@ -100,7 +100,7 @@ def test_report_detail_json_and_user_text_rules():
 
 
 def test_reason_mapping_coverage():
-    assert len(ro.KNOWN_CODES) == 56  # NONASK-1103 WP-D: +R-ACQ-PID-NOROUTE; INTEG-1023: +2 ARX-A2 codes; P0DTA-DIAG: +5 (FETCH_TIMEOUT, DOC_BUDGET, RATE, DAILY, CRAWL_DELAY)
+    assert len(ro.KNOWN_CODES) == 58  # MIDTERMS-WP7-1106: +R-ACQ-STOPPED, R-ACQ-NO_PROGRESS; NONASK-1103 WP-D: +R-ACQ-PID-NOROUTE; INTEG-1023: +2 ARX-A2 codes; P0DTA-DIAG: +5 (FETCH_TIMEOUT, DOC_BUDGET, RATE, DAILY, CRAWL_DELAY)
     for code in ro.KNOWN_CODES:
         assert reason_from_code(code) in ro.TERMINAL_REASONS
         assert reason_from_code(code) != "admitted"

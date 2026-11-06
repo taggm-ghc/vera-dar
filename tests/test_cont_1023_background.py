@@ -103,17 +103,19 @@ def test_second_identical_request_queues_no_duplicate_jobs(bg):
 
 # ------------------------------------------------------------------------------------------------ candidate cut
 def test_per_request_cut_of_six_with_nine_eligible_enqueues_three(bg):
+    # MIDTERMS-WP7-1106 (a): the 3 candidates beyond the cut of six are no longer left for the background queue; the
+    # extra round evaluates them inline (before any variant search), so all nine end R-ACQ-NOTOA and none is queued
     dois = _dois(9)
     cfg = A.cfg(max_candidates_resolved=6)  # pinned: the shipped ceiling is 31 since OD-1031-SHORTLIST31; this tests the cut mechanism
     assert int(cfg["bounds"]["max_candidates_resolved"]) == 6
-    d = A.deps([A.cand(x) for x in dois], A.Web({}, {}))  # no Europe PMC record: the 6 evaluated end R-ACQ-NOTOA
+    d = A.deps([A.cand(x) for x in dois], A.Web({}, {}))  # no Europe PMC record: the evaluated ones end R-ACQ-NOTOA
     o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)
     by = {}
     for c in o.candidates:
         by.setdefault(c["outcome"], []).append(c)
-    assert len(by[QUEUED]) == 3 and all(c["reason"] == "R-ACQ-DEFER_CAP" for c in by[QUEUED])
-    assert len(by["rejected"]) == 6 and all(c["background"] == "no_route" for c in by["rejected"])
-    assert len(_queued_cands()) == 3
+    assert QUEUED not in by and not [c for c in o.candidates if c["reason"] == "R-ACQ-DEFER_CAP"]
+    assert len(by["rejected"]) == 9
+    assert len(_queued_cands()) == 0
 
 
 # ------------------------------------------------------------------------------------------------ transient vs terminal

@@ -157,7 +157,11 @@ def _pre_llm(writer: bool = False) -> None:
 REQUEST_BUDGET: contextvars.ContextVar = contextvars.ContextVar("cmf_request_budget", default=None)
 _QUESTION: contextvars.ContextVar = contextvars.ContextVar("port_p2_question", default=None)  # PORT-P2: query hash only
 # DDFIX-1023/INTEG item 6: this request's inline-acquisition outcome (its R-ACQ-IRRELEVANT marks), reset per request
+_REQUEST_PERSIST: contextvars.ContextVar = contextvars.ContextVar("midterms_wp1_persist", default=False)  # MIDTERMS-WP1-1106
 _INLINE_OUT: contextvars.ContextVar = contextvars.ContextVar("ddfix_inline_outcome", default=None)
+# MIDTERMS-WP10-1106: the answer-time evidence bundle (ephemeral corpus admission + lane pages) of the inline attempt in
+# progress, for the examined-source ledger (vera.evidence_ledger). Set only by _fulldoc's acquired-only branch.
+_LEDGER_EV: contextvars.ContextVar = contextvars.ContextVar("midterms_wp10_ledger_ev", default=None)
 # NONASK-1103 E4m: the public evidence trace of the latest full-document attempt that produced no answer (response-only,
 # never logged or stored). _fulldoc sets it; the no-answer contracts merge it. Reset at the start of every attempt.
 _FD_TRACE: contextvars.ContextVar = contextvars.ContextVar("nonask_fd_trace", default=None)
@@ -211,6 +215,11 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     if _removed:  # separated injection sentence is discarded; the rest goes through every gate. Category-only log
         from vera.scope_router import INSTRUCTION_REMOVED_TOKEN
         logging.getLogger("vera").info("scope %s rid=%s", INSTRUCTION_REMOVED_TOKEN, _rid())
+    from vera.request_intent import split_request  # MIDTERMS-WP1-1106 RC1: a trailing request is not research content
+    question, _intent = split_request(question)  # cleaned text flows on; `original` (un-split) is judged by route only
+    _REQUEST_PERSIST.set(bool(_intent.get("persist")))  # WP8 reads this later; acquisition behaviour is unchanged
+    if _intent.get("persist"):
+        _rt_event("scope", "request_intent_split", counts={"persist": 1})
     question, _claims = nullify_mode_claims(question)  # SEC-V3-1028 / owner 2026-10-28: a mode-switch claim is
     if _claims:  # stripped (never obeyed) and the rest is routed, answered and searched as usual; token-only log
         from vera.scope_router import MODE_CLAIM_TOKEN
@@ -381,7 +390,10 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
     or, when less time is left, the remaining time minus that tail. No new cap: the request deadline, the configured
     deadline_s, the job caps inside inline_acquire and the finite candidate/variant lists bound the loop.
     CMF-1022 CR-3 is kept across the provider chain: budget.inline_used marks that this request's acquisition ran,
-    so a chained provider retry never starts a second series."""
+    so a chained provider retry never starts a second series.
+    MIDTERMS-WP8-1106: a keep-searching request (_REQUEST_PERSIST) lifts only the inner no-progress heuristic
+    (inline_acquire._extra_rounds); this loop's conditions are unchanged. MIDTERMS-WP10-1106: one examined-source
+    ledger is kept across rounds (same dedup), and the round target is met on its counted sources."""
     from vera import acq_rounds, inline_acquire
     ia: dict = {}
     if inline_acquire.icfg_of(acq).get("in_scope") is not True or not _retry_tokens(question, token, not_configured):
@@ -392,6 +404,7 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
     target = acq_rounds.target_of(acq)
     tried = set(_doc_keys(used_in.get("acq")))
     eligible = 0
+    ledger = None  # WP10: examined-source ledger merged across rounds
     note = None
     spent_t, spent_c = 0, 0.0
     rounds = 0
@@ -424,7 +437,15 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
             spent_t += max(note.tokens - int(decision.tokens_used or 0), 0)
             spent_c += max(note.cost - float(decision.cost_usd or 0.0), 0.0)
             note = _InlineNotice(str(note))
+        rl = info.get("_ledger")
+        if rl is not None:
+            ledger = rl if ledger is None else ledger.merge(rl)
         if isinstance(inl, AskResult):
+            if ledger is not None and rounds > 1:
+                c = dict(inl.contract or {})
+                if isinstance(c.get("inline_acquisition"), dict):
+                    c["inline_acquisition"] = _with_ledger(c["inline_acquisition"], ledger, acq)
+                    inl = replace(inl, contract=c)
             if spent_t or spent_c:
                 inl = replace(inl, tokens_used=int(inl.tokens_used or 0) + spent_t,
                               cost_usd=round(float(inl.cost_usd or 0.0) + spent_c, 6))
@@ -432,7 +453,10 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
         note, ia = inl, out
         new_keys = set(info.get("tried_keys") or ()) - tried
         tried |= new_keys
-        eligible += int(out.get("admitted", 0) or 0) + int(out.get("reused", 0) or 0)
+        if ledger is not None:
+            eligible = ledger.counted()  # WP10: deduplicated across rounds; lane and web pages included
+        else:
+            eligible += int(out.get("admitted", 0) or 0) + int(out.get("reused", 0) or 0)
         stop = str(((out.get("acquisition") or {}).get("status")) or "")
         if inl is None or eligible >= target or stop != "incomplete_deadline" or not new_keys:
             break
@@ -446,6 +470,10 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
         note = merged
     if ia and rounds > 1:
         ia = {**ia, "rounds": rounds}
+    if ia and ledger is not None and rounds > 1:
+        ia = _with_ledger(ia, ledger, acq)
+    if ia and _REQUEST_PERSIST.get():  # WP8: the contract carries the keep-searching flag (a boolean, never text)
+        ia = {**ia, "persist": True}
     if not rounds and ia:
         logging.getLogger("vera").info("inline retry skipped: %s rid=%s", ia["status"], _rid())
         _rt_event("acquire", "retry_skipped", detail={"reason": _rt_token(ia["status"])})
@@ -526,6 +554,9 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         kw["topic_key"] = decision.topic_key
     # PERF-MISS-1105-FIX2 F2: the lane pass needs only the question, so it starts NOW and runs concurrently with the
     # acquisition rounds (it used to start only after acquire() returned); joined below, with a visible activity.
+    persist = bool(_REQUEST_PERSIST.get())  # MIDTERMS-WP8-1106: keep-searching overrides the no-progress heuristic
+    if persist:
+        kw["persist"] = True  # absent otherwise, so the unchanged call keeps its signature
     lane_task = inline_acquire.start_lane_pass(question, acq)
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
     lanes = inline_acquire.with_web(o, lane_task.result())  # NONASK-1103 (+A6-W web pages): request-local only
@@ -535,7 +566,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         _rt_event("acquire", "outcome",
                   counts={"admitted": int(getattr(o, "admitted", 0) or 0), "stored": int(getattr(o, "stored", 0) or 0),
                           "reused": int(getattr(o, "reused", 0) or 0),
-                          "candidates": len(getattr(o, "candidates", None) or [])},
+                          "candidates": len(getattr(o, "candidates", None) or []),
+                          **({"persist": 1} if persist else {})},
                   detail={"status": _rt_token(getattr(o, "status", "")),
                           "acquisition": {k: v for k, v in (getattr(o, "acquisition", None) or {}).items()
                                           if k in ("status", "stored", "target", "rounds", "stop")},
@@ -556,6 +588,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     from vera import answer_contract as contract
     bg = inline_acquire.background_note(acq, o)  # CONT-1023: "" unless candidates were queued for background acquisition
     if o.corpus is None and not (lanes is not None and lanes.pages):
+        _ledger_out(o, None, lanes, acq, info)  # WP10: candidates, discovered records and links only
         t = _inline_notice(acq, o)
         if t is not None and bg:
             if contract.notes_separate():  # ANS-LAYERS-1101 A: the background note travels separately (kind "background")
@@ -574,11 +607,16 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
     n_st, n_re, n_ad = (int(getattr(o, "stored", 0) or 0), int(getattr(o, "reused", 0) or 0), int(getattr(o, "admitted", 0) or 0))
     counts = {"stored": n_st + n_re, "fetched": max(n_ad - n_st, 0)} if hon else None
     tok_c = _INLINE_COUNTS.set(counts)
+    tok_l = _LEDGER_EV.set(None)
     try:
         out = _fulldoc(question, model, pricing, decision, chained, grounding, acquired_only=True, ephemeral=o.corpus,
                        **({"lanes": lanes} if lanes is not None else {}))
+        led_ev = _LEDGER_EV.get()
     finally:
         _INLINE_COUNTS.reset(tok_c)
+        _LEDGER_EV.reset(tok_l)
+    ledger = _ledger_out(o, led_ev, lanes, acq, info)  # WP10: before the page text is dropped
+    led_ev = None
     lanes = None  # page text is dropped with the request (R-037)
     if not isinstance(out, AskResult):
         # post-writer fallback: keep the specific token (response telemetry + log); user text is the generic
@@ -588,6 +626,8 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         logging.getLogger("vera").info("inline answer fallback token=%s rid=%s", tok, _rid())
         _rt_event("acquire", "answer_fallback", detail={"fallback": _rt_token(tok)})
         text = inline_acquire.notice(acq, "unanswered")
+        if text:  # MIDTERMS-WP8-1106 review F2: the stop disclosure on this non-answer path too
+            text = f"{text}{inline_acquire.stop_clause(getattr(o, 'acquisition', None))}"
         if hon and counts is not None and isinstance(out, tuple) and len(out) == 5 \
                 and tok not in tuple((_cfg_h or {}).get("fallback_tokens", {}).get(x) for x in ("checker_unavailable", "nonresponsive")):
             text = " ".join(x for x in (text, _honest_text(_cfg_h, counts)) if x)  # A6-4: existing wording kept, split counts appended; never "tried"
@@ -606,7 +646,53 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         ans, nts = contract.add_note(ans, nts, kind, t, "prefix")
     return replace(out, answer=ans, notes=nts,
                    contract={**(out.contract or {}), "acquired_only": True,
-                             "inline_acquisition": {**o.public(), **({"counts": counts} if hon else {})}})
+                             "inline_acquisition": _with_ledger({**o.public(), **({"counts": counts} if hon else {})},
+                                                                ledger, acq)})
+
+
+def _with_ledger(pub: dict, ledger, acq) -> dict:
+    """MIDTERMS-WP10-1106 (owner D3): a COPY of a public inline outcome with the ledger summary (counts only) and
+    acquisition.counted; status becomes "met" when the counted examined sources reach the target, so the status and the
+    "Read N of the T sources targeted" line agree. The (possibly cached) Outcome is never mutated."""
+    if ledger is None or not isinstance(pub, dict):
+        return pub
+    summ = ledger.summary()
+    out = {**pub, "ledger": summ}
+    aq = pub.get("acquisition")
+    if isinstance(aq, dict):
+        aq = {**aq, "counted": summ["counted"]}
+        t = aq.get("target")
+        if isinstance(t, int) and not isinstance(t, bool) and summ["counted"] >= t > 0:
+            aq["status"] = "met"
+        out["acquisition"] = aq
+    return out
+
+
+def _ledger_out(o, ev, lanes, acq, info):
+    """WP10: build this attempt's examined-source ledger, put its summary on info["outcome"] (and the object on
+    info["_ledger"] for _acquire_rounds), and trace it (counts only). Never raises; None on failure."""
+    try:
+        from vera import evidence_ledger
+        ledger = evidence_ledger.from_inline(o, ev=ev, lanes=lanes, acq=acq)
+    except Exception as exc:  # noqa: BLE001  the ledger never breaks the answer path
+        logging.getLogger("vera").warning("evidence ledger unavailable (%s)", type(exc).__name__)
+        return None
+    if info is not None:
+        info["_ledger"] = ledger
+        if isinstance(info.get("outcome"), dict) and info["outcome"].get("status") != "off":
+            info["outcome"] = _with_ledger(info["outcome"], ledger, acq)
+    try:
+        _rt_event("acquire", "ledger", counts=ledger.summary())
+    except Exception:  # noqa: BLE001
+        pass
+    try:  # the streamed progress bar "Read n of 6" (counts only; an existing lifecycle state, no new contract state)
+        aq = (getattr(o, "acquisition", None) or {})
+        if isinstance(aq.get("target"), int) and _stream_ctx.active():
+            from vera import progress
+            progress.emit("acquire", "update", counted=int(ledger.counted()), target=int(aq["target"]))
+    except Exception:  # noqa: BLE001
+        pass
+    return ledger
 
 
 _PREFILTER_LICENCE = ("ineligible_not_open_access", "ineligible_licence_prefilter")
@@ -646,6 +732,23 @@ def _docs(n: int) -> str:
 
 
 def _inline_notice(acq, o):
+    """The inline non-answer notice (_inline_notice_body) plus, MIDTERMS-WP8-1106 review F2, the need-to-know stop
+    clause (vera.inline_acquire.stop_clause): a heuristic stop is disclosed on the non-answer path too."""
+    t = _inline_notice_body(acq, o)
+    if not t:
+        return t
+    try:
+        from vera import inline_acquire
+        sc = inline_acquire.stop_clause(getattr(o, "acquisition", None))
+    except Exception:  # noqa: BLE001
+        sc = ""
+    if not sc:
+        return t
+    out = f"{t}{sc}"
+    return _InlineNotice(out) if isinstance(t, _InlineNotice) else out
+
+
+def _inline_notice_body(acq, o):
     """DDFIX-1023/SCOPE (b) + INTEG item 9: the inline "none" notice ("none passed its licence, content and relevance
     checks") is used only when every candidate was actually checked. Otherwise the text follows the per-candidate
     diagnostic statuses (P0DTA-DIAG): licence/open-access prefilter drops are reported as judged on their listed
@@ -981,6 +1084,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
             if lanes is not None:  # NONASK-1103 N2: lane spans join this answer only (answer_only, never stored)
                 from vera import lane_evidence
                 ev = lane_evidence.merge(ev, lanes, question, cfg)
+            if ephemeral is not None or lanes is not None:  # MIDTERMS-WP10-1106: what this inline attempt examined
+                _LEDGER_EV.set(ev)
             ev, qualified = attempt_anyway(ev, cfg)  # C6 (R-045): >= 1 admitted passage -> the writer runs
             if ev is None or contract.result_kind_for((ev,)) != "answer":
                 if warming:  # in-scope while warming: an explicit insufficient result (the caller may go inline)
