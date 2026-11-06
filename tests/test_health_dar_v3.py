@@ -100,6 +100,9 @@ def test_uncached_real_cached_readiness_is_unknown_publicly_and_null_in_full(cli
     from vera import dar_health
     dar_health.reset_for_tests()
     monkeypatch.setattr(dar_health.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    # TEST-SPEED-1106: the no-op Thread above means the fulldoc-status worker never runs, so the request would wait out
+    # the full production health wait (15 s) before reporting its timeout; the test never reads that field. Test-only seam.
+    monkeypatch.setattr(dar_health, "fulldoc_wait_s", lambda: 0.05)
     assert c.get("/health").json() == {"status": "ok", "dar": "unknown"}
     full = c.get("/health/dar", headers={"X-API-Key": KEY}).json()
     assert full["dar"] is None and full["reason_code"] == "not_probed"

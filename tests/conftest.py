@@ -273,6 +273,15 @@ def _ui_wake_default_healthy(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_arxiv_pacing_sleep(monkeypatch):
+    """TEST-SPEED-1106: the arXiv route's per-host spacing (arxiv_route.min_interval_s, 3 s) is enforced through the module-level
+    _sleep seam, which production leaves at time.sleep. Tests never wait it out; the spacing arithmetic (the computed wait,
+    the deadline stop) still runs, and any test that records or asserts on the sleep installs its own _sleep after this."""
+    from vera import arxiv_fulltext
+    monkeypatch.setattr(arxiv_fulltext, "_sleep", lambda s: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_continuation_worker(monkeypatch):
     """CONT-1023 (verification D1): an inline run hands unfinished candidates to auto_acquire.enqueue_candidates, which
     would start the REAL daemon worker; in tests it never starts (no thread outlives a test). Tests that need the jobs

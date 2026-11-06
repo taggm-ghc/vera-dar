@@ -78,6 +78,7 @@ def test_real_ddg_provider_from_resolved_settings_writes_nothing(monkeypatch, tm
         return R()
     p = sp.PROVIDER_FACTORIES[sp.DDG_NAME](s, transport=tx)
     assert isinstance(p, sp.DuckDuckGoLiteProvider) and p.cache_dir is None
+    p._sleep = lambda s: None  # TEST-SPEED-1106: production keeps its inter-query spacing; the test does not wait it out
     before = {q for q in ROOT.rglob("*.json") if "tmp" in q.parts}
     p.call(QUESTION, 5, 5.0)
     assert calls, "stub transport was never exercised"
