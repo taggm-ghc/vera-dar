@@ -629,7 +629,7 @@ def _after_response(admit_args, memory, result, question: str, discovery=None) -
             # TT-R6 A1: FULL-DOCUMENT hashes (sources.provenance text_sha256), not the admitted passage hashes
             topic_tagging.schedule_refresh([d.get("text_sha256") for d in
                                             (getattr(result.evidence, "examined_full_documents", ()) or ())
-                                            if isinstance(d, dict)])
+                                            if isinstance(d, dict) and (d.get("admitted_spans") or 0) > 0])  # TT-R7 N1: used docs only
     except Exception as exc:  # noqa: BLE001
         logger.warning("post-response task failed (%s)", type(exc).__name__)
 

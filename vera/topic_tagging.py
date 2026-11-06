@@ -682,6 +682,7 @@ class Worker:
         self._digest_due, self._digest_at = False, None  # R4 (skeptic 4): debounced digest signal
         self._sweep_after = 0     # R5 (R5K-1): stale-sweep cursor (source_id); wraps to 0 at the end
         self.long_wait_s = None   # R5 (R5K-5): last provider Retry-After ABOVE max_retry_after_s (the CLI stops on it)
+        self.blocked_logged = None  # TT-R7 N2: last logged registry-unavailable reason (log on change only)
         self.blocked = None       # R5 (R5P-3): registry reason the last run_parts tagged nothing (CLI stops on it)
 
     def control(self) -> str | None:
@@ -695,8 +696,9 @@ class Worker:
         ready = getattr(self.store, "schema_ready", None)
         try:
             if callable(ready) and not ready():  # TT-R6 C5: 017 not applied: clean pause, no store errors
+                if self._paused != "migration_017_absent":  # TT-R7 N3: log on state change only
+                    logger.warning("topic tagging paused: migration 017 tables are absent")
                 self._paused = "migration_017_absent"
-                logger.warning("topic tagging paused: migration 017 tables are absent")
                 return self._paused
             rows = reader() if callable(reader) else None
         except Exception as exc:  # noqa: BLE001
@@ -737,11 +739,13 @@ class Worker:
 
     def _ensure_alive(self):
         """Supervisor (R1 skeptic 11): a started worker whose thread died is restarted on the next hand-off."""
-        t = self._thread
-        if t is not None and not t.is_alive() and not self._stop.is_set():
+        with self._lock:  # TT-R6 A8: two concurrent notifications must not start two threads
+            t = self._thread
+            if t is None or t.is_alive() or self._stop.is_set():
+                return
             self.stats["restarts"] += 1
             self._thread = None
-            self.start()
+        self.start()
 
     def _tag_one(self, part: Part, registry, allowed) -> str:
         if self.cooldown_left() > 0:
@@ -749,6 +753,10 @@ class Worker:
         else:
             est = min(len(part.text or ""), int(self.cfg["max_part_chars"])) // 4 + 250 + int(self.cfg["max_tokens"])
             self.pace.wait(tokens=est)
+            if self.control() is not None:  # TT-R6 A4: cached control check after pacing, before the model call
+                with self._lock:
+                    self.stats["deferred"] = self.stats.get("deferred", 0) + 1
+                return "deferred"
             try:
                 res = tag_part(part, registry, self.llm, self.cfg, self.propose, allowed)
                 out = self.store.write_result(part, res)
@@ -790,7 +798,16 @@ class Worker:
         if self.control() is not None:  # R4 (SEOS 2): DB kill switch / unconfirmed limits: no call, no write
             return {"paused": len(parts)}
         self.blocked = None
-        registry = self.registry_loader()
+        try:
+            registry = self.registry_loader()
+        except Exception as exc:  # noqa: BLE001  TT-R7 N2: e.g. DB registry table absent: tag nothing, say why
+            self.stats["last_error"] = type(exc).__name__
+            self.blocked = "registry_unreadable"
+            why = (type(exc).__name__, str(exc)[:80])
+            if self.blocked_logged != why:
+                self.blocked_logged = why
+                logger.warning("topic tagging paused: registry unavailable (%s: %s)", *why)
+            return {"deferred": len(parts)}
         try:  # deny-all: offer only keys active in the DB registry with an active ancestor chain (R1 review M1)
             act = self.store.active_keys()
             allowed = usable_keys(registry, act)
@@ -1014,7 +1031,12 @@ def build_worker(cfg: dict, env=os.environ, engine_factory=None, on_documents_ch
     propose = None
     if cfg.get("propose_new_topics") is True:
         logger.warning("topic tagging: propose_new_topics is set but no proposal path is wired (owner decision D2); ignored")
-    return Worker(store, lambda: micro_topic.load_registry(mt_cfg), free_llm(), cfg, propose, on_documents_changed)
+    def _registry():
+        reg = micro_topic.load_registry(mt_cfg)
+        if require_limits and micro_topic.db_registry_absent(mt_cfg):  # TT-R7 N2: no silent fall back to the 10-entry seed
+            raise RuntimeError("registry_table_absent")
+        return reg
+    return Worker(store, _registry, free_llm(), cfg, propose, on_documents_changed)
 
 
 def main(argv=None) -> int:

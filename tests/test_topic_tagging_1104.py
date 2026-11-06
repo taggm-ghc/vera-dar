@@ -727,3 +727,59 @@ def test_r6_c6_config_note_matches_bm25_fallback_value():
     assert raw["bm25_fallback_after_failures"] == 0
     assert "bm25_fallback_after_failures 3" not in raw["_note"]
     assert all(raw[k] is False for k in ("enabled", "limits_confirmed", "propose_new_topics", "tag_chunkless_sources"))
+
+
+def test_r7_n3_absent_017_warning_logged_once(caplog):
+    store = FakeStore([tt.Part(5, 50, "outbreak")])
+    store.schema_ready = lambda: False
+    w, _ = make_worker(store, epi_reply)
+    w.cfg["control_poll_s"] = 0
+    with caplog.at_level("WARNING", logger=tt.logger.name):
+        for _ in range(3):
+            w.control()
+    assert sum("017 tables are absent" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_r7_n2_registry_load_failure_blocks_with_one_log(caplog):
+    store = FakeStore([tt.Part(5, 50, "outbreak")])
+    w, _ = make_worker(store, epi_reply)
+
+    def boom():
+        raise RuntimeError("registry_table_absent")
+    w.registry_loader = boom
+    with caplog.at_level("WARNING", logger=tt.logger.name):
+        assert w.run_parts(store.parts if hasattr(store, "parts") else [tt.Part(5, 50, "outbreak")]) == {"deferred": 1}
+        w.run_parts([tt.Part(5, 50, "outbreak")])
+    assert w.blocked == "registry_unreadable" and not w.llm.calls
+    assert sum("registry unavailable" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_r7_n2_db_registry_absent_helper():
+    micro_topic.reset_for_tests()
+    cfg = {"registry_table": {"read_from_db": True}}
+    micro_topic._DB_CACHE["db:" + str(micro_topic._ROOT)] = (10 ** 12, None)
+    try:
+        assert micro_topic.db_registry_absent(cfg) is True
+        assert micro_topic.db_registry_absent({"registry_table": {"read_from_db": False}}) is False
+    finally:
+        micro_topic.reset_for_tests()
+
+
+def test_r7_a8_ensure_alive_starts_one_thread():
+    import threading
+    w, _ = make_worker(FakeStore([]), epi_reply)
+    starts = []
+    w.start = lambda: starts.append(1)
+    dead = threading.Thread(target=lambda: None)
+    dead.start(); dead.join()
+    w._thread = dead
+    ts = [threading.Thread(target=w._ensure_alive) for _ in range(8)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(starts) == 1
+
+
+def test_r7_a4_pause_checked_before_model_call():
+    store = FakeStore([])
+    w, _ = make_worker(store, epi_reply)
+    w.control = lambda: "paused_by_owner"
+    assert w._tag_one(tt.Part(5, 50, "outbreak"), REG, {"epi-outbreak"}) == "deferred" and not w.llm.calls

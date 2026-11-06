@@ -90,6 +90,13 @@ def load_registry(cfg: dict | None = None, path=None, reader=None) -> Registry:
     return _load_json_registry(cfg, path)
 
 
+def db_registry_absent(cfg: dict | None = None) -> bool:
+    """TT-R7 N2: True when read_from_db is true and the last (cached) DB read found the registry table absent, so
+    load_registry returned the JSON seed. Read-only; reflects the cache only."""
+    hit = _DB_CACHE.get("db:" + str(_ROOT))
+    return ((cfg or {}).get("registry_table") or {}).get("read_from_db") is True and hit is not None and hit[1] is None
+
+
 def _load_json_registry(cfg, path) -> Registry:
     rel = path or (cfg or {}).get("registry_path") or "config/micro_topic_anchors.json"
     p = Path(rel)

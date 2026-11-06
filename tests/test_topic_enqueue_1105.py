@@ -61,7 +61,8 @@ def test_r6_a1_ask_hook_sends_full_document_hashes():
     tt.schedule_refresh = lambda hashes: calls.append(list(hashes)) or 0
     try:
         ev = types.SimpleNamespace(admitted=({"text_sha256": "p" * 64},),
-                                   examined_full_documents=({"document_id": 1, "text_sha256": "d" * 64}, "junk"))
+                                   examined_full_documents=({"document_id": 1, "text_sha256": "d" * 64, "admitted_spans": 2},
+                                                        {"document_id": 2, "text_sha256": "e" * 64, "admitted_spans": 0}, "junk"))
         res = types.SimpleNamespace(evidence=ev, claims=(), result_kind="answer", sources=(), candidates=())
         app_main._after_response(None, None, res, "q")
     finally:
@@ -87,3 +88,18 @@ def test_r6_a2_worker_requires_db_registry_source(caplog):
     assert tt.build_worker(cfg, env=env, engine_factory=_boom) is None
     # read-only paths (--status, --retag-inactive) are not gated: they use the DB active keys, not the seed
     assert tt.build_worker(cfg, env=env, engine_factory=lambda *a, **k: object(), require_limits=False, micro_cfg={}) is not None
+
+
+def test_r7_n1_only_documents_with_admitted_spans_are_queued():
+    import types
+    import main as app_main
+    calls, orig = [], tt.schedule_refresh
+    tt.schedule_refresh = lambda hashes: calls.append(list(hashes)) or 0
+    try:
+        ev = types.SimpleNamespace(examined_full_documents=({"text_sha256": "a" * 64, "admitted_spans": 0},
+                                                            {"text_sha256": "b" * 64, "admitted_spans": 1}))
+        app_main._after_response(None, None, types.SimpleNamespace(evidence=ev, claims=(), result_kind="answer", sources=(),
+                                                                   candidates=()), "q")
+    finally:
+        tt.schedule_refresh = orig
+    assert calls == [["b" * 64]]
