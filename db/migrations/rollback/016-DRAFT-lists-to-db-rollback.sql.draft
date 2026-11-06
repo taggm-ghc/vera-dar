@@ -10,6 +10,8 @@
 -- Owner script: work/LISTS-TO-DB-1104/scripts/rollback_016.sh (dry run by default).
 -- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
 BEGIN;
+-- A lock that cannot be taken within 10 s aborts the whole transaction (no DROP runs) instead of queueing app readers.
+SET LOCAL lock_timeout = '10s';
 
 DO $$
 DECLARE t text; n bigint;

@@ -177,7 +177,7 @@ def test_016_drafts_byte_identical_to_reviewed_staged_copies():
     want = {"pending/016-DRAFT-lists-to-db.sql.draft":
             "1734f6518f64c8cd2caec2bcf56fcf7073a09b47019b34f5022f70c27ccc4340",
             "rollback/016-DRAFT-lists-to-db-rollback.sql.draft":
-            "d5905b9a992227c8de3a69d108594b2999be176bc98cb9c6edc20bdd2881e6f4"}
+            "f05186b5857e60e22bd49c2121be85e1cf08ac5c0969eec7eee60dc2644abd36"}
     for rel, sha in want.items():
         assert hashlib.sha256((REPO / "db" / "migrations" / rel).read_bytes()).hexdigest() == sha, rel
 
