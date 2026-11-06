@@ -57,3 +57,7 @@ Limits: layer 1 only, no model calls; the probe set was written before the fix, 
 - What are the latency, cost and reliability trade-offs of added evidence processing?
 
 Internal trace files, frozen evaluation records, and dated implementation diary are not reproduced here. Any future public claims should cite a reproducible released evaluation artifact rather than private-only evidence.
+
+## Golden question set and release evaluation (OD-1106-EVAL, 2026-11-06)
+
+A standing golden set of 52 questions (known misses, false premises, refusals and refusal controls, time-sensitive, British spelling and hyphenated compounds) is kept in the workspace, not in this repository. Its offline replay is a blocking step in release verification. Live golden evaluation is owner-run, about 50 questions per run, and report-only: it may be considered for a live gate only after two baselines exist, and any live gate needs a separate owner decision. Pass margins must be fixed before the first live baseline is seen. No live baseline has been run or published, so this adds no measurement of the current system.
