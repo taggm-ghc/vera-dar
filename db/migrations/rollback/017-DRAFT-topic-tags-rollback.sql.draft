@@ -1,7 +1,7 @@
 -- 017_vera_topic_tags ROLLBACK -- DRAFT, NOT EXECUTED, UNTESTED against a real PostgreSQL. OWNER-ONLY, prepared, never expected to run.
 -- DESTRUCTIVE: drops toptag_chunk_topics, toptag_document_topics, toptag_attempts and the view toptag_span_status_v.
 -- Requires a separate, same-turn owner approval and the table-owner (admin) account. Never run via db/apply_migrations.py (HZ-DAR-1).
--- SAFETY: the file LOCKs the three tables, then RAISEs (nothing changes) while ANY row exists in ANY of them. There is no force option.
+-- SAFETY: the file checks the identity (below), LOCKs the three tables, then RAISEs (nothing changes) while ANY row exists in ANY of them. There is no force option.
 -- Non-destructive alternative: stop the tagging worker and leave the tables in place.
 -- IDENTITY GUARD: refuses unless current_user owns the 017 tables and is not an app group or login role.
 -- Dependency order: view, triggers, tables (drop their indexes, constraints and identity sequences), functions. No CASCADE, no IF EXISTS:
@@ -15,10 +15,9 @@
 BEGIN;
 \endif
 
-LOCK TABLE vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts IN ACCESS EXCLUSIVE MODE;
-
+-- TT-017-EDIT-1105 (r6 B6): the identity check runs BEFORE the lock, so a wrong account is refused without queueing for or taking
+-- an ACCESS EXCLUSIVE lock. The row count runs after the lock, so no row can be added between the count and the DROPs.
 DO $$
-DECLARE n bigint;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                   WHERE c.oid = 'vera_vjay.toptag_chunk_topics'::pg_catalog.regclass
@@ -27,6 +26,13 @@ BEGIN
      OR session_user IN ('vera_vjay_wo', 'vera_vjay_rw', 'vera_vjay_ro') THEN
     RAISE EXCEPTION '017 rollback: current_user must own the 017 tables and must not be an app role.';
   END IF;
+END $$;
+
+LOCK TABLE vera_vjay.toptag_chunk_topics, vera_vjay.toptag_document_topics, vera_vjay.toptag_attempts IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+DECLARE n bigint;
+BEGIN
   SELECT (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_chunk_topics)
        + (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_document_topics)
        + (SELECT pg_catalog.count(*) FROM vera_vjay.toptag_attempts) INTO n;

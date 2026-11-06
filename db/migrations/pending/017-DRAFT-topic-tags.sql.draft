@@ -41,6 +41,12 @@
 --   nothing; 001-003 give wo nothing). Because SECURITY DEFINER is not allowed, this file grants vera_vjay_wo USAGE on the schema
 --   and column-level SELECT on topreg_topics (topic_key, state) and evidence_spans (span_id, source_id) ONLY. The rollback revokes
 --   those two column grants. Without them a wo-run tagging worker could not insert.
+-- TT-017-EDIT-1105 (2026-11-05, owner decision OD-1105-TTPACKET): (b) retention: no retention DDL (rows kept while their source is in
+--   the corpus; attempts log kept until production ends); (c) the five foreign keys stay NO ACTION (a per-source purge is a separate
+--   prepared owner script, not DDL). Edits: r6 B3 (both guard triggers refuse a set_version below the part's / document's current
+--   maximum, for every role; equal is allowed because one set has one row per topic), r6 B4 (the final grant check also requires the rw
+--   and ro logins to hold SELECT on topreg_topics(topic_key, state) and evidence_spans(span_id, source_id)). No table, column,
+--   constraint, index, trigger or grant is added or removed. Fix log: work/TT-017-EDIT-1105/FIXLOG.md.
 -- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_wo_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT;
 --   ON_ERROR_STOP stops at the first error, so the open transaction is never committed and PostgreSQL rolls everything back).
 \if :{?app_rw_login}
@@ -260,6 +266,7 @@ CREATE FUNCTION vera_vjay.toptag_chunk_guard_trgfn() RETURNS trigger LANGUAGE pl
 DECLARE
   is_owner boolean := vera_vjay.toptag_is_owner_fn();
   span_src bigint;
+  max_sv integer;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.span_id IS NOT NULL THEN
@@ -270,6 +277,13 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = NEW.topic_key AND t.state = 'active') THEN
       RAISE EXCEPTION 'toptag_chunk_topics: topic key is not an active registry topic';
+    END IF;
+    -- TT-017-EDIT-1105 (r6 B3), every role: a set_version below the part's current maximum could leave two active sets (succession
+    -- retires only LOWER versions). Equal is allowed: one set holds one row per topic. The worker's per-part lock stays the primary guard.
+    SELECT pg_catalog.max(c.set_version) INTO max_sv FROM vera_vjay.toptag_chunk_topics c
+     WHERE c.source_id = NEW.source_id AND c.span_id IS NOT DISTINCT FROM NEW.span_id;
+    IF max_sv IS NOT NULL AND NEW.set_version < max_sv THEN
+      RAISE EXCEPTION 'toptag_chunk_topics: set_version is below the part''s current maximum (use max + 1)';
     END IF;
     IF NEW.state NOT IN ('active','draft') THEN
       RAISE EXCEPTION 'toptag_chunk_topics: new rows must be active or draft';
@@ -317,10 +331,16 @@ CREATE FUNCTION vera_vjay.toptag_doc_guard_trgfn() RETURNS trigger LANGUAGE plpg
   SET search_path = pg_catalog, pg_temp AS $f$
 DECLARE
   is_owner boolean := vera_vjay.toptag_is_owner_fn();
+  max_sv integer;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NOT EXISTS (SELECT 1 FROM vera_vjay.topreg_topics t WHERE t.topic_key = NEW.topic_key AND t.state = 'active') THEN
       RAISE EXCEPTION 'toptag_document_topics: topic key is not an active registry topic';
+    END IF;
+    -- TT-017-EDIT-1105 (r6 B3), every role: as the chunk guard, per document (source_id).
+    SELECT pg_catalog.max(d.set_version) INTO max_sv FROM vera_vjay.toptag_document_topics d WHERE d.source_id = NEW.source_id;
+    IF max_sv IS NOT NULL AND NEW.set_version < max_sv THEN
+      RAISE EXCEPTION 'toptag_document_topics: set_version is below the document''s current maximum (use max + 1)';
     END IF;
     IF NEW.state NOT IN ('active','draft') THEN
       RAISE EXCEPTION 'toptag_document_topics: new rows must be active or draft';
@@ -563,6 +583,16 @@ BEGIN
           AND pg_catalog.has_schema_privilege(current_setting('vera017.wo'), 'vera_vjay', 'USAGE')) THEN
     RAISE EXCEPTION '017 grant check failed: wo login lacks the trigger-read grants.';
   END IF;
+  -- TT-017-EDIT-1105 (r6 B4): the header assumes rw and ro already hold SELECT on the guard-trigger columns (003/011 and the 001 default
+  -- privileges); rw inserts fire the guard triggers, and ro runs the worker's corpus reads. Verify the assumption here.
+  FOREACH r IN ARRAY ARRAY[current_setting('vera017.rw'), current_setting('vera017.ro')] LOOP
+    IF NOT (pg_catalog.has_column_privilege(r, 'vera_vjay.topreg_topics', 'topic_key', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.topreg_topics', 'state', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.evidence_spans', 'span_id', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.evidence_spans', 'source_id', 'SELECT')) THEN
+      RAISE EXCEPTION '017 grant check failed: login % lacks SELECT on topreg_topics(topic_key, state) or evidence_spans(span_id, source_id).', r;
+    END IF;
+  END LOOP;
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k, pg_catalog.aclexplode(k.relacl) x
               WHERE k.oid IN ('vera_vjay.toptag_chunk_topics'::pg_catalog.regclass, 'vera_vjay.toptag_document_topics'::pg_catalog.regclass,
                               'vera_vjay.toptag_attempts'::pg_catalog.regclass, 'vera_vjay.toptag_span_status_v'::pg_catalog.regclass)
