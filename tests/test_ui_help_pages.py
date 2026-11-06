@@ -103,6 +103,15 @@ def test_how_to_use_page_renders_sections_and_uses_config_scope():
     assert "The Terms of Access, Browsing, and Use page says what VERA-DAR keeps from your question" in _NORM(t)
 
 
+def test_about_opens_with_vera_expansion_and_has_no_terms_link():
+    """Owner 2026-11-05: About opens with the VERA expansion (-DAR and -MAG expansions not yet supplied) and its content
+    area has no Terms link (the sidebar keeps the Terms entry)."""
+    at = _run("pages/about.py")
+    assert at.main.markdown[0].value.startswith(
+        "**VERA: Verifiable Evidence-based Research Answers**, an agentic research system for provenance-grounded")
+    assert "Terms of Access, Browsing, and Use" not in [e.proto.label for e in at.main.get("page_link")]
+
+
 def test_unreadable_config_shows_fallback(tmp_path):
     class St:
         def __init__(self): self.out = []
@@ -119,7 +128,7 @@ def test_sidebar_nav_has_both_pages_and_files_exist():
     assert NAV[-3:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
                         ("pages/terms.py", "Terms of Access, Browsing, and Use"))
     assert all((ROOT / p).exists() for p, _ in NAV)
-    assert {t for t, _ in disclosure.ABOUT_LINKS} == {"pages/about.py", "pages/how_to_use.py"}
+    assert not hasattr(disclosure, "ABOUT_LINKS")  # owner 2026-11-05: no header links on any page
 
 
 # ---- UI-ABOUT-FIX-1031 -------------------------------------------------------------------------------------
@@ -158,8 +167,8 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     assert "last updated" not in t and "scope" not in t.lower()  # CORPUS-DIGEST-1104: no fixed Scope text
     from vera import sources_sidebar as sb  # each claimed element exists in the renderer
     import inspect
-    side = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar) + inspect.getsource(sb._about_link)
-    for el in ("newest source", "topics", "CHECKED", "ABOUT_LINK_LABEL"):
+    side = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar)
+    for el in ("newest source", "topics", "CHECKED"):
         assert el in side, el
     for gone in ("LICENCE_SIDEBAR", "scope_text", "how_answers_text", "how_answers_base", "trace_eval_line"):
         assert gone not in side, gone  # moved off the sidebar
@@ -305,7 +314,7 @@ def test_terms_page_renders_moved_sections_and_hides_placeholders():
     assert "@" not in t
     assert "Effective date: 2026-10-20" in [c.value for c in at.caption]
     assert "_streamlit_xsrf" in t
-    assert disclosure.short_notice_text() in [c.value for c in at.caption]  # R-031 short notice on this page too
+    assert disclosure.short_notice_text() not in [c.value for c in at.caption]  # owner 2026-11-05: notice on Ask only
 
 
 def test_terms_release_gate_no_placeholders_left():

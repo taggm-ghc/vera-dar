@@ -155,6 +155,8 @@ class Labels:
         if "why" in values and str(values["why"]) in self._why:
             values["why_text"] = self._why[str(values["why"])]
         values["rid"] = rid
+        if type(values.get("stored")) is int and type(values.get("target")) is int and values["target"] > 0:
+            values["stored"] = min(values["stored"], values["target"])  # PROGRESS-COUNT-1106: never "7 of 6 saved"
         if _fields_of(text) <= set(values):
             return text.format_map(values)
         start = (self._stages.get(stage) or {}).get("start")
@@ -356,6 +358,7 @@ def _spawn(fn, *a) -> None:
 STREAM_HOLDER_KEY = "vera_stream"
 STREAM_LAST_KEY = "vera_stream_last"
 _LOG_MAX = 12
+_LOG_REFRESH_S = 10.0  # PROGRESS-COUNT-1106: at most one extra line per 10 s for repeated count updates
 _RESULT_KIND_TERMINAL = {"busy": "busy", "error": "error", "provider_error": "provider_error", "unavailable": "unavailable"}
 
 
@@ -366,6 +369,7 @@ class StreamHolder:
     t0: float
     last_read: float
     events: list = field(default_factory=list)
+    event_at: list = field(default_factory=list)  # PROGRESS-COUNT-1106: arrival time of each events[i] (same length)
     last_line_at: float = 0.0
     result: dict | None = None
     status: int | None = None
@@ -394,6 +398,7 @@ def stream_worker(holder: StreamHolder, stream_fn, args, now, orphan_s: float) -
                 holder.activity = a if "act" in a else None
             elif line.get("type") == "event":
                 holder.events.append(line)
+                getattr(holder, "event_at", []).append(now()) if hasattr(holder, "event_at") else None
                 c = line.get("counts") or {}
                 holder.activity = dict(c) if "act" in c else None
             elif line.get("type") == "result":
@@ -444,7 +449,10 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
     """Pure view model: label, log lines, bars [(text, fraction)], and the still-working caption."""
     log: list[str] = []
     label = "Working on your question"
-    for ev in list(holder.events):
+    evs = list(holder.events)
+    ats = list(getattr(holder, "event_at", None) or [])
+    last_key = None  # (stage, state, held, appended_at) of the last appended line
+    for i, ev in enumerate(evs):
         if ev.get("stage") == "received":  # its label carries the request id, which the stream does not use
             continue
         if "act" in (ev.get("counts") or {}):  # activity events are the live status line, not log lines
@@ -453,8 +461,18 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
         if text is None:
             continue
         label = text
+        at = ats[i] if i < len(ats) else None
+        held = (ev.get("counts") or {}).get("held")
+        key = (ev.get("stage"), ev.get("state"))
+        # PROGRESS-COUNT-1106: a run of count-only updates of one stage shares one line, refreshed in place; a new line
+        # starts only when "held" changes or about every _LOG_REFRESH_S since the line was appended.
+        if (log and last_key and key == last_key[:2] and ev.get("state") == "update" and held == last_key[2]
+                and (at is None or last_key[3] is None or at - last_key[3] < _LOG_REFRESH_S)):
+            log[-1] = text
+            continue
         if not log or log[-1] != text:
             log.append(text)
+            last_key = (*key, held, at)
     counts = _latest_counts(list(holder.events))
     bars = []
     # MIDTERMS-WP10-1106: once the examined-source count arrives, "Read n of 6" replaces the "Saved" bar

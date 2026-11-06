@@ -91,14 +91,6 @@ TERMS_PENDING = "This part of the terms is being finalised."
 NEWS_HEADING = "News reports"
 
 
-def _terms_link(st, label: str = TERMS_LABEL) -> None:
-    """PRIVACY-1104: one short link to the Terms page (a link, not content; About-only rule unaffected)."""
-    try:
-        st.page_link(TERMS_PAGE, label=label)
-    except Exception:  # noqa: BLE001  (StreamlitPageNotFoundError outside a multipage run, e.g. AppTest of a pages/ file)
-        logger.warning("terms link unavailable in this run")
-
-
 def render_about(st, cfg=_UNSET) -> None:
     cfg = load() if cfg is _UNSET else cfg
     page = (cfg or {}).get("about")
@@ -106,6 +98,8 @@ def render_about(st, cfg=_UNSET) -> None:
     if not isinstance(page, dict):
         st.info(FALLBACK)
         return
+    if page.get("opening"):  # owner 2026-11-05: the About page opens with the VERA expansion (config about.opening)
+        st.markdown(str(page["opening"]))
     st.markdown(str(page.get("intro", "")))
     moved = set(page.get("moved_to_terms") or [])  # PRIVACY-1104: terms-type disclosure sections render on Terms
     for heading, text in disclosure.disclosure_sections():
@@ -123,7 +117,20 @@ def render_about(st, cfg=_UNSET) -> None:
             # NEWS-LANE-1104 / R-031 fix note: the GDELT credit stays on About (and next to GDELT items), even though
             # "Your question and what is stored" (which also carries it) moved to Terms.
             st.markdown(disclosure._LANE_GDELT_CREDIT.strip())
-    _terms_link(st, str(page.get("terms_link_label") or TERMS_LABEL))
+
+
+ASK_TERMS_DEFAULT = "By asking, you agree to the Terms"
+
+
+def render_ask_terms_notice(st, cfg=_UNSET) -> None:
+    """H14 (OD-1106-HITL): one short line under the Ask box, linked to the Terms page. Wording from config
+    ui_help_pages.json `ask_terms_notice.label`. It is a notice of terms, not a record of consent."""
+    cfg = load() if cfg is _UNSET else cfg
+    label = str(((cfg or {}).get("ask_terms_notice") or {}).get("label") or ASK_TERMS_DEFAULT)
+    try:
+        st.page_link(TERMS_PAGE, label=label)
+    except Exception:  # noqa: BLE001  (page not found outside a multipage run)
+        st.caption(label + ".")
 
 
 def _terms_para(st, text: str) -> None:

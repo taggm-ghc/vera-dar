@@ -185,9 +185,9 @@ FILL = "a long abstract about llm orchestration and how a team of engineers migh
 def _pool(arxiv_route, ax):
     cfg = A.cfg()
     cfg["arxiv_route"]["enabled"] = arxiv_route
-    oa = [{"provider": "openalex", "doi": f"10.1001/oa{i}", "title": f"LLM orchestration study {i}", "snippet": FILL,
+    oa = [{"provider": "openalex", "doi": f"10.1001/oa{i}", "title": f"LLM multi agent orchestration study {i}", "snippet": FILL,
            "oa": {"is_oa": True}} for i in range(31)]
-    ep = [{"provider": "europepmc", "doi": f"10.1002/ep{i}", "title": f"LLM orchestration review {i}", "snippet": FILL,
+    ep = [{"provider": "europepmc", "doi": f"10.1002/ep{i}", "title": f"LLM multi agent orchestration review {i}", "snippet": FILL,
            "oa": {"epmc_ft": True}} for i in range(31)]
     return cfg, oa + ep + [ax]
 

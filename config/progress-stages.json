@@ -93,7 +93,7 @@
   "activities": {
     "1": "Waiting about {wait_s} s for a search provider's rate limit",
     "2": "Waiting about {wait_s} s between requests to a source, to be polite to it",
-    "3": "Still reading source {k} of {n} ({elapsed} s)",
+    "3": "Still reading {k} source(s) at once; the slowest has taken {elapsed} s",
     "4": "A step failed; trying again in about {wait_s} s",
     "5": "Free AI providers are busy; finishing with backup",
     "6": "Waiting for a connection ({elapsed} s)",

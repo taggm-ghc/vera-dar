@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from vera import strict_json
 from pathlib import Path
@@ -402,12 +403,38 @@ def discover(question: str, cfg: Mapping | None = None, *, http_get: Callable | 
     return out, links, counts
 
 
+_LINK_SINK: dict = {}  # NT-3: question -> discovered news links, popped once by take_links (bounded, in memory)
+_LINK_SINK_MAX = 32
+_LINK_LOCK = threading.Lock()
+
+
+def record_links(question: str, links: list) -> None:
+    """Keep this question's reading-list links for the news lane. Discovery only, never evidence; never persisted."""
+    try:
+        key = " ".join(str(question or "").split()).lower()
+        if not key or not links:
+            return
+        with _LINK_LOCK:
+            while len(_LINK_SINK) >= _LINK_SINK_MAX:
+                _LINK_SINK.pop(next(iter(_LINK_SINK)), None)
+            _LINK_SINK[key] = list(links)
+    except Exception:  # noqa: BLE001 - fail quiet: link recording must never break the search
+        logger.debug("autoacq wikiref record_links failed", exc_info=True)
+
+
+def take_links(question: str) -> list:
+    """Pop (once) the links recorded for this question; [] when none."""
+    with _LINK_LOCK:
+        return _LINK_SINK.pop(" ".join(str(question or "").split()).lower(), None) or []
+
+
 def make_portal_search(cfg: Mapping | None = None, *, http_get: Callable | None = None,
                        url_check: Callable | None = None, clock: Callable = time.monotonic) -> Callable:
     """A search(question, n, timeout_s) -> [candidates] callable for search_providers.acquisition_search's pool. The
     deadline is now + timeout_s; n caps the emitted candidates together with max_refs."""
     def search(question, n, timeout_s):
-        cands, _links, _counts = discover(question, cfg, http_get=http_get, url_check=url_check, clock=clock,
+        cands, links, _counts = discover(question, cfg, http_get=http_get, url_check=url_check, clock=clock,
                                           deadline=clock() + float(timeout_s), max_refs=n or None)
+        record_links(question, links)  # NT-3: was discarded; now offered to the news lane as link-only items
         return cands
     return search

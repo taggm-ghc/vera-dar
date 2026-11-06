@@ -70,7 +70,8 @@ def _get(name, c, eng, seed, clock=None):
 
 def test_shipped_flag_is_off_and_registry_complete():
     c = json.loads((ROOT / "config" / "list_tables.json").read_text())
-    assert c["read_from_db"] is False and len(c["lists"]) == 10
+    # repository.pdf_hosts added by H20 D-CFG (2026-11-05)
+    assert c["read_from_db"] is False and len(c["lists"]) == 11
     assert lt._CFG["read_from_db"] is False
 
 

@@ -85,6 +85,11 @@ def extract_terms(sub_query: str, known_entities: Iterable[str] = (), *, max_ter
     allowlisted upper-case acronyms (defaults: config/query_terms.json). See the module docstring for the rules.
     """
     text = str(sub_query or "")
+    try:  # R2: framing idioms (config/query_terms.json framing_phrases) are no terms ("de facto", "status quo")
+        from vera.search_query import strip_framing
+        text = strip_framing(text)
+    except Exception:  # noqa: BLE001
+        pass
     text = _EMAIL.sub(" ", text)
     text = _URL.sub(" ", text)
     text = _PHONE.sub(" ", text)

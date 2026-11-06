@@ -16,6 +16,7 @@
     "trace.key_allowlist": {"file": "request_trace.json", "path": ["key_allowlist"], "shape": "stage_keys", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
     "digest.numeric_words": {"file": "corpus_digest_numeric_words.json", "path": ["numeric_words", "words"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
     "fetch.deny_hosts": {"file": "public_fetch.json", "path": ["deny_hosts"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "union"},
-    "permissions.deny_hosts": {"file": "source_permissions.json", "path": ["deny_hosts"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "union"}
+    "permissions.deny_hosts": {"file": "source_permissions.json", "path": ["deny_hosts"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "union"},
+    "repository.pdf_hosts": {"file": "repository_pdf.json", "path": ["hosts"], "shape": "records", "state_field": "status", "key_field": "host", "key_lower": true, "combine": "replace"}
   }
 }

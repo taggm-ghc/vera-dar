@@ -1,7 +1,8 @@
 {
   "_doc": "NONASK-1103 S7: lexicon/pattern detector for current-state questions. Deterministic; a model fallback is not implemented (S7b, flag off).",
+  "_r2_note": "RELEVANCE-R1R4-1106 R2: \"status quo\" stays a time cue (political questions), but the framing idioms \"de facto status quo\", and \"status quo bias\" are masked by negations; a bare \"status quo best practice(s)\" stays a currency cue (test_subquery_1103).",
   "lexicon": ["current", "currently", "latest", "newest", "now", "today", "this year", "this month", "recent", "recently", "status quo", "state of", "as of", "at the moment", "right now", "these days", "nowadays", "up to date", "up-to-date", "state of the art", "state-of-the-art", "to date"],
-  "negations": ["alternating current", "direct current", "electric current", "ocean current", "current density", "current source", "current mirror", "now that", "state of matter", "state of mind", "state of nature", "state of grace", "state of equilibrium", "state of stress", "state of the union"],
+  "negations": ["alternating current", "direct current", "electric current", "ocean current", "current density", "current source", "current mirror", "now that", "state of matter", "state of mind", "state of nature", "state of grace", "state of equilibrium", "state of stress", "state of the union", "de facto status quo", "status quo bias"],
   "year_pattern": "\\b(?:19|20)\\d{2}\\b",
   "year_requires_lexicon_cue": true,
   "volatile_entity_triggers": true,

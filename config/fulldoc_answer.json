@@ -250,7 +250,7 @@
     "coverage_qualification_text": "Note: the documents VERA-DAR holds cover this question only partly, so this answer may be incomplete.",
     "inline_honest_text": "VERA-DAR used {n_stored} stored and {n_fetched} fetched {n_word} for this question and has not answered from memory.",
     "insufficient_text": "VERA-DAR searched {n_docs_phrase} but found no passage that answers this question well enough, so it has not written an answer or answered from memory.",
-    "unsupported_text": "VERA-DAR found related material in {n_docs_phrase} but could not write a supported answer from it, so it has not answered.",
+    "unsupported_text": "VERA-DAR checked {n_docs_phrase}; passages from {n_selected} looked related, but they did not support an answer, so it has not answered.",
     "verification_unavailable_text": "VERA-DAR could not complete its verification step for this answer. Please try again.",
     "corpus_unusable_text": "VERA-DAR's full-document collection could not be verified right now, so it has not answered from memory.",
     "unchecked_note": "Note: parts of the draft that did not cite a passage could not be checked and were left out.",

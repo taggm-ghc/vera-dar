@@ -61,11 +61,13 @@ def test_short_notice_is_the_approved_line():
 @pytest.mark.parametrize("page", OTHER_PAGES)
 def test_no_about_content_outside_about(page):
     text, caps = _all_text(_run(page))
-    assert APPROVED_SHORT in caps
     leaked = [s for s in _about_only_strings() if s in text]
     assert not leaked, (page, leaked)
     notices = [c for c in caps if c.startswith("VERA-DAR is an AI system")]
-    assert notices == [APPROVED_SHORT], (page, notices)  # exactly one notice, exactly the approved short text
+    if page == "streamlit_app.py":  # owner 2026-11-05: the AI and third-party notice is on the Ask page only
+        assert notices == [APPROVED_SHORT], (page, notices)  # exactly one notice, exactly the approved short text
+    else:
+        assert APPROVED_SHORT not in caps and notices == [], (page, notices)
 
 
 def test_about_holds_the_about_content():
@@ -79,7 +81,7 @@ def test_about_holds_the_about_content():
 
 def test_terms_holds_the_terms_content():
     text, caps = _all_text(_run("pages/terms.py"))
-    assert APPROVED_SHORT in caps  # R-031: the short notice on every page except About
+    assert APPROVED_SHORT not in caps  # owner 2026-11-05: the notice is on the Ask page only, not on Terms
     for s in (disclosure._LANE_PAGES, disclosure._LANE_GDELT_CREDIT, disclosure._NO_SAVE, "30 days"):
         assert _NORM(s).strip() in text, s
     assert sources_sidebar.CORPUS_NOTES_HEADING not in text  # About content stays on About

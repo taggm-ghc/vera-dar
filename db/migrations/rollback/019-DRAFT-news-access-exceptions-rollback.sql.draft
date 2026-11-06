@@ -1,0 +1,20 @@
+-- 019_vera_news_access_exceptions ROLLBACK -- DRAFT, NOT EXECUTED. DESTRUCTIVE: drops vera_vjay.news_access_exceptions and its grants.
+-- Owner-only, never expected to run, needs the owner's separate same-turn approval. Never run via db/apply_migrations.py.
+-- SAFETY GATE: refuses while the table holds any row (export first). No CASCADE: a dependent object outside 019 makes the DROP fail.
+-- The schema vera_vjay is shared and NOT dropped; the USAGE grant on it predates 019 and is left alone.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; an error leaves everything in place).
+BEGIN;
+SET LOCAL lock_timeout = '10s';
+DO $$
+DECLARE n bigint;
+BEGIN
+  IF pg_catalog.to_regclass('vera_vjay.news_access_exceptions') IS NOT NULL THEN
+    LOCK TABLE vera_vjay.news_access_exceptions IN ACCESS EXCLUSIVE MODE;
+    SELECT count(*) INTO n FROM vera_vjay.news_access_exceptions;
+    IF n <> 0 THEN
+      RAISE EXCEPTION '019 rollback refused: news_access_exceptions has % row(s). Export them first.', n;
+    END IF;
+  END IF;
+END $$;
+DROP TABLE IF EXISTS vera_vjay.news_access_exceptions;
+COMMIT;

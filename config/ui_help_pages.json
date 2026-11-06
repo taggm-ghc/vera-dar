@@ -1,6 +1,10 @@
 {
+  "ask_terms_notice": {
+    "label": "By asking, you agree to the Terms"
+  },
   "about": {
     "title": "About VERA-DAR",
+    "opening": "**VERA: Verifiable Evidence-based Research Answers**, an agentic research system for provenance-grounded evidence evaluation and auditable synthesis.",
     "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
     "after_disclosure": [
       {
@@ -28,8 +32,7 @@
       "Licences",
       "Privacy and data sent to third parties",
       "Your question and what is stored"
-    ],
-    "terms_link_label": "Terms of Access, Browsing, and Use"
+    ]
   },
   "how_to_use": {
     "title": "How to use VERA-DAR",

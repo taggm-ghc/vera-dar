@@ -13,14 +13,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -35,6 +27,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -147,10 +143,6 @@
   [
    "UnknownElement",
    "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "partial_answer": [
@@ -167,14 +159,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -189,6 +173,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -301,10 +289,6 @@
   [
    "UnknownElement",
    "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "legacy_abstract_answer": [
@@ -321,14 +305,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -343,6 +319,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -439,10 +419,6 @@
   [
    "UnknownElement",
    "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "reading_list_with_contract": [
@@ -459,14 +435,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -481,6 +449,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -589,10 +561,6 @@
   [
    "UnknownElement",
    "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "decline": [
@@ -609,14 +577,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -631,6 +591,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "UnknownElement",
@@ -703,10 +667,6 @@
   [
    "UnknownElement",
    "page: \"terms\"\nlabel: \"Terms of Access, Browsing, and Use\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "answer_dev_mode": [
@@ -723,14 +683,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -745,6 +697,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "Warning",
@@ -809,10 +765,6 @@
   [
    "Caption",
    "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ],
  "reading_list_dev_mode": [
@@ -829,14 +781,6 @@
    "body: \"VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and search services.\"\nis_caption: true\nelement_type: CAPTION\n"
   ],
   [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"About: how VERA-DAR answers, licences, data\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"how_to_use\"\nlabel: \"How to use VERA-DAR\"\npage_script_hash: \"<H>\"\n"
-  ],
-  [
    "Subheader",
    "tag: \"h3\"\nbody: \"Ask a Question\"\n"
   ],
@@ -851,6 +795,10 @@
   [
    "Button",
    "id: \"$$ID-<H>-FormSubmitter:ask_form-Ask\"\nlabel: \"Ask\"\nform_id: \"ask_form\"\nis_form_submitter: true\ntype: \"primary\"\n"
+  ],
+  [
+   "UnknownElement",
+   "page: \"terms\"\nlabel: \"By asking, you agree to the Terms\"\npage_script_hash: \"<H>\"\n"
   ],
   [
    "Warning",
@@ -915,10 +863,6 @@
   [
    "Caption",
    "body: \"Type the owner key to list claims waiting for review.\"\nis_caption: true\nelement_type: CAPTION\n"
-  ],
-  [
-   "UnknownElement",
-   "page: \"about\"\nlabel: \"How VERA-DAR answers and its limits → About\"\npage_script_hash: \"<H>\"\n"
   ]
  ]
 }

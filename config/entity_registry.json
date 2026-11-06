@@ -801,9 +801,220 @@
    "allowed_paths": {},
    "allowed_paths_note": "link-only row: no path is read.",
    "path_case_insensitive": false
+  },
+  {
+   "entity": "FEC",
+   "aliases": [
+    "FEC",
+    "Federal Election Commission"
+   ],
+   "entity_class": "authority",
+   "volatile": false,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "www.fec.gov"
+   ],
+   "docs_entry_urls": [
+    "https://www.fec.gov/"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Federal Election Commission"
+   ],
+   "parents": [],
+   "context_terms": [
+    "campaign finance",
+    "election",
+    "candidate",
+    "committee",
+    "pac",
+    "contribution",
+    "federal election",
+    "midterm"
+   ],
+   "generic_phrases": [
+    "fec file",
+    "fec flat"
+   ],
+   "terms_verdict": "allow",
+   "terms_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+   "access_verdict": "allow",
+   "access_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched) (US government work; public domain unless a page says otherwise)",
+   "ingest_verdict": "unknown",
+   "ingest_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched) (not assessed; lane pages are never ingested, R-037)",
+   "avoid_paths": [
+    "/data/receipts/*",
+    "/data/disbursements/*",
+    "/data/individual-contributions/*",
+    "any URL with a query string"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY. work/H5-ENABLE-1106/c4-sources.md (summary-grade, 2026-11-05): robots * Crawl-delay 10 and disallows query-string URLs (a query is always denied by normalise_path). Contributor-data paths excluded: 52 U.S.C. 30111(a)(4) use limits unverified. Terms provisional ALLOW-READ (no licence text found).",
+   "verification": {
+    "status": "owner_decided_unverified_paths",
+    "date": "2026-11-06",
+    "verdict": "read-permitted",
+    "decision": "OD-1106-HITL H5 (a) (owner, 2026-11-06)",
+    "evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "www.fec.gov": {
+     "exact": [
+      "/"
+     ],
+     "prefix": [
+      "/introduction-campaign-finance/",
+      "/help-candidates-and-committees/",
+      "/data/elections/",
+      "/data/raising-bythenumbers/"
+     ]
+    }
+   },
+   "allowed_paths_note": "c4-sources.md (summary-grade): /introduction-campaign-finance/, /help-candidates-and-committees/, /data/elections/ (no query string), /data/raising-bythenumbers/. Host www.fec.gov only. crawl_delay_s 10 is enforced by the lane (no fetch earlier than 10 s after the last).",
+   "path_case_insensitive": false,
+   "crawl_delay_s": 10
+  },
+  {
+   "entity": "Census Bureau",
+   "aliases": [
+    "Census Bureau",
+    "U.S. Census Bureau",
+    "US Census Bureau"
+   ],
+   "entity_class": "authority",
+   "volatile": false,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "www.census.gov"
+   ],
+   "docs_entry_urls": [
+    "https://www.census.gov/topics/public-sector/voting"
+   ],
+   "state": "active",
+   "version": 1,
+   "full_aliases": [
+    "Census Bureau",
+    "U.S. Census Bureau",
+    "US Census Bureau"
+   ],
+   "parents": [],
+   "context_terms": [
+    "population",
+    "demographic",
+    "census",
+    "american community survey",
+    "apportionment",
+    "redistricting",
+    "survey"
+   ],
+   "generic_phrases": [],
+   "terms_verdict": "allow",
+   "terms_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+   "access_verdict": "allow",
+   "access_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+   "derivative_verdict": "allow",
+   "derivative_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched) (US government work; public domain unless a page says otherwise)",
+   "ingest_verdict": "unknown",
+   "ingest_evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched) (not assessed; lane pages are never ingested, R-037)",
+   "avoid_paths": [
+    "/search-results.html",
+    "/quickfacts/*"
+   ],
+   "avoid_paths_note": "DOCUMENTATION ONLY. c4-sources.md (summary-grade): generic agents barred only from /search-results.html; /quickfacts/ skipped by policy. Terms provisional ALLOW-READ.",
+   "verification": {
+    "status": "owner_decided_unverified_paths",
+    "date": "2026-11-06",
+    "verdict": "read-permitted",
+    "decision": "OD-1106-HITL H5 (a) (owner, 2026-11-06)",
+    "evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "www.census.gov": {
+     "exact": [
+      "/topics/public-sector/voting"
+     ],
+     "prefix": [
+      "/data/tables/time-series/demo/voting-and-registration/",
+      "/library/publications/",
+      "/library/stories/",
+      "/library/visualizations/"
+     ]
+    }
+   },
+   "allowed_paths_note": "c4-sources.md (summary-grade): voting topic page, voting-and-registration tables, /library/publications|stories|visualizations/. Host www.census.gov only.",
+   "path_case_insensitive": false
+  },
+  {
+   "entity": "EAC",
+   "aliases": [
+    "EAC",
+    "Election Assistance Commission",
+    "U.S. Election Assistance Commission"
+   ],
+   "entity_class": "authority",
+   "volatile": false,
+   "match_case": true,
+   "exclude_next": [],
+   "domains": [
+    "www.eac.gov"
+   ],
+   "docs_entry_urls": [],
+   "state": "suspended",
+   "version": 1,
+   "full_aliases": [
+    "Election Assistance Commission",
+    "U.S. Election Assistance Commission"
+   ],
+   "parents": [],
+   "context_terms": [
+    "election",
+    "voting",
+    "voter",
+    "voting system",
+    "election official",
+    "ballot",
+    "help america vote act",
+    "hava"
+   ],
+   "generic_phrases": [],
+   "terms_verdict": "unknown",
+   "terms_evidence": null,
+   "access_verdict": "unknown",
+   "access_evidence": null,
+   "derivative_verdict": "unknown",
+   "derivative_evidence": null,
+   "ingest_verdict": "unknown",
+   "ingest_evidence": null,
+   "avoid_paths": [],
+   "avoid_paths_note": "DOCUMENTATION ONLY. c4-sources.md (summary-grade): robots OK but terms UNVERIFIED (terms pages 404). Row disabled (state suspended, terms_unverified true): never loaded, so it cannot be used even when the lane is on. Prefixes for later: /voters/, /vote, /uocava.",
+   "verification": {
+    "status": "owner_decided_unverified_paths",
+    "date": "2026-11-06",
+    "verdict": "terms_unverified",
+    "decision": "OD-1106-HITL H5 (a) (owner, 2026-11-06)",
+    "evidence": "work/CATCHUP-1106/hitl-decisions.md#h5 (OD-1106-HITL H5 option (a), owner 2026-11-06; D4 research is an orchestrator summary only, no per-source file; robots.txt and path layout NOT fetched)",
+    "qualification": "Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use."
+   },
+   "allowed_paths": {
+    "www.eac.gov": {
+     "exact": [],
+     "prefix": [
+      "/voters/"
+     ]
+    }
+   },
+   "allowed_paths_note": "Disabled row; /voters/ is a candidate only. Re-enable needs terms read and an owner decision.",
+   "path_case_insensitive": false,
+   "terms_unverified": true
   }
  ],
  "_context_note": "NONASK-1103 stream S disambiguation: full_aliases count alone; otherwise a name or parent hit counts only with a context term (curated list, whole-word, phrases allowed) and after generic_phrases are removed. No numeric threshold. Curated data, UNCALIBRATED; extend from reviewed false hits.",
  "_permissions_note": "Owner decisions R-049/R-050 (2026-11-03): three per-source gates read by vera/source_permissions.py. access_verdict (read), derivative_verdict (use for the answer), ingest_verdict (store), each allow | forbid | unknown with *_evidence. Unknown = allowed for read and use; ingest also needs an explicit storage licence. forbid on access means the host is never fetched. terms_verdict/terms_evidence (I-SL) are unchanged. Seeded from work/NONASK-1103/entity-hosts-evidence.md.",
- "_verification_note": "OD-OL-1 (owner, 2026-11-04) signed off the registry table at work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md: read-permitted 4 (Google Cloud, Kafka, Pulsar, Slack incl. docs.slack.dev), link-only 6 (AWS, Nvidia, Azure, Snowflake, Teams, Zoom on support.zoom.com), exclude 0. Owner qualification, verbatim: \"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use.\" Deny All (owner standard 2026-11-04): allowed_paths per exact host ({exact:[...], prefix:[... ending '/']}) is the only path rule; a path is read only if, after normalisation (percent-decode once; deny anything still encoded, non-ASCII, a query, ';', backslash, empty/'.'/'..' segments), it equals an exact entry or starts with a prefix. Everything else is link-only. path_case_insensitive=false: paths compare case-sensitively. avoid_paths is kept as documentation only. robots.txt is still enforced per hop."
+ "_verification_note": "OD-OL-1 (owner, 2026-11-04) signed off the registry table at work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md: read-permitted 4 (Google Cloud, Kafka, Pulsar, Slack incl. docs.slack.dev), link-only 6 (AWS, Nvidia, Azure, Snowflake, Teams, Zoom on support.zoom.com), exclude 0. Owner qualification, verbatim: \"Treat the access verdicts as operational policy decisions, not definitive legal determinations of permitted AI use.\" Deny All (owner standard 2026-11-04): allowed_paths per exact host ({exact:[...], prefix:[... ending '/']}) is the only path rule; a path is read only if, after normalisation (percent-decode once; deny anything still encoded, non-ASCII, a query, ';', backslash, empty/'.'/'..' segments), it equals an exact entry or starts with a prefix. Everything else is link-only. path_case_insensitive=false: paths compare case-sensitively. avoid_paths is kept as documentation only. robots.txt is still enforced per hop. H5 (OD-1106-HITL, owner 2026-11-06): three authority rows added (FEC, Census Bureau, EAC; static pages only), status owner_decided_unverified_paths: robots.txt and the path layout were not fetched when they were added. congress.gov is deliberately absent (blocks AI agents). State election-office sites are absent until their terms are read."
 }

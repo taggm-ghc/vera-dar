@@ -1,0 +1,46 @@
+-- 019_vera_news_access_exceptions.sql -- DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL (offline review only).
+-- Not a live migration: it sits in pending/ and is invisible to the runner (name does not match apply_migrations.py's glob).
+-- H19H21-DESIGN-1106 section 6 (T7): durable store of news-access exceptions (ND news / Wikipedia-citation reads that fell back to link-only).
+-- Strictly additive: ONE table in schema vera_vjay. Hosts and closed reason tokens only; never URLs, titles or text.
+-- Written by the rw app path (INSERT ... ON CONFLICT (host, reason_code, route) DO UPDATE SET count = count + 1, last_seen = now()).
+-- No code reads or writes it yet; until applied, scripts/news_access_report.py plus the request-trace counters are the record.
+-- APPLYING NEEDS OWNER-APPROVED DDL IN THAT TURN (AGENTS.md section 7), admin/owner-run only, never via db/apply_migrations.py.
+-- No role is created or altered. Grants: SELECT, INSERT, UPDATE on the new table to the group role vera_vjay_rw ONLY; no DELETE/TRUNCATE.
+-- Rollback (owner-only, prepared): db/migrations/rollback/019-DRAFT-news-access-exceptions-rollback.sql.draft
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 -f <this file>   (own BEGIN/COMMIT; any error leaves nothing applied).
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = 'vera_vjay') THEN
+    RAISE EXCEPTION '019 requires schema vera_vjay to exist (001 first); this file does not create it.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_rw') THEN
+    RAISE EXCEPTION '019 requires group role vera_vjay_rw (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.news_access_exceptions') IS NOT NULL THEN
+    RAISE EXCEPTION '019 already applied or name collision: vera_vjay.news_access_exceptions exists.';
+  END IF;
+END $$;
+
+CREATE TABLE vera_vjay.news_access_exceptions (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT news_access_exceptions_pk PRIMARY KEY,
+    host           TEXT NOT NULL CONSTRAINT news_access_exceptions_host_chk
+                   CHECK (host ~ '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$'),
+    reason_code    TEXT NOT NULL CONSTRAINT news_access_exceptions_reason_chk
+                   CHECK (reason_code ~ '^[a-z][a-z0-9_]{0,63}$'),
+    route          TEXT NOT NULL CONSTRAINT news_access_exceptions_route_chk
+                   CHECK (route IN ('reporting_lane', 'wiki_citation')),
+    first_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    count          INTEGER NOT NULL DEFAULT 1 CONSTRAINT news_access_exceptions_count_chk CHECK (count >= 1),
+    status         TEXT NOT NULL DEFAULT 'open' CONSTRAINT news_access_exceptions_status_chk
+                   CHECK (status IN ('open', 'resolved', 'wontfix')),
+    resolution_ref TEXT CONSTRAINT news_access_exceptions_resref_chk CHECK (resolution_ref IS NULL OR length(resolution_ref) <= 300),
+    CONSTRAINT news_access_exceptions_uq UNIQUE (host, reason_code, route)
+);
+
+GRANT USAGE ON SCHEMA vera_vjay TO vera_vjay_rw;
+GRANT SELECT, INSERT, UPDATE ON vera_vjay.news_access_exceptions TO vera_vjay_rw;
+
+COMMIT;

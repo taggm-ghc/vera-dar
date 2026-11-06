@@ -42,6 +42,8 @@ def render_lane_links(st, data) -> None:
     for lk in links:
         meta = ", ".join(p for p in (_t(lk.get("outlet") or lk.get("entity")), _t(lk.get("published"), 40)) if p)
         mark = "read" if lk.get("read") is True else "link only"
+        if lk.get("credit") and lk.get("read") is not True:  # NT-3: credit line for Wikipedia-citation links
+            mark += f", {_t(lk.get('credit'), 80)}"
         title = _t(lk.get("title")) or _t(_http(lk["url"]))
         st.markdown(safe_markdown(f"- [{title}]({_http(lk['url'])})" + (f" ({meta})" if meta else "") + f" - {mark}"))
     for cr in credits:

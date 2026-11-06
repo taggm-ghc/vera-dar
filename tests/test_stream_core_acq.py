@@ -120,7 +120,8 @@ def test_T4_events_are_counts_only_and_name_nothing(monkeypatch, events):
     ups = [c for s, t, c in events if (s, t) == ("acquire", "update")]
     assert len(ups) == 31 and [u["checked"] for u in ups] == list(range(1, 32))
     assert all(set(u) == {"checked", "usable", "held", "stored", "target", "shortlisted"} for u in ups)
-    assert ups[-1]["usable"] == 30 == ups[-1]["stored"] and ups[-1]["shortlisted"] == 31 and ups[-1]["target"] == 6
+    assert ups[-1]["usable"] == 30 and ups[-1]["stored"] == 6 and ups[-1]["shortlisted"] == 31 and ups[-1]["target"] == 6
+    # PROGRESS-COUNT-1106: stored is clamped to target
     assert events[-1][:2] == ("acquire", "done")
 
 

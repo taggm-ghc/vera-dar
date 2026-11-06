@@ -144,12 +144,16 @@ def test_disclosure_on_every_page(monkeypatch, page, fulldoc):
         for _h, t in disclosure.disclosure_sections():  # PRIVACY-1104: terms-type sections render on Terms instead
             assert main.count(t) == (0 if _h in moved else 1), _h
     else:  # one short line; the long disclosure is not repeated
-        assert any(c.value == disclosure.short_notice_text() for c in at.main.caption)
+        if page == "streamlit_app.py":  # owner 2026-11-05: the AI and third-party notice is on the Ask page only
+            assert any(c.value == disclosure.short_notice_text() for c in at.main.caption)
+        else:
+            assert disclosure.short_notice_text() not in [c.value for c in at.main.caption], page
         assert disclosure.required_notice_text() not in main
         assert _BASE[:60] not in main and _BASE_FULLDOC[:60] not in main
         # WP6 (orchestrator decision): the third-party point appears exactly once, in the short notice, on every
         # non-About page; How to use's Privacy section points to About instead of repeating it
-        assert main.lower().count("third-party") == 1
+        if page == "streamlit_app.py":
+            assert main.lower().count("third-party") == 1
 
 
 def test_static_guard_references():

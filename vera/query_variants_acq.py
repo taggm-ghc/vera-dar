@@ -93,6 +93,13 @@ def _subquery_central(clean: str, cfg, mt: int) -> list[str]:
         return []
 
 
+def _drop_bare_flag() -> bool:
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("drop_bare_one_word_variants") is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None, max_terms=None) -> list[str]:
     """Ordered, de-duplicated query variants; [] when the question has no content terms. `tried` = queries already run
     (strings; compared in `norm` form)."""
@@ -118,9 +125,14 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
     seen = {norm(t) for t in tried}
     out: list[str] = []
 
-    def add(query: str) -> None:
+    drop_bare = len(base) > 1 and _drop_bare_flag()
+
+    def add(query: str, *, entity: bool = False) -> None:
         n = norm(query)
-        if n and n != raw and n not in seen and len(query.split()) <= 3 * mt + 4:
+        if drop_bare and not entity and len(query.split()) == 1 and "-" not in query:
+            return  # R3: a bare one-word variant ("agent", "color") matches the wrong field; entity-central queries exempt
+        if n and n != raw and n not in seen and len(query.split()) <= 3 * mt + 4 \
+                and not search_query.is_degenerate_query(query):  # F1-QUERY-1106: never a bare year / "us"
             seen.add(n)
             out.append(query.strip())
 
@@ -135,7 +147,7 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
         add(v)
     # (c) entity-central terms
     for sq in _subquery_central(clean, cfg, mt):  # A6 D1: vera.subquery entity-central queries come first
-        add(sq)
+        add(sq, entity=True)
     kc, w = search_query.key_concepts(clean, cfg, groups=groups)
     kc = [c for c in kc if "|" not in c and c not in gen]
     anchor = list(qt.anchor)
@@ -145,6 +157,14 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
         add(c)
     # (d) practitioner seed list: the entity-central terms (anchor run, else the first two base terms) + one seed
     head = anchor[:2] or base[:2]
+    if is_news_route(question):  # F1-QUERY-1106: the news seed head is the event phrase ("midterm elections")
+        try:
+            from vera import reporting_lane
+            core = reporting_lane.event_core(clean)
+            if core and core.get("phrase"):
+                head = [core["phrase"]] + ([core["year"]] if core.get("year") else [])
+        except Exception:  # noqa: BLE001
+            pass
     for s in seed_list:
         add(_q(head + [s]))
     # (e) the OR form

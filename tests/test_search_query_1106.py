@@ -8,7 +8,7 @@ Q = "What are implications of the US 2026 Midterm elections?"
 def test_year_kept_and_framing_dropped():
     kc, w = sq.key_concepts(Q)
     assert "2026" in kc and "implications" not in kc
-    assert w["2026"] == max(w.values()) and w["elections"] == w["2026"]
+    assert w["2026"] < w["elections"] == w["midterm"]  # F1-QUERY-1106: a bare year is not central
 
 
 def test_part_query_keeps_year():

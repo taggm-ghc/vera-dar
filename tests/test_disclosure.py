@@ -114,19 +114,20 @@ def test_render_calls_caption_with_text():
     st = mock.MagicMock()
     disclosure.render_disclosure(st)
     st.caption.assert_called_once_with(disclosure.short_notice_text())  # R-031: one short line; full text is on About only
-    assert [c.args[0] for c in st.page_link.call_args_list] == [t for t, _ in disclosure.ABOUT_LINKS]
+    st.page_link.assert_not_called()  # owner 2026-11-05: no header links on any page
+    assert not hasattr(disclosure, "ABOUT_LINKS")
 
 
-def test_every_page_calls_render_disclosure_once():
+def test_only_ask_page_calls_render_disclosure_once():
+    """Owner 2026-11-05: the one AI and third-party notice is on the Ask page (streamlit_app.py) only."""
     for rel in PAGES:
         tree = ast.parse((ROOT / rel).read_text())
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Name) and n.func.id == "render_disclosure"]
-        imported = any(isinstance(n, ast.ImportFrom) and n.module == "vera.disclosure" for n in ast.walk(tree))
-        if rel.endswith("about.py"):  # R-031: About renders the full sections once and no short line
-            assert not calls, rel
+        if rel == "streamlit_app.py":
+            assert len(calls) == 1, rel
         else:
-            assert imported and len(calls) == 1, rel
+            assert not calls, rel
 
 
 def test_pages_do_not_hardcode_the_text():

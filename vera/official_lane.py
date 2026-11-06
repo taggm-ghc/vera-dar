@@ -21,6 +21,8 @@ The lane flag ships OFF (config/subquery.json official_lane.enabled). Enable onl
 from __future__ import annotations
 
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
@@ -209,6 +211,29 @@ def _rows(registry: list | None) -> dict:
     return out
 
 
+_LAST_FETCH: dict = {}  # host -> monotonic time of the last request sent (per process); never holds page text
+_LAST_LOCK = threading.Lock()
+_clock = time.monotonic
+
+
+def _delay_ok(url: str, row: dict) -> bool:
+    """Row `crawl_delay_s` (config; the host's robots.txt Crawl-delay): True, and the slot is taken, when the last request
+    to this host was at least that long ago; False = too early, so the request is NOT sent (link only)."""
+    try:
+        delay = float(row.get("crawl_delay_s") or 0)
+    except (TypeError, ValueError):
+        return False
+    if delay <= 0:
+        return True
+    h, now = _host(url), _clock()
+    with _LAST_LOCK:
+        last = _LAST_FETCH.get(h)
+        if last is not None and now - last < delay:
+            return False
+        _LAST_FETCH[h] = now
+    return True
+
+
 class OfficialLane:
     """Inject `fetch` (vera.public_fetch.fetch signature: url -> {"text", "url", "content_type"}) in tests."""
 
@@ -275,6 +300,8 @@ class OfficialLane:
                     link["reason"] = "path_not_allowed"  # deny all: not on the row's allowed_paths, never requested
                 elif stop:
                     link["reason"] = stop  # deadline or stop: listed without a fetch
+                elif not _delay_ok(url, row):
+                    link["reason"] = "crawl_delay"  # inside the host's Crawl-delay: not sent early
                 else:
                     try:
                         got = self._do_fetch(url, row)

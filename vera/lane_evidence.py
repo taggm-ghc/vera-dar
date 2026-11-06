@@ -23,6 +23,7 @@ ship OFF; with both off collect() does no work and returns an empty result.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -59,7 +60,7 @@ class LaneResult:
 
     def public(self) -> dict:
         """Counts and links only: no page text, no portal name, no registry state, no internal cause."""
-        keep = ("lane", "label", "title", "url", "published", "outlet", "entity", "read")
+        keep = ("lane", "label", "title", "url", "published", "outlet", "entity", "read", "credit")
         return {"links": [{k: lk.get(k) for k in keep if lk.get(k) is not None} for lk in self.links],
                 "n_read": len(self.pages), "credits": [dict(a) for a in self.attributions],
                 "scope": INSPECTION_LABEL}
@@ -84,6 +85,61 @@ def _outlet_allowed(url: str, cfg: dict) -> bool:
         if isinstance(o, dict) and str(o.get("host") or "").lower() == h:
             return o.get("terms_verdict") == "allow" and bool(o.get("terms_evidence"))
     return False
+
+
+def _outlet_read_rules(url: str) -> dict:
+    """OD-1106-HITL H5: optional per-outlet read limits from config/reporting_lane.json `outlets` (config, never
+    hardcoded). path_prefixes / path_regex: the URL path must match (absent = no limit); deny_path_prefixes: never;
+    require_any_markers: the fetched text must hold one (positive evidence); wire_markers: any hit means link only.
+    Markers are case-insensitive. A declared but empty or malformed rule matches nothing (fail closed); an error
+    denies everything."""
+    deny_all = {"prefixes": ["\0"], "regex": None, "deny": [], "need": [], "wire": []}
+    try:
+        row = reporting_lane.outlet_row(url) or {}
+        lst = lambda k: [str(x) for x in row.get(k) or [] if isinstance(x, str) and x.strip()]  # noqa: E731
+        pp = [x for x in lst("path_prefixes") if x.startswith("/")]
+        if "path_prefixes" in row and not pp:
+            pp = ["\0"]
+        rx = None
+        if "path_regex" in row:
+            try:
+                rx = re.compile(str(row["path_regex"]))
+            except (re.error, TypeError):
+                return deny_all
+        need = [x.lower() for x in lst("require_any_markers")]
+        if "require_any_markers" in row and not need:
+            return deny_all
+        return {"prefixes": pp, "regex": rx, "deny": lst("deny_path_prefixes"), "need": need,
+                "wire": [x.lower() for x in lst("wire_markers")]}
+    except Exception:  # noqa: BLE001
+        return deny_all
+
+
+def _path_ok(url: str, rules) -> bool:
+    if isinstance(rules, list):  # a bare list of prefixes
+        rules = {"prefixes": rules, "regex": None, "deny": []}
+    if any(ord(c) <= 32 or ord(c) == 127 for c in str(url)):  # urlsplit silently strips \n, \r, \t: deny them
+        return False
+    try:
+        from urllib.parse import urlsplit
+        sp = urlsplit(url)
+        path = sp.path or "/"
+    except ValueError:
+        return False
+    if any(path.startswith(d) for d in rules.get("deny") or []):
+        return False
+    if rules.get("prefixes") and not any(path.startswith(p) for p in rules["prefixes"]):
+        return False
+    return rules.get("regex") is None or (not sp.query and bool(rules["regex"].fullmatch(path)))
+
+
+def _text_ok(text: str, rules: dict) -> bool:
+    norm = lambda x: " ".join(str(x).lower().split())  # noqa: E731  collapse any whitespace run, lowercase
+    low = norm(text)
+    if any(norm(m) in low for m in rules.get("wire") or []):
+        return False
+    need = rules.get("need") or []
+    return not need or any(norm(m) in low for m in need)
 
 
 def collect(question: str, *, official=None, reporting=None, fetch=None, plan=None) -> LaneResult:
@@ -133,6 +189,12 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                 if not url or url in seen:
                     continue
                 seen.add(url)
+                try:  # defence in depth (H5): re-check the outlet verdict here, whatever the source of the item
+                    verdict = reporting_lane.outlet_verdict(str(url))
+                except Exception:  # noqa: BLE001
+                    verdict = "links_only"
+                if verdict == "exclude":
+                    continue  # an excluded outlet is never shown, read or linked
                 lk = {"lane": "reporting", "label": "Reported", "title": it.get("title"), "url": url,
                       "published": it.get("published") or "date unknown", "outlet": it.get("outlet"), "read": False,
                       "part": p.label}
@@ -140,7 +202,9 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                 # allow outlet inside its crawl delay) is a link only, never fetched.
                 # NEWS-LANE-1104 R1: read only an item the lane explicitly tagged read_ok=True (an untagged item, e.g.
                 # from a future or injected lane, is a link only: fail closed)
-                perm = _outlet_gate(url) if it.get("read_ok") is True else None
+                can_read = it.get("read_ok") is True and verdict == "allow"  # links_only / unknown stay link-only
+                rules = _outlet_read_rules(url) if can_read else {}
+                perm = (_outlet_gate(url) if can_read and _path_ok(url, rules) else None)
                 # vera.source_permissions: read unless restricted; use unless barred
                 if perm is not None and perm.read and perm.use_for_answer and n_reads[0] < _read_cap():
                     n_reads[0] += 1
@@ -151,7 +215,8 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                         final = str(page.get("url") or url)
                         post = web_route.evaluate_fetched(final, page)  # WP6-P2b D3: noai, Content-Signal, derivative
                         if (_host(final) == _host(url) and post.read and post.use_for_answer
-                                and (page.get("text") or "").strip()):
+                                and (page.get("text") or "").strip()
+                                and _text_ok(str(page.get("text")), rules) and _path_ok(final, rules)):
                             pg = LanePage("reporting", "", str(it.get("title") or ""), final, outlet=it.get("outlet") or
                                           _host(final), published=it.get("published"), text=str(page["text"]))
                             pg.part = p.label
@@ -164,6 +229,59 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
         return LaneResult(links=list(res.links), diag=list(res.diag) + [{"portal": "-", "status": "called",
                                                                        "reason": "error", "items": 0}])
     return res
+
+
+WIKI_CREDIT = "via Wikipedia citations"
+
+
+def _wiki_host(url: str) -> bool:
+    """True for a Wikipedia or Wikimedia-family host (config `wiki_link_drop_hosts`, exact or subdomain). A missing or
+    malformed list drops every URL (fail closed); an unparsable host is dropped."""
+    try:
+        h = reporting_lane._domain(url)
+        hosts = reporting_lane.load_config().get("wiki_link_drop_hosts")
+        if not h or not isinstance(hosts, list) or not hosts:
+            return True
+        return any(h == str(x).lower() or h.endswith("." + str(x).lower()) for x in hosts)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def wiki_link_items(urls, seen=()) -> list:
+    """NT-3: Wikipedia-citation URLs as LINK-ONLY news items (read False, never fetched, never evidence, never counted
+    toward the full-text target). Outlet from the host; an outlet the owner list marks "exclude" is dropped; the
+    credit is the only mention of the source. Pure: no network, no DB. Never raises."""
+    out, have = [], set(seen)
+    try:
+        for u in urls or []:
+            u = str(u or "")
+            if not u.startswith(("http://", "https://")) or u in have:
+                continue
+            if reporting_lane.outlet_verdict(u) == "exclude" or _wiki_host(u):
+                continue
+            have.add(u)
+            host = reporting_lane._domain(u)
+            out.append({"lane": "reporting", "label": "Reported", "title": host, "url": u, "published": "date unknown",
+                        "outlet": host, "read": False, "credit": WIKI_CREDIT})
+    except Exception:  # noqa: BLE001
+        return out
+    return out
+
+
+def merge_wiki_links(lanes: "LaneResult | None", question) -> "LaneResult | None":
+    """NT-3: add the Wikipedia portal's links (wiki_ref_portal.take_links) to the lane result as link-only items.
+    Returns lanes unchanged when there are none. Never raises."""
+    try:
+        from vera import wiki_ref_portal
+        urls = wiki_ref_portal.take_links(str(question or ""))
+        base = lanes if lanes is not None else LaneResult()
+        items = wiki_link_items(urls, seen={lk.get("url") for lk in base.links})
+        if not items:
+            return lanes
+        return LaneResult(links=list(base.links) + items, pages=list(base.pages),
+                          attributions=list(base.attributions), diag=list(base.diag))
+    except Exception:  # noqa: BLE001
+        return lanes
 
 
 def _news(text: str) -> bool:
@@ -240,8 +358,15 @@ def attribution_for(page: LanePage) -> dict:
     who = (f"{page.entity} documentation" if page.lane == "official"
            else f"Web source: {_host(page.url)}" if page.lane == "web"  # A6-W: a web page, never verified fact
            else f"As reported by {page.outlet or _host(page.url)}")
-    return {"creator": who, "title": page.title or _host(page.url), "source": page.url,
-            "lane": EPISTEMIC[page.lane], "scope": INSPECTION_LABEL}
+    att = {"creator": who, "title": page.title or _host(page.url), "source": page.url,
+           "lane": EPISTEMIC[page.lane], "scope": INSPECTION_LABEL}
+    try:  # H5: an outlet row may carry its licence statement (Wikinews: CC BY 4.0 after 2024-12-16, CC BY 2.5 before)
+        note = (reporting_lane.outlet_row(page.url) or {}).get("licence_note") if page.lane == "reporting" else None
+        if isinstance(note, str) and note.strip():
+            att["licence"] = note
+    except Exception:  # noqa: BLE001
+        pass
+    return att
 
 
 def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:

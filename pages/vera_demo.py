@@ -11,7 +11,7 @@ import requests  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from vera import public_mode, ui_wake  # noqa: E402
-from vera.disclosure import ask_help_text, render_disclosure  # noqa: E402
+from vera.disclosure import ask_help_text  # noqa: E402
 from vera.env_files import load_vera_env  # noqa: E402
 from vera.m7 import live_report as lr  # noqa: E402
 from vera.m7.data import load_latest_report  # noqa: E402
@@ -23,7 +23,6 @@ load_vera_env()  # same loader as streamlit_app.py
 st.set_page_config(page_title="VERA-DAR report", layout="wide")
 render_nav(st)
 render_sources_sidebar(st)
-render_disclosure(st)  # item #74
 
 LIVE, OFFLINE = "Live report (ask VERA-DAR)", "Offline example (illustrative, not a real run)"
 PUBLIC = public_mode.is_public_mode()

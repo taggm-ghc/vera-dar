@@ -84,15 +84,17 @@ def test_acquisition_and_query_is_the_compound_concept_not_the_first_four_words(
     lambda: wiki_ref_portal.build_query(Q, json.loads((ROOT / "config" / "wiki_ref_portal.json").read_text())),
 ])
 def test_no_provider_query_carries_an_isolated_generic_word(q):
-    words = set(q().lower().replace("(", " ").replace(")", " ").replace("all:", "").split())
+    # R3 (RELEVANCE-R1R4-1106): the arXiv query quotes the compound phrase, so quotes are stripped before the word check
+    words = set(q().lower().replace("(", " ").replace(")", " ").replace("all:", "").replace('"', "").split())
     assert not GENERIC & words, q()
     assert "multi-agent" in words and "orchestration" in words
 
 
 def test_or_retry_and_reading_list_stay_or_queries():  # D3: broader than the AND query, never a strict AND
     assert sp.build_openalex_search(Q, QT)[0] == "(agent OR archetypes OR multi-agent OR orchestration)"
+    # R3 (RELEVANCE-R1R4-1106): the arXiv query ANDs the compound and drops its bare component "agent"; OpenAlex stays OR
     assert sp.build_arxiv_query_info(Q, RUN["arxiv"]["query"], QT)[0].startswith(
-        "(all:agent OR all:archetypes OR all:multi-agent OR all:orchestration) AND submittedDate:")
+        '(all:"multi-agent" AND (all:archetypes OR all:orchestration)) AND submittedDate:')
 
 
 def test_questions_without_generic_words_or_compounds_keep_their_previous_query():

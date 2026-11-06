@@ -307,7 +307,7 @@ def lane_env(monkeypatch):
 def test_owner_news_decision_shipped_config():
     c = reporting_lane.load_config()
     assert c["emit_link_only"] is True and c["outlet_query"] == "all" and c["unlisted_verdict"] == "links_only"
-    assert set(reporting_lane.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org"}
+    assert set(reporting_lane.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com"}  # H5
 
 
 def test_owner_news_decision_link_only_never_fetched_allow_read_excluded_absent_credit(lane_env):

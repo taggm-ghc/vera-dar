@@ -13,6 +13,7 @@ QUAL = ("Treat the access verdicts as operational policy decisions, not definiti
 EV = "work/OFFICIAL-REGISTRY-VERIFY-1104/registry-verification.md"
 READ = {"Google Cloud", "Kafka", "Pulsar", "Slack"}
 LINK = {"AWS", "Nvidia", "Azure", "Snowflake", "Teams", "Zoom"}
+H5 = {"FEC", "Census Bureau", "EAC"}  # OD-1106-HITL H5 (a); tests/test_h5_enable_1106.py covers them
 
 
 def _load(name):
@@ -31,7 +32,7 @@ def _doc():
 
 
 def _active():
-    return {r["entity"]: r for r in _doc()["entities"] if r.get("state") == "active"}
+    return {r["entity"]: r for r in _doc()["entities"] if r.get("state") == "active" and r["entity"] not in H5}
 
 
 def test_active_set_is_the_signed_off_ten():

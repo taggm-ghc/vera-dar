@@ -16,6 +16,9 @@ KIND_SELF_DESCRIPTION = "self_description"  # SELFREF-1028: fixed public self-de
 # DAR-PIPE-1022-UIFIX: one table from internal reason codes (config/auto_acquire.json reason_codes) to plain text.
 # Internal codes are keys only; they are never rendered. Unknown codes use REASON_GENERIC.
 OBTAINED_TEXT = "Full text obtained; not used in this answer."
+# R8-HEADLINE-1106: the document supplied passages that reached the writer, but they did not support an answer
+OBTAINED_CONSIDERED_TEXT = "Full text obtained; its passages were considered but did not support an answer."
+_OBTAINED_ANY = (OBTAINED_TEXT, OBTAINED_CONSIDERED_TEXT)
 # Page-level disclosure when some or all listed documents were obtained (the fixed "has not acquired or read the
 # documents in this list" line would contradict an "obtained" row).
 # The banner is composed from per-row counts: n_obt (obtained), n_held (stored / in collection), n_none (not acquired).
@@ -93,6 +96,21 @@ def _reason_line(entry) -> str | None:
         return REASON_TEXT.get("R-ACQ-RATELIMITED" if r.upper().startswith("R-ACQ-RATELIMITED-") else r, REASON_GENERIC)
     o = entry.get("outcome")
     return OUTCOME_TEXT.get(o) if isinstance(o, str) and o in OUTCOME_TEXT else (REASON_GENERIC if o else None)
+
+
+def _key(v) -> str:
+    return v.strip().rstrip("/").lower() if isinstance(v, str) else ""
+
+
+def _passage_keys(data: dict) -> set:
+    """URLs and ids of documents whose passages were selected for the writer (public admitted_evidence); empty if none."""
+    ae = data.get("admitted_evidence")
+    out = set()
+    for a in ae if isinstance(ae, list) else []:
+        if isinstance(a, dict):
+            out.update(_key(a.get(k)) for k in ("url", "canonical_source_id"))
+    out.discard("")
+    return out
 
 
 def _reasons_by_url(data: dict) -> dict:
@@ -179,7 +197,10 @@ def render_discovery(st, data: dict) -> None:
     if cands:
         whys = [why.get(c["url"].rstrip("/")) if c["acquisition"] == answer_contract.ACQ_NOT_ACQUIRED else None
                 for c in cands]
-        n_obt = sum(w == OBTAINED_TEXT for w in whys)
+        used = _passage_keys(data)
+        whys = [OBTAINED_CONSIDERED_TEXT if w == OBTAINED_TEXT and (_key(c["url"]) in used or _key(c["identifier"]) in used)
+                else w for c, w in zip(cands, whys)]
+        n_obt = sum(w in _OBTAINED_ANY for w in whys)
         n_held = sum(c["acquisition"] != answer_contract.ACQ_NOT_ACQUIRED for c in cands)
         n_none = len(cands) - n_obt - n_held
         any_stored_only = any(c["acquisition"] == answer_contract.ACQ_ACQUIRED for c in cands)
@@ -205,7 +226,7 @@ def render_discovery(st, data: dict) -> None:
             line_why = whys[i - 1]
             if line_why == REASON_TEXT["R-ACQ-NODOI"] and _is_handle(c["identifier"]):
                 line_why = REASON_TEXT["R-ACQ-PID-NOROUTE"]  # a Handle is an identifier, so no 'No stable identifier'
-            if line_why != OBTAINED_TEXT:  # never pair "Not acquired" with "Full text obtained"
+            if line_why not in _OBTAINED_ANY:  # never pair "Not acquired" with "Full text obtained"
                 parts.append(answer_contract.representation(c["acquisition"]))
             if line_why:
                 parts.append(line_why)

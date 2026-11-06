@@ -73,7 +73,7 @@ def is_fulldoc(data: dict | None, sources=None) -> bool:
                for s in (sources if sources is not None else _list(data.get("sources"))))
 
 
-def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0) -> str:
+def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_selected: int = 0, n_fetched: int = 0) -> str:
     """Visitor sentence for a contract.fallback token (None/unknown -> generic). Never returns the token."""
     if not isinstance(token, str) or not token:
         return GENERIC_FALLBACK
@@ -85,7 +85,11 @@ def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0) -> str:
     if isinstance(val, str) and val.strip():
         try:
             n = _count(n_inspected)  # NONASK-1103 WP-C: {n_docs_phrase} = "1 full document" / "N full documents"
-            out = val.replace("{n_docs_phrase}", f"{n} full document" if n == 1 else f"{n} full documents").format(n_inspected=n)
+            ph = f"{n} full document" if n == 1 else f"{n} full documents"
+            f = _count(n_fetched)  # R8-HEADLINE-1106: keep the "from VERA-DAR's collection and M fetched" wording
+            if f > 0:
+                ph += f" from VERA-DAR's collection and {f} fetched for this question"
+            out = val.replace("{n_docs_phrase}", ph).replace("{n_selected}", str(_count(n_selected))).format(n_inspected=n)
         except (KeyError, IndexError, ValueError):
             return _TOKEN_DEFAULT[token]
         return out if "{" not in out else _TOKEN_DEFAULT[token]
@@ -108,6 +112,20 @@ def _distinct_docs(items) -> int:
     return len(seen) + extra
 
 
+def fetched_for_request(data: dict | None) -> int:
+    """SCOPE-COUNT-1106: documents fetched for this request whose text was checked for passages but that are NOT in
+    examined_full_documents. Only when the examined set is the held collection (corpus_source.kind 'bundle'): the
+    inline round's answer-only documents (reason below_persist_min) are then absent from it. Otherwise 0 (no double count)."""
+    data = data if isinstance(data, dict) else {}
+    cs = data.get("corpus_source")
+    if not (isinstance(cs, dict) and cs.get("kind") == "bundle"):
+        return 0
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition")
+    docs = ia.get("documents") if isinstance(ia, dict) and isinstance(ia.get("documents"), list) else []
+    return sum(1 for d in docs if isinstance(d, dict) and d.get("reason") == "below_persist_min")
+
+
 def evidence_scope_line(data: dict | None) -> str | None:
     """'N documents inspected, M passages from K documents selected as possible evidence' from the response, or None without evidence fields.
     N and K count distinct documents, so inspected vs used are never conflated."""
@@ -116,7 +134,11 @@ def evidence_scope_line(data: dict | None) -> str | None:
         return None
     n, m = _distinct_docs(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
     k = _distinct_docs(data.get("admitted_evidence")) if isinstance(data.get("admitted_evidence"), list) else 0
-    head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
+    f = fetched_for_request(data)
+    if f:
+        head = f"Evidence scope: {n} document{'s' if n != 1 else ''} from VERA-DAR's collection and {f} fetched for this question inspected; "
+    else:
+        head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
     if not m:
         return head + "no passages selected as possible evidence."
     frm = f" from {k} document{'s' if k != 1 else ''}" if k else ""
@@ -250,7 +272,10 @@ def render_fallback_reason(st, data) -> None:
         if note and not _shortfall_in_limitations(data, note):
             st.caption(note)
         return
-    st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents"))))
+    ae = data.get("admitted_evidence")
+    st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents")),
+                          n_selected=_distinct_docs(ae) if isinstance(ae, list) else 0,
+                          n_fetched=fetched_for_request(data)))
     render_evidence_scope(st, data)
 
 

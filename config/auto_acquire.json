@@ -332,5 +332,10 @@
     "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
     "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",
     "arxiv_html_policy": "R-ACQ-ARXIV_HTML_POLICY"
+  },
+  "repository_pdf_route": {
+    "_note": "H20-PDF-1106 D-CFG. Flag ships OFF. Off, missing or non-boolean enabled = off; no env override. Caps and the exact-host list live in config/repository_pdf.json (required controls, PROVISIONAL values). mode answer_only: listed-host PDFs are used for answers only; ingest needs an explicit allowed licence (Q2, orchestrator 2026-11-05).",
+    "enabled": false,
+    "mode": "answer_only"
   }
 }

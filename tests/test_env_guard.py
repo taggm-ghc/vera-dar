@@ -1374,6 +1374,9 @@ EXPECTED_SPAWN_SITES = {
     # ordinary (non -I) Python child, so the boundary bootstrap is installed in it (inherit rule); the script is
     # stdlib-only and offline (synthetic fixtures under tests/fixtures/nonask_1103/).
     "test_nonask_1103_replay.py": {"subprocess.run"},
+    # H20 D-FIX 2026-11-05: child runs python -I with env={} in an empty tmp cwd under scratch; reviewed by
+    # orchestrator; D-SEC re-reviews
+    "test_pdf_extract_worker.py": {"subprocess.run"},
     # K18W review: object constructions inside fakes (D-B5-1 binding tests), not process creation
     "test_release_gate_evidence_binding.py": {"subprocess.CompletedProcess", "subprocess.TimeoutExpired"},
 }

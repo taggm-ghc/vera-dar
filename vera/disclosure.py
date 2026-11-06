@@ -337,15 +337,8 @@ def short_notice_text() -> str:
     return SHORT_NOTICE
 
 
-ABOUT_LINKS = (("pages/about.py", "About: how VERA-DAR answers, licences, data"),
-               ("pages/how_to_use.py", "How to use VERA-DAR"))
-
-
 def render_disclosure(st) -> None:
-    """R-031: the one short notice, then links to the About and How to use pages. The full disclosure is on About only."""
+    """The one short AI and third-party notice, shown on the Ask page only (where the question is typed). Owner
+    request: no header links on any page (the sidebar has About and How to use); other pages show no notice.
+    The full disclosure is on About only."""
     st.caption(short_notice_text())
-    for target, label in ABOUT_LINKS:
-        try:
-            st.page_link(target, label=label)
-        except Exception:  # noqa: BLE001  (StreamlitPageNotFoundError outside a multipage run, e.g. AppTest of a pages/ file)
-            pass

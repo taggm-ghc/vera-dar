@@ -7,6 +7,7 @@ import requests
 import streamlit as st
 
 from vera.disclosure import ask_help_text, render_disclosure
+from vera.help_pages import render_ask_terms_notice
 from vera.env_files import load_vera_env
 from vera.discovery_panel import render_discovery
 from vera.m7.live_report import INLINE_STATUS
@@ -373,6 +374,7 @@ with st.form("ask_form", clear_on_submit=False):  # Enter in the box submits exa
         help=ask_help_text()
     )
     _clicked = st.form_submit_button("Ask", type="primary", disabled=_inflight is not None or _sholder is not None)  # evaluated after _inflight/_sholder (R2-PROG-Q-8)
+render_ask_terms_notice(st)  # H14: one short line under the Ask box; the long text stays on Terms/About
 if _clicked and (_inflight is not None or _sholder is not None):  # race: submit landed before the disabled render; queue nothing
     st.info(LABELS.already_running)
 elif _clicked:

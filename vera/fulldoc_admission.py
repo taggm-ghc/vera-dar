@@ -37,6 +37,11 @@ def tokenize(text: str, icfg: dict) -> list[str]:
     """Same rule as vera.domain_identify.tokenize (casefold, token_pattern, min_token_len, stopwords), kept local so
     this gate module imports nothing from domain routing/registry (tests/test_dar_routing.py isolation rule)."""
     pat, stop, min_len = re.compile(icfg["token_pattern"]), set(icfg.get("stopwords") or []), int(icfg["min_token_len"])
+    try:  # R4 (RELEVANCE-R1R4-1106): colour = color (config/query_terms.json spelling_pairs)
+        from vera.search_query import normalize_spelling
+        text = normalize_spelling(str(text or ""))
+    except Exception:  # noqa: BLE001
+        pass
     return [t for t in pat.findall(str(text or "").casefold()) if len(t) >= min_len and t not in stop]
 
 

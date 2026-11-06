@@ -1,0 +1,66 @@
+{
+  "_doc": "H20-PDF-1106 repository-PDF route seed (records/plans/h20-repository-pdf-route.md, D-CFG). Read via list `repository.pdf_hosts` (config/list_tables.json). Exact-host allowlist: only rows with status `active` are used; `pending` and `retired` rows are never fetched. No wildcards, no suffix matching. Host: zenodo.org is the only first host (LSE removed: robots blocks AI assistants, OD-1106-ROBOTS-AI). Caps are required controls: a missing or invalid value falls back to the shipped default, never to no limit. Ships with the feature flag off (config/auto_acquire.json repository_pdf_route.enabled).",
+  "_calibration_note": "All numeric caps are PROVISIONAL planner priors (OD-1106-NEWS, Q4 values stay provisional). Calibrate per cap from the D-MEM measurement (work/H20-PDF-1106/mem.md) and from trace bytes_bucket, pages, extract_ms and R-PDF-* counts on the first owner-approved live attempts. Record the change and its data in this file.",
+  "hosts": [
+    {
+      "host": "zenodo.org",
+      "platform": "zenodo",
+      "status": "pending",
+      "allowed_path_pattern": "^/records/[0-9]+/files/[^/]+\\.pdf$",
+      "_allowed_path_note": "Only /records/{id}/files/{name}.pdf. Never /search, /api (other than /api/records/*/files), /records/*/preview, /me or /account.",
+      "api_paths_allowed_pattern": "^/api/records/[0-9]+/files/[^/]+\\.pdf$",
+      "licence_source": "record metadata licence field, through the unchanged licence gate",
+      "crawl_delay_s": 10,
+      "rate_portal": null,
+      "_rate_portal_note": "Set by D-RATE (config/rate_limits.json, new portal key). Stricter of terms and crawl_delay_s 10 applies.",
+      "terms_url": null,
+      "terms_read": null,
+      "robots_read": "2026-11-05",
+      "robots_evidence_grade": "summary-grade (2026-11-05); not verbatim raw robots.txt",
+      "evidence": null,
+      "_evidence_note": "Path to the D-HOST research note once it exists. Owner approval is needed before status becomes active."
+    }
+  ],
+  "caps": {
+    "max_pdf_bytes": {
+      "value": 15728640,
+      "unit": "bytes (15 MiB, wire and stream cap)",
+      "_calibration_note": "PROVISIONAL. PRIOR: typical article PDFs are under 5 MB; 3x headroom. Calibrate from trace bytes_bucket and the D-HOST sample. Raise if R-PDF-SIZE exceeds 5% of attempts."
+    },
+    "max_pages": {
+      "value": 400,
+      "unit": "pages (refused, never truncated)",
+      "_calibration_note": "PROVISIONAL. PRIOR: long working papers and theses. Calibrate from the trace pages histogram and the R-PDF-PAGES share."
+    },
+    "extract_wall_s": {
+      "value": 20,
+      "unit": "seconds (wall clock for the child; also the child RLIMIT_CPU)",
+      "_calibration_note": "PROVISIONAL. Fits inside the existing per_doc_timeout_s of 25. Calibrate from extract_ms p50 and p95 in the trace."
+    },
+    "child_rlimit_cpu_s": {
+      "value": 20,
+      "unit": "seconds of CPU time in the child",
+      "_calibration_note": "PROVISIONAL. Same as extract_wall_s. Calibrate with it."
+    },
+    "child_rlimit_as_bytes": {
+      "value": 402653184,
+      "unit": "bytes of address space (384 MiB) in the child; MEMORY CAP PLACEHOLDER",
+      "_calibration_note": "PLACEHOLDER, NOT MEASURED. Set from the peak RSS of the worker on the fixtures and about 20 real open PDFs (D-MEM). Lower it if the container peak exceeds 90% of headroom."
+    },
+    "max_concurrent_extractions": {
+      "value": 1,
+      "unit": "extractions per API process",
+      "_calibration_note": "PROVISIONAL. Memory bound on a 512 MB container. Calibrate from container memory metrics."
+    },
+    "max_stream_decompressed_bytes": {
+      "value": 67108864,
+      "unit": "bytes (64 MiB) per decompressed stream",
+      "_calibration_note": "PROVISIONAL. Decompression-bomb control, set no higher than 64 MiB. Calibrate from the R-PDF-BOMB count."
+    },
+    "max_output_text_bytes": {
+      "value": 4000000,
+      "unit": "bytes of extracted text (same as config/public_fetch.json max_decompressed_bytes)",
+      "_calibration_note": "PROVISIONAL, existing bound reused. Calibrate from the R-PDF-TEXTCAP count."
+    }
+  }
+}

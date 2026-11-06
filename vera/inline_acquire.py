@@ -1055,13 +1055,15 @@ def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadli
         logger.warning("autoacq web route failed (%s)", type(e).__name__)
 
 
-def with_web(o, lanes):
+def with_web(o, lanes, question=None):
     """A6-W: the request's lane result with the web route's pages and reading-list links appended (a new LaneResult;
     None when neither exists). Request-local only, like lane_pass."""
     web = getattr(o, "web", None) if o is not None else None
+    from vera import lane_evidence
+    if question:  # NT-3: Wikipedia-citation links, link-only (lane_evidence.merge_wiki_links)
+        lanes = lane_evidence.merge_wiki_links(lanes, question)
     if web is None or not (web.pages or web.listed):
         return lanes
-    from vera import lane_evidence
     keep = ("lane", "label", "title", "url", "published", "read", "reference")
     links = [{k: d.get(k) for k in keep if d.get(k) is not None} for d in web.listed]
     links += [{"lane": "web", "label": getattr(p, "label", "web source"), "title": p.title, "url": p.url, "read": True}
@@ -1518,13 +1520,14 @@ def _slow_read(pending, started, n, slow, every: float = 10.0, now=time.monotoni
         progress.clear_activity()
         return
     idx, t0 = min((started[f] for f in pending if f in started), key=lambda x: x[1], default=(None, None))
+    k = len(pending)  # PROGRESS-COUNT-1106: reads run in parallel; the rank index of the oldest is not a position
     if idx is None:
         return
     age = now() - t0
     mark = int(age // every)
     if mark >= 1 and mark != slow["mark"]:
         slow["mark"] = mark
-        progress.set_activity(progress.ACT_SLOW_READ, k=idx + 1, n=n, elapsed=int(age))
+        progress.set_activity(progress.ACT_SLOW_READ, k=k, n=n, elapsed=int(age))
     elif mark < 1:
         slow["mark"] = 0
 
@@ -1575,9 +1578,12 @@ def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, co
                     if code in held_codes:
                         seen["held"] += 1
                 ctx.touch()
+                # PROGRESS-COUNT-1106: eligible plans may exceed the target (budget > target); the shown count is the
+                # number toward the target, so it is clamped (the surplus is still persisted by the persist step)
+                _elig = sum(1 for p in got.values() if aa.persist_eligible(p, acq))
                 _emit("acquire", "update", checked=len(per) if per is not None else len(got) + 0, usable=len(got),
                       held=seen["held"],
-                      stored=sum(1 for p in got.values() if aa.persist_eligible(p, acq)), target=int(tgt),
+                      stored=min(_elig, int(tgt)), target=int(tgt),
                       shortlisted=len(ranked))
             if len(got) >= budget:
                 break  # the document budget is reached: stragglers are not waited for (legacy behaviour)

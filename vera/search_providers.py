@@ -183,9 +183,28 @@ def build_arxiv_query_info(question: str, q: Mapping, terms_cfg: Mapping | None 
             parts = [f'all:"{c}"' for c in qt.core]
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
                 parts = ["(" + " OR ".join(parts) + ")"]
-            if qt.extra:
-                parts.append("(" + " OR ".join(f"all:{t}" for t in qt.extra) + ")")
-            body = "(" + " AND ".join(parts) + ")" if qt.core else parts[0]
+            extra = list(qt.extra)
+            years = [t for t in extra if re.fullmatch(r"(?:19|20)\d{2}", t)]
+            topic = [t for t in extra if t not in years]
+            if years and topic:  # F1-QUERY-1106: a year never matches alone; it is ANDed with the topic terms
+                from vera.search_query import stoplike_tokens
+                topic = [t for t in topic if t not in stoplike_tokens()] or topic
+                parts.append("(" + " OR ".join(f"all:{t}" for t in topic) + ")")
+                parts.extend(f"all:{y}" for y in years)
+            elif extra:
+                # R3 (RELEVANCE-R1R4-1106): configured compounds ("multi-agent", config compound_concepts) are ANDed as phrases; a bare component
+                # ("agent") is dropped; the other distinctive terms are ORed in one group. No compound: unchanged.
+                from vera.search_query import is_compound
+                comps = [t for t in extra if is_compound(t)]
+                if comps:
+                    rest = [t for t in extra if t not in comps
+                            and not any(t in c.split("-") for c in comps)]
+                    parts.extend(f'all:"{c}"' for c in comps)
+                    if rest:
+                        parts.append("(" + " OR ".join(f"all:{t}" for t in rest) + ")")
+                else:
+                    parts.append("(" + " OR ".join(f"all:{t}" for t in extra) + ")")
+            body = "(" + " AND ".join(parts) + ")" if (qt.core or len(parts) > 1) else parts[0]
             return body + _date_clause(q), mode
         mode = "fallback_legacy"
     return _legacy_arxiv_body(question, q) + _date_clause(q), mode

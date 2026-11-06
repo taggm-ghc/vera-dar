@@ -40,8 +40,8 @@ def test_shipped_config_enabled_gdelt_only_and_allowlist():
     # terms"): every outlet is searched and listed; only allow outlets are read (PERF-MISS-1105-FIX2)
     assert c["emit_link_only"] is True and c["outlet_query"] == "all" and c["unlisted_verdict"] == "links_only"
     for o in c["outlets"]:
-        assert o["terms_verdict"] in rl.VERDICTS and o["terms_evidence"].startswith("work/NEWS-LANE-1104/compliance.md")
-    assert set(rl.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org"}
+        assert o["terms_verdict"] in rl.VERDICTS and o["terms_evidence"].startswith("work/")
+    assert set(rl.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com"}  # voanews: OD-1106-HITL H5, VOA-original only
 
 
 def test_outlet_verdicts_exact_subdomain_lookalike_unlisted():

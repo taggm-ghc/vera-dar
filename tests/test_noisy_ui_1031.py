@@ -66,7 +66,7 @@ def test_slow_read_reports_at_10s_and_every_10s_after():
         marks.append(s.hb_fields().get("elapsed"))
     assert marks == [None, 10, 10, 20, 31]
     ev = [e[3] for e in _events(s)]
-    assert [e["elapsed"] for e in ev] == [10, 20, 31] and all(e["k"] == 4 and e["n"] == 8 and e["act"] == 3 for e in ev)
+    assert [e["elapsed"] for e in ev] == [10, 20, 31] and all(e["k"] == 1 and e["n"] == 8 and e["act"] == 3 for e in ev)
     ia._slow_read(set(), started, 8, slow)
     assert s.hb_fields() == {}
 
@@ -138,7 +138,7 @@ def test_streamlit_status_line_shows_latest_activity_and_elapsed():
     h.activity = {"act": 3, "k": 1, "n": 4, "elapsed": 30}  # the line changes with the activity
     ui2 = FakeUI()
     stream_tick(h, {}, ui2, lambda: 96.0, lab)
-    assert "Still reading source 1 of 4 (30 s)" in [c[1] for c in ui2.calls if c[0] == "info"][0]
+    assert "Still reading 1 source(s) at once; the slowest has taken 30 s" in [c[1] for c in ui2.calls if c[0] == "info"][0]
 
 
 def test_no_events_yet_says_waiting_for_a_connection():

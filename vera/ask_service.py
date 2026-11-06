@@ -306,6 +306,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         _rt_event("outcome", "reading_list", detail={"branch": "fulldoc_not_configured"})
         return out
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
+    text = _with_fetched(text, ev, ia)  # SCOPE-COUNT-1106
     _a, _n = _nonanswer_note(text, res.notes, inline_note, strip=False)
     out = replace(res, answer=_a, notes=_n, evidence=ev,
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
@@ -559,7 +560,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         kw["persist"] = True  # absent otherwise, so the unchanged call keeps its signature
     lane_task = inline_acquire.start_lane_pass(question, acq)
     o = inline_acquire.acquire(question, acq, served=tried, **kw)  # R2: only documents actually tried are skipped
-    lanes = inline_acquire.with_web(o, lane_task.result())  # NONASK-1103 (+A6-W web pages): request-local only
+    lanes = inline_acquire.with_web(o, lane_task.result(), question)  # NONASK-1103 (+A6-W web pages): request-local only
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(ephemeral=o.corpus, inline=(o.public() if hasattr(o, "public") else None))  # OD-1031-EXHAUST-GRACE
     try:  # PERF-MISS-1104-TRACE: per inline attempt (counts, status, reason codes; never DOIs, URLs or titles)
@@ -1151,8 +1152,29 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     return (ev, tok, out.tokens_used, out.cost_usd, _with_count(texts.get(key) or texts["insufficient_text"], ev, selected=True))
 
 
-def _plural_docs(n: int) -> str:
-    return f"{n} full document" if n == 1 else f"{n} full documents"
+def _plural_docs(n: int, m: int = 0) -> str:
+    """SCOPE-COUNT-1106: with m > 0 documents fetched for this question, "N full documents from VERA-DAR's collection and
+    M fetched for this question"; m == 0 keeps the old wording."""
+    base = f"{n} full document" if n == 1 else f"{n} full documents"
+    return base if m <= 0 else f"{base} from VERA-DAR's collection and {m} fetched for this question"
+
+
+def _with_fetched(text: str, ev, ia) -> str:
+    """SCOPE-COUNT-1106: re-word a "searched N full documents" headline once the inline round's fetched documents are
+    known (they are checked after the held-collection text was built). Unchanged when none, or when text lacks the phrase."""
+    try:
+        from vera import ui_evidence
+        m = ui_evidence.fetched_for_request({"corpus_source": {"kind": getattr(ev, "corpus_source", None)},
+                                             "contract": {"inline_acquisition": ia}})
+        if m <= 0:
+            return text
+        n = len(getattr(ev, "examined_full_documents", ()) or ())
+        for verb in ("searched", "checked"):  # R8-HEADLINE-1106: the non-answer headline says "checked"
+            if f"{verb} {_plural_docs(n)}" in text:
+                return text.replace(f"{verb} {_plural_docs(n)}", f"{verb} {_plural_docs(n, m)}", 1)
+        return text
+    except Exception:  # headline wording must never break an answer
+        return text
 
 
 def _with_count(text: str, ev, selected: bool = False) -> str:
@@ -1161,12 +1183,14 @@ def _with_count(text: str, ev, selected: bool = False) -> str:
     str.replace, so braces elsewhere are safe and a text without a placeholder is returned unchanged."""
     try:
         n = len(getattr(ev, "examined_full_documents", ()) or ())
-        if selected:
-            ids = {a.get("document_id") for a in (getattr(ev, "admitted", ()) or ()) if isinstance(a, dict)}
-            n = len(ids) if ids else n
+        ids = {a.get("document_id") for a in (getattr(ev, "admitted", ()) or ()) if isinstance(a, dict)}
+        k = len(ids)
+        if selected:  # R8-HEADLINE-1106: inspected count and passage-supplying count are separate
+            n = max(n, k)
     except TypeError:
-        n = 0
-    return text.replace("{n_docs_phrase}", _plural_docs(n)).replace("{n_inspected}", str(n))
+        n, k = 0, 0
+    return (text.replace("{n_docs_phrase}", _plural_docs(n)).replace("{n_selected}", str(k))
+            .replace("{n_inspected}", str(n)))
 
 
 # NONASK-1103 WP-C (stream B contract E5): fallback token -> no_answer_cause code
@@ -1448,7 +1472,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     lane_res = lane_task.result() if lane_task is not None and o is not None else None  # unused: not joined
     if o is not None and lane_task is None:
         lane_res = _ia.lane_pass(question, acq)
-    lanes = _ia.with_web(o, lane_res) if o is not None else None  # NONASK-1103 (+A6-W): request-local
+    lanes = _ia.with_web(o, lane_res, question) if o is not None else None  # NONASK-1103 (+A6-W): request-local
     if lanes is not None and isinstance(pub, dict):
         pub = dict(pub, lanes=lanes.public())  # links and counts only (need-to-know)
     new_res, failed = None, False

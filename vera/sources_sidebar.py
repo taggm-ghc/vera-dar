@@ -64,7 +64,6 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
                            "coverage", "topic_shares"})
-ABOUT_LINK_LABEL = "How VERA-DAR answers and its limits → About"
 # D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
 # many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
 # topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
@@ -78,7 +77,6 @@ def _sample_basis(shares: dict, n: int) -> str:
     k = int(shares["full_documents_in_sample"])
     fd = f", including {k} full document{'s' if k != 1 else ''} stored as passages" if k > 0 else ""
     return f"share of the {n} sampled sources{fd}, each counted once under its main topic"
-ABOUT_LINK_FALLBACK = "How VERA-DAR answers and its limits: see the About page."
 
 LICENCE_SIDEBAR = ("For listed records, only the indexing services' metadata licence was checked; the articles' own "
                    "licences were not verified with the publisher.")
@@ -304,22 +302,12 @@ def render_corpus_notes(st, data: dict | None = None) -> None:
         st.markdown(line)
 
 
-def _about_link(st) -> None:
-    from streamlit.errors import StreamlitPageNotFoundError
-    link = getattr(st, "page_link", None)
-    try:
-        if link is None:
-            raise KeyError("page_link")
-        link("pages/about.py", label=ABOUT_LINK_LABEL)
-    except (StreamlitPageNotFoundError, KeyError):  # not found relative to the running script (AppTest of a page)
-        st.caption(ABOUT_LINK_FALLBACK)
-
-
 def render_sources_sidebar(st) -> None:
-    """HOTFIX-BLURB-1104 (owner rule "only the About page should have About-related content"): the corpus
-    description is About-only (vera.help_pages.render_about); every other page's sidebar holds only a link to About."""
-    with st.sidebar:
-        _about_link(st)
+    """Kept as a no-op for the page shells. Owner request: the sidebar shows one About entry only, the NAV link
+    from render_nav ("About"); the second "How VERA-DAR answers and its limits → About" link was removed. The header
+    links were removed from every page too (vera.disclosure.render_disclosure). The corpus description stays About-only
+    (vera.help_pages.render_about, HOTFIX-BLURB-1104)."""
+    return None
 
 
 def _link(title: str, url: str) -> str:

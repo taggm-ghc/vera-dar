@@ -346,7 +346,9 @@ def test_main_page_nav_renders_via_apptest_with_labels(monkeypatch):
     assert not at.exception
     labels = [e.proto.label for e in at.get("page_link")]
     assert [l for l in labels if l in [n for _, n in sb.NAV]] == [n for _, n in sb.NAV]  # sidebar nav, in order
-    assert labels[:2] == [l for _, l in __import__("vera.disclosure", fromlist=["x"]).ABOUT_LINKS]  # OD-1029-UI notice links
+    assert "About: how VERA-DAR answers, licences, data" not in labels  # owner 2026-11-05: no header links
+    assert "How to use VERA-DAR" not in labels
+    assert "How VERA-DAR answers and its limits → About" not in labels
 
 
 def _no_network(monkeypatch):
@@ -555,18 +557,21 @@ def test_sidebar_has_no_scope_licence_howanswers_or_trace_eval(tmp_path, monkeyp
     for needle in ("Scope", sb.LICENCE_SIDEBAR, "not verified with the publisher", "How VERA-DAR answers:",
                    sb.MODEL_LINE, "Trace Eval", "Current coverage", FIXED_SCOPE):
         assert needle not in side, needle
-    assert "What VERA-DAR" not in side and sb.ABOUT_LINK_FALLBACK in side  # About link (fallback caption here)
+    assert "What VERA-DAR" not in side and "How VERA-DAR answers and its limits" not in side  # no second About entry
 
 
 FIXED_SCOPE = "Published evidence (2023-2026) on AI coding assistants and sentinel fixed scope text"
 
 
-def test_sidebar_renders_about_page_link_when_available():
+def test_sidebar_has_no_second_about_entry():
+    """Owner 2026-11-05: the sidebar's only About entry is the NAV link; no "How VERA-DAR answers and its limits" link."""
     from unittest import mock
     st = mock.MagicMock()
     with mock.patch.object(sb, "render_corpus"), mock.patch.object(sb, "_corpus"):
         sb.render_sources_sidebar(st)
-    st.page_link.assert_called_once_with("pages/about.py", label=sb.ABOUT_LINK_LABEL)
+    st.page_link.assert_not_called()
+    assert not hasattr(sb, "ABOUT_LINK_LABEL") and not hasattr(sb, "ABOUT_LINK_FALLBACK")
+    assert "How VERA-DAR answers and its limits" not in repr(st.mock_calls)
 
 
 @pytest.mark.parametrize("data", [None, {"summary_source": "deterministic_fallback", "source_count": 3, "summary": "S.",

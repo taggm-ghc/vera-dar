@@ -185,6 +185,66 @@ def _default_terms_cfg() -> Mapping | None:
         return None
 
 
+@lru_cache(maxsize=1)
+def _qt_lists() -> tuple:
+    """(framing phrases, compound spellings, spelling pairs) from config/query_terms.json (RELEVANCE-R1R4-1106);
+    empty when the file is absent or invalid."""
+    try:
+        d = json.loads((Path(__file__).resolve().parent.parent / "config" / "query_terms.json").read_text("utf-8"))
+        return (tuple(str(x) for x in d.get("framing_phrases") or ()),
+                tuple(tuple(str(x).lower() for x in g) for g in d.get("compound_concepts") or () if g),
+                {str(k).lower(): str(v).lower() for k, v in (d.get("spelling_pairs") or {}).items()},
+                tuple(str(x).lower() for x in d.get("llm_context_cues") or ()),
+                tuple(str(x).lower() for x in d.get("demote_cues") or ()),
+                tuple(str(x).lower() for x in d.get("demote_when_question_has") or ()))
+    except Exception:  # noqa: BLE001
+        return (), (), {}, (), (), ()
+
+
+def strip_framing(text: str) -> str:
+    """R2: `text` without the framing idioms (config framing_phrases); unchanged when nothing else would remain."""
+    out = " ".join(str(text or "").split())
+    for ph in sorted(_qt_lists()[0], key=lambda p: -len(p)):
+        out = re.compile(r"\b" + r"\s+".join(re.escape(w) for w in ph.lower().split()) + r"s?\b", re.I).sub(" ", out)
+    out = " ".join(out.split())
+    return out if re.search(r"[A-Za-z0-9]", out) else " ".join(str(text or "").split())
+
+
+def _has_cue(text: str, cues) -> bool:
+    t = str(text or "").lower()
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(c) + r"(?![a-z0-9])", t) for c in cues)
+
+
+def llm_sense(concepts) -> bool:
+    """R1: the question has an LLM/orchestration sense (config demote_when_question_has) and no RL cue of its own
+    (config demote_cues). Only then does a configured compound weigh more than the other concepts."""
+    lists = _qt_lists()
+    q = " ".join(concepts)
+    return bool(lists[4]) and _has_cue(q, lists[5]) and not _has_cue(q, lists[4])
+
+
+def is_compound(term: str) -> bool:
+    """R1/R3: `term` is a configured compound concept ("multi-agent", config compound_concepts first forms)."""
+    return any(term == g[0] for g in _qt_lists()[1])
+
+
+def normalize_spelling(text: str) -> str:
+    """R4: British spellings -> American (config spelling_pairs), as word stems with an optional s/es/d/ed/ing suffix."""
+    pairs = _qt_lists()[2]
+    if not pairs or not text:
+        return text
+    rx = re.compile(r"\b(" + "|".join(sorted(map(re.escape, pairs), key=len, reverse=True)) + r")(s|es|d|ed|ing)?\b", re.I)
+    return rx.sub(lambda m: pairs[m.group(1).lower()] + (m.group(2) or ""), text)
+
+
+def merge_compounds(text: str) -> str:
+    """R1: each compound spelling ("multiagent", "multi agent") becomes its first (canonical) form ("multi-agent")."""
+    for g in _qt_lists()[1]:
+        for v in g[1:]:
+            text = re.sub(r"\b" + r"\s+".join(re.escape(w) for w in v.split()) + r"\b", g[0], text, flags=re.I)
+    return text
+
+
 def _groups(groups):
     """E1 term groups: the given ones, else the shipped default (() unless admission.term_groups.enabled is true)."""
     if groups is not None:
@@ -197,7 +257,7 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
                  central=()) -> tuple[tuple, dict]:
     """(key concepts, weights). Concepts: core phrases + distinctive extra terms (stop, meta, filler words and
     `extra_generic`, e.g. the acquisition profile's generic_terms, removed; idioms never reach them). Weight of a
-    concept: 1 + the number of other concepts that contain it as a hyphen component ("agent" in "multi-agent": 2).
+    concept: 1, a hyphenated compound 2 (R1: never a component above its compound).
     ((), {}) without a terms config.
     NONASK-1103 S2: `central` (the named entities of a sub-query) makes each matching concept CENTRAL: its weight is
     (top weight + 1), so a record that lacks the entity is weak (tier 1) however many generic concepts it matches.
@@ -205,6 +265,7 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
     cfg = cfg if cfg is not None else _default_terms_cfg()
     if not cfg:
         return (), {}
+    question = normalize_spelling(merge_compounds(question))  # R1 (one concept per compound) and R4 (colour = color)
     qt = build_query_terms(question, cfg)
     gen = {str(g).lower() for g in extra_generic or ()} | filler_words(cfg)
     out = tuple(t for t in (*qt.core, *qt.extra) if t not in gen)
@@ -219,7 +280,11 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
             first = next((i for i, c in enumerate(out) if c in words), len(out))
             rest = [c for c in out if c not in words]
             out = tuple(rest[:first] + ["|".join(t for t, _a in g.phrases)] + rest[first:])
-    w = {c: 1 + sum(1 for d in out if d != c and "|" not in d and c in re.split(r"[\s\-]+", d)) for c in out}
+    # R1: a hyphen component ("agent") never outweighs its compound ("multi-agent"): the compound is the top concept
+    # (2), its components and every other concept weigh 1. relevance_tiers then asks a compound-only match to be
+    # backed by a second, non-component concept. No numeric threshold changes; weights stay derived from the set.
+    comps = {c for c in out if is_compound(c)} if llm_sense(out) else set()  # incidental "multi-agent": weight 1 (QA F4)
+    w = {c: (2 if c in comps else 1) for c in out}
     cen = entity_concepts(out, central) | _news_central(question, out)
     if cen and w:
         top = max(w.values())
@@ -227,9 +292,26 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
     return out, w
 
 
+def stoplike_tokens() -> frozenset:
+    """F1-QUERY-1106: stop-like tokens ("us", "u.s.") that never make a search variant alone (config/acq_variants.json
+    `stoplike_variant_tokens`; empty set when the file is absent or invalid)."""
+    try:
+        path = Path(__file__).resolve().parent.parent / "config" / "acq_variants.json"
+        return frozenset(str(t).lower() for t in json.loads(path.read_text()).get("stoplike_variant_tokens", []))
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def is_degenerate_query(query: str) -> bool:
+    """F1-QUERY-1106: True when every word of `query` is a bare year or a stop-like token (or there is no word)."""
+    words = [w for w in re.split(r"\s+", str(query or "").lower().replace(" or ", " ")) if w]
+    stop = stoplike_tokens()
+    return all(_YEAR_TOKEN.fullmatch(w) or w in stop for w in words)
+
+
 def _news_central(question: str, concepts) -> set:
-    """MIDTERMS-WP3-1106: when news intent fires, the event nouns ("elections", "midterm") and 4-digit years of the
-    question are CENTRAL concepts (weight top + 1), so framing words cannot carry a candidate to tier 0. set() when
+    """MIDTERMS-WP3-1106: when news intent fires, the event nouns ("elections", "midterm") of the
+    question are CENTRAL (F1: years are not) concepts (weight top + 1), so framing words cannot carry a candidate to tier 0. set() when
     news intent does not fire or the detector is unavailable. No new number."""
     try:
         from vera import news_intent, reporting_lane
@@ -239,7 +321,9 @@ def _news_central(question: str, concepts) -> set:
                  (reporting_lane.load_config().get("news_intent") or {}).get("event_nouns", [])}
     except Exception:  # noqa: BLE001  never breaks relevance ranking
         return set()
-    return {c for c in concepts if "|" not in c and (_YEAR_TOKEN.fullmatch(c) or c.rstrip("s") in nouns)}
+    # F1-QUERY-1106: a bare year is never central on its own: only the event/topic nouns are, so a title that matches
+    # just "2026" is weak (tier 1) while "2026 midterm elections" still reaches tier 0 through the nouns.
+    return {c for c in concepts if "|" not in c and c.rstrip("s") in nouns}
 
 
 def entity_concepts(concepts, entities) -> set:
@@ -295,7 +379,7 @@ def _concept_regex(term: str) -> re.Pattern:
 def matched_concepts(kc: tuple, text: str) -> set:
     """Concepts found in `text`; a matched compound also counts its component concepts ("multiagent" -> agent)."""
     concepts = kc[0]
-    t = str(text or "")
+    t = normalize_spelling(str(text or ""))  # R4
     got = {c for c in concepts if _concept_regex(c).search(t)}
     for c in list(got):
         if "|" not in c:
@@ -376,6 +460,31 @@ def relevance_tiers(kc: tuple, texts, entities=None) -> list:
                 m = (m | cs) if entity_hit(t, c) else (m - cs)
         return m
     top = max(w.values())
+    comps = {c for c in concepts if is_compound(c)}
+    _sg = lambda x: x[:-1] if len(x) > 3 and x.endswith("s") else x  # noqa: E731  "agents" counts as "agent"
+    parts = {c for c in concepts if c not in comps and any(_sg(c) in map(_sg, re.split(r"[\s\-]+", d)) for d in comps)}
+    pair = bool(comps) and top > 1 and {c for c in concepts if w[c] == top} <= comps  # R1: compound needs backing
+
+    llm_c, dem_c, when_c = _qt_lists()[3], _qt_lists()[4], _qt_lists()[5]
+    qtxt = " ".join(concepts)
+    # R1: demote RL-vocabulary titles only for a question with an LLM/orchestration sense and no RL cue of its own
+    demote = bool(dem_c) and _has_cue(qtxt, when_c) and not _has_cue(qtxt, dem_c)
+    pair = pair and demote  # the compound-needs-backing rule is for LLM/orchestration questions only
+
+    def _top(m, t=""):
+        """Reaches the top weight. R1 (pair mode): a compound ("multi-agent") or, with an LLM-context cue, its component
+        ("LLM agents") is the core match; it needs one other question concept or the LLM cue; reinforcement-learning
+        vocabulary without an LLM cue (config demote_cues) keeps it weak."""
+        if not m:
+            return False
+        if not pair:
+            return max(w[c] for c in m) >= top
+        llm = _has_cue(t, llm_c)
+        if demote and _has_cue(t, dem_c) and not llm:
+            return False
+        if max(w[c] for c in m) < top and not (llm and m & parts):
+            return False
+        return bool(m - comps - parts) or llm
     out, any_hit = [], False
     for t in texts:
         if len(_TOKEN.findall(t)) < MIN_JUDGE_WORDS:
@@ -383,11 +492,11 @@ def relevance_tiers(kc: tuple, texts, entities=None) -> list:
             # central concept as a long text would; otherwise tier 1, so a 3-word weak or off-topic title ("Status Quo
             # Bias") can no longer sort with the relevant records ahead of them (both cuts use these tiers).
             m = _mc(t)
-            out.append(0 if m and (top <= 1 or max(w[c] for c in m) >= top) else 1)
+            out.append(0 if m and (top <= 1 or _top(m, t)) else 1)
             continue
         m = _mc(t)
         any_hit = any_hit or bool(m)
-        out.append(2 if not m else 1 if top > 1 and max(w[c] for c in m) < top else 0)
+        out.append(2 if not m else 1 if top > 1 and not _top(m, t) else 0)
     return out if any_hit else [0] * len(texts)
 
 
