@@ -18,7 +18,8 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 | `POST /ask` | Research question: grounded answer from admitted full-document passages, otherwise a reading list or decline (see [Default behaviour](#default-behaviour)) | `VERA_API_KEY` |
 | `POST /ask/stream` | Same request body as `POST /ask`; answers with newline-delimited JSON progress lines, then one result line (see below) | `VERA_API_KEY` |
 | `GET /corpus-summary` | Agentic digest of the stored corpus (CORPUS-DIGEST-1104): counts, model-written digest checked against recorded facts, subject topics with document shares (topics covering 80% of sampled documents, computed in code), and a generated description of current coverage | `VERA_API_KEY` |
-| `GET /trace/request/{id}` | One request's trace (codes and counts; see [Request trace](#endpoints)) | Owner key |
+| `GET /trace/request/{id}` | One request's trace: events with codes and counts, the outcome and, owner-only, the question text; 404 if expired, unknown or tracing off (see [Request trace](#endpoints)) | Owner key |
+| `GET /diag/header-shape` | Diagnostic: shapes of forwarding headers only, never values; returns 404 while `config/header_echo.json` `enabled` is false (available, off by default; added to this table 2026-11-05) | Owner key |
 | `GET /memory/pending` | Pending findings for owner review | Owner key |
 | `POST /memory/{claim_id}/confirm` | Confirm a pending finding | Owner key |
 | `POST /memory/{claim_id}/reject` | Reject a finding | Owner key |
