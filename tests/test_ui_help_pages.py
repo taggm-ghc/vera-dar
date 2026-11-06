@@ -104,11 +104,13 @@ def test_how_to_use_page_renders_sections_and_uses_config_scope():
 
 
 def test_about_opens_with_vera_expansion_and_has_no_terms_link():
-    """Owner 2026-11-05: About opens with the VERA expansion (-DAR and -MAG expansions not yet supplied) and its content
-    area has no Terms link (the sidebar keeps the Terms entry)."""
+    """Owner 2026-11-05: About opens with the VERA expansion, then the -DAR and -MAG expansions (ABOUT-DARMAG-1106),
+    and its content area has no Terms link (the sidebar keeps the Terms entry)."""
     at = _run("pages/about.py")
     assert at.main.markdown[0].value.startswith(
         "**VERA: Verifiable Evidence-based Research Answers**, an agentic research system for provenance-grounded")
+    assert at.main.markdown[1].value == "**-DAR: Domain-Aware Retrieval**: VERA-DAR adds domain-aware retrieval to VERA."
+    assert at.main.markdown[2].value.startswith("**-MAGOPS: Multi-Agent Operations**: VERA-DAR-MAGOPS is a proposed multi-agent operations control plane")
     assert "Terms of Access, Browsing, and Use" not in [e.proto.label for e in at.main.get("page_link")]
 
 

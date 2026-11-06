@@ -5,6 +5,10 @@
   "about": {
     "title": "About VERA-DAR",
     "opening": "**VERA: Verifiable Evidence-based Research Answers**, an agentic research system for provenance-grounded evidence evaluation and auditable synthesis.",
+    "opening_expansions": [
+      "**-DAR: Domain-Aware Retrieval**: VERA-DAR adds domain-aware retrieval to VERA.",
+      "**-MAGOPS: Multi-Agent Operations**: VERA-DAR-MAGOPS is a proposed multi-agent operations control plane for VERA-DAR (planned; not part of this service)."
+    ],
     "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
     "after_disclosure": [
       {

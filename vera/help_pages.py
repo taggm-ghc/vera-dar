@@ -100,6 +100,8 @@ def render_about(st, cfg=_UNSET) -> None:
         return
     if page.get("opening"):  # owner 2026-11-05: the About page opens with the VERA expansion (config about.opening)
         st.markdown(str(page["opening"]))
+    for line in page.get("opening_expansions") or []:  # ABOUT-DARMAG-1106: -DAR and -MAG expansions after the VERA line
+        st.markdown(str(line))
     st.markdown(str(page.get("intro", "")))
     moved = set(page.get("moved_to_terms") or [])  # PRIVACY-1104: terms-type disclosure sections render on Terms
     for heading, text in disclosure.disclosure_sections():

@@ -107,8 +107,20 @@
       "multi-agent",
       "multiagent",
       "multi agent"
+    ],
+    [
+      "midterm",
+      "mid-term",
+      "mid term"
+    ],
+    [
+      "midterms",
+      "mid-terms",
+      "mid terms"
     ]
   ],
+  "_gx1106_note": "GOLDEN-XFAIL-1106. lexical_resource_cues: curated list, not a threshold. A title with one of these cues is tier 1 at best (never 0) unless the question itself contains a cue; checked offline on the golden set (sky-colour dataset title), not measured on production traffic. compound_concepts gained midterm/mid-term (and plural) and fulldoc_admission.tokenize now applies merge_compounds so admission matches the query side.",
+  "lexical_resource_cues": ["word association", "word-association", "association norms", "lexicon", "lexical database", "semantic norms", "word norms"],
   "spelling_pairs": {
     "colour": "color",
     "favour": "favor",

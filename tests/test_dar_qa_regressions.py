@@ -189,7 +189,20 @@ def test_cx4_stored_full_document_reaches_retrieve_all_with_external_empty():
     assert len(out) <= SHIPPED["corpus"]["stored_fill_max"]  # no external results: stored chunks fill the free slots
 
 
-def test_stored_branch_off_by_flag_or_missing_corpus_is_identical():
+def _freeze_now(monkeypatch):
+    """FLAKY-1106: grounded_ask stamps retrieved_at from datetime.now(...) at 1 s precision; two calls straddling a
+    second boundary differ. Freeze the clock (the function imports datetime.datetime at call time)."""
+    import datetime as _dt
+
+    class _Frozen(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 1, 1, 0, 0, 0, tzinfo=tz)
+    monkeypatch.setattr(_dt, "datetime", _Frozen)
+
+
+def test_stored_branch_off_by_flag_or_missing_corpus_is_identical(monkeypatch):
+    _freeze_now(monkeypatch)
     q = " ".join(VOCAB["reef"][:5])
     ext = [{"url": "https://e.example/1", "title": "e", "snippet": "abstract"}]
     base = ga.retrieve_all(q, GCFG, search=lambda _q: ext)

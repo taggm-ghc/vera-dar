@@ -196,9 +196,10 @@ def _qt_lists() -> tuple:
                 {str(k).lower(): str(v).lower() for k, v in (d.get("spelling_pairs") or {}).items()},
                 tuple(str(x).lower() for x in d.get("llm_context_cues") or ()),
                 tuple(str(x).lower() for x in d.get("demote_cues") or ()),
-                tuple(str(x).lower() for x in d.get("demote_when_question_has") or ()))
+                tuple(str(x).lower() for x in d.get("demote_when_question_has") or ()),
+                tuple(str(x).lower() for x in d.get("lexical_resource_cues") or ()))
     except Exception:  # noqa: BLE001
-        return (), (), {}, (), (), ()
+        return (), (), {}, (), (), (), ()
 
 
 def strip_framing(text: str) -> str:
@@ -497,6 +498,11 @@ def relevance_tiers(kc: tuple, texts, entities=None) -> list:
         m = _mc(t)
         any_hit = any_hit or bool(m)
         out.append(2 if not m else 1 if top > 1 and not _top(m, t) else 0)
+    # GOLDEN-XFAIL-1106: a lexical-resource title (word-association norms, lexicon; config lexical_resource_cues) matches a
+    # physical-phenomenon question only through a shared word ("colour"): weak (1), unless the question asks for such a resource.
+    lex = _qt_lists()[6]
+    if lex and not _has_cue(qtxt, lex):
+        out = [1 if o == 0 and _has_cue(t, lex) else o for o, t in zip(out, texts)]
     return out if any_hit else [0] * len(texts)
 
 

@@ -38,8 +38,8 @@ def tokenize(text: str, icfg: dict) -> list[str]:
     this gate module imports nothing from domain routing/registry (tests/test_dar_routing.py isolation rule)."""
     pat, stop, min_len = re.compile(icfg["token_pattern"]), set(icfg.get("stopwords") or []), int(icfg["min_token_len"])
     try:  # R4 (RELEVANCE-R1R4-1106): colour = color (config/query_terms.json spelling_pairs)
-        from vera.search_query import normalize_spelling
-        text = normalize_spelling(str(text or ""))
+        from vera.search_query import normalize_spelling, merge_compounds
+        text = merge_compounds(normalize_spelling(str(text or "")))  # GOLDEN-XFAIL-1106: mid-term = midterm
     except Exception:  # noqa: BLE001
         pass
     return [t for t in pat.findall(str(text or "").casefold()) if len(t) >= min_len and t not in stop]

@@ -59,10 +59,14 @@ In plain words (owner decisions R-037 and R-042):
 
 Status: offline-tested only; live behaviour unverified. As of 2026-11-05 the Official lane ships off and the Current-reporting lane is on in config (Superseded 2026-11-05: earlier text said both ship off). The checks that must pass before either is enabled are in the [lanes enable checklist](lanes-enable-checklist.md).
 
+### Update 2026-11-06 (NEWS-BATCH-2)
+
+The lane notes below predate these changes (offline-tested only). Wikipedia-citation links are shown link-only, credited "via Wikipedia citations", never read (NT-3). VOA: full text only for VOA-original pages (path pattern, "By VOA News" byline, no wire markers); Wikinews: `/wiki/` mainspace only, archive of a closed site; ProPublica and The Conversation: excluded; PBS: link-only; FEC and Census Bureau registry rows added, EAC suspended, Official lane flag still off (H5). The no-derivatives access module (H19) is not wired in and is link-only until NC-BASIS-1.
+
 ### Lane names and sources
 
 - **Official lane.** For each entity named in a sub-query that has an active row in `config/entity_registry.json`, the lane uses that row's own documentation entry URLs. No host is guessed. An entity with no active row gives nothing. By default there is no search call (see `site_search` below).
-- **Current-reporting lane.** For each sub-query that asks about the current state, the lane queries GDELT (a news index) and, as fallback, Hacker News search (Algolia), in that order. It sends extracted search terms, not the sentence. Each hit is a link with title, date and outlet. The portal name is not shown to the user.
+- **Current-reporting lane.** *Superseded 2026-11-05: Hacker News is no longer in the fallback order (GDELT only).* For each sub-query that asks about the current state, the lane queries GDELT (a news index) and, as fallback, Hacker News search (Algolia), in that order. It sends extracted search terms, not the sentence. Each hit is a link with title, date and outlet. The portal name is not shown to the user.
 
 ### How a lane result is labelled
 

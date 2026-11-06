@@ -1790,8 +1790,9 @@ def test_unix_connect_inside_basetemp_allowed(tmp_path, monkeypatch):
 @pytest.mark.boundary_probe
 @pytest.mark.vera_sockets      # K18W: requested, so the refusal below is the basetemp-roots rule, not the default deny
 def test_unix_connect_outside_roots_refused_and_recorded(monkeypatch):
-    d = Path(bt.STATE["bootstrap_dir"]).parent / "sentinel-unix-test"
-    d.mkdir(exist_ok=True)
+    # FLAKY-1106: a unique dir per test (was the fixed name "sentinel-unix-test" in the SHARED run-tmp parent, so a
+    # concurrent run's d.rmdir() removed it between mkdir and bind -> FileNotFoundError)
+    d = Path(tempfile.mkdtemp(prefix="su-", dir=str(Path(bt.STATE["bootstrap_dir"]).parent)))
     sock = d / "s.sock"
     monkeypatch.chdir(d)
     srv = _unix_server("s.sock")
@@ -1827,8 +1828,7 @@ def test_unix_abstract_address_allowed():
 @pytest.mark.vera_sockets      # K18W OA-2: local sockets only on explicit request
 def test_multiprocessing_tempdir_unix_allowed(monkeypatch):
     import multiprocessing.process as mpp
-    d = Path(bt.STATE["bootstrap_dir"]).parent / "sentinel-mp-test"
-    d.mkdir(exist_ok=True)
+    d = Path(tempfile.mkdtemp(prefix="sm-", dir=str(Path(bt.STATE["bootstrap_dir"]).parent)))  # FLAKY-1106: unique, not shared
     sock = d / "m.sock"
     monkeypatch.chdir(d)
     srv = _unix_server("m.sock")
