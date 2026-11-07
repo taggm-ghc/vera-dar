@@ -311,7 +311,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     out = replace(res, answer=_a, notes=_n, evidence=ev,
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
                             **_inline_trace(inline_note), **({"inline_acquisition": ia} if ia else {}),
-                            **_fd_trace_contract()}, **trig,
+                            **_fd_trace_contract(),
+                            **({"search_counts": _sc} if (_sc := _search_counts(used_in)) is not None else {})}, **trig,
                   **_spent(inline_note, res.tokens_used, res.cost_usd, decision.tokens_used, decision.cost_usd))
     out = _research_on_insufficient(out, ev, acq, ia or None, answered=False, extra_ev=used_in.get("ev_acq"))
     cause = "reading_list" if not_configured else _CAUSE_CODE.get(token, "no_supported_answer")
@@ -1091,7 +1092,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
             if ev is None or contract.result_kind_for((ev,)) != "answer":
                 if warming:  # in-scope while warming: an explicit insufficient result (the caller may go inline)
                     return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
-                            _with_count(cfg["answer"]["insufficient_text"], ev))
+                            _insufficient(cfg["answer"], ev))
                 if counts is not None and ephemeral is not None and _honest_counts_on(cfg):  # A6-4: never silent
                     return (ev, cfg["fallback_tokens"]["insufficient"], decision.tokens_used, decision.cost_usd,
                             _honest_text(cfg, counts))
@@ -1099,6 +1100,8 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
         else:
             ev = admit(question, corpus, cfg)
             ev, qualified = attempt_anyway(ev, cfg)  # C6 (R-045)
+            if used is not None:
+                used["ev_base"] = ev  # NOANSWER-RC-1107 r2: the base corpus search, counted with the acquired one
             if contract.result_kind_for((ev,)) != "answer" and ev.status != "corpus_unusable":
                 # WED-ACQ2 (plan V6): base corpus first, exactly as before; the separate acquired corpus is consulted
                 # only when the base corpus cannot answer, so base answers never change.
@@ -1127,7 +1130,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
 
         _FD_TRACE.set(_fda._trace(ev, None, None, None, _fda.sources_from(ev) if getattr(ev, "admitted", None) else None))
         return (ev, tokens_["corpus_unusable" if unusable else "insufficient"], decision.tokens_used,
-                decision.cost_usd, texts["corpus_unusable_text"] if unusable else _with_count(texts["insufficient_text"], ev))
+                decision.cost_usd, texts["corpus_unusable_text"] if unusable else _insufficient(texts, ev, used))
     from vera import fulldoc_answer
 
     _pre_llm(writer=True)  # STREAM-1031 (no-op off the stream path unless providers are exhausted)
@@ -1149,7 +1152,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     tok = out.fallback or tokens_["insufficient"]
     # NONASK-1103 WP-C: passages WERE selected and the writer or checker declined, so never "found no passage"
     key = "verification_unavailable_text" if tok == tokens_.get("checker_unavailable") else "unsupported_text"
-    return (ev, tok, out.tokens_used, out.cost_usd, _with_count(texts.get(key) or texts["insufficient_text"], ev, selected=True))
+    return (ev, tok, out.tokens_used, out.cost_usd, _unsupported(texts, key, ev))
 
 
 def _plural_docs(n: int, m: int = 0) -> str:
@@ -1175,6 +1178,61 @@ def _with_fetched(text: str, ev, ia) -> str:
         return text
     except Exception:  # headline wording must never break an answer
         return text
+
+
+def _rows(ev):
+    return None if ev is None else list(getattr(ev, "examined_full_documents", ()) or ())
+
+
+def _search_counts(used) -> dict | None:
+    """NOANSWER-RC-1107 r2: contract.search_counts {"matched": documents of the base AND the stored acquired corpus
+    (when searched) with candidate passages for this question}; None without a base attempt or an exact count."""
+    if not isinstance(used, dict) or used.get("ev_base") is None:
+        return None
+    try:
+        from vera import ui_evidence
+        return ui_evidence.search_counts(_rows(used["ev_base"]), _rows(used.get("ev_acq")))
+    except Exception:  # noqa: BLE001  (counts must never break the request)
+        return None
+
+
+def _insufficient(texts: dict, ev, used=None) -> str:
+    """NOANSWER-RC-1107: the no-passage headline. answer.count_matching_documents on: only documents with candidate
+    passages for this question, over every stored corpus searched (base and acquired); no count when unknown; never
+    the corpus size. Off: the previous insufficient_text (the only way back to it)."""
+    try:
+        from vera import ui_evidence
+        if isinstance(used, dict) and used.get("ev_base") is not None:
+            sc = _search_counts(used)
+            n = sc["matched"] if sc is not None else None
+        else:
+            n = ui_evidence.matched_documents(_rows(ev))
+        alt = ui_evidence.insufficient_matching_text(texts, n)
+    except Exception:  # noqa: BLE001  (headline wording must never break the request)
+        alt = None
+    if alt is None and _count_on(texts):
+        alt = ("VERA-DAR found no stored passage that answers this question well enough, so it has not written an "
+               "answer or answered from memory.")
+    return alt or _with_count(texts["insufficient_text"], ev)
+
+
+def _count_on(texts) -> bool:
+    return isinstance(texts, dict) and texts.get("count_matching_documents") is True
+
+
+def _unsupported(texts: dict, key: str, ev) -> str:
+    """NOANSWER-RC-1107 r2: passages selected, no supported answer. Flag on and the unsupported text: count only the
+    documents the selected passages came from, never every document searched."""
+    if key == "unsupported_text":
+        try:
+            from vera import ui_evidence
+            k = len({a.get("document_id") for a in (getattr(ev, "admitted", ()) or ()) if isinstance(a, dict)})
+            alt = ui_evidence.unsupported_matching_text(texts, k)
+            if alt:
+                return alt
+        except Exception:  # noqa: BLE001
+            pass
+    return _with_count(texts.get(key) or texts["insufficient_text"], ev, selected=True)
 
 
 def _with_count(text: str, ev, selected: bool = False) -> str:

@@ -1,5 +1,5 @@
 {
-  "_comment": "PROG-1027 user-facing progress labels (only place for stage and terminal text). Placeholders: {rid} request id (shown by design), {minutes} (terminals only; derived from ASK_TIMEOUT_S, rounded up, includes the unit word), counts {inspected} {admitted} {found} {checked} {usable} {budget} {stored} {target} {attempt}. Labels name no gate, layer, provider, category, verdict code, basis or source. Counts are shown only when the event carries them. STREAM-1031 additions: counts {shortlisted} {held} {step} {ceiling} and {why_text} (rendered from the top-level why map by the client). Generic wording only: counts and stages, never a provider, portal, host, URL or title.",
+  "_comment": "PROG-1027 user-facing progress labels (only place for stage and terminal text). Placeholders: {rid} request id (shown by design), {minutes} (terminals only; derived from ASK_TIMEOUT_S, rounded up, includes the unit word), counts {admitted} {found} {checked} {usable} {budget} {stored} {target} {attempt}. Labels name no gate, layer, provider, category, verdict code, basis or source. Counts are shown only when the event carries them. STREAM-1031 additions: counts {shortlisted} {held} {step} {ceiling} and {why_text} (rendered from the top-level why map by the client). Generic wording only: counts and stages, never a provider, portal, host, URL or title.",
   "sending": "Sending your question (request {rid})",
   "finishing": "Finishing",
   "progress_unavailable": "Live progress is not available right now; still waiting for the answer",
@@ -18,8 +18,8 @@
     },
     "corpus": {
       "start": "Searching VERA-DAR's collection",
-      "update": "{inspected} documents inspected, {admitted} passages usable",
-      "done": "{inspected} documents inspected, {admitted} passages usable",
+      "update": "{admitted} passages usable",
+      "done": "{admitted} passages usable",
       "skipped": "Collection search not available this time"
     },
     "corpus_verdict": {

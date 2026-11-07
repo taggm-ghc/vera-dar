@@ -64,12 +64,12 @@ def test_enum_and_valid_pairs_enforced():
 def test_event_shape_seq_and_ts():
     rec, tok = sink()
     p.emit("received", "done")
-    p.emit("corpus", "done", inspected=3, admitted=2)
+    p.emit("corpus", "done", checked=3, admitted=2)
     p.SINK.reset(tok)
     evs = rec.events_after(0, 99)
     assert [e["seq"] for e in evs] == [1, 2]
     assert set(evs[0]) == {"v", "seq", "ts", "stage", "state", "counts"} and evs[0]["v"] == "1"
-    assert evs[0]["ts"].endswith("+00:00") and evs[1]["counts"] == {"inspected": 3, "admitted": 2}
+    assert evs[0]["ts"].endswith("+00:00") and evs[1]["counts"] == {"checked": 3, "admitted": 2}
     assert [e["seq"] for e in rec.events_after(1, 99)] == [2]
 
 

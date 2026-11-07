@@ -409,7 +409,9 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
     cap = None if fulldoc else grounding_cap()
     if sources:
         if fulldoc:
-            st.markdown("**Sources** (documents whose inspected passages the answer was grounded in)")
+            st.markdown("**Sources** (documents whose cited passages the answer was grounded in)"  # NOANSWER-RC-1107 r3
+                        if ui_evidence.count_matching_on(ui_evidence._cfg())
+                        else "**Sources** (documents whose inspected passages the answer was grounded in)")
         else:
             st.markdown("**Sources** (published records whose abstracts"
                         f"{f', up to {cap:,} characters each,' if cap else ''} the answer was grounded in)")

@@ -105,7 +105,8 @@ def test_state2_claim_check_caption_exact():
 def test_state3_fallback_and_not_read_lines_exact():
     cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())
     assert cfg["answer"]["insufficient_text"] == INSUFFICIENT_NEW
-    line = ue.fallback_text("insufficient_full_document_evidence", n_inspected=2)
+    line = ue.fallback_text("insufficient_full_document_evidence", n_inspected=2,  # NOANSWER-RC-1107: legacy = flag off
+                            cfg=dict(cfg["answer"], count_matching_documents=False))
     assert line.startswith("VERA-DAR searched 2 full documents") and BAD not in line
     assert "inspected" not in line and "{" not in line
     nr = json.loads((ROOT / "config" / "discovery_contract.json").read_text())["texts"]["not_read_line"]

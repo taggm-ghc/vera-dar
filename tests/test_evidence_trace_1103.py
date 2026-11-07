@@ -61,7 +61,7 @@ def test_caveat_gates_public_counts():
     assert not any(k in t for k in ("claims", "documents", "not_used"))
     t = et.project(ev(), RECS[:1], CITES, adequacy={"verdict": "qualify", "parts": [{"label": "P1", "supported": False}]},
                    public=True, sources=SOURCES)
-    assert t["not_used"] and t["documents"] == {"inspected": 3, "used": 2}
+    assert t["not_used"] and t["documents"] == {"examined_by_corpus": 3, "used": 2}
     assert t["parts"] == [{"label": "P1", "covered": False}] and t["adequacy"]["verdict"] == "qualify"
 
 

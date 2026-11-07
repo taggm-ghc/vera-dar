@@ -27,7 +27,8 @@ def test_plurals():
     assert "1 full document but" in ask_service._with_count(t, _ev(1))
     assert "9 full documents but" in ask_service._with_count(t, _ev(9))
     assert "(s)" not in ask_service._with_count(t, _ev(2))
-    assert ue.fallback_text("insufficient_full_document_evidence", n_inspected=1).count("1 full document ") == 1
+    assert ue.fallback_text("insufficient_full_document_evidence", cfg=dict(fulldoc_corpus.load_config()["answer"], count_matching_documents=False), n_inspected=1).count(  # NOANSWER-RC-1107: legacy = flag off
+        "1 full document ") == 1
 
 
 def test_selected_text_never_says_found_no_passage():

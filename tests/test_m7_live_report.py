@@ -154,7 +154,7 @@ def test_live_report_renders_all_sections_and_leaks_nothing(monkeypatch, public_
     heads = [h.value for h in at.header]
     assert heads == ["Answer", "Evidence and limitations"]  # public: layers 1-2 as on Ask; no numeric prefixes
     assert not [e for e in at.expander if e.label == "Technical details"]
-    assert "Evidence scope: 1 document inspected; 2 passages from 1 document selected as possible evidence." in text
+    assert "Evidence scope: 1 stored document with passages matching the question; 2 passages from 1 document selected as possible evidence." in text
     assert "Q" * ui_evidence._quote_cap() in text
     assert "](https://example.org/one)" in text
     assert "(javascript" not in text and "<b>" not in text

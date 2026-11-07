@@ -245,7 +245,8 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
         out["adequacy"]["subqueries"] = subs
     if caveat or dev:
         out["claims"] = counts
-        out["documents"] = {"inspected": len(examined), "used": len({a.get("document_id") for a in admitted
+        out["documents"] = {"examined_by_corpus": len(examined), "used":  # NOANSWER-RC-1107 r3: never shown as "inspected"
+                             len({a.get("document_id") for a in admitted
                                                                     if a.get("document_id") is not None})}
         out["not_used"] = not_used
     if dev:

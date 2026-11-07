@@ -1,5 +1,6 @@
 """PROG-1027 W4b-2: pure progress_ui state machine, classify, Labels, run_worker (AC4, AC6, AC9)."""
 import logging
+from pathlib import Path
 
 import pytest
 import requests
@@ -40,7 +41,7 @@ def test_labels_cover_every_terminal_and_stage_state():
         assert LABELS.terminal_text(k, RID)
     for st, states in progress.VALID.items():
         for sa in states:
-            assert LABELS.stage_label(st.value, sa.value, {"inspected": 1, "admitted": 2, "found": 3, "checked": 4, "usable": 5,
+            assert LABELS.stage_label(st.value, sa.value, {"admitted": 2, "found": 3, "checked": 4, "usable": 5,
                                                            "budget": 2, "stored": 1, "target": 6, "attempt": 2, "shortlisted": 9, "held": 1,
                                                            "step": 1, "ceiling": 31, "why": 1}, RID)
 
@@ -49,7 +50,8 @@ def test_label_missing_counts_never_invented():
     assert LABELS.stage_label("corpus", "update", {}, RID) == "Searching VERA-DAR's collection"
     assert LABELS.stage_label("acquire", "update", {}, RID) is None  # no start fallback with counts either
     assert LABELS.stage_label("nope", "x", {}, RID) is None
-    assert "3 documents inspected" in LABELS.stage_label("corpus", "update", {"inspected": 3, "admitted": 1}, RID)
+    assert LABELS.stage_label("corpus", "update", {"admitted": 2}, RID) == "2 passages usable"
+    assert "inspected" not in (Path(__file__).resolve().parent.parent / "config" / "progress-stages.json").read_text()  # NOANSWER-RC-1107 r3
 
 
 def test_labels_reject_bad_shape():

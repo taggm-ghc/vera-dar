@@ -73,14 +73,115 @@ def is_fulldoc(data: dict | None, sources=None) -> bool:
                for s in (sources if sources is not None else _list(data.get("sources"))))
 
 
-def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_selected: int = 0, n_fetched: int = 0) -> str:
-    """Visitor sentence for a contract.fallback token (None/unknown -> generic). Never returns the token."""
+def matched_documents(examined) -> int | None:
+    """NOANSWER-RC-1107: distinct examined documents that supplied >= 1 retrieval candidate passage for this question
+    (candidate_spans > 0). None when the rows are absent or any row lacks a valid candidate_spans (legacy payloads keep
+    the previous wording). Every document of the stored corpus is scored, so the examined list alone is the corpus size."""
+    rows = [x for x in examined if isinstance(x, dict)] if isinstance(examined, (list, tuple)) else []
+    if not rows or any(not _nat(r.get("candidate_spans")) for r in rows):
+        return None
+    return _distinct_docs([r for r in rows if r["candidate_spans"] > 0])
+
+
+def search_counts(base_rows, acq_rows=None) -> dict | None:
+    """NOANSWER-RC-1107 r2: {"matched": distinct documents of the base corpus and, when it was searched, the stored
+    acquired corpus with >= 1 candidate passage for this question}. Never the size of a set searched regardless of
+    subject (owner 2026-11-07). None when a searched set's rows lack candidate_spans (no exact count: show none)."""
+    rows = []
+    for part in (base_rows, acq_rows):
+        if part is None:
+            continue
+        got = [x for x in part if isinstance(x, dict)] if isinstance(part, (list, tuple)) else []
+        if got and matched_documents(got) is None:
+            return None
+        rows += got
+    if base_rows is None or not rows:
+        return None
+    return {"matched": _distinct_docs([r for r in rows if r["candidate_spans"] > 0])}
+
+
+def _valid_counts(sc) -> dict | None:
+    """A well-formed contract.search_counts block, else None (never raises)."""
+    return sc if isinstance(sc, dict) and _nat(sc.get("matched")) else None
+
+
+def matched_for(data) -> int | None:
+    """Documents with candidate passages for this question: contract.search_counts (base + acquired) when present,
+    else the examined rows; None = unknown (then no count is shown at all)."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    sc = _valid_counts(contract.get("search_counts"))
+    return sc["matched"] if sc is not None else matched_documents(data.get("examined_full_documents"))
+
+
+def count_matching_on(cfg) -> bool:
+    """answer.count_matching_documents, exactly true (ships true; false = the previous wording, the only way back)."""
+    return isinstance(cfg, dict) and cfg.get("count_matching_documents") is True
+
+
+# NOANSWER-RC-1107 r2: used only if the configured text is missing or malformed (never the old set-size wording)
+_MATCH_DEFAULT = {
+    "insufficient_no_match_text": "VERA-DAR has no stored full documents on this subject yet, so it has not written an "
+                                  "answer or answered from memory.",
+    "insufficient_matched_text": "{n_stored_phrase} had passages related to this question; none answered it well "
+                                 "enough, so VERA-DAR has not written an answer or answered from memory.",
+    "insufficient_nocount_text": "VERA-DAR found no stored passage that answers this question well enough, so it has "
+                                 "not written an answer or answered from memory.",
+    "unsupported_matched_text": "Passages from {n_stored_phrase} looked related to this question, but they did not "
+                                "support an answer, so VERA-DAR has not answered.",
+    "unsupported_nocount_text": "The passages VERA-DAR selected did not support an answer, so it has not answered.",
+}
+
+
+def _stored_phrase(n: int) -> str:
+    return f"{n} stored full document" if n == 1 else f"{n} stored full documents"
+
+
+def _match_text(cfg, key: str, n: int | None = None) -> str:
+    val = cfg.get(key) if isinstance(cfg, dict) else None
+    for t in (val, _MATCH_DEFAULT[key]):
+        if isinstance(t, str) and t.strip():
+            out = t.replace("{n_stored_phrase}", _stored_phrase(_count(n)))
+            if "{" not in out:
+                return out
+    return _MATCH_DEFAULT["insufficient_nocount_text"]
+
+
+def insufficient_matching_text(cfg, n_matched, n_fetched: int = 0) -> str | None:
+    """NOANSWER-RC-1107: the no-passage headline (flag on) counting only documents with candidate passages for THIS
+    question; none matched: "no stored full documents on this subject yet"; count unknown (or documents fetched for the
+    question, whose matches are not counted here): no count at all. None only when the flag is off."""
+    if not count_matching_on(cfg):
+        return None
+    if n_matched is None or _count(n_fetched) > 0:
+        return _match_text(cfg, "insufficient_nocount_text")
+    n = _count(n_matched)
+    return _match_text(cfg, "insufficient_no_match_text" if n == 0 else "insufficient_matched_text", n)
+
+
+def unsupported_matching_text(cfg, n_selected) -> str | None:
+    """Passages selected, no supported answer (flag on): count only the documents the passages came from."""
+    if not count_matching_on(cfg):
+        return None
+    if _count(n_selected) < 1:  # no passage document known: no count at all
+        return _MATCH_DEFAULT["unsupported_nocount_text"]
+    return _match_text(cfg, "unsupported_matched_text", n_selected)
+
+
+def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_selected: int = 0, n_fetched: int = 0,
+                  n_matched: int | None = None) -> str:
+    """Visitor sentence for a contract.fallback token (None/unknown -> generic). Never returns the token.
+    n_matched (NOANSWER-RC-1107): documents with candidate passages for this question; None = unknown (old wording)."""
     if not isinstance(token, str) or not token:
         return GENERIC_FALLBACK
     if token not in _TOKEN_DEFAULT:
         return GENERIC_FALLBACK
     cfg = _cfg() if cfg is None else cfg
     key = _TOKEN_TEXT.get(token)
+    alt = (insufficient_matching_text(cfg, n_matched, n_fetched) if key == "insufficient_text"
+           else unsupported_matching_text(cfg, n_selected) if key == "unsupported_text" else None)
+    if alt:
+        return alt
     val = cfg.get(key) if key else None
     if isinstance(val, str) and val.strip():
         try:
@@ -135,7 +236,15 @@ def evidence_scope_line(data: dict | None) -> str | None:
     n, m = _distinct_docs(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
     k = _distinct_docs(data.get("admitted_evidence")) if isinstance(data.get("admitted_evidence"), list) else 0
     f = fetched_for_request(data)
-    if f:
+    if count_matching_on(_cfg()):  # NOANSWER-RC-1107 r2: never the size of a set searched regardless of subject
+        mt = matched_for(data)
+        parts = []
+        if mt is not None:
+            parts.append(f"{mt} stored document{'s' if mt != 1 else ''} with passages matching the question")
+        if f:
+            parts.append(f"{f} document{'s' if f != 1 else ''} fetched for this question")
+        head = "Evidence scope: " + (" and ".join(parts) + "; " if parts else "")
+    elif f:
         head = f"Evidence scope: {n} document{'s' if n != 1 else ''} from VERA-DAR's collection and {f} fetched for this question inspected; "
     else:
         head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
@@ -275,7 +384,8 @@ def render_fallback_reason(st, data) -> None:
     ae = data.get("admitted_evidence")
     st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents")),
                           n_selected=_distinct_docs(ae) if isinstance(ae, list) else 0,
-                          n_fetched=fetched_for_request(data)))
+                          n_fetched=fetched_for_request(data),
+                          n_matched=matched_for(data)))
     render_evidence_scope(st, data)
 
 

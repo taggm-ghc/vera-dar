@@ -205,7 +205,7 @@ STREAM_V = "1.3"
 _LIT_STAGES = frozenset({"received", "scope", "corpus", "corpus_verdict", "search", "acquire", "write", "check", "retry", "done"})
 _LIT_STATES = frozenset({"start", "update", "done", "skipped", "sufficient", "insufficient", "stale", "answered", "partial",
                          "no_answer", "declined", "error", "limited", "busy"})
-_LIT_COUNTS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued",
+_LIT_COUNTS = frozenset({"admitted", "found", "checked", "usable", "budget", "stored", "target", "queued",
                          "attempt", "shortlisted", "held", "step", "ceiling", "why"})
 _RESULT_KINDS = frozenset({"busy", "error", "provider_error", "unavailable"})
 _RESULT_STATUSES = frozenset({200, 429, 500, 502, 503})

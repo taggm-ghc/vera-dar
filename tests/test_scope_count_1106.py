@@ -1,6 +1,16 @@
 from vera import ui_evidence as u
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_flag_off(monkeypatch):
+    """NOANSWER-RC-1107: these pin the legacy scope wording, which now ships only with count_matching_documents off."""
+    cfg = dict(u._cfg(), count_matching_documents=False)
+    monkeypatch.setattr(u, "_cfg", lambda: cfg)
+
+
 def _d(kind="bundle", n=9, below=1):
     return {"evidence_status": "insufficient", "examined_full_documents": [{"document_id": i} for i in range(n)],
             "admitted_evidence": [], "corpus_source": {"kind": kind},

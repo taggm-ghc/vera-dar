@@ -13,9 +13,20 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from vera import sources_sidebar as sb
+from vera import ui_evidence as _ue
+
+
+@pytest.fixture
+def legacy_scope_wording(monkeypatch):
+    """NOANSWER-RC-1107: the original golden pins the pre-extract page (render parity), whose scope wording now ships
+    only with answer.count_matching_documents off. The SHIPPED state (flag on) is pinned by GOLDEN_ON below."""
+    cfg = dict(_ue._cfg(), count_matching_documents=False)
+    monkeypatch.setattr(_ue, "_cfg", lambda: cfg)
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "ui_render_extract_golden.json"
+GOLDEN_ON = Path(__file__).resolve().parent / "ui_render_extract_golden_on.json"  # NOANSWER-RC-1107 r3: flag on
+ON_CASES = ("answer", "legacy_abstract_answer", "partial_answer", "reading_list_with_contract")
 TITLE, URL = "Render Fixture Title", "https://example.org/render-fixture"
 
 
@@ -145,7 +156,7 @@ def capture_all(monkeypatch):
 
 
 @pytest.mark.parametrize("name", sorted(FIXTURES))
-def test_rendered_tree_matches_original_golden(monkeypatch, name):
+def test_rendered_tree_matches_original_golden(monkeypatch, legacy_scope_wording, name):
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     make, public = FIXTURES[name]
     assert _snapshot(_run(monkeypatch, make(), public=public)) == golden[name]
@@ -155,3 +166,20 @@ def test_golden_covers_every_fixture():
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert sorted(golden) == sorted(FIXTURES)
     assert all(golden[name] for name in FIXTURES)
+
+
+@pytest.mark.parametrize("name", ON_CASES)
+def test_rendered_tree_matches_shipped_golden_flag_on(monkeypatch, name):
+    """NOANSWER-RC-1107 r3: the shipped state (answer.count_matching_documents on) for the cases whose scope wording
+    changed; no set size, "searched N" or "inspected" in any rendered text."""
+    assert _ue.count_matching_on(_ue._cfg())
+    golden = json.loads(GOLDEN_ON.read_text(encoding="utf-8"))
+    make, public = FIXTURES[name]
+    snap = _snapshot(_run(monkeypatch, make(), public=public))
+    assert snap == golden[name]
+    text = " ".join(b for _, b in snap)
+    assert "inspected" not in text and not re.search(r"searched \d", text)
+
+
+def test_golden_on_covers_its_cases():
+    assert sorted(json.loads(GOLDEN_ON.read_text(encoding="utf-8"))) == sorted(ON_CASES)

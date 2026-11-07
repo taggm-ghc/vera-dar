@@ -57,7 +57,7 @@ def test_answer_shows_quote_span_attribution_scope_and_no_abstract_wording(monke
     at = _render(monkeypatch, _body())
     t = _main_text(at)
     assert QUOTE in t and "chars" in t and "20" in t
-    assert "2 documents inspected; 1 passage from 1 document selected as possible evidence" in t
+    assert "Evidence scope: 1 passage from 1 document selected as possible evidence" in t
     assert "A\\. Author" in t and "CC BY 4\\.0" in t
     assert "parts answered: 1 of 2" in t and "2 left out" in t
     scoped = " ".join([m.value for m in at.markdown if m.value.startswith("**Sources**")]
@@ -82,7 +82,7 @@ def test_insufficient_fallback_reason_no_raw_token_no_full_doc_claim(monkeypatch
     t = _main_text(at)
     assert ue.fallback_text("insufficient_full_document_evidence", n_inspected=1) in [i.value for i in at.info]
     assert "insufficient_full_document_evidence" not in _tree_text(at)
-    assert "1 document inspected; no passages selected as possible evidence" in t
+    assert "Evidence scope: no passages selected as possible evidence" in t and "inspected" not in t
     assert "full document acquired" not in t.lower()
 
 
@@ -169,7 +169,7 @@ def test_fallback_text_has_no_unfilled_placeholder(monkeypatch, token):
          "admitted_evidence": [], "contract": {"layers": [], "fallback": token}, "candidates": []}
     at = _render(monkeypatch, b)
     infos = " ".join(i.value for i in at.info)
-    assert "{" not in infos and "}" not in infos and "2 full documents" in infos
+    assert "{" not in infos and "}" not in infos and infos and "2 full documents" not in infos  # NOANSWER-RC-1107
 
 
 def test_long_quote_trimmed_to_config_cap(monkeypatch):
@@ -184,7 +184,7 @@ def test_db_source_answer_renders_answer_sources_and_evidence(monkeypatch):
     at = _render(monkeypatch, _body(source="db", corpus_source={"kind": "db"}))
     t = _main_text(at)
     assert "Partial answer" in t and TITLE in t  # answer heading (completeness is partial in _body) and the Sources block
-    assert QUOTE in t and "2 documents inspected; 1 passage from 1 document selected as possible evidence" in t
+    assert QUOTE in t and "Evidence scope: 1 passage from 1 document selected as possible evidence" in t
     assert any(c.value == "Evidence source: stored database." for c in at.caption)
     assert "A\\. Author" in t and "CC BY 4\\.0" in t
     assert not any("abstract" in c.value.lower() for c in at.caption if c.value.startswith("Claim check"))
@@ -230,7 +230,7 @@ def test_sources_grouped_one_entry_per_document_cited_first(monkeypatch):
 
 def test_scope_counts_distinct_documents_inspected_and_used(monkeypatch):
     t = _main_text(_render(monkeypatch, _multi()))
-    assert "1 document inspected; 6 passages from 1 document selected as possible evidence" in t
+    assert "Evidence scope: 6 passages from 1 document selected as possible evidence" in t
 
 
 @pytest.mark.parametrize("ia,expect", [

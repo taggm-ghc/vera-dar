@@ -69,7 +69,8 @@ class State(str, Enum):
     BUSY = "busy"  # ACQUIRE only
 
 
-COUNT_KEYS = frozenset({"inspected", "admitted", "found", "checked", "usable", "budget", "stored", "target", "queued", "attempt",
+COUNT_KEYS = frozenset({"admitted",  # NOANSWER-RC-1107 r3: no "inspected" count (it was the corpus size)
+                         "found", "checked", "usable", "budget", "stored", "target", "queued", "attempt",
                         "shortlisted", "held", "step", "ceiling", "why",
                         "counted",  # MIDTERMS-WP10-1106: examined sources counted toward the target (acquire update)
                         "act", "wait_s", "k", "n", "elapsed"})  # EXHAUST-GRACE/NOISY-UI: current-activity code + generic counts

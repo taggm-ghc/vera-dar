@@ -16,9 +16,10 @@ def test_server_text():
 
 
 def test_ui_text_and_fetched():
-    assert u.fallback_text("model_insufficient", n_inspected=30, n_selected=2).startswith(
+    off = dict(fulldoc_corpus.load_config()["answer"], count_matching_documents=False)  # NOANSWER-RC-1107: legacy
+    assert u.fallback_text("model_insufficient", cfg=off, n_inspected=30, n_selected=2).startswith(
         "VERA-DAR checked 30 full documents; passages from 2 looked related")
-    t = u.fallback_text("model_insufficient", n_inspected=29, n_selected=2, n_fetched=1)
+    t = u.fallback_text("model_insufficient", cfg=off, n_inspected=29, n_selected=2, n_fetched=1)
     assert "checked 29 full documents from VERA-DAR's collection and 1 fetched for this question;" in t
     ev = N(corpus_source="bundle", examined_full_documents=tuple(range(29)))
     ia = {"documents": [{"persisted": False, "reason": "below_persist_min"}]}
