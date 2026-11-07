@@ -16,7 +16,7 @@ S_URL = "https://sentinel-host-nonask.example.invalid"
 S_KEY = "sk-SENTINELKEYnonask123456"
 FIX_CAUSE = "Fixture cause sentence for the visitor."
 # Dev-only strings (H1 list). Checked structurally: absent in public, present in dev where the fixture produces them.
-DEV_ONLY = ("Documents inspected", "Search and acquisition", "Cost and latency", "Tokens used", "Latency (s)",
+DEV_ONLY = ("Documents with related passages", "Search and acquisition", "Cost and latency", "Tokens used", "Latency (s)",
             "Answer-eligible", "stored:", "reused from the collection:", "Research was run because",
             "Evidence authorized", "Answer generated", "Listed as candidates", "Technical details")
 
@@ -128,7 +128,7 @@ def test_cause_text_is_rendered_when_present_and_absent_degrades():
     assert lr.build_live_report(_body(contract={"no_answer_cause": "bad"}), "q", 1.0)["no_answer_cause"] is None
 
 
-# --- L-b: Documents inspected heading only with rows, as a real table ------------------------------------------
+# --- L-b: related-passages heading only with rows, as a real table ------------------------------------------
 
 def test_lb_heading_iff_rows_and_table_is_text():
     at = _render(_body(), False)

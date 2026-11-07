@@ -180,18 +180,19 @@ def docs_inline(inline: dict) -> list:
 
 
 def _pipeline(data: dict, cc: dict, contract: dict, is_answer: bool, n_cands: int, n_fetched: int) -> list[str]:
-    """B2-1022: one line per stage, kept apart: discovered, fetched, inspected, admitted, claims, authorization, answer.
+    """B2-1022: one line per stage, kept apart: discovered, fetched, related, admitted, claims, authorization, answer.
     A stage the response does not report is said to be not reported, never inferred."""
     adm = data.get("admitted_evidence")
     m = ui_evidence._count(adm)
     k = ui_evidence._distinct_docs(adm) if isinstance(adm, list) else 0
-    n = ui_evidence._distinct_docs(data.get("examined_full_documents"))
+    mt = ui_evidence.matched_for(data)  # M7-INSPECTED-1107: never the count of every document examined
     checked, supported = ui_evidence._count(cc.get("checked")), ui_evidence._count(cc.get("supported"))
     authorized = m > 0 and (contract.get("offtopic") is not True or is_answer)  # admitted, so the writer ran
     return [f"Listed as candidates (found, not read): {n_cands}.",
             f"Documents fetched for this question: {n_fetched}." if n_fetched else
             "Documents fetched for this question: not reported separately.",
-            f"Documents inspected: {n}.",
+            (f"Documents with related passages: {mt}." if mt is not None else
+             "Documents with related passages: not reported."),
             f"Passages selected as possible evidence: {m}" + (f", from {k} document{'s' if k != 1 else ''}." if m and k else "."),
             f"Claims checked: {checked}; supported by their source passage: {supported}." if cc else
             "Claims checked: none.",
@@ -357,7 +358,10 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
         "partial": is_answer and cc.get("answer_completeness") == "partial",
         "answer": str(data.get("answer") or "") if is_answer else "",
         "no_answer_reason": "" if is_answer else ui_evidence.fallback_text(
-            contract.get("fallback"), n_inspected=ui_evidence._count(data.get("examined_full_documents"))),
+            contract.get("fallback"), n_inspected=ui_evidence._count(data.get("examined_full_documents")),
+            n_selected=ui_evidence._distinct_docs(data.get("admitted_evidence"))
+            if isinstance(data.get("admitted_evidence"), list) else 0,
+            n_fetched=ui_evidence.fetched_for_request(data), n_matched=ui_evidence.matched_for(data)),
         "claim_check": ui_evidence.claim_check_text(data.get("claim_check"), None, fulldoc) or "",
         "claims": claims, "groups": groups, "inspected": inspected,
         "reading_list": [] if is_answer else [{"n": _int(c.get("n")), "title": _str(c.get("title") or "source", 300),
@@ -519,14 +523,18 @@ def _render_technical(st, rep: dict, r) -> None:
                 st.caption(r(rep["scope_source"]))
         for line in rep.get("pipeline") or []:
             st.caption(r(line))
-        ins = [d for d in rep.get("inspected") or []
-               if d.get("title") != "document" or any(d.get(k) for k in ("chunks_inspected", "candidate_spans", "admitted_spans"))]
+        # M7-INSPECTED-1107: only documents with candidate passages for THIS question; never the fixed base set.
+        rows = [d for d in rep.get("inspected") or []
+                if d.get("title") != "document" or any(d.get(k) for k in ("chunks_inspected", "candidate_spans", "admitted_spans"))]
+        ins = [d for d in rows if (d.get("candidate_spans") or 0) > 0]
         if ins:
-            st.markdown("**Documents inspected** (passage counts; no document text is shown)")
+            st.markdown("**Documents with related passages** (passage counts; no document text is shown)")
             st.table([{"Document": r(d["title"]), "Published": r(d["published"]),
-                       "Passages inspected": "" if d["chunks_inspected"] is None else d["chunks_inspected"],
-                       "Candidate passages": "" if d["candidate_spans"] is None else d["candidate_spans"],
+                       "Passages scored": "" if d["chunks_inspected"] is None else d["chunks_inspected"],
+                       "Candidate passages": d["candidate_spans"],
                        "Selected passages": "" if d["admitted_spans"] is None else d["admitted_spans"]} for d in ins])
+        elif rows:
+            st.caption("No stored document had passages related to this question.")
         st.markdown("**Search and acquisition**")
         s = rep.get("search") or {}
         st.caption(f"Results found or used: {s.get('results', 0)}. Counts only; individual search services are not named.")

@@ -329,3 +329,46 @@ def test_p05b_report_tally_and_candidate_field():
     rep = build_live_report(_body("reading_list", candidates=[c], sources=[]), "q", 1.0)
     assert rep["search"]["by_licence"] == {"Index metadata: CC0; article licence not verified": 1}
     assert rep["search"]["by_acquisition"] == {"not acquired (link only)": 1}
+
+
+# --- M7-INSPECTED-1107: the technical table lists only documents with candidate passages --------------------------
+
+def _doc(i, cand):
+    return {"document_id": f"zz{i}", "title": f"ZZDoc{i}", "chunks_inspected": 9, "candidate_spans": cand, "admitted_spans": 0}
+
+
+def test_table_lists_only_documents_with_candidate_passages():
+    from tests.test_report_page_nonask import _body as nb, _render
+    at = _render(nb(examined_full_documents=[_doc(1, 0), _doc(2, 3), _doc(3, 0)]), False)
+    text = _tree_text(at)
+    assert "ZZDoc2" in text and "ZZDoc1" not in text and "ZZDoc3" not in text
+    assert "Documents with related passages" in text and "Documents inspected" not in text
+    cols = [list(t.value.columns) for t in at.table]
+    assert any(c[:2] == ["Document", "Published"] for c in cols)
+    assert not any("Passages inspected" in c for c in cols) and any("Passages scored" in c for c in cols)
+    heads = [m.value for m in at.markdown if "passage counts" in m.value]
+    assert heads and all("inspected" not in h.lower() for h in heads)
+
+
+def test_no_related_documents_shows_one_honest_line_not_the_base_set():
+    from tests.test_report_page_nonask import _body as nb, _render
+    at = _render(nb(examined_full_documents=[_doc(i, 0) for i in range(9)]), False)
+    text = _tree_text(at)
+    assert "ZZDoc" not in text and "No stored document had passages related to this question." in text
+    assert "Documents with related passages" not in text.replace("Documents with related passages:", "")
+
+
+def test_pipeline_line_counts_related_documents_only():
+    rep = lr.build_live_report(_body(examined_full_documents=[_doc(i, 0) for i in range(9)]), "q", 1.0)
+    assert "Documents with related passages: 0." in rep["pipeline"]
+    assert not any("inspected" in l.lower() for l in rep["pipeline"])
+
+
+def test_report_no_answer_reason_uses_matched_count_like_ask():
+    from vera import ui_evidence
+    b = _body("noanswer", examined_full_documents=[_doc(i, 0) for i in range(9)])
+    b["contract"]["search_counts"] = {"matched": 0}
+    rep = lr.build_live_report(b, "q", 1.0)
+    assert rep["no_answer_reason"] == ui_evidence.fallback_text(
+        TOKEN, n_inspected=9, n_selected=0, n_fetched=ui_evidence.fetched_for_request(b), n_matched=0)
+    assert "9" not in rep["no_answer_reason"]
