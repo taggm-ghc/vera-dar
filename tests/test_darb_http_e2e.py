@@ -8,6 +8,7 @@ import socket
 
 import pytest
 
+from tests import acq_support as A  # CONTROL-GAPS-1107: doc_urls
 from tests._gap_support import (SHIPPED_TEXT, REAL_LOAD_CONFIG, disabled_config_text, http_ask, stored_text, use_config_file)
 from tests._pipeline_support import (ABSTRACT_SENTINEL, DOI, PMC, epmc_web, h, passages_sent_to_model, rig)  # noqa: F401
 from tests.test_dar_pipeline_audit_gaps import EPMC_FULLTEXT, EPMC_SEARCH, _fetched, _raw_provider_record
@@ -94,7 +95,7 @@ def test_shipped_config_enables_full_http_discovery_to_answer(scenario, rig, mon
     assert len(searches) == 1 and searches[0]["providers"]
     # the record was resolved and fetched from the stubbed Europe PMC endpoints, once each
     assert len(_fetched(rig, EPMC_SEARCH)) == 1 and len(_fetched(rig, EPMC_FULLTEXT)) == 1
-    assert all(u.startswith("https://www.ebi.ac.uk/europepmc/") for u in rig.web.urls)
+    assert all(u.startswith("https://www.ebi.ac.uk/europepmc/") for u in A.doc_urls(rig.web.urls))  # + hop-gate reads
 
     # admission recorded, exactly one discovered candidate, outcome admitted
     ia = body["contract"]["inline_acquisition"]

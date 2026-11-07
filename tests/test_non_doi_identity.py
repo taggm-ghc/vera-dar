@@ -306,4 +306,5 @@ def test_resolve_oa_valid_pmcid_still_queries_once():
     web = A.Web({}, {})
     with pytest.raises(auto_acquire._Stop):
         auto_acquire.resolve_oa(None, A.cfg(), A.deps([], web), pmcid="pmc1234567")
-    assert len(web.urls) == 1 and "PMC1234567" in web.urls[0]
+    urls = A.doc_urls(web.urls)  # CONTROL-GAPS-1107: robots.txt / tdmrep.json precede it
+    assert len(urls) == 1 and "PMC1234567" in urls[0]

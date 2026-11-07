@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import re
 import threading
 import time
@@ -352,11 +353,16 @@ def gate_b_admit(plan: dict) -> None:
 # checked BEFORE url_check and http_get. landing_doi / _guarded_get stay unchanged for their existing callers.
 _ROBOTS: dict = {}
 _ROBOTS_LOCK = threading.Lock()
+_TDMREP: dict = {}  # CONTROL-GAPS-1107: host -> (monotonic time, parsed tdmrep.json rules | "unreadable")
+_CRAWL_LAST: dict = {}  # CONTROL-GAPS-1107 r2 (H-5, flag off): host -> monotonic time of the last paced request
+_sleep = time.sleep  # test seam (tests never sleep for real)
 
 
 def reset_for_tests() -> None:
     with _ROBOTS_LOCK:
         _ROBOTS.clear()
+        _TDMREP.clear()
+        _CRAWL_LAST.clear()
 
 
 def _lcfg(acq) -> dict:
@@ -413,10 +419,15 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
         if _norm(cur) in visited:
             raise aa._Stop(acq_config.reason(acq, "cycle"))
         visited.add(_norm(cur))
-        if robots and not _robots_allowed(cur, hosts, deps, acq, clock, deadline):
-            raise aa._Stop(acq_config.reason(acq, "robots"))
+        if robots:  # CONTROL-GAPS-1107: robots.txt AND the TDM opt-out, the one per-hop access gate (hop_access)
+            refused = hop_access(cur, hosts, deps, acq, clock, deadline)
+            if refused:
+                raise aa._Stop(acq_config.reason(acq, refused))
         if chain is not None:
             chain.append(_clean(cur, 2000))
+        if robots:
+            w = crawl_wait(cur, acq, clock, deadline)  # H-5 (flag off by default): per-host Crawl-delay
+            end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
         try:
             resp = deps.http_get(cur, headers={"User-Agent": sf.USER_AGENT, "Accept-Encoding": "identity"},
                                  timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
@@ -435,6 +446,10 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                 cur = nxt
                 continue
             if resp.status_code not in ok_status:
+                if robots is False and resp.status_code in _throttle_statuses(cur):
+                    # CONTROL-GAPS-1107 r2: a server throttle (429 / the portal's throttle_statuses) on robots.txt or
+                    # tdmrep.json is a rate limit, not a verdict: refused now, never cached, never an attempt.
+                    raise aa._Stop(acq_config.reason(acq, "rate_limited"))
                 if robots is False and 400 <= resp.status_code < 500 and resp.status_code != 429:
                     return b"", cur, resp.status_code  # robots.txt: 4xx = no rules (RFC 9309); 429/5xx fail closed
                 raise aa._Stop(acq_config.reason(acq, "unreachable"))
@@ -444,6 +459,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype not in ctypes:
                 raise aa._Stop(acq_config.reason(acq, "format_unsupported"))
+            if robots and tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
+                raise aa._Stop(acq_config.reason(acq, "tdm"))
             buf, size = [], 0
             for chunk in resp.iter_content(65536):
                 size += len(chunk)
@@ -453,7 +470,10 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                     raise aa._Stop(acq_config.reason(acq, "deadline" if deadline is not None and clock() > deadline
                                                  else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
                 buf.append(chunk)
-            return b"".join(buf), cur, resp.status_code
+            body = b"".join(buf)
+            if robots and tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
+                raise aa._Stop(acq_config.reason(acq, "tdm"))
+            return body, cur, resp.status_code
         finally:
             aa._close(resp)
 
@@ -488,7 +508,11 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
                 from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI
                 _ra.annotate(p, txt)
                 rp = p
-        except Exception:  # noqa: BLE001  aa._Stop and any parse/config error: fail closed
+        except aa._Stop as e:
+            if _passthrough(e, acq):
+                raise  # CONTROL-GAPS-1107: refused as host / rate-limited (nothing sent), never cached as robots
+            rp = False
+        except Exception:  # noqa: BLE001  any other stop, parse or config error: fail closed
             rp = False
         with _ROBOTS_LOCK:
             _ROBOTS[host] = (now, rp)
@@ -503,6 +527,143 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
         return _ra.allowed(rp, sf.USER_AGENT, url) and _ra.block_reason(rp, url) is None
     except Exception:  # noqa: BLE001
         return False
+
+
+def _passthrough(stop, acq) -> bool:
+    """CONTROL-GAPS-1107: a stop of the gate's own robots.txt / tdmrep.json request that is NOT a verdict about the
+    file: the host or its address was refused, the limiter skipped or the server throttled (r2: R-ACQ-RATELIMITED*),
+    or the JOB deadline ran out (r2). It is raised as itself (still a refusal for this request: fail closed) and is
+    not cached, so neither ROBOTS nor TDM is recorded for a host that never answered."""
+    code = str(getattr(stop, "code", ""))
+    return (code in (acq_config.reason(acq, "host"), acq_config.reason(acq, "deadline"))
+            or code.startswith(acq_config.reason(acq, "rate_limited")))
+
+
+def _throttle_statuses(url: str) -> set:
+    """429 plus the rate_limits.json portal's throttle_statuses for the URL's host (config/rate_limits.json)."""
+    out = {429}
+    try:
+        from vera import rate_limit
+        ad = rate_limit.get_registry().portal_for_url(url)
+        if ad is not None:
+            out |= {int(s) for s in ad.c.get("throttle_statuses") or ()}
+    except Exception:  # noqa: BLE001  config error: 429 alone (the rest stay fail-closed refusals)
+        pass
+    return out
+
+
+def crawl_enforced(acq) -> bool:
+    """H-5 OWNER-PENDING: config auto_acquire.json crawl_delay.enforce_on_acquisition, exactly true (default off)."""
+    c = (acq or {}).get("crawl_delay")
+    return isinstance(c, dict) and c.get("enforce_on_acquisition") is True
+
+
+def crawl_wait(url: str, acq, clock, deadline) -> float:
+    """H-5 (only when crawl_enforced): wait out the host's robots.txt Crawl-delay (robots_ai.crawl_delay: own UA, *
+    and AI groups) since the last paced request to that host, then mark this request. A wait that would pass the job
+    deadline stops with R-ACQ-CRAWL_DELAY (no request sent: not an attempt). Off: no effect at all. Returns the
+    seconds waited (the caller's per-fetch clock does not count them)."""
+    if not crawl_enforced(acq):
+        return 0.0
+    from vera import auto_acquire as aa
+    from vera import robots_ai
+    from vera import selective_fetch as sf
+    host = (urlsplit(url).hostname or "").lower()
+    with _ROBOTS_LOCK:
+        rp = (_ROBOTS.get(host) or (0, None))[1]
+        last = _CRAWL_LAST.get(host)
+    cd = robots_ai.crawl_delay(rp, sf.USER_AGENT) if rp not in (None, True, False) else None
+    waited = 0.0
+    if cd and last is not None:
+        wait = last + float(cd) - clock()
+        if wait > 0:
+            if deadline is not None and clock() + wait >= deadline:
+                raise aa._Stop(acq_config.reason(acq, "crawl_delay"))
+            from vera import progress as _prog  # NOISY-UI
+            with _prog.waiting(_prog.ACT_POLITE, wait):
+                _sleep(wait)
+            waited = wait
+    with _ROBOTS_LOCK:
+        _CRAWL_LAST[host] = clock()
+    return waited
+
+
+def _tdmrep_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
+    """CONTROL-GAPS-1107 (TDM Reservation Protocol, the same rule as public_fetch._tdmrep_signal): the host's
+    /.well-known/tdmrep.json through _b_get (same allowlist, caps, deadline; robots=False so 4xx returns its status),
+    cached per host with the robots TTLs. 404/410 -> no reservation; 200 -> public_fetch.tdmrep_reserved for the URL's
+    path; any other status, error, timeout or malformed JSON -> reserved (fail closed)."""
+    from vera import auto_acquire as aa
+    from vera import public_fetch
+    lc = _lcfg(acq)
+    sp = urlsplit(url)
+    host = (sp.hostname or "").lower()
+    now = clock()
+    with _ROBOTS_LOCK:
+        hit = _TDMREP.get(host)
+    ok_hit = hit is not None and hit[1] != "unreadable"
+    if hit is not None and now - hit[0] < float(lc.get("robots_ttl_s" if ok_hit else "robots_fail_ttl_s",
+                                                       3600 if ok_hit else 60)):
+        rules = hit[1]
+    else:
+        try:
+            body, _f, status = _b_get(f"https://{host}/.well-known/tdmrep.json", hosts,
+                                      {"application/json", "text/plain", ""}, int(lc.get("robots_max_bytes", 524288)),
+                                      2, deps, acq, clock, deadline, None, robots=False)
+            if status in (404, 410):
+                rules = []
+            elif status != 200:
+                rules = "unreadable"
+            else:
+                rules = json.loads(body.decode("utf-8", "replace"))
+                public_fetch.tdmrep_reserved(rules, "/")  # shape check now; ValueError -> unreadable
+        except aa._Stop as e:
+            if _passthrough(e, acq):
+                raise  # refused as host / rate-limited (nothing sent), never cached
+            rules = "unreadable"
+        except Exception:  # noqa: BLE001  bad JSON, malformed rules: fail closed
+            rules = "unreadable"
+        with _ROBOTS_LOCK:
+            _TDMREP[host] = (now, rules)
+            while len(_TDMREP) > 64:
+                _TDMREP.pop(next(iter(_TDMREP)))
+    if rules == "unreadable":
+        return False
+    try:
+        return not public_fetch.tdmrep_reserved(rules, sp.path or "/")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def tdm_header_reserved(headers) -> bool:
+    """CONTROL-GAPS-1107: a TDM-Reservation response header of 1 (source_permissions._tdm_reserved, the same rule)."""
+    from vera import source_permissions
+    try:
+        return source_permissions._tdm_reserved({"tdm-reservation": (headers or {}).get("TDM-Reservation") or ""})
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def tdm_body_reserved(body: bytes, ctype: str) -> bool:
+    """CONTROL-GAPS-1107: an HTML page's <meta name="tdm-reservation" content="1"> (public_fetch._tdm_meta)."""
+    if (ctype or "").split(";")[0].strip().lower() not in ("text/html", "application/xhtml+xml"):
+        return False
+    from vera import public_fetch
+    try:
+        return public_fetch._tdm_meta(body[:200000].decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def hop_access(url: str, hosts: set, deps, acq, clock, deadline) -> str | None:
+    """CONTROL-GAPS-1107: THE access gate for every acquisition hop (acq_discovered._b_get and auto_acquire._guarded_get,
+    which serves Europe PMC and arXiv). Returns the refusal reason key ("robots" or "tdm") or None. robots.txt first
+    (owner R-050 / OD-1106-ROBOTS-AI), then the TDM Reservation Protocol (/.well-known/tdmrep.json). Fail closed."""
+    if not _robots_allowed(url, hosts, deps, acq, clock, deadline):
+        return "robots"
+    if not _tdmrep_allowed(url, hosts, deps, acq, clock, deadline):
+        return "tdm"
+    return None
 
 
 _META = re.compile(r"<meta\s[^>]*?name=[\"'](citation_xml_url|citation_pdf_url)[\"'][^>]*?>", re.I)

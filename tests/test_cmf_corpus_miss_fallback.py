@@ -319,6 +319,7 @@ def test_G_ssrf_check_failure_stops_before_any_request():
 
 
 def test_G_redirect_to_internal_host_is_blocked_and_never_fetched():
+    A.seed_access(ALLOW, __import__('time').monotonic())  # CONTROL-GAPS-1107: robots/TDM tested elsewhere
     seen = []
 
     def get(url, **k):
@@ -330,6 +331,7 @@ def test_G_redirect_to_internal_host_is_blocked_and_never_fetched():
 
 
 def test_G_redirect_loop_is_bounded():
+    A.seed_access(ALLOW, __import__('time').monotonic())  # CONTROL-GAPS-1107: robots/TDM tested elsewhere
     seen = []
 
     def get(url, **k):
@@ -341,18 +343,20 @@ def test_G_redirect_loop_is_bounded():
 
 
 def test_G_oversize_body_is_capped():
+    A.seed_access(ALLOW, __import__('time').monotonic())  # CONTROL-GAPS-1107: robots/TDM tested elsewhere
     d = _with_check(lambda *a, **k: A.Resp(ctype="application/xml", body=b"x" * 3_000_000))
     with pytest.raises(auto_acquire._Stop) as ei:
         auto_acquire._guarded_get(f"https://{ALLOW}/x", A.cfg(), d, 1000, 5.0, False)
     assert ei.value.code == acq_config.reason(A.cfg(), "too_large")
 
 
-@pytest.mark.xfail(reason="RED (I2/E1): the chain/cycle, userinfo and port-443 checks apply only when chain is set; "
-                          "the fallback path should apply them unconditionally", strict=False)
+# CONTROL-GAPS-1107 r2: _host_ok (userinfo, port 443) now runs on every _guarded_get hop, chain or not: no longer xfail.
 def test_G_userinfo_and_non443_port_rejected_without_chain():
     calls = []
     d = _with_check(lambda *a, **k: calls.append(a) or A.Resp(ctype="application/xml", body=b"<a/>"))
-    assert _stop_code(f"https://u:p@{ALLOW}/x", d) == acq_config.reason(A.cfg(), "host")
+    # userinfo with an empty password: username "user" is set, so _host_ok refuses it, the same refusal as
+    # user:password; neither credential- nor email-shaped for the release scan (CONTROL-GAPS-1107 r5)
+    assert _stop_code(f"https://user:@{ALLOW}/x", d) == acq_config.reason(A.cfg(), "host")
     assert _stop_code(f"https://{ALLOW}:8443/x", d) == acq_config.reason(A.cfg(), "host")
     assert not calls
 

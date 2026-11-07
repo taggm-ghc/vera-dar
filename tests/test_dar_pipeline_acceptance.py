@@ -196,7 +196,7 @@ def test_C_provenance_recorded_on_acquired_record(rig):
     assert len(rig.store.plans) == 1
     a = rig.store.plans[0]["source"]["provenance"]["acquisition"]
     assert a["discovery"]["record_id"] == W1 and a["resolver"] == "europepmc"
-    assert a["url_chain"] == web.urls and a["gate_b"]["decision"] == "admit"
+    assert a["url_chain"] == A.doc_urls(web.urls) and a["gate_b"]["decision"] == "admit"
     assert a["retention"]["mode"] == "hash-only" and a["retention"]["raw_sha256"]
     assert a["licence_evidence"]["index_metadata_licence"] == "not used"
     assert "publicdomain" not in json.dumps(rig.store.plans[0]["source"]["provenance"]).lower().replace("index_metadata", "")

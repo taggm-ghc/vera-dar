@@ -195,7 +195,11 @@ def pytest_runtest_makereport(item, call):
 
 
 _SINGLETONS = (("vera.memory_store", "_SERVICE", "clear"), ("vera.corpus_admission", "_STORE", "clear"),
-               ("vera.db", "_engine", None), ("vera.db", "SessionLocal", None), ("db", "_admin_engine", None))
+               ("vera.db", "_engine", None), ("vera.db", "SessionLocal", None), ("db", "_admin_engine", None),
+               # CONTROL-GAPS-1107: per-host robots.txt / tdmrep.json verdicts of the acquisition hop gate never leak
+               # between tests (a fail-closed verdict cached under one test's fake web would refuse the next test's).
+               ("vera.acq_discovered", "_ROBOTS", "clear"), ("vera.acq_discovered", "_TDMREP", "clear"),
+               ("vera.acq_discovered", "_CRAWL_LAST", "clear"))
 
 
 def _reset_singletons(monkeypatch):

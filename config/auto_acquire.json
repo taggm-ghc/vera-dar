@@ -248,6 +248,7 @@
     "abs_max_bytes": 1048576,
     "min_interval_s": 3,
     "max_crawl_delay_s": 15,
+    "_tdmrep_wait_note": "CONTROL-GAPS-1107 r2 SAFETY BOUND, not a tuned threshold: while arxiv.org's /.well-known/tdmrep.json is not cached (same TTL as robots.txt) it is read one Crawl-delay after robots.txt, so an arXiv-routed document's per-document deadline and the inline collection window are extended by exactly one Crawl-delay, at most max_crawl_delay_s (vera/arxiv_fulltext.deadline_extension). Only the cold first document per TTL pays it (worst inline pass 45 + 15 s, inside the 40 s margin of the 165 s request budget in inline._calibration_note). Change only with max_crawl_delay_s.",
     "robots": true,
     "_calibration_note": "abs_max_bytes is a safety size cap, not a decision threshold: 1 MiB, uncalibrated prior (arXiv abs pages are typically tens of kB; not measured on live pages in this task, no network). Full HTML uses bounds.max_fetch_bytes unchanged. Change it from the size distribution of fetched abs pages in live logs. min_interval_s 3 = the arXiv API terms' documented one request every three seconds (rate_limits.json arxiv portal source), applied to arxiv.org too as a conservative prior; arxiv.org robots.txt was NOT read in ARX-A2 (no network): robots.txt is fetched and obeyed at run time (acq_discovered._robots_allowed, fail closed on 429/5xx/error), and a crawl-delay longer than min_interval_s is honoured; above max_crawl_delay_s 15 (a planner prior: two spaced requests must fit the 45 s inline deadline) the record is refused R-ACQ-ROBOTS rather than fetched faster. Change from the live robots.txt and 429/503 counts."
   },
@@ -326,6 +327,7 @@
     "defer_cap": "R-ACQ-DEFER_CAP",
     "cycle": "R-ACQ-CYCLE",
     "robots": "R-ACQ-ROBOTS",
+    "tdm": "R-ACQ-TDM",
     "encoding": "R-ACQ-ENCODING",
     "format_unsupported": "R-ACQ-FORMAT_UNSUPPORTED",
     "identity_mismatch": "R-ACQ-IDENTITY_MISMATCH",
@@ -333,6 +335,10 @@
     "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
     "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",
     "arxiv_html_policy": "R-ACQ-ARXIV_HTML_POLICY"
+  },
+  "crawl_delay": {
+    "_note": "CONTROL-GAPS-1107 r2, OWNER-PENDING H-5: when enforce_on_acquisition is exactly true, the robots.txt Crawl-delay (own UA, * and AI-agent groups; vera.robots_ai.crawl_delay) of each host is honoured on auto_acquire._guarded_get and acq_discovered._b_get: a request waits until Crawl-delay seconds after the previous request to that host; a wait past the job deadline stops with R-ACQ-CRAWL_DELAY (no request sent, not an attempt). Ships false = unchanged pacing (rate_limits.json portals only; the arXiv route keeps its own Crawl-delay spacing). Not a threshold: the delay is the host's own published value.",
+    "enforce_on_acquisition": false
   },
   "repository_pdf_route": {
     "_note": "H20-PDF-1106 D-CFG. Flag ships OFF. Off, missing or non-boolean enabled = off; no env override. Caps and the exact-host list live in config/repository_pdf.json (required controls, PROVISIONAL values). mode answer_only: listed-host PDFs are used for answers only; ingest needs an explicit allowed licence (Q2, orchestrator 2026-11-05).",

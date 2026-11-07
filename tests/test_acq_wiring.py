@@ -82,7 +82,8 @@ def test_real_resolver_and_fetch_through_the_production_http_object(monkeypatch)
     web, _ = A.epi_setup()
 
     def fake_get(url, **kw):
-        seen.append(kw)
+        if A.doc_urls([url]):  # CONTROL-GAPS-1107: the hop gate's robots.txt / tdmrep.json requests are not counted
+            seen.append(kw)
         return web(url, **kw)
     monkeypatch.setattr(requests, "get", fake_get)
     d = A.deps([A.cand(DOI)], requests.get)  # the object default_deps passes in production

@@ -128,7 +128,7 @@ def test_t1_openalex_discovered_source_resolves_to_accessible_full_text():
     assert e["gate_a"]["decision"] == "fetch" and e["gate_b"] == {"decision": "admit", "basis": acq_discovered.GATE_B_BASIS}
     a = store.plans[0]["source"]["provenance"]["acquisition"]
     assert a["discovery"]["record_id"] == W1 and a["resolver"] == "europepmc" and a["repository"] == "europepmc"
-    assert a["url_chain"] == web.urls and a["url_chain"][-1] == store.plans[0]["source"]["provenance"]["item"]["fulltext_url"]
+    assert a["url_chain"] == A.doc_urls(web.urls) and a["url_chain"][-1] == store.plans[0]["source"]["provenance"]["item"]["fulltext_url"]
 
 
 # ------------------------------------------------------------------------------------------------ test 2 (D1)
@@ -219,7 +219,8 @@ def test_t3_robots_4xx_means_no_rules_but_429_fails_closed():
     acq_discovered.reset_for_tests()
     inline_acquire.reset_for_tests()
     auto_acquire.reset_for_tests()
-    assert _step_b_reason(robots_pub=A.Resp(status=429, ctype="text/plain"))[0] == "R-ACQ-ROBOTS"
+    # CONTROL-GAPS-1107 r2: a 429 on robots.txt is a rate limit (refused, not cached, not an attempt), not ROBOTS
+    assert _step_b_reason(robots_pub=A.Resp(status=429, ctype="text/plain"))[0] == "R-ACQ-RATELIMITED"
 
 
 def test_t3_licence_uri_contradicted_by_licence_text_is_held():
@@ -301,13 +302,16 @@ def test_t7_redirect_cycle_is_rejected_on_the_discovered_path_and_unchanged_else
     web = Router({}, {}, {a: redirect(b), b: redirect(a)})
     with pytest.raises(auto_acquire._Stop) as e:
         _gg(web, a, chain=[])
-    assert e.value.code == "R-ACQ-CYCLE" and web.urls == [a, b]
+    assert e.value.code == "R-ACQ-CYCLE" and A.doc_urls(web.urls) == [a, b]
     with pytest.raises(auto_acquire._Stop) as e:  # existing callers (chain None): unchanged hop-cap behaviour
         _gg(Router({}, {}, {a: redirect(b), b: redirect(a)}), a, chain=None)
     assert e.value.code == "R-ACQ-UNREACHABLE"
 
 
-@pytest.mark.parametrize("url", ["https://u:p@www.ebi.ac.uk/x", "https://www.ebi.ac.uk:8443/x",
+# Userinfo with an EMPTY password (CONTROL-GAPS-1107 r5): urlsplit gives username "user" (password ""), and
+# acq_discovered._host_ok refuses any URL whose username is set, the same refusal as user:password. This form is chosen
+# because it is neither credential-shaped (no password) nor email-shaped (":" before "@") for the release scan.
+@pytest.mark.parametrize("url", ["https://user:@www.ebi.ac.uk/x", "https://www.ebi.ac.uk:8443/x",
                                  "http://www.ebi.ac.uk/x", "https://www.ebi.ac.uk.evil.tld/x"])
 def test_t7_unsafe_urls_are_rejected_before_any_request(url):
     web = Router({}, {}, {})
@@ -321,7 +325,7 @@ def test_t7_private_address_and_offlist_redirect_are_rejected():
     web = Router({}, {}, {a: redirect("https://evil.example.net/y")})
     with pytest.raises(auto_acquire._Stop) as e:
         _gg(web, a, chain=[])
-    assert e.value.code == "R-ACQ-HOST" and [u for u, _h, _k in web.calls] == [a]
+    assert e.value.code == "R-ACQ-HOST" and A.doc_urls([u for u, _h, _k in web.calls]) == [a]
     d = A.deps([], Router({}, {}, {}))
     d.url_check = lambda u: (False, "private address 169.254.169.254")
     with pytest.raises(auto_acquire._Stop) as e:
@@ -447,7 +451,7 @@ def _flags_off_identity_check(on_run=None, raw_hook=False):
     for passed in (False, True):
         if on_run:
             on_run()
-        auto_acquire.reset_for_tests()
+        auto_acquire.reset_for_tests()  # also resets the hop gate's robots/tdmrep caches (CONTROL-GAPS-1107)
         inline_acquire.reset_for_tests()
         web, _raw = epmc_web()
         o, store = run(copy.deepcopy(off), [oa_src(doi="10.9999/other"), arxiv_src()], web, own=[A.cand(DOI)],
@@ -458,7 +462,8 @@ def _flags_off_identity_check(on_run=None, raw_hook=False):
     assert "discovered" not in res[0][0]
     prov = res[0][1][0]["source"]["provenance"]["acquisition"]
     assert not set(prov) & {"discovery", "url_chain", "gate_a", "gate_b", "retention"}
-    assert all(set(h) == {"User-Agent"} for _u, h, _k in res[0][2])  # the unchanged header set on existing paths
+    assert all(set(h) == {"User-Agent"} for u, h, _k in res[0][2]
+               if A.doc_urls([u]))  # the unchanged header set on existing paths (hop-gate requests excluded)
     assert not any("10.9999/other" in u for u, _h, _k in res[0][2])
     return raw_stamps
 

@@ -74,6 +74,8 @@ _S = _State()
 def reset_for_tests() -> None:
     global _S
     _S = _State()
+    from vera import acq_discovered  # CONTROL-GAPS-1107: _guarded_get's robots.txt / tdmrep.json caches
+    acq_discovered.reset_for_tests()
 
 
 def _qkey(question: str) -> str:
@@ -610,18 +612,33 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             sp = urlsplit(current)
             if sp.scheme != "https" or (sp.hostname or "").lower() not in allowed:
                 raise _Stop(acq_config.reason(cfg, "host"))
+            from vera import acq_discovered
+            if not acq_discovered._host_ok(current, allowed):  # CONTROL-GAPS-1107 r2: every path (userinfo, port)
+                raise _Stop(acq_config.reason(cfg, "host"))
             if chain is not None:  # P0-5 (new path only)
-                from vera import acq_discovered
-                if not acq_discovered._host_ok(current, allowed):
-                    raise _Stop(acq_config.reason(cfg, "host"))
                 if acq_discovered._norm(current) in visited:
                     raise _Stop(acq_config.reason(cfg, "cycle"))
                 visited.add(acq_discovered._norm(current))
+            # CONTROL-GAPS-1107: robots.txt + TDM opt-out on EVERY hop (acq_discovered.hop_access). When the host's
+            # verdicts are not cached, the gate runs first: its own requests go through _b_get, which validates the
+            # same host's address (a refusal is raised as R-ACQ-HOST, not cached), and this URL's check below is then
+            # the last validation before the request (its address pin is the one the transport uses).
+            from vera import acq_discovered as _ad
+            h = (sp.hostname or "").lower()
+            if h not in _ad._ROBOTS or h not in _ad._TDMREP:
+                refused = _ad.hop_access(current, allowed, deps, cfg, clock, deadline)  # r2: JOB deadline (uncached)
+                if refused:
+                    raise _Stop(acq_config.reason(cfg, refused))
             ok, _why = check(current)
             if not ok:
                 raise _Stop(acq_config.reason(cfg, "host"))
+            refused = _ad.hop_access(current, allowed, deps, cfg, clock, deadline)  # cached now: no request; TTL-checked
+            if refused:
+                raise _Stop(acq_config.reason(cfg, refused))
             if chain is not None:
                 chain.append(acq_discovered._clean(current, 2000))
+            w = _ad.crawl_wait(current, cfg, clock, deadline)  # H-5 (flag off by default): per-host Crawl-delay
+            end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
             hdrs = {"User-Agent": sf.USER_AGENT} if chain is None else {"User-Agent": sf.USER_AGENT,
                                                                         "Accept-Encoding": "identity"}
             try:
@@ -650,6 +667,9 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 raise _Stop(acq_config.reason(cfg, "unreachable"))
         elif ctype not in ctypes:
             raise _Stop(acq_config.reason(cfg, "convert"))
+        from vera import acq_discovered as _ad
+        if _ad.tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
+            raise _Stop(acq_config.reason(cfg, "tdm"))
         chunks, size = [], 0
         try:
             for chunk in resp.iter_content(65536):
@@ -662,7 +682,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             raise
         except Exception:  # noqa: BLE001
             raise _Stop(acq_config.reason(cfg, "unreachable")) from None
-        return b"".join(chunks), current
+        body = b"".join(chunks)
+        if _ad.tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
+            raise _Stop(acq_config.reason(cfg, "tdm"))
+        return body, current
     finally:
         _close(resp)
 

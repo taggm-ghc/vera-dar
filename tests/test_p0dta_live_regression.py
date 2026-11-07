@@ -100,7 +100,7 @@ def test_live_question_acquires_versioned_arxiv_html_and_answers_with_that_citat
     # fetch of the versioned HTML route under a 15 s crawl-delay on a cold robots cache (full delay honoured)
     urls = [c[0] for c in web.calls]
     assert ROBOTS in urls and X.ABS_URL in urls and X.HTML_URL in urls, urls
-    assert [round(w) for w in live.waits] == [15, 15]
+    assert [round(w) for w in live.waits] == [15, 15, 15]  # CONTROL-GAPS-1107 r2: tdmrep.json, abs, html each wait the full delay
     # licence gate (CC BY on the abs page) -> admission -> stored provenance pins the versioned html route
     assert arx[0]["outcome"] == "admitted" and arx[0]["status"] == "admitted", arx[0]
     (plan,) = live.store.plans

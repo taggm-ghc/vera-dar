@@ -40,6 +40,21 @@ def epmc_record(doi, pmcid="PMC1234567", licence="cc by", oa="Y", source="MED", 
     return r
 
 
+ACCESS_PATHS = ("/robots.txt", "/.well-known/tdmrep.json")  # CONTROL-GAPS-1107: the per-hop access gate's own requests
+
+
+def doc_urls(urls) -> list:
+    """The requested URLs without the access gate's robots.txt / tdmrep.json requests (acq_discovered.hop_access)."""
+    return [u for u in urls if not str(u).split("?")[0].endswith(ACCESS_PATHS)]
+
+
+def seed_access(host: str, now: float = 0.0) -> None:
+    """Pre-record an allow verdict (no rules) for host in the hop gate's caches, for tests about something else."""
+    from vera import acq_discovered
+    acq_discovered._ROBOTS[host] = (now, True)
+    acq_discovered._TDMREP[host] = (now, [])
+
+
 class Web:
     """Fake http_get: Europe PMC search JSON by DOI, then JATS full text by PMC id. Records every URL requested."""
 

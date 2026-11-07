@@ -16,6 +16,7 @@ from tests.test_acq_discovered import Router, _direct, cfg_on, disc, redirect, r
 from vera import arxiv_fulltext, auto_acquire, fulldoc_db, fulltext_loader, licence_gate
 
 ROBOTS = "https://arxiv.org/robots.txt"
+TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt
 CC_BY_HTTPS = "https://creativecommons.org/licenses/by/4.0/"
 _REAL_DECISION = licence_gate.licence_decision
 
@@ -74,7 +75,7 @@ def test_abs_final_url_must_be_the_requested_version(final):
     web = Router({}, {}, {**X.routes(), X.ABS_URL: redirect(final), final: X.html_resp(X.abs_page())})
     o, store = _go(web)
     assert disc(o)["reason"] == "R-ACQ-IDENTITY_MISMATCH" and store.plans == []
-    assert [u for u, _h, _k in web.calls] == [ROBOTS, X.ABS_URL, final]  # only the abs redirect chain; no content fetch
+    assert [u for u, _h, _k in web.calls] == [ROBOTS, TDMREP, X.ABS_URL, final]  # only the abs redirect chain; no content fetch
     last = _attempts()[-1]
     assert last["representation"] == "abs" and last["status"] == "refused"
     assert last["reason"] == "abs final URL is not the requested id/version abstract page" and last["final_url"] == final

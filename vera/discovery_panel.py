@@ -54,6 +54,7 @@ REASON_TEXT = {
     "R-ACQ-CRAWL_DELAY": "Not checked in time: the source asks crawlers to wait.",
     "R-ACQ-HOST": "Blocked by network safety check.",
     "R-ACQ-ROBOTS": "Blocked by network safety check.",
+    "R-ACQ-TDM": "Not used: the publisher reserves text and data mining rights.",  # CONTROL-GAPS-1107
     "R-ACQ-CYCLE": "Blocked by network safety check.",
     "R-ACQ-LARGE": "Document too large to read.",
     "R-ACQ-CONVERT": "Document could not be converted to readable text.",

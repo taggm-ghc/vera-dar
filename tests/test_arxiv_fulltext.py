@@ -21,6 +21,7 @@ from vera import acq_config, arxiv_fulltext, fulltext_loader, licence_gate
 
 _REAL_DECISION = licence_gate.licence_decision
 ROBOTS = "https://arxiv.org/robots.txt"
+TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +71,7 @@ def test_html_attempted_through_safe_route_and_admitted_at_the_licence_gate():
     web = _go_web = _web()
     o, store = _go(web)
     urls = [u for u, _h, _k in web.calls]
-    assert urls == [ROBOTS, X.ABS_URL, X.HTML_URL]  # robots.txt, abs (identity + licence) then the HTML representation; nothing else
+    assert urls == [ROBOTS, TDMREP, X.ABS_URL, X.HTML_URL]  # robots.txt, abs (identity + licence) then the HTML representation; nothing else
     for _u, hdrs, _k in web.calls[1:]:
         assert hdrs.get("Accept-Encoding") == "identity" and "Cookie" not in hdrs and "Authorization" not in hdrs
     e = disc(o)
@@ -102,7 +103,7 @@ def test_openalex_record_with_arxiv_datacite_doi_is_routed():
     src = {"provider": "openalex", "doi": X.DOI, "url": X.ABS_URL, "title": X.TITLE, "openalex_id": "https://openalex.org/W8"}
     web = _web()
     o, _store = _go(web, src=src)
-    assert [u for u, _h, _k in web.calls][:2] == [ROBOTS, X.ABS_URL] and disc(o)["outcome"] == "admitted"
+    assert [u for u, _h, _k in web.calls][:3] == [ROBOTS, TDMREP, X.ABS_URL] and disc(o)["outcome"] == "admitted"
 
 
 # ------------------------------------------------------------------------------------------------ licence
@@ -110,7 +111,7 @@ def test_arxiv_default_licence_is_held_with_precise_reason_and_no_content_fetch(
     web = _web(licence=X.ARXIV_DEFAULT)
     o, store = _go(web)
     assert disc(o)["reason"] == "R-ACQ-ARXIV_LICENCE_HOLD" and store.plans == []
-    assert [u for u, _h, _k in web.calls] == [ROBOTS, X.ABS_URL]  # the HTML is never fetched for a held licence
+    assert [u for u, _h, _k in web.calls] == [ROBOTS, TDMREP, X.ABS_URL]  # the HTML is never fetched for a held licence
 
 
 def test_missing_licence_link_is_held():
@@ -122,7 +123,7 @@ def test_nd_licence_is_rejected():
     web = _web(licence=X.CC_BY_ND)
     o, store = _go(web)
     assert disc(o)["reason"] == "R-LIC-REJECT" and store.plans == []
-    assert [u for u, _h, _k in web.calls] == [ROBOTS, X.ABS_URL]
+    assert [u for u, _h, _k in web.calls] == [ROBOTS, TDMREP, X.ABS_URL]
 
 
 # ------------------------------------------------------------------------------------------------ abstract-only
@@ -184,7 +185,7 @@ def test_public_address_check_runs_on_every_hop():
     from vera import inline_acquire
     inline_acquire.acquire(A.Q_EPI, cfg_on(), env=A.ENV_ON, deps_factory=lambda a, e: d,
                            discovered=[X.discovery_src()])
-    assert seen == [ROBOTS, X.ABS_URL, X.HTML_URL]
+    assert seen == [ROBOTS, TDMREP, X.ABS_URL, X.HTML_URL]
 
 
 def test_production_transport_is_the_pinned_public_only_getter(monkeypatch):
@@ -212,7 +213,7 @@ def test_production_transport_is_the_pinned_public_only_getter(monkeypatch):
     o = inline_acquire.acquire(A.Q_EPI, cfg_on(), env=A.ENV_ON, deps_factory=lambda a, e: d,
                                discovered=[X.discovery_src()])
     rate_limit.set_registry_for_tests(None)
-    assert pinned == [ROBOTS, X.ABS_URL, X.HTML_URL], (pinned, o.public())
+    assert pinned == [ROBOTS, TDMREP, X.ABS_URL, X.HTML_URL], (pinned, o.public())
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("10.0.0.5", 443))])
     inline_acquire.reset_for_tests()
     rate_limit.set_registry_for_tests(rate_limit.Registry(rc))
@@ -302,7 +303,7 @@ def test_shipped_config_route_and_codes():
 # ------------------------------------------------------------------------------------------------ robots + pacing
 def test_requests_are_spaced_by_min_interval(_no_wait):
     _go(_web())
-    assert len(_no_wait) == 2 and all(0 < w <= 3.0 for w in _no_wait)  # robots -> abs -> html, one at a time
+    assert len(_no_wait) == 3 and all(0 < w <= 3.0 for w in _no_wait)  # robots -> tdmrep -> abs -> html, one at a time (CONTROL-GAPS-1107 r2)
 
 
 def test_robots_disallow_refuses_before_any_content_fetch():
@@ -314,7 +315,7 @@ def test_robots_disallow_refuses_before_any_content_fetch():
 def test_long_crawl_delay_is_refused_not_ignored():
     web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(body=b"User-agent: *\nCrawl-delay: 60\n", ctype="text/plain")})
     o, _store = _go(web)
-    assert disc(o)["reason"] == "R-ACQ-ROBOTS" and [u for u, _h, _k in web.calls] == [ROBOTS]
+    assert disc(o)["reason"] == "R-ACQ-ROBOTS" and [u for u, _h, _k in web.calls] == [ROBOTS]  # refused before tdmrep.json
 
 
 def test_crawl_delay_within_limit_is_honoured(_no_wait):
@@ -323,10 +324,13 @@ def test_crawl_delay_within_limit_is_honoured(_no_wait):
     assert _no_wait and max(_no_wait) > 3.0
 
 
-def test_robots_server_error_fails_closed():
-    web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(status=503, ctype="text/plain")})
+@pytest.mark.parametrize("status,code", [(500, "R-ACQ-ROBOTS"), (503, "R-ACQ-RATELIMITED")])
+def test_robots_server_error_fails_closed(status, code):
+    # CONTROL-GAPS-1107 r2: 503 is in the arxiv_web portal's throttle_statuses: a rate limit (not cached, not an
+    # attempt), still refused; any other 5xx is a fail-closed robots refusal.
+    web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(status=status, ctype="text/plain")})
     o, _store = _go(web)
-    assert disc(o)["reason"] == "R-ACQ-ROBOTS" and X.ABS_URL not in [u for u, _h, _k in web.calls]
+    assert disc(o)["reason"] == code and X.ABS_URL not in [u for u, _h, _k in web.calls]
 
 
 # ------------------------------------------------------------------------------------------------ every CC variant

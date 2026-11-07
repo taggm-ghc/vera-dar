@@ -115,7 +115,7 @@ def clk(monkeypatch):
 def test_cold_robots_crawl_delay_15_now_admitted_without_shortening_delay(clk):
     o, web, _ = _crawl_run(clk)
     assert disc(o)["outcome"] == "admitted", o.public()
-    assert [round(w) for w in clk.waits] == [15, 15]  # abs and html each wait the FULL crawl-delay after the prior request
+    assert [round(w) for w in clk.waits] == [15, 15, 15]  # tdmrep.json (CONTROL-GAPS-1107 r2: per-doc deadline +1 Crawl-delay while cold), abs and html each wait the FULL crawl-delay
     urls = [c[0] for c in web.calls]
     assert X.ABS_URL in urls and X.HTML_URL in urls
 

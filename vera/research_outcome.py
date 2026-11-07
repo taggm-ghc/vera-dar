@@ -46,6 +46,7 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-NODOI": "no_route", "R-ACQ-NOTOA": "no_route", "R-ACQ-PID-NOROUTE": "no_route",
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
+    "R-ACQ-TDM": "no_route",  # CONTROL-GAPS-1107: TDM reservation (tdmrep.json, header or meta)
     # fetch/transport failures
     "R-ACQ-UNREACHABLE": "fetch_failed", "R-ACQ-RATELIMITED": "fetch_failed",
     "R-ACQ-ERROR": "fetch_failed",

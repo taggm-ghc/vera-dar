@@ -281,8 +281,8 @@ def _host_lock(host: str):
 
 
 def doc_budget(acq, clock=time.monotonic) -> float:
-    """P0DTA-ARXFIX C: the per-document time an arXiv-routed record needs: 2 x crawl-delay (abs, then html) plus one
-    fetch timeout. The crawl-delay is the robots value when cached, else the configured maximum (never lowered)."""
+    """P0DTA-ARXFIX C: the per-document time an arXiv-routed record needs: 2 x crawl-delay (abs, then html; 3 x while
+    tdmrep.json is not cached, CONTROL-GAPS-1107 r2) plus one fetch timeout. The crawl-delay is the robots value when cached, else the configured maximum (never lowered)."""
     from vera import acq_discovered
     from vera import selective_fetch as sf
     r = rcfg(acq)
@@ -292,7 +292,8 @@ def doc_budget(acq, clock=time.monotonic) -> float:
         from vera import robots_ai  # OD-1106-ROBOTS-AI
         v = robots_ai.crawl_delay(hit[1], sf.USER_AGENT)
         cd = float(v) if v is not None else float(r.get("min_interval_s", 3))
-    return 2 * cd + float(acq_config.bound(acq, "fetch_timeout_s"))
+    n = 2 if "arxiv.org" in acq_discovered._TDMREP else 3  # CONTROL-GAPS-1107 r2: a cold tdmrep.json read is spaced too
+    return n * cd + float(acq_config.bound(acq, "fetch_timeout_s"))
 
 
 def _get(url, acq, deps, max_bytes, clock, deadline, chain, pace: dict):
@@ -309,6 +310,31 @@ def _get(url, acq, deps, max_bytes, clock, deadline, chain, pace: dict):
         return _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, hosts, host, gap)
 
 
+def deadline_extension(acq) -> float:
+    """CONTROL-GAPS-1107 r2 SAFETY BOUND (not a tuned threshold): while arxiv.org's tdmrep.json is not cached, an
+    arXiv-routed document must also wait one robots Crawl-delay before that read (the owner rule: never violate robots).
+    Its per-document deadline is extended by exactly one such wait, at most arxiv_route.max_crawl_delay_s (15 s; a
+    longer Crawl-delay is refused R-ACQ-ROBOTS anyway). 0 once tdmrep.json is cached (same TTL as robots.txt)."""
+    from vera import acq_discovered
+    if "arxiv.org" in acq_discovered._TDMREP:
+        return 0.0
+    return float(rcfg(acq).get("max_crawl_delay_s", 15))
+
+
+def _space(pace: dict, gap: float, acq, clock, deadline) -> None:
+    """Wait until `gap` seconds after this host's last request (P0DTA-ARXFIX C: a wait past the deadline is the
+    distinct, background-eligible crawl_delay stop, never an attempt)."""
+    from vera import auto_acquire as aa
+    if pace.get("last") is not None:
+        wait = pace["last"] + gap - clock()
+        if wait > 0:
+            if deadline is not None and clock() + wait >= deadline:
+                raise aa._Stop(acq_config.reason(acq, "crawl_delay"))
+            from vera import progress as _prog  # NOISY-UI
+            with _prog.waiting(_prog.ACT_POLITE, wait):
+                _sleep(wait)
+
+
 def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, hosts, host, gap):
     from vera import acq_discovered
     from vera import auto_acquire as aa
@@ -317,6 +343,8 @@ def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, host
     if last is not None and last <= clock():  # the most recent request by ANY record to this host (read under the lock)
         pace["last"] = max(pace.get("last") or last, last)
     if r.get("robots", True):
+        # CONTROL-GAPS-1107 r2: the acquisition hop gate's two reads, each spaced like any arXiv request: robots.txt,
+        # then (after the gap / Crawl-delay) /.well-known/tdmrep.json. _guarded_get's own gate then finds both cached.
         cached = host in acq_discovered._ROBOTS
         allowed = host in hosts and acq_discovered._robots_allowed(url, hosts, deps, acq, clock, deadline)
         if not cached:
@@ -330,14 +358,15 @@ def _get_locked(url, acq, deps, max_bytes, clock, deadline, chain, pace, r, host
             if float(cd) > float(r.get("max_crawl_delay_s", 15)):
                 raise aa._Stop(acq_config.reason(acq, "robots"))
             gap = max(gap, float(cd))
-    if pace.get("last") is not None:
-        wait = pace["last"] + gap - clock()
-        if wait > 0:
-            if deadline is not None and clock() + wait >= deadline:
-                raise aa._Stop(acq_config.reason(acq, "crawl_delay"))  # P0DTA-ARXFIX C: distinct, background-eligible
-            from vera import progress as _prog  # NOISY-UI
-            with _prog.waiting(_prog.ACT_POLITE, wait):
-                _sleep(wait)
+        if host not in acq_discovered._TDMREP:
+            _space(pace, gap, acq, clock, deadline)
+            tdm_ok = acq_discovered._tdmrep_allowed(url, hosts, deps, acq, clock, deadline)
+            pace["last"] = _HOST_LAST[host] = clock()  # tdmrep.json was requested just now
+        else:
+            tdm_ok = acq_discovered._tdmrep_allowed(url, hosts, deps, acq, clock, deadline)  # cached: no request
+        if not tdm_ok:
+            raise aa._Stop(acq_config.reason(acq, "tdm"))
+    _space(pace, gap, acq, clock, deadline)
     c = _route_cfg(acq, r.get("content_types") or ("text/html",))
     try:
         return aa._guarded_get(url, c, deps, int(max_bytes), float(acq_config.bound(acq, "fetch_timeout_s")), False,

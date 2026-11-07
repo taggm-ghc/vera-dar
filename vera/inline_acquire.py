@@ -1495,8 +1495,12 @@ def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl
             if isinstance(cand.get("arxiv"), dict):  # P0DTA-ARXFIX C: 2 x crawl-delay + fetch timeout, not the flat bound
                 from vera import arxiv_fulltext
                 pd = max(per_doc, arxiv_fulltext.doc_budget(acq, clock))
+            dl = deadline
+            if isinstance(cand.get("arxiv"), dict):  # CONTROL-GAPS-1107 r2: + one Crawl-delay for a cold tdmrep.json
+                from vera import arxiv_fulltext
+                dl = deadline + arxiv_fulltext.deadline_extension(acq)
             plan, _isbn = aa.evaluate_candidate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock,
-                                                min(deadline, clock() + pd), d,
+                                                min(dl, clock() + pd), d,
                                                 min_spans=acq_config.answer_min_spans(acq))  # ONE-SPAN-1021
             return idx, plan, None
         except aa._Stop as e:
@@ -1619,12 +1623,18 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
     durs: list = []
     one = _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl)
 
+    collect_until = deadline
+    if any(isinstance(r[2], dict) and isinstance(r[2].get("arxiv"), dict) for r in ranked):
+        # CONTROL-GAPS-1107 r2 SAFETY BOUND: + one Crawl-delay (<= 15 s) while tdmrep.json is cold, decided BEFORE
+        # any fetch starts (a worker caching tdmrep.json must not shrink the window it needs)
+        from vera import arxiv_fulltext
+        collect_until = deadline + arxiv_fulltext.deadline_extension(acq)
     futs = {pool.submit(contextvars.copy_context().run, one, i, *r) for i, r in enumerate(ranked)}  # RATE-1022 C2
     got: dict = {}
     try:
         pending = futs
         while pending and len(got) < budget:
-            left = deadline - clock()
+            left = collect_until - clock()
             if left <= 0:
                 break
             fin, pending = wait(pending, timeout=left, return_when=FIRST_COMPLETED)
