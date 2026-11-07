@@ -164,8 +164,11 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     t = " ".join(p for s in cfg["about"]["after_disclosure"] for p in s["paragraphs"])
     assert "never names an individual document" not in t.lower() and "totals only" not in t
     for shown in ("number of sources", "newest source", "licence note", "language model", "current coverage", "topics",
-                  "link to this page", "Trace Eval"):
+                  "Trace Eval", "on this page", "unavailable"):
         assert shown in t, shown
+    # SIDEBAR-RC-1107: the corpus description is About-only since 35f21fb (HOTFIX-BLURB-1104); About must not
+    # describe a sidebar entry or a link that no longer renders.
+    assert "sidebar" not in t.lower() and "link to this page" not in t, t
     assert "last updated" not in t and "scope" not in t.lower()  # CORPUS-DIGEST-1104: no fixed Scope text
     from vera import sources_sidebar as sb  # each claimed element exists in the renderer
     import inspect

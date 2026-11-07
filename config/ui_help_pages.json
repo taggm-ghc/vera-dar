@@ -12,9 +12,9 @@
     "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
     "after_disclosure": [
       {
-        "heading": "What the sidebar entry shows",
+        "heading": "What the corpus section shows",
         "paragraphs": [
-          "The sidebar entry \"What VERA-DAR draws on\" shows the number of sources in the collection and the date of the newest source, a short description of what the collection covers, its main subject topics with each topic's share of a sample of the sources, and a link to this page. When a language model wrote the description, the sidebar says so and gives the date it was written, and the description may be imperfect; otherwise the description is a plain summary and no such line is shown. The licence note, the current coverage, how VERA-DAR answers and the Trace Eval sources line are on this page."
+          "The section \"What VERA-DAR draws on\" on this page shows the number of sources in the collection and the date of the newest source. When a checked description is available, it also shows a short description of what the collection covers and its main subject topics with each topic's share of a sample of the sources; that description was written by a language model, the section says so and gives the date it was written, and the description may be imperfect. When no checked description is available, the section shows only a plain summary (the number of sources and their publication years) and says that a written description is unavailable. The licence note, the current coverage, how VERA-DAR answers and the Trace Eval sources line are also on this page."
         ]
       },
       {
