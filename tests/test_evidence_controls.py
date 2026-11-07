@@ -57,7 +57,23 @@ def _e2_is_open_exception() -> bool:
     return any(e.get("path") == "E2" for e in pin.get("exceptions", []))
 
 
-def test_acquired_loader_tamper_matches_register():
+def _pin_into_manifest(src, spans, tmp_path, monkeypatch):
+    """H1B-PROMOTE-1107: a copy of the shipped acquired-pins manifest (same mode) with the clean row promoted, as the
+    promotion tool would; so the E2 branch below tests the shipped mode, not an empty manifest."""
+    from vera import acquired_pins as ap
+    shipped = json.loads((REPO / "config" / "acquired_pins.json").read_text(encoding="utf-8"))
+    rec = ap.export_records(copy.deepcopy(src), copy.deepcopy(spans), fc.load_config(), A.cfg())
+    assert rec["documents"], "setup: the clean acquired row was not verified for promotion"
+    shipped["batches"] = shipped["batches"] + [{"id": "T1-SYNTH", "export_sha256": "0" * 64}]
+    shipped["documents"] = {**shipped["documents"], **{d["document_id"]: {**{k: d[k] for k in ap.PIN_FIELDS},
+                                                                          "batch": "T1-SYNTH"} for d in rec["documents"]}}
+    p = tmp_path / "acquired_pins.json"
+    p.write_text(json.dumps(shipped), encoding="utf-8")
+    monkeypatch.setattr(ap, "CONFIG_PATH", p)
+    ap._CACHE.clear()
+
+
+def test_acquired_loader_tamper_matches_register(tmp_path, monkeypatch):
     from tests import test_fulldoc_e2e as e2e
     from vera import auto_acquire
     web, _ = A.epi_setup()
@@ -67,6 +83,7 @@ def test_acquired_loader_tamper_matches_register():
     # setup (plain asserts, fail loudly): a plan was stored and the untampered row is served
     assert store.plans, "setup: no acquired plan was stored"
     src, spans = A.rows_from_plans(store.plans)
+    _pin_into_manifest(src, spans, tmp_path, monkeypatch)
     clean = fulldoc_db.load_acquired_rows(copy.deepcopy(src), copy.deepcopy(spans), fc.load_config(), A.cfg())
     assert clean.acquired, "setup: the untampered acquired row is not served"
     # coordinated tamper: one span character plus both recorded hashes
@@ -119,6 +136,13 @@ def test_every_row_loader_is_registered_and_pins_stripping_has_an_exception():
     assert loaders == registered, f"unregistered or stale row loaders: {sorted(loaders ^ registered)}"
     pin = next(c for c in reg["controls"] if c["id"] == "CTL-PIN")
     allowed = {e["site"] for e in pin.get("exceptions", []) if e.get("site")}
+    # H1B-PROMOTE-1107: a site whose stripped base pins are REPLACED by another pin check counts only while that
+    # check is on (config file named by `by`, mode "on")
+    for sub in pin.get("substitute_sites", []):
+        assert sub["path"] in pin["covered"], f"substitute site for uncovered path {sub['path']}"
+        mode = json.loads((REPO / sub["by"]).read_text(encoding="utf-8")).get("mode")
+        assert mode == "on", f"{sub['site']}: substitute {sub['by']} is not in mode on"
+        allowed.add(sub["site"])
     assert _pin_stripping_sites() == allowed, \
         f"pins-stripping sites differ from CTL-PIN exceptions: found {sorted(_pin_stripping_sites())}, listed {sorted(allowed)}"
 

@@ -897,9 +897,10 @@ def build_plan(rec: dict, item: dict, meta: dict, cfg: dict, job: Job, score: fl
 def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict) -> int:
     """Admitted span count when the answer path's own admission runs over a corpus that holds ONLY this document,
     loaded from the exact rows by the acquired-path reader (so a pass also proves the reader accepts them)."""
-    from vera import fulldoc_admission, fulldoc_db
+    from vera import acquired_pins, fulldoc_admission, fulldoc_db
     src = {"run_id": -1, "source_id": 1, "canonical_url": plan["canonical_url"], "content": plan["source"]["content"],
-           "content_hash": plan["source"]["content_hash"], "provenance": json.loads(json.dumps(plan["source"]["provenance"]))}
+           "content_hash": plan["source"]["content_hash"], "provenance": json.loads(json.dumps(plan["source"]["provenance"])),
+           acquired_pins.EPHEMERAL_KEY: True}  # H1B: built in memory from this fetch, never read back from the DB
     spans = [{"source_id": 1, "start_index": s["start_index"], "end_index": s["end_index"], "text": s["text"]}
              for s in plan["spans"]]
     corpus = fulldoc_db.load_acquired_rows([src], spans, fdcfg, cfg, ingest_cfg=icfg)

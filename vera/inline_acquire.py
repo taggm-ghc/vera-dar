@@ -1657,15 +1657,18 @@ def ephemeral_corpus(plans: list, acq: dict, fdcfg: dict, icfg: dict, stored=Non
     key and text hash."""
     import json
 
-    from vera import fulldoc_db
+    from vera import acquired_pins, fulldoc_db
     srcs, spans = [], []
+    # H1B-PROMOTE-1107: reused STORED rows must never carry the in-memory tag (stripped here; the manifest decides)
     st_src, st_spans = stored if stored else ([], [])
-    srcs.extend(json.loads(json.dumps(r, default=str)) for r in st_src)
+    srcs.extend({k: v for k, v in json.loads(json.dumps(r, default=str)).items() if k != acquired_pins.EPHEMERAL_KEY}
+                for r in st_src)
     spans.extend(dict(sp) for sp in st_spans)
     for i, plan in enumerate(plans, 1):
         srcs.append({"run_id": -i, "source_id": -i, "canonical_url": plan["canonical_url"],
                      "content": plan["source"]["content"], "content_hash": plan["source"]["content_hash"],
-                     "provenance": json.loads(json.dumps(plan["source"]["provenance"]))})
+                     "provenance": json.loads(json.dumps(plan["source"]["provenance"])),
+                     acquired_pins.EPHEMERAL_KEY: True})  # H1B: in-memory fetch, never read back from the DB
         spans.extend({"source_id": -i, "start_index": s["start_index"], "end_index": s["end_index"], "text": s["text"]}
                      for s in plan["spans"])
     if not srcs:

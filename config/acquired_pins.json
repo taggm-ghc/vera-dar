@@ -1,0 +1,8 @@
+{
+  "_doc": "H1B-PROMOTE-1107 (owner H1(b), 2026-11-07): repository-pinned manifest of promoted STORED acquired documents. Trust root = this file in a reviewed repository commit (rule 7.a), never a DB row; app-writable pin records are not a trust root. Each entry pins the document's text sha256 (rebuilt from its stored spans), the sha256 of its whole stored provenance (canonical JSON), the sha256 of its canonical URL, its licence id and licence decision. Entries are added ONLY by scripts/promote_acquired_pins.py from an owner-run read-only, hash-only export (batches[].export_sha256 is the sha256 the owner's export printed). mode: off = today's behaviour (manifest not consulted); shadow = served as today, a document whose pin differs is refused, counts reported; on = only pinned stored documents are served, unpinned ones are quarantined. In-memory inline documents (fetched within a request) are not covered: they are never read back from the DB. Read by vera/acquired_pins.py; a malformed file fails closed. Residual risk: a promotion pins what is stored at export time, so a row altered or forged before an export would be pinned (hashes alone cannot show it to a reviewer); keep batches frequent.",
+  "_constraint": {"kind": "temporary", "review_by": "2026-11-21", "owner": "orchestrator", "accepted_by": "owner 2026-11-07 (H1: accept the documented risk through 2026-11-21; select H1(b))", "exit": "first promotion batch lands: set mode on, remove this marker and move CTL-PIN E2 to covered in config/controls.json (work/H1B-PROMOTE-1107/enable.patch)"},
+  "schema_version": 1,
+  "mode": "off",
+  "batches": [],
+  "documents": {}
+}

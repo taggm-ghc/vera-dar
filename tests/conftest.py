@@ -316,3 +316,16 @@ def _provider_exhaustion_reset():
     provider_exhaustion.reset_for_tests()
     yield
     provider_exhaustion.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _acquired_pins_mode_off_for_unrelated_tests(monkeypatch):
+    """H1B-PROMOTE-1107: synthetic stored acquired rows are never in the shipped pin manifest, so tests that exercise
+    stored-acquired serving would be quarantined once config/acquired_pins.json is mode on. Each test starts with NO
+    manifest (= mode off, today's serving); tests/test_acquired_pins.py and the CTL-PIN tripwire in
+    tests/test_evidence_controls.py point CONFIG_PATH at their own manifests (the shipped mode included)."""
+    import vera.acquired_pins as ap
+    monkeypatch.setattr(ap, "CONFIG_PATH", ap.CONFIG_PATH.parent / "acquired_pins.TESTS-ABSENT.json")
+    ap._CACHE.clear()
+    yield
+    ap._CACHE.clear()

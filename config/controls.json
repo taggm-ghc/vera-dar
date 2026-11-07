@@ -12,7 +12,7 @@
       "must_cover": ["E1", "E2"],
       "covered": ["E1"],
       "exceptions": [
-        {"path": "E2", "reason": "acquired documents are served without pins (WED-ACQ2 V2)", "accepted_by": null, "review_by": "2026-11-21", "owner": "orchestrator", "site": "vera/fulldoc_db.py:_load_acquired", "exit": "signed or admin-written pins for acquired documents"}
+        {"path": "E2", "reason": "acquired documents are served without pins (WED-ACQ2 V2)", "accepted_by": "owner 2026-11-07 (H1: accept the documented risk through 2026-11-21; select H1(b))", "review_by": "2026-11-21", "owner": "orchestrator", "site": "vera/fulldoc_db.py:_load_acquired", "exit": "repository-pinned manifest config/acquired_pins.json in mode on after the first promotion batch (H1B-PROMOTE-1107)"}
       ],
       "owner": "orchestrator",
       "test": "tests/test_evidence_controls.py::test_acquired_loader_tamper_matches_register"

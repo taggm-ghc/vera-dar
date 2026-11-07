@@ -607,10 +607,16 @@ def _per_topic_mode(acq_cfg):
     return (ptm is not None or _topic_balanced(acq_cfg)), ptm
 
 
-def acquired_ids_per_topic(conn, cur, base_run_id, marker, per_topic_max, scan_max, total_max, cfg) -> list:
+def acquired_ids_per_topic(conn, cur, base_run_id, marker, per_topic_max, scan_max, total_max, cfg,
+                           allow_ids=None) -> list:
+    """allow_ids (H1B-PROMOTE-1107, pins mode on): only rows whose provenance document_id is pinned compete for the
+    serve caps. A pre-selection only: the reader still verifies each row and compares it with its pin."""
     rows = _select(cur, SQL_ACQ_INDEX, {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker),
                                                       "base": int(base_run_id), "scan": int(scan_max)})
     idx = [{"source_id": r[0], "run_id": r[1], "provenance": r[2]} for r in rows]
+    if allow_ids is not None:
+        from vera import acquired_pins
+        idx = [i for i in idx if acquired_pins.row_document_id(i) in allow_ids]
     if idx:  # D1: first-span text per document (read-only, parameterized SELECT) so keys come from title + text
         from vera import micro_topic
         win = int((cfg or {}).get("text_window_chars") or micro_topic.DEFAULT_WINDOW)
@@ -650,7 +656,7 @@ def acquired_signature(connect, base_run_id, marker: str) -> tuple:
 
 
 def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical_urls=None, per_topic_max=None,
-                        scan_max=None, micro_cfg=None, topic_balanced=False) -> tuple:
+                        scan_max=None, micro_cfg=None, topic_balanced=False, allow_ids=None) -> tuple:
     """Read-only. canonical_urls (DAR-INLINE-1021-R2): only the acquired rows of those canonical URLs (inline reuse).
     per_topic_max (L9): per-micro-topic serving of the newest scan_max rows; None = newest `limit` (legacy).
     topic_balanced (FLOOR6-1028): per-topic ORDER with no ceiling when per_topic_max is None."""
@@ -665,7 +671,7 @@ def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int, canonical
                 params["cus"] = [str(u) for u in canonical_urls]
             if canonical_urls is None and (per_topic_max or topic_balanced):
                 sids = acquired_ids_per_topic(conn, cur, base_run_id, marker, per_topic_max, scan_max or 2000,
-                                              limit, micro_cfg or {})
+                                              limit, micro_cfg or {}, allow_ids=allow_ids)
                 params.pop("lim", None)
                 params["sids"] = [int(x) for x in sids]
                 srows = _select_compat(conn, cur, SQL_ACQ_SOURCES_BY_ID, params) if sids else []
@@ -710,11 +716,22 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
     max_docs = int(b.get("served_acquired_max", 0) if max_docs is None else max_docs)
     max_bytes = int(b.get("served_acquired_max_bytes", 0) if max_bytes is None else max_bytes)
     open_cfg = {k: v for k, v in cfg.items() if k != "pins"}  # pins-free: acquired runs are not part of the bundle
+    # H1B-PROMOTE-1107: the base pins do not cover acquired runs; the repository manifest config/acquired_pins.json does
+    from vera import acquired_pins as ap
+    pm = ap.load()
+    pmode = pm["mode"]
+    ek = ap.EPHEMERAL_KEY
     by_src: dict = {}
     for sp in spans:
         by_src.setdefault(sp.get("source_id"), []).append(sp)
     runs: dict = {}
     ordered = sorted(sources, key=lambda r: -int(r.get("source_id") or 0))
+    rest: list = []
+    if pmode == "on":  # pinned stored rows and in-memory inline rows fill the serve caps; the rest only meet quarantine
+        pids = ap.pinned_ids(pm)
+        keep = [r for r in ordered if r.get(ek) is True or ap.row_document_id(r) in pids]
+        rest = [r for r in ordered if not (r.get(ek) is True or ap.row_document_id(r) in pids)]
+        ordered = keep
     use_pt, ptm = _per_topic_mode(acq_cfg)
     if use_pt:  # L9 / FLOOR6: per-micro-topic order; rows beyond the per-topic/total caps are not loaded
         first = _first_span_texts(spans)  # D1: real rows have content '' (text is in the spans)
@@ -723,20 +740,22 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
                              acq_cfg.get("micro_topic") or {})
         rank = {sid: i for i, sid in enumerate(pick)}
         ordered = sorted((r for r in ordered if r.get("source_id") in rank), key=lambda r: rank[r.get("source_id")])
-    for row in ordered:
-        runs.setdefault(row.get("run_id"), []).append(row)
+    for row in ordered + rest:  # H1B review: an in-memory row never shares a run group with a stored row
+        runs.setdefault((row.get(ek) is True, row.get("run_id")), []).append(row)
     acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
     seen_keys, seen_hashes, total = set(), set(), 0
     stamps: dict = {}
-    for rid, rows in runs.items():
+    pin_candidates: dict = {}
+    report = {"mode": pmode, "pinned": 0, "unpinned": 0, "mismatch": 0, "ephemeral": 0, "manifest_error": pm["error"]}
+    for (is_eph, rid), rows in runs.items():
         if len(acquired) >= max_docs:
             break
         rspans = [sp for r in rows for sp in by_src.get(r.get("source_id"), [])]
-        bare = [{k: v for k, v in r.items() if k != "run_id"} for r in rows]
+        bare = [{k: v for k, v in r.items() if k not in ("run_id", ek)} for r in rows]
         c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS, build_index=False)
         unusable.extend(c.unusable)
         stamps.update(getattr(c, "stamps", None) or {})
-        provs = {}
+        provs, eph = {}, set()
         for r in rows:
             try:
                 p = _prov(r)
@@ -745,6 +764,8 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
             if (p.get("acquisition") or {}).get("marker") != acq_cfg.get("marker"):
                 continue
             provs[p.get("document_id")] = p
+            if is_eph:
+                eph.add(p.get("document_id"))
         for a in c.acquired:
             did = a["document_id"]
             text = c._texts[did]
@@ -765,6 +786,26 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
             if acq_config.injection_refused(text, acq_cfg):  # re-applied at read (filters apply to all ingest)
                 unusable.append(_unusable(did, R_ACQINJECT, "instruction-like text found by the injection scan"))
                 continue
+            if did in eph:  # fetched within this request, verified in memory, never read back from the DB
+                report["ephemeral"] += 1
+            else:
+                got = ap.pin_entry(text, provs[did], key, a.get("licence"), a.get("licence_decision"))
+                pin_candidates[did] = {**got, "acquired_on": str((provs[did].get("acquisition") or {}).get("acquired_at")
+                                                                 or "")[:10] or None}
+                if pmode != "off":
+                    if pm["error"] is not None:
+                        if pmode == "on":
+                            unusable.append(_unusable(did, ap.R_PINCFG, "acquired pins manifest unusable"))
+                            continue
+                    else:
+                        st = ap.status(pm, did, got)
+                        report[st] += 1
+                        if st == "mismatch":
+                            unusable.append(_unusable(did, ap.R_PINMISMATCH, "stored document differs from its pin"))
+                            continue
+                        if st == "unpinned" and pmode == "on":
+                            unusable.append(_unusable(did, ap.R_QUARANTINE, "stored document not promoted (no pin)"))
+                            continue
             n = len(text.encode("utf-8"))
             if len(acquired) >= max_docs or total + n > max_bytes:
                 unusable.append(_unusable(did, R_ACQCAP, "serve cap reached (documents or bytes)"))
@@ -788,7 +829,7 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
         out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
                             {}, None, {}, cfg)
         out.source_kind = "db"
-        return out
+        return _pin_attrs(out, pin_candidates, report)
     dar = DarCorpus(_routing_cfg())
     kept_docs = []
     for d in docs:  # the index-refusal rule the per-run load applied before (ACQ-REBUILD-PERF-1021): refused => UNUSABLE
@@ -805,9 +846,18 @@ def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg, max_docs, max_bytes
         out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
                             {}, None, {}, cfg)
         out.source_kind = "db"
-        return out
+        return _pin_attrs(out, pin_candidates, report)
     out = _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs))
     out.source_kind = "db"
+    return _pin_attrs(out, pin_candidates, report)
+
+
+def _pin_attrs(out, pin_candidates: dict, report: dict):
+    """H1B-PROMOTE-1107: hash-only pin candidates (every stored document that passed the non-pin checks) and, unless
+    mode is off, the pinned / unpinned / mismatch / ephemeral counts."""
+    out.pin_candidates = pin_candidates
+    if report.get("mode") != "off":
+        out.pin_report = report
     return out
 
 
@@ -822,6 +872,10 @@ def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocC
         if use_pt:
             b = acq_cfg.get("bounds") or {}
             extra = {} if ptm else {"topic_balanced": True}  # FLOOR6-1028: no ceiling, balanced order
+            from vera import acquired_pins
+            pm = acquired_pins.load()
+            if pm["mode"] == "on":  # H1B-PROMOTE-1107: only pinned rows compete for the serve caps
+                extra["allow_ids"] = acquired_pins.pinned_ids(pm)
             sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim, per_topic_max=ptm,
                                                  scan_max=int(b.get("served_scan_max") or 2000),
                                                  micro_cfg=acq_cfg.get("micro_topic") or {}, **extra)
@@ -829,4 +883,10 @@ def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocC
             sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], lim)
     except Exception as e:  # noqa: BLE001
         return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
-    return load_acquired_rows(sources, spans, cfg, acq_cfg)
+    c = load_acquired_rows(sources, spans, cfg, acq_cfg)
+    rep = getattr(c, "pin_report", None)
+    if rep:  # counts only (no ids, titles or URLs)
+        logging.getLogger("vera").info("acquired pins: mode=%s pinned=%d unpinned=%d mismatch=%d manifest_error=%s",
+                                       rep["mode"], rep["pinned"], rep["unpinned"], rep["mismatch"],
+                                       "yes" if rep["manifest_error"] else "no")
+    return c
