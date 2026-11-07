@@ -276,7 +276,7 @@ def test_description_line_ignores_summary_model_and_unknown_fields():
     joined = " ".join(cap)
     assert "written by a language model on 2026" in joined and "groq" not in joined and SENT_MODEL not in joined
     assert sb.CORPUS_FIELDS == {"summary_source", "source_count", "corpus_updated_at", "summary", "topics",
-                                "summary_generated_at", "coverage", "topic_shares"}
+                                "summary_generated_at", "coverage", "topic_shares", "subject_areas"}
 
 
 def test_model_written_description_naming_a_backend_is_replaced():
@@ -313,7 +313,7 @@ def test_licence_and_heading_reworded(tmp_path, monkeypatch):
 
 def test_nav_labels_and_streamlit_config():
     assert tuple(label for _, label in sb.NAV) == ("Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About",
-                                                 "Terms of Access, Browsing, and Use")
+                                                 "Corpus Description", "Terms of Access, Browsing, and Use")
     assert not any("streamlit" in label.lower() for _, label in sb.NAV)
     cfg = (ROOT / ".streamlit" / "config.toml").read_text()
     assert re.search(r"^showSidebarNavigation\s*=\s*false\s*$", cfg, re.M)
@@ -331,7 +331,7 @@ def test_nav_labels_and_streamlit_config():
 
     sb.render_nav(St())
     assert [c[1] for c in calls] == ["Ask VERA-DAR", "Report", "Trace Eval", "How to use", "About",
-                                         "Terms of Access, Browsing, and Use"]
+                                         "Corpus Description", "Terms of Access, Browsing, and Use"]
 
 
 def test_main_page_nav_renders_via_apptest_with_labels(monkeypatch):
@@ -603,12 +603,13 @@ def test_no_fixed_scope_text_without_generated_description(data, tmp_path, monke
 def test_generated_coverage_renders_on_about_and_how_to_use(monkeypatch):
     from vera import help_pages
     monkeypatch.setattr(sb, "_corpus", lambda st: _AGENTIC)
-    for render in (help_pages.render_about, help_pages.render_how_to_use):
+    # CORPUS-DESC-1107: the coverage line moved with the corpus description to the Corpus Description page
+    for render in (help_pages.render_about, help_pages.render_how_to_use, help_pages.render_corpus_page):
         st, cap = _capture()
         st.title = st.info = st.subheader = lambda *a, **k: None
         render(st)
         shown = any(sb.plain("Mostly epidemiology and public health.") in c and "overage" in c for c in cap)
-        assert shown is (render is help_pages.render_about), render.__name__  # HOTFIX-BLURB-1104: About only
+        assert shown is (render is help_pages.render_corpus_page), render.__name__  # one page only
     assert sb.corpus_notes_lines(_AGENTIC)[0] == r"**Current coverage:** Mostly epidemiology and public health\."
     # a coverage naming a backend is dropped, never shown
     assert sb.coverage_text({**_AGENTIC, "coverage": "Written by gpt-4.1-nano."}) is None

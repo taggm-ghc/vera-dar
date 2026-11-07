@@ -172,7 +172,9 @@ def fallback_summary(overview: dict, profile: dict) -> str:
         return "VERA-DAR's corpus has no stored sources yet. Sources are added after answers, once they pass VERA-DAR's checks."
     yrs = profile.get("published_years") or [None, None]
     years = f" Publication years: {yrs[0]} to {yrs[1]}." if yrs[0] and yrs[1] else ""
-    return f"{overview['source_count']} sources.{years} A written description is temporarily unavailable."
+    # CORPUS-DESC-1107: no count here (the section's first line already gives it) and no "unavailable" sentence; the
+    # subject areas (subject_areas) describe what the corpus covers without a model.
+    return years.strip()
 
 
 # --- CORPUS-DIGEST-1104: bounded agentic digest pipeline ---------------------------------------------------------
@@ -1063,6 +1065,136 @@ def run_table_digest(overview: dict, profile: dict, table: dict, llm, cfg: dict,
             "model": None, "check_model": None, "trace": trace, "prose": "fallback"}
 
 
+# --- CORPUS-DESC-1107: deterministic subject areas (domain > topic > subtopic); no model call ------------------------
+# Owner 2026-11-07: the corpus section must describe domains, and topics where possible, and never only a count. At HEAD the
+# taxonomy is the topic registry table (migration 011): a topic row has a domain name (`field`) and an optional parent topic
+# (a subtopic). No stored document-to-topic table exists yet (017 unapplied), so each document's primary topic is assigned
+# here at read time by the existing deterministic anchor match (vera.micro_topic: a stored acquisition key first, else BM25
+# of title + text window against the active anchors, at micro_topic.count_min_score.anchor_bm25.scholarly). Names come from
+# the DB registry only (never the JSON seed). document_primary_topics() is the single seam to repoint at normalized
+# document/chunk-topic tables when they land (TAXONOMY-SCHEMA-1107).
+# CALIBRATION (2026-11-07): NOT calibrated on real data; no production read was authorised to the implementer. The display
+# limits below only bound how many names are listed (everything else is summed into "other"); they accept or reject
+# nothing. The BM25 threshold is the existing PROVISIONAL prior (config/auto_acquire.json micro_topic._note). Owner/RO-path
+# follow-up: measure the matched share and spot-check assignments on real vera_vjay.sources rows.
+# connect_timeout_s / statement_timeout_ms: PROVISIONAL safety bounds (not decision thresholds; uncalibrated) so a slow DB
+# cannot hold a page view; on timeout the page shows the "not available right now" line.
+SUBJECT_DEFAULTS = {"enabled": True, "display_domains": 8, "display_topics": 3, "display_subtopics": 2,
+                    "scan_max": 2000, "cache_s": 300.0, "connect_timeout_s": 5, "statement_timeout_ms": 5000}
+SUBJECT_ROWS_SQL = (  # latest version of each canonical source; read-only; titles and text never leave this module
+    "SELECT s.canonical_source_id, coalesce(s.provenance->>'title', k.title), left(s.content, :w), "
+    "s.provenance->'acquisition'->'micro_topic' FROM vera_vjay.sources s "
+    "LEFT JOIN vera_vjay.candidates k ON k.candidate_id = s.candidate_id WHERE s.version = "
+    "(SELECT max(v.version) FROM vera_vjay.sources v WHERE v.canonical_source_id = s.canonical_source_id) "
+    "ORDER BY s.canonical_source_id DESC LIMIT :n")
+
+
+def subject_cfg(cfg: dict | None) -> dict:
+    return {**SUBJECT_DEFAULTS, **(((cfg or {}).get("subject_areas")) or {})}
+
+
+def _micro_cfg() -> dict:
+    from vera import acq_config
+    return (acq_config.load_config() or {}).get("micro_topic") or {}
+
+
+def registry_for_subjects(engine, mt_cfg: dict, reader=None) -> dict | None:
+    """Active registry data from the DB on this engine (vera.micro_topic.registry_active_data), or None when the table is
+    absent. Raises on any other problem (the caller then shows no subject areas)."""
+    from vera import micro_topic
+    return micro_topic.registry_active_data(mt_cfg, engine, reader)
+
+
+def assign_topic(reg, title, text, stored, threshold: float, window: int) -> str | None:
+    """Primary registry key of one document, or None (not matched). Pure and deterministic."""
+    from vera import micro_topic
+    if isinstance(stored, (str, bytes)):
+        try:
+            stored = json.loads(stored)
+        except ValueError:
+            stored = None
+    if isinstance(stored, list) and stored and isinstance(stored[0], dict):
+        top = stored[0]
+        if top.get("scheme") in micro_topic.STORED_REGISTRY_SCHEMES and str(top.get("id")) in reg.by_id:
+            return str(top["id"])
+    body = micro_topic.doc_text(title, text, {"text_window_chars": window})
+    if not body.strip():
+        return None
+    b = reg.best(body)
+    return str(b[1]["id"]) if b is not None and b[0] >= threshold else None
+
+
+def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_timeout_ms: int = 5000) -> dict:
+    """SEAM (TAXONOMY-SCHEMA-1107): {document id: primary topic key or None} for up to scan_max documents (newest first).
+    Today: one read-only SELECT plus the read-time anchor match. Repoint here at a stored document-topic table."""
+    from sqlalchemy import text as sql
+    window = int(mt_cfg.get("text_window_chars") or 2000)
+    threshold = float((((mt_cfg.get("count_min_score") or {}).get("anchor_bm25") or {}).get("scholarly", 2.0)))
+    with engine.connect() as c:  # transaction-local statement timeout (PROVISIONAL safety bound), then the one SELECT
+        c.execute(sql("SELECT set_config('statement_timeout', :ms, true)"), {"ms": str(int(statement_timeout_ms))})
+        rows = c.execute(sql(SUBJECT_ROWS_SQL), {"w": window, "n": int(scan_max)}).all()
+    return {int(r[0]): assign_topic(reg, r[1], r[2], r[3], threshold, window) for r in rows}
+
+
+def _share(n: int, d: int) -> float:
+    return round(n / d, 4) if d else 0.0
+
+
+def subject_areas(entries: list, primary: dict, scfg: dict | None = None) -> dict | None:
+    """Pure. Domain > topic > subtopic shares of documents from registry entries (dicts id, label, field, parent_topic_key)
+    and {document: key or None}. A subtopic rolls up to its top-level topic (roll_up: active chain, depth <= 2); the domain
+    is the top-level topic's field. Each document counts once, so shares add up. None when there are no documents."""
+    s = {**SUBJECT_DEFAULTS, **(scfg or {})}
+    n = len(primary)
+    if not n:
+        return None
+    tree = {e["id"]: {"label": e.get("label"), "state": "active", "parent": e.get("parent_topic_key"), "field": e.get("field")}
+            for e in entries or [] if e.get("id")}
+    dom, top, sub = {}, {}, {}
+    for key in primary.values():
+        root = roll_up(tree, key) if key else None
+        if root is None:
+            continue
+        d = sanitise(tree[root]["field"], 60)
+        if not d:
+            continue
+        dom[d] = dom.get(d, 0) + 1
+        top[(d, root)] = top.get((d, root), 0) + 1
+        if key != root:
+            sub[(root, key)] = sub.get((root, key), 0) + 1
+    ranked = sorted(dom.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+    shown, rest = ranked[:int(s["display_domains"])], ranked[int(s["display_domains"]):]
+    domains = []
+    for d, dn in shown:
+        ts = sorted(((k, c) for (dd, k), c in top.items() if dd == d), key=lambda kv: (-kv[1], str(tree[kv[0]]["label"]).casefold()))
+        topics = []
+        for k, c in ts[:int(s["display_topics"])]:
+            ss = sorted(((sk, sc) for (r, sk), sc in sub.items() if r == k), key=lambda kv: (-kv[1], str(tree[kv[0]]["label"]).casefold()))
+            topics.append({"label": sanitise(tree[k]["label"], 120), "share": _share(c, n),
+                           "subtopics": [{"label": sanitise(tree[sk]["label"], 120), "share": _share(sc, n)}
+                                         for sk, sc in ss[:int(s["display_subtopics"])]]})
+        domains.append({"label": d, "share": _share(dn, n), "topics": topics, "more_topics": max(0, len(ts) - len(topics))})
+    matched = sum(dom.values())
+    return {"basis_documents": n, "domains": domains,
+            "other_domains": {"count": len(rest), "share": _share(sum(c for _, c in rest), n)},
+            "unmatched_share": _share(n - matched, n)}
+
+
+def subject_areas_for(engine, cfg: dict | None, mt_cfg: dict | None = None, registry_reader=None) -> dict | None:
+    """Subject areas of the whole corpus, or None (off, registry absent, or no documents). Raises on a read problem."""
+    scfg = subject_cfg(cfg)
+    if scfg.get("enabled") is not True:
+        return None
+    from vera import micro_topic
+    mt = _micro_cfg() if mt_cfg is None else mt_cfg
+    data = registry_for_subjects(engine, mt, registry_reader)
+    if not data or not data.get("entries"):
+        return None
+    reg = micro_topic.Registry(data)
+    return subject_areas(data["entries"], document_primary_topics(engine, reg, mt, int(scfg["scan_max"]),
+                                                                  int(scfg["statement_timeout_ms"])), scfg)
+
+
 class CorpusDescriber:
     """Process-wide cache; `llm(messages, max_tokens=, timeout_s=) -> (json_object, model_label)` is injected."""
 
@@ -1082,6 +1214,9 @@ class CorpusDescriber:
         # INTEGRATE-1104 (owner: migration 015 applied): DB persistence of the latest digest, ONLY behind
         # config/request_trace.json digest_store.enabled (vera.digest_store; None = read that config). Tests inject both.
         self.store_cfg, self.store_engine_factory = None, None
+        # CORPUS-DESC-1107: subject areas cache (clock, corpus key, value); tests inject the micro_topic config and reader
+        self._subject_cache, self.subject_mt_cfg, self.subject_registry_reader = None, None, None
+        self._subject_lock = threading.Lock()
 
     def _store_key(self, overview: dict, sig=None) -> str:
         import re as _re
@@ -1153,7 +1288,8 @@ class CorpusDescriber:
                 from sqlalchemy import create_engine as factory
             else:
                 factory = self.engine_factory
-            self._engine = factory(url, pool_pre_ping=True, hide_parameters=True)
+            self._engine = factory(url, pool_pre_ping=True, hide_parameters=True,  # CORPUS-DESC-1107: PROVISIONAL bound
+                                   connect_args={"connect_timeout": int(subject_cfg(self.cfg)["connect_timeout_s"])})
         return self._engine
 
     # --- TOPIC-TAGGING-1104: table mode (never calls the model inline) -------------------------------------------
@@ -1269,7 +1405,44 @@ class CorpusDescriber:
         return bool(c) and (c["source_count"], c["corpus_updated_at"], c["prompt_version"]) == (
             overview["source_count"], overview["corpus_updated_at"], self.cfg["prompt_version"])
 
+    def _subjects(self, overview: dict):
+        """CORPUS-DESC-1107: deterministic subject areas, cached in memory per corpus state for subject_areas.cache_s (the
+        registry can change without the corpus changing). Never raises; None on any problem (class name logged only)."""
+        key = (overview.get("source_count"), overview.get("corpus_updated_at"))
+        now, ttl = self.clock(), float(subject_cfg(self.cfg)["cache_s"])
+        sc = self._subject_cache
+        if sc is not None and sc[1] == key and now - sc[0] < ttl:
+            return sc[2]
+        # single flight: one rebuild at a time; a concurrent miss gets the previous value (or None) at once, never waits
+        if not self._subject_lock.acquire(blocking=False):
+            return sc[2] if sc is not None else None
+        try:
+            return self._subjects_build(key, now)
+        finally:
+            self._subject_lock.release()
+
+    def _subjects_build(self, key, now):
+        sc = self._subject_cache
+        if sc is not None and sc[1] == key and self.clock() - sc[0] < float(subject_cfg(self.cfg)["cache_s"]):
+            return sc[2]  # another caller finished the rebuild just before this one took the lock
+        try:
+            engine = self._engine_or_none()
+            val = None if engine is None else subject_areas_for(engine, self.cfg, self.subject_mt_cfg, self.subject_registry_reader)
+        except Exception as exc:  # noqa: BLE001  the page never breaks; the digest still renders
+            logger.warning("corpus subject areas unavailable (%s)", type(exc).__name__)
+            val = None
+        self._subject_cache = (now, key, val)
+        return val
+
     def current(self, llm) -> dict:
+        out = self._current_digest(llm)
+        if out.get("source_count"):
+            sa = self._subjects(out)
+            if sa:
+                out = {**out, "subject_areas": sa}
+        return out
+
+    def _current_digest(self, llm) -> dict:
         engine = self._engine_or_none()
         if engine is None:
             return {"source_count": None, "corpus_updated_at": None, "summary": None, "topics": [], "coverage": None,

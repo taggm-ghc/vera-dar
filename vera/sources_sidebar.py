@@ -59,11 +59,12 @@ def plain_url(text: str) -> str:
 # K3.I: UI labels for the page links (labels, not data). Order is the order shown.
 NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), ("pages/trace_eval.py", "Trace Eval"),
        ("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
+       ("pages/corpus_description.py", "Corpus Description"),  # CORPUS-DESC-1107 (owner direction): its own page
        ("pages/terms.py", "Terms of Access, Browsing, and Use"))  # PRIVACY-1104: a link on every page, not content
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
-                           "coverage", "topic_shares"})
+                           "coverage", "topic_shares", "subject_areas"})
 # D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
 # many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
 # topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
@@ -217,9 +218,52 @@ def _share_lines(shares) -> list[str]:
         return []
 
 
+def _pct(share) -> str:
+    v = float(share)
+    return "under 1%" if 0 < v < 0.005 else f"{int(round(v * 100))}%"
+
+
+def _subject_lines(sa) -> list[str]:
+    """CORPUS-DESC-1107: code-built domain > topic > subtopic lines (names from the DB topic registry, shares computed by
+    code; no model text, no source title). [] when absent or malformed."""
+    if not isinstance(sa, dict):
+        return []
+    try:
+        n = int(sa["basis_documents"])
+        if n <= 0:
+            return []
+        lines = [f"**Subject areas** (share of {n} documents; each document counts once, under the closest subject in "
+                 "VERA-DAR's subject list):"]
+        for d in sa.get("domains") or []:
+            label = plain(str(d["label"])[:1].upper() + str(d["label"])[1:])
+            parts = []
+            for t in d.get("topics") or []:
+                subs = ", ".join(f"{plain(x['label'])} {_pct(x['share'])}" for x in t.get("subtopics") or [])
+                parts.append(f"{plain(t['label'])} {_pct(t['share'])}" + (f" (including {subs})" if subs else ""))
+            more = int(d.get("more_topics") or 0)
+            if more:
+                parts.append(f"{more} more topic{'s' if more != 1 else ''}")
+            lines.append(f"{label}: {_pct(d['share'])}" + (f". Topics: {'; '.join(parts)}." if parts else "."))
+        o = sa.get("other_domains") or {}
+        if int(o.get("count") or 0) > 0:
+            k = int(o["count"])
+            lines.append(f"Other subject areas: {_pct(o.get('share') or 0)} across {k} more area{'s' if k != 1 else ''}.")
+        if not sa.get("domains"):
+            lines.append("No document matched a listed subject area yet.")
+        elif float(sa.get("unmatched_share") or 0) > 0:
+            lines.append(f"Not matched to a listed subject area: {_pct(sa['unmatched_share'])}.")
+        return lines if all(_model_text_ok(ln) for ln in lines) else []  # defence in depth: all or nothing
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+NO_SUBJECTS = "A description by subject area is not available right now."
+
+
 def render_corpus(st, data: dict | None) -> None:
     """CORPUS-DIGEST-1104: count/newest line, the digest, subject topics with shares, and the model-written line.
-    The licence note, scope, how-it-answers and Trace Eval lines moved to the About page (render_corpus_notes)."""
+    CORPUS-DESC-1107: plus the code-built subject areas (domains, topics, subtopics) in every state; rendered on the
+    Corpus Description page. The licence note, how-it-answers and Trace Eval lines stay on About (render_corpus_notes)."""
     if not data or data.get("summary_source") in (None, "disabled", "unavailable", "not_connected"):
         st.caption(f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
         return
@@ -229,10 +273,15 @@ def render_corpus(st, data: dict | None) -> None:
     checked = data.get("summary_source") == CHECKED
     if data.get("summary") and data.get("summary_source") in CODE_ONLY_SOURCES:
         st.caption(plain(data["summary"]))  # code-built text
+    subjects = _subject_lines(data.get("subject_areas"))
     if not checked:  # default deny: no model-written field without the checker-pass marker
+        for line in subjects or [NO_SUBJECTS]:
+            st.caption(line)
         return
     if data.get("summary"):
         st.caption(plain(data["summary"]) if _model_text_ok(data["summary"]) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
+    for line in subjects:
+        st.caption(line)
     shares = _share_lines(data.get("topic_shares"))
     if shares:
         for line in shares:
@@ -285,7 +334,7 @@ def trace_eval_line() -> str:
             f"retrieved for {snap['questions']} test questions{span}{when}.")
 
 
-CORPUS_NOTES_HEADING = "VERA-DAR's corpus: coverage, licences and how it answers"
+CORPUS_NOTES_HEADING = "VERA-DAR's corpus: licences and how it answers"  # CORPUS-DESC-1107: coverage is on Corpus Description
 
 
 def corpus_notes_lines(data: dict | None) -> list[str]:

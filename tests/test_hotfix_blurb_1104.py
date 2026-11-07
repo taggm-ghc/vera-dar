@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 from vera import disclosure, sources_sidebar
 
 ROOT = Path(__file__).resolve().parent.parent
-OTHER_PAGES = ("pages/how_to_use.py", "pages/trace_eval.py", "pages/vera_demo.py")
+OTHER_PAGES = ("pages/how_to_use.py", "pages/trace_eval.py", "pages/vera_demo.py", "pages/corpus_description.py")
 _NORM = lambda t: re.sub(r"\s+", " ", t).strip()  # noqa: E731
 APPROVED_SHORT = ("VERA-DAR is an AI system and its answers may be wrong. Your question is sent to third-party AI and "
                   "search services.")
@@ -35,7 +35,7 @@ def _about_only_strings():
     s = [disclosure._LANE_SEARCH, disclosure._LANE_SEARCH_HN, disclosure._LANE_PAGES, disclosure._LANE_LICENCE,
          disclosure._LANE_GDELT_CREDIT, disclosure._NO_SAVE, disclosure._THIRD_PARTY, "30 days", "GDELT",
          sources_sidebar.LICENCE_SIDEBAR, sources_sidebar.MODEL_LINE, "How VERA-DAR answers:", "Trace Eval sources:",
-         "VERA-DAR's corpus:", "Current coverage", "Main topics", sources_sidebar.CORPUS_NOTES_HEADING]
+         sources_sidebar.CORPUS_NOTES_HEADING]  # CORPUS-DESC-1107: the corpus lines moved to the Corpus Description page
     s += [t for _h, t in disclosure.disclosure_sections()]
     return [_NORM(x).strip() for x in s if _NORM(x).strip()]
 

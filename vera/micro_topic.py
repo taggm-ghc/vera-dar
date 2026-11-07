@@ -230,6 +230,14 @@ def registry_active_tree(cfg: dict | None = None, reader=None) -> dict:
     return {e["id"]: {"label": e.get("label"), "state": "active", "parent": e.get("parent_topic_key")} for e in data["entries"]}
 
 
+def registry_active_data(cfg: dict | None = None, engine=None, reader=None) -> dict | None:
+    """CORPUS-DESC-1107: registry data (entries with id, label, field, parent_topic_key, anchor_text) of the DB table's ACTIVE
+    rows, read on `engine` (e.g. the corpus digest's read-only engine) through the registry module's owner-checked READ ONLY
+    reader; None when the table is absent (never the JSON seed). Raises on any other problem."""
+    from vera import topic_registry
+    return topic_registry.load_active_registry_data(cfg, reader, engine=engine)
+
+
 def registry_active_keys(cfg: dict | None = None, reader=None) -> set:
     """ACTIVE registry keys (set(registry_active_tree)); empty when the table is absent."""
     return set(registry_active_tree(cfg, reader))

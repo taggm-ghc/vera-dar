@@ -127,7 +127,8 @@ def test_unreadable_config_shows_fallback(tmp_path):
 
 def test_sidebar_nav_has_both_pages_and_files_exist():
     from vera.sources_sidebar import NAV
-    assert NAV[-3:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
+    assert NAV[-4:] == (("pages/how_to_use.py", "How to use"), ("pages/about.py", "About"),
+                        ("pages/corpus_description.py", "Corpus Description"),
                         ("pages/terms.py", "Terms of Access, Browsing, and Use"))
     assert all((ROOT / p).exists() for p, _ in NAV)
     assert not hasattr(disclosure, "ABOUT_LINKS")  # owner 2026-11-05: no header links on any page
@@ -161,10 +162,10 @@ def test_no_answer_wording_is_plain():
 
 def test_about_sidebar_text_matches_what_the_sidebar_shows():
     _, cfg = _howto_text()
-    t = " ".join(p for s in cfg["about"]["after_disclosure"] for p in s["paragraphs"])
+    t = " ".join(cfg["corpus_page"]["paragraphs"])  # CORPUS-DESC-1107: the corpus description has its own page
     assert "never names an individual document" not in t.lower() and "totals only" not in t
-    for shown in ("number of sources", "newest source", "licence note", "language model", "current coverage", "topics",
-                  "Trace Eval", "on this page", "unavailable"):
+    for shown in ("number of sources", "newest source", "subject areas", "subtopics", "language model", "current coverage",
+                  "topics", "publication years", "never names an individual source"):
         assert shown in t, shown
     # SIDEBAR-RC-1107: the corpus description is About-only since 35f21fb (HOTFIX-BLURB-1104); About must not
     # describe a sidebar entry or a link that no longer renders.
@@ -173,7 +174,7 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     from vera import sources_sidebar as sb  # each claimed element exists in the renderer
     import inspect
     side = inspect.getsource(sb.render_corpus) + inspect.getsource(sb.render_sources_sidebar)
-    for el in ("newest source", "topics", "CHECKED"):
+    for el in ("newest source", "topics", "CHECKED", "subject_areas"):
         assert el in side, el
     for gone in ("LICENCE_SIDEBAR", "scope_text", "how_answers_text", "how_answers_base", "trace_eval_line"):
         assert gone not in side, gone  # moved off the sidebar

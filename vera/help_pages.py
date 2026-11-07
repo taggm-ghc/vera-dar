@@ -10,7 +10,10 @@ from vera import sources_sidebar
 logger = logging.getLogger(__name__)
 HELP_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "ui_help_pages.json"
 _UNSET = object()
-CORPUS_HEADING = "What VERA-DAR draws on"
+CORPUS_HEADING = "What VERA-DAR draws on"  # CORPUS-DESC-1107: no longer an About heading (kept so tests can assert its absence)
+CORPUS_PAGE = "pages/corpus_description.py"
+CORPUS_PAGE_TITLE = "Corpus Description"
+CORPUS_LINK_DEFAULT = "Corpus Description: what VERA-DAR's collection covers"
 FALLBACK = "This page is not available right now. The notice at the top of the page still applies."
 
 
@@ -74,6 +77,8 @@ def _section(st, sec: dict, coverage: str | None = None) -> None:
         if "{coverage}" in str(p) and not coverage:
             continue  # owner 2026-11-04: no fixed Scope text exists; no generated coverage yet = omit the line
         st.markdown(_fill(str(p), coverage))
+    if sec.get("corpus_link"):  # CORPUS-DESC-1107: the JSON gives the label only; the page path lives here
+        _page_link(st, CORPUS_PAGE, str(sec["corpus_link"]))
 
 
 # PRIVACY-1104 (owner 2026-11-04: "toabnu content should be migrated away from About & How"). About skips the
@@ -109,16 +114,38 @@ def render_about(st, cfg=_UNSET) -> None:
             continue
         st.subheader(heading)
         st.markdown(text)
-    _corpus = sources_sidebar._corpus(st)
-    st.subheader(CORPUS_HEADING)  # HOTFIX-BLURB-1104: the corpus description is About-only (was the sidebar on every page)
-    sources_sidebar.render_corpus(st, _corpus)
-    sources_sidebar.render_corpus_notes(st, _corpus)  # CORPUS-DIGEST-1104: moved from the sidebar
+    # CORPUS-DESC-1107 (owner 2026-11-07: too granular for About): the corpus description is its own page; About keeps one
+    # link line and the licence / how-it-answers / Trace Eval notes (no coverage line: that is on the Corpus Description page).
+    _page_link(st, CORPUS_PAGE, str(page.get("corpus_link") or CORPUS_LINK_DEFAULT))
+    sources_sidebar.render_corpus_notes(st, None)
     for sec in page.get("after_disclosure") or []:
         _section(st, sec)
         if sec.get("heading") == NEWS_HEADING and disclosure.reporting_lane_on():
             # NEWS-LANE-1104 / R-031 fix note: the GDELT credit stays on About (and next to GDELT items), even though
             # "Your question and what is stored" (which also carries it) moved to Terms.
             st.markdown(disclosure._LANE_GDELT_CREDIT.strip())
+
+
+def _page_link(st, path: str, label: str) -> None:
+    try:
+        st.page_link(path, label=label)
+    except Exception:  # noqa: BLE001  (page not found outside a multipage run)
+        st.markdown(label + ".")
+
+
+def render_corpus_page(st, cfg=_UNSET) -> None:
+    """CORPUS-DESC-1107: the Corpus Description page. One count/newest line (render_corpus), the subject areas (domains,
+    topics, subtopics; code-built in every state), the checked digest when one exists, and the current coverage."""
+    cfg = load() if cfg is _UNSET else cfg
+    page = (cfg or {}).get("corpus_page") or {}
+    st.title(str(page.get("title") or CORPUS_PAGE_TITLE))
+    for para in page.get("paragraphs") or []:
+        st.markdown(str(para))
+    data = sources_sidebar._corpus(st)
+    sources_sidebar.render_corpus(st, data)
+    cov = sources_sidebar.coverage_text(data)
+    if cov:
+        st.markdown(f"**Current coverage:** {cov}")
 
 
 ASK_TERMS_DEFAULT = "By asking, you agree to the Terms"

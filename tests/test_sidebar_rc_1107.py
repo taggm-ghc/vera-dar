@@ -49,17 +49,16 @@ def test_corpus_heading_is_not_in_any_sidebar(page):
 
 
 def test_about_text_matches_the_rendered_corpus_section():
-    at = _run("pages/about.py")
-    main, side = _texts(at.main), _texts(at.sidebar)
-    assert help_pages.CORPUS_HEADING in [_NORM(s.value) for s in at.main.subheader]
-    assert "VERA-DAR's corpus: 275 sources, newest source 2026-11-07." in main
-    assert "A written description is temporarily unavailable." in main
+    """CORPUS-DESC-1107 (owner 2026-11-07): the corpus description moved from About to its own Corpus Description page.
+    About keeps one link line and no corpus section; the page shows the count line once and describes itself correctly."""
+    about = _texts(_run("pages/about.py").main)
+    assert help_pages.CORPUS_HEADING not in about and "VERA-DAR's corpus: 275 sources" not in about
+    assert "Corpus Description" in about  # the one link line (page_link label, or its text outside a multipage run)
     paras = " ".join(p for s in help_pages.load()["about"]["after_disclosure"] for p in s["paragraphs"])
-    for quoted in re.findall(r'"([^"]+)"', paras):  # every quoted UI element About names is rendered where it says
-        if quoted == help_pages.CORPUS_HEADING:
-            assert quoted in main and quoted not in side
-    assert "sidebar" not in paras.lower(), "About describes a sidebar element; render it there or drop the claim"
-    # honest degradation: in the fallback state no topics or model line render, and About says so
-    assert "Main topics" not in main
-    assert "Description written by a language model" not in main
-    assert "no checked description is available" in paras
+    assert "sidebar" not in paras.lower() and help_pages.CORPUS_HEADING not in paras
+    at = _run("pages/corpus_description.py")
+    main = _texts(at.main)
+    assert main.count("VERA-DAR's corpus: 275 sources, newest source 2026-11-07.") == 1
+    assert "Main topics" not in main and "Description written by a language model" not in main  # fallback state
+    page = " ".join(help_pages.load()["corpus_page"]["paragraphs"])
+    assert "sidebar" not in page.lower() and "When no checked description is available" in page

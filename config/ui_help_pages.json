@@ -10,13 +10,8 @@
       "**-MAGOPS: Multi-Agent Operations**: VERA-DAR-MAGOPS is a proposed multi-agent operations control plane for VERA-DAR (planned; not part of this service)."
     ],
     "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
+    "corpus_link": "Corpus Description: what VERA-DAR's collection covers, by subject area",
     "after_disclosure": [
-      {
-        "heading": "What the corpus section shows",
-        "paragraphs": [
-          "The section \"What VERA-DAR draws on\" on this page shows the number of sources in the collection and the date of the newest source. When a checked description is available, it also shows a short description of what the collection covers and its main subject topics with each topic's share of a sample of the sources; that description was written by a language model, the section says so and gives the date it was written, and the description may be imperfect. When no checked description is available, the section shows only a plain summary (the number of sources and their publication years) and says that a written description is unavailable. The licence note, the current coverage, how VERA-DAR answers and the Trace Eval sources line are also on this page."
-        ]
-      },
       {
         "heading": "News reports",
         "paragraphs": [
@@ -38,6 +33,15 @@
       "Your question and what is stored"
     ]
   },
+  "corpus_page": {
+    "title": "Corpus Description",
+    "paragraphs": [
+      "This page describes VERA-DAR's collection of stored sources. It first gives the number of sources and the date of the newest source.",
+      "It then shows the subject areas the collection covers, with each area's share of the documents and its main topics and subtopics. The subject areas, topics and subtopics come from VERA-DAR's subject list. Each document is listed once, under the closest subject on that list. No language model is used, so this part is shown even when no written description is available. Documents that match no listed subject are counted as not matched. The matching is approximate, so treat the shares as a rough guide.",
+      "When a checked description is available, the page also shows a short description of the collection, its main topics with each topic's share of a sample of the sources, and its current coverage. That description was written by a language model. The page says so, gives the date it was written, and the description may be imperfect. When no checked description is available, the page shows the publication years instead.",
+      "The page never names an individual source."
+    ]
+  },
   "how_to_use": {
     "title": "How to use VERA-DAR",
     "intro": "A short guide to asking a question and reading what comes back.",
@@ -46,8 +50,10 @@
         "heading": "What to ask",
         "paragraphs": [
           "Type one research question in your own words on the Ask VERA-DAR page, then press Enter.",
+          "For the best answers, ask about subjects already in VERA-DAR's collection. VERA-DAR answers from documents it has already collected, so questions on those subjects get the most complete answers. Other questions can still work, but VERA-DAR first has to find and read new sources, so they are slower and less likely to get an answer.",
           "VERA-DAR does not write or fix code; it can point to published research instead. A question outside the collection may get a reading list instead of an answer. Some requests are refused for safety reasons."
-        ]
+        ],
+        "corpus_link": "See what the collection covers on the Corpus Description page"
       },
       {
         "heading": "What you get back",

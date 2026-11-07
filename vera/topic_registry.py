@@ -214,11 +214,14 @@ def registry_data_from_rows(rows) -> dict:
     return {"anchor_registry_version": "db:v%d" % max(r["version"] for r in rows), "entries": entries}
 
 
-def load_active_registry_data(cfg, reader=None):
+def load_active_registry_data(cfg, reader=None, engine=None):
     """Registry data dict from the DB's active rows, or None when the table is absent (caller uses the JSON seed).
-    Raises TopicRegistryError on any other problem (fail closed), including invalid registry_table settings."""
+    Raises TopicRegistryError on any other problem (fail closed), including invalid registry_table settings.
+    CORPUS-DESC-1107: `engine` (default None = the rw engine) lets a read-only caller use its own engine; same reader."""
     validate_registry_settings(registry_table_settings(cfg))
-    exists, rows = (reader or functools.partial(read_topic_rows, roles=app_role_names(registry_table_settings(cfg))))()
+    roles = app_role_names(registry_table_settings(cfg))
+    exists, rows = (reader or (functools.partial(read_topic_rows, roles=roles) if engine is None
+                               else functools.partial(read_topic_rows, engine, roles=roles)))()
     if not exists:
         logging.getLogger("vera").warning("topic registry table absent: using the JSON seed")
         return None
