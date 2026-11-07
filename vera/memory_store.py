@@ -78,6 +78,14 @@ def _sql(sql: str) -> str:
     return sql.replace("{S}", SCHEMA)
 
 
+_MISSING_LICENCE_COUNTED = False  # CONTROL-GAPS-1107 follow-up: the missing-licence count runs once per process
+
+
+def reset_missing_licence_count_for_tests() -> None:
+    global _MISSING_LICENCE_COUNTED
+    _MISSING_LICENCE_COUNTED = False
+
+
 class RoMemoryReader:
     """Read-only lookups: recall, dedupe, source and answer resolution. hide_parameters keeps bound values
     (including the question) out of SQLAlchemy error text."""
@@ -137,7 +145,11 @@ class RoMemoryReader:
 
     def _log_missing_licence(self, q_params: dict) -> None:
         """CONTROL-GAPS S45 r2: numbers only. Live, in-TTL claims of this store whose source has NO licence_decision
-        (these are never recalled). Never raises; a failure logs a fixed code. No claim text, URL or query is logged."""
+        (these are never recalled). Never raises; a failure logs a fixed code. No claim text, URL or query is logged.
+        Follow-up: counted ONCE per process (the first recall), not on every recall; a failed count is retried."""
+        global _MISSING_LICENCE_COUNTED
+        if _MISSING_LICENCE_COUNTED:
+            return
         try:
             rows = self._rows(
                 "SELECT count(DISTINCT c.claim_id) FROM {S}.claims c JOIN {S}.answers a ON a.answer_id = c.answer_id "
@@ -151,6 +163,7 @@ class RoMemoryReader:
             if isinstance(n, bool) or not isinstance(n, int):
                 raise TypeError("count")
             logger.info("memory recall: %d live claim(s) not recalled, source licence_decision missing", n)
+            _MISSING_LICENCE_COUNTED = True
         except Exception:  # noqa: BLE001
             logger.warning("memory recall: missing_licence_count_failed")
 

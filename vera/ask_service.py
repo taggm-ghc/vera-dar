@@ -187,13 +187,19 @@ READING_LIST_SEARCHES = 2
 
 
 def inline_need_s(acq: dict, grounding) -> float | None:
-    """Seconds one inline retry may need: inline deadline_s + POST_INLINE_LLM_CALLS x chain timeout_s + the reading-list
+    """Seconds one inline retry may need: inline deadline_s (+ the arXiv cold-tdmrep window, arxiv_fulltext.
+    deadline_extension, CONTROL-GAPS-1107) + POST_INLINE_LLM_CALLS x chain timeout_s + the reading-list
     tail (READING_LIST_SEARCHES x grounding deadline_s; 0 when ungrounded). Every term is an existing config value.
     None when any term cannot be read (the caller then skips the retry: fail closed)."""
     ct = _chain_timeout_s()
     from vera import inline_acquire
     dl = inline_acquire._b(acq, "deadline_s", 45)  # the value inline_acquire itself applies (its own default 45 when absent)
     if ct is None or isinstance(dl, bool) or not isinstance(dl, (int, float)):
+        return None
+    try:  # CONTROL-GAPS-1107 follow-up: the arXiv cold tdmrep.json window (<= one Crawl-delay) extends the inline pass
+        from vera import arxiv_fulltext
+        ext = float(arxiv_fulltext.deadline_extension(acq))
+    except Exception:  # noqa: BLE001  unreadable: skip the retry (fail closed, like every other term)
         return None
     tail = 0.0
     if grounding is not None:
@@ -202,7 +208,7 @@ def inline_need_s(acq: dict, grounding) -> float | None:
         if isinstance(gd, bool) or not isinstance(gd, (int, float)):
             return None
         tail = READING_LIST_SEARCHES * float(gd)
-    return float(dl) + POST_INLINE_LLM_CALLS * ct + tail
+    return float(dl) + ext + POST_INLINE_LLM_CALLS * ct + tail
 
 
 def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: OpenAI | None = None,

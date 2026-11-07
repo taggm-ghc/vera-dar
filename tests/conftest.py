@@ -199,7 +199,8 @@ _SINGLETONS = (("vera.memory_store", "_SERVICE", "clear"), ("vera.corpus_admissi
                # CONTROL-GAPS-1107: per-host robots.txt / tdmrep.json verdicts of the acquisition hop gate never leak
                # between tests (a fail-closed verdict cached under one test's fake web would refuse the next test's).
                ("vera.acq_discovered", "_ROBOTS", "clear"), ("vera.acq_discovered", "_TDMREP", "clear"),
-               ("vera.acq_discovered", "_CRAWL_LAST", "clear"))
+               ("vera.acq_discovered", "_CRAWL_LAST", "clear"),
+               ("vera.memory_store", "_MISSING_LICENCE_COUNTED", None))  # once-per-process count: fresh per test
 
 
 def _reset_singletons(monkeypatch):

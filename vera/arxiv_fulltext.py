@@ -316,7 +316,7 @@ def deadline_extension(acq) -> float:
     Its per-document deadline is extended by exactly one such wait, at most arxiv_route.max_crawl_delay_s (15 s; a
     longer Crawl-delay is refused R-ACQ-ROBOTS anyway). 0 once tdmrep.json is cached (same TTL as robots.txt)."""
     from vera import acq_discovered
-    if "arxiv.org" in acq_discovered._TDMREP:
+    if not route_on(acq) or "arxiv.org" in acq_discovered._TDMREP:  # follow-up: no arXiv route, no extension
         return 0.0
     return float(rcfg(acq).get("max_crawl_delay_s", 15))
 

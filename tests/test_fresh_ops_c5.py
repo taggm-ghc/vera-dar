@@ -189,7 +189,8 @@ def test_freshness_trigger_does_not_remove_the_retry_budget_guard():
     from vera import ask_service
     c = acq_config.load_config()
     need = ask_service.inline_need_s(c, object())
-    assert need == pytest.approx(45 + 3 * ask_service._chain_timeout_s() + 2 * 10)
+    from vera import arxiv_fulltext  # CONTROL-GAPS-1107 follow-up: + the arXiv cold-tdmrep window (<= 15 s)
+    assert need == pytest.approx(45 + arxiv_fulltext.deadline_extension(c) + 3 * ask_service._chain_timeout_s() + 2 * 10)
     assert public_mode.ASK_TIMEOUT_S - need >= 40, (need, public_mode.ASK_TIMEOUT_S)
 
 
