@@ -267,6 +267,10 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                 raise fulltext_loader.Refused(R_DUP, "same full text already acquired under another canonical URL")
         except _DocPinFail as e:
             return _unusable_corpus(cfg, ids, R_DBDOCPIN, str(e))
+        except fulltext_loader.InjectionRefused as e:  # S3: drop ONLY this document, pinned or not; fixed-code log
+            fulltext_loader.log_injection_drop(e.code)
+            unusable.append(_unusable(did, e.code, e))
+            continue
         except fulltext_loader.Refused as e:
             if doc_pins is not None:  # pinned run: any per-document failure makes the whole run unusable
                 return _unusable_corpus(cfg, ids, R_DBDOCPIN, f"pinned document {did!r} failed verification ({e.code})")

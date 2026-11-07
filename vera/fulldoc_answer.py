@@ -74,7 +74,9 @@ def _lane_keys(a: dict) -> dict:
     memory_store skips it and the trace drops its text; never labelled stored. Non-lane passages: no extra key."""
     if not (a.get("lane") and a.get("answer_only") is True):
         return {}
-    return {"answer_only": True, "lane": a["lane"], "origin": a.get("origin"), "lane_origin": a.get("lane_origin"),
+    nd = ({"licence_class": "nd", "canonical_text": a.get("canonical_text") or ""}
+          if a.get("licence_class") == "nd" else {})  # CONTROL-GAPS S45: nd_guard sees ND lane pages (fail closed)
+    return {**nd, "answer_only": True, "lane": a["lane"], "origin": a.get("origin"), "lane_origin": a.get("lane_origin"),
             "epistemic": a.get("epistemic"),
             "stored": False, "source_type": "lane_page_passage", "stored_text_kind": None}
 

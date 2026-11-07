@@ -430,6 +430,15 @@ def attribution_for(page: LanePage) -> dict:
     return att
 
 
+def _nd_page(pg) -> bool:
+    """CONTROL-GAPS S45: a page of an outlet whose row carries an ND `access` block is an ND source for vera.nd_guard
+    (the existing output guard, run by fulldoc_answer). Fail closed: a lookup error counts as ND."""
+    try:
+        return isinstance((reporting_lane.outlet_row(pg.url) or {}).get("access"), dict)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:
     """(admitted span dicts, examined document dicts) for the lane pages, using the existing admission scoring and
     thresholds. Question = the page's sub-query text is not available here, so the original question is scored."""
@@ -450,6 +459,7 @@ def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:
     for i, pg in enumerate(pages, 1):
         did = f"lane-{pg.lane}-{i}"
         att = attribution_for(pg)
+        nd = _nd_page(pg)
         cands = []
         for s, e, seg in _chunks(pg.text, size, min_size):
             rel = fa._relevance(question, seg, icfg, stem_n)
@@ -467,7 +477,8 @@ def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:
                              "licence": None, "licence_url": None, "start": s, "end": e, "text": seg,
                              "text_sha256": fa._sha(seg), "relevance": round(rel, 4), "attribution": att,
                              "answer_only": True, "lane": pg.lane, "origin": EPISTEMIC[pg.lane],
-                             "lane_origin": ORIGIN[pg.lane], "epistemic": EPISTEMIC[pg.lane], "stored": False})
+                             "lane_origin": ORIGIN[pg.lane], "epistemic": EPISTEMIC[pg.lane], "stored": False,
+                             **({"licence_class": "nd", "canonical_text": pg.text} if nd else {})})
         examined.append({"document_id": did, "canonical_source_id": pg.url, "title": pg.title, "url": pg.url,
                          "doi": None, "licence": None, "licence_decision": LICENCE_DISPOSITION,
                          "text_sha256": None, "chars": len(pg.text), "admitted_spans": took, "answer_only": True,

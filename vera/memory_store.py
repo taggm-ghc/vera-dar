@@ -102,6 +102,13 @@ class RoMemoryReader:
         if not q:
             return []
         terms = q.split(" or ")
+        try:  # CONTROL-GAPS S45: the SAME write-time licence control (gate allowed_licence), re-applied at read; fail closed
+            from vera.memory_gate import load_gate_config
+            okdec = [str(x) for x in load_gate_config().allowed_licence]
+        except Exception:  # noqa: BLE001
+            return []
+        if not okdec:
+            return []
         rows = self._rows(
             "SELECT claim_text, created_at, title, url FROM ("
             "SELECT DISTINCT ON (c.claim_id) c.claim_text, c.created_at, s.provenance ->> 'title' AS title, "
@@ -114,16 +121,38 @@ class RoMemoryReader:
             "JOIN {S}.sources s ON s.source_id = e.source_id "
             "JOIN {S}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
             "WHERE a.response_text = :qt AND c.detailed_status = :live "
+            "AND s.provenance ->> 'licence_decision' = ANY(CAST(:okdec AS text[])) "
             "AND c.created_at > now() - make_interval(days => :ttl) "
             "AND to_tsvector('english', c.claim_text) @@ websearch_to_tsquery('english', :q) "
             "AND ts_rank(to_tsvector('english', c.claim_text), websearch_to_tsquery('english', :q)) >= :floor "
             "AND (SELECT count(*) FROM unnest(CAST(:terms AS text[])) AS tm(w) "
             "WHERE to_tsvector('english', c.claim_text) @@ plainto_tsquery('english', tm.w)) >= :minterms "
             "ORDER BY c.claim_id) t ORDER BY score DESC LIMIT :k",
-            {"qt": self.cfg["question_text"], "live": self.cfg["status_live"], "ttl": int(self.cfg["ttl_days"]),
+            {"qt": self.cfg["question_text"], "okdec": okdec, "live": self.cfg["status_live"], "ttl": int(self.cfg["ttl_days"]),
              "q": q, "terms": terms, "minterms": int(self.cfg["min_matched_terms"]), "floor": float(self.cfg["min_rank"]), "hl": float(self.cfg["half_life_days"]), "k": int(self.cfg["recall_k"])})
+        self._log_missing_licence(q_params={"qt": self.cfg["question_text"], "live": self.cfg["status_live"],
+                                            "ttl": int(self.cfg["ttl_days"])})
         return [{"claim_text": r[0], "source_title": r[2] or "", "source_url": r[3] or "",
                  "saved_at": r[1].isoformat() if r[1] else ""} for r in rows]
+
+    def _log_missing_licence(self, q_params: dict) -> None:
+        """CONTROL-GAPS S45 r2: numbers only. Live, in-TTL claims of this store whose source has NO licence_decision
+        (these are never recalled). Never raises; a failure logs a fixed code. No claim text, URL or query is logged."""
+        try:
+            rows = self._rows(
+                "SELECT count(DISTINCT c.claim_id) FROM {S}.claims c JOIN {S}.answers a ON a.answer_id = c.answer_id "
+                "JOIN LATERAL jsonb_array_elements_text(c.evidence_span_ids) AS sp(span_id) ON true "
+                "JOIN {S}.evidence_spans e ON e.span_id = sp.span_id::bigint "
+                "JOIN {S}.sources s ON s.source_id = e.source_id "
+                "WHERE a.response_text = :qt AND c.detailed_status = :live "
+                "AND c.created_at > now() - make_interval(days => :ttl) "
+                "AND s.provenance ->> 'licence_decision' IS NULL", q_params)
+            n = rows[0][0]
+            if isinstance(n, bool) or not isinstance(n, int):
+                raise TypeError("count")
+            logger.info("memory recall: %d live claim(s) not recalled, source licence_decision missing", n)
+        except Exception:  # noqa: BLE001
+            logger.warning("memory recall: missing_licence_count_failed")
 
     def recall_discovery(self, question: str) -> list[dict]:
         """K2.I4: live discovery notes (no evidence spans, unverified, note prefix) ranked like `recall`. No JOIN to

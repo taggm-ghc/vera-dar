@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from vera import strict_json
 import re
 from datetime import datetime, timezone
@@ -195,6 +196,47 @@ def check_content(text: str, meta: dict, cfg: dict) -> None:
                                       f"abstract ({abstract})")
 
 
+R_INJECTION = "R-ACQ-INJECT"  # same code vera.fulldoc_db uses for the acquired-path scan
+R_INJECTION_CFG = "R-INJ-CFG"  # scan configuration unavailable (fail closed, logged at ERROR once per process)
+_log = logging.getLogger(__name__)
+_cfg_error_logged = False
+
+
+class InjectionRefused(Refused):
+    """A document refused by the injection control. Readers drop ONLY this document (never the corpus or run)."""
+
+
+def _injection_cfg() -> dict | None:
+    from vera import acq_config
+    try:
+        return acq_config.load_config()
+    except Exception:  # noqa: BLE001  (ConfigError etc.: treated as unavailable; never log values)
+        return None
+
+
+def log_injection_drop(code: str) -> None:
+    """Fixed-code log line for a dropped document: no title, no text, no id."""
+    _log.warning("injection control dropped a document code=%s", code)
+
+
+def check_injection(item: dict, text: str, cfg: dict) -> None:
+    """SEC S3 (CONTROL-GAPS-1107): the SAME prompt-injection control the acquisition path uses (acq_config.injection_refused),
+    applied on every ingest/read path through check_text_record. Fail closed: no scan config or no patterns => refuse
+    (default-deny), with one ERROR log line per process so a missing config is never silent."""
+    global _cfg_error_logged
+    from vera import acq_config
+    ic = _injection_cfg()
+    pats = ((ic or {}).get("injection_scan") or {}).get("patterns")
+    codes = cfg.get("reason_codes") or {}
+    if not pats:
+        if not _cfg_error_logged:
+            _cfg_error_logged = True
+            _log.error("injection scan configuration unavailable; refusing documents (fail closed) code=%s", R_INJECTION_CFG)
+        raise InjectionRefused(R_INJECTION_CFG, "injection scan configuration unavailable (fail closed)")
+    if acq_config.injection_refused(f"{(item or {}).get('title') or ''}\n{text}", ic):
+        raise InjectionRefused(codes.get("injection", R_INJECTION), "instruction-like text found by the injection scan")
+
+
 def _cc_family(url_or_id, cfg: dict) -> str | None:
     pats = cfg["cc_licence_patterns"]
     low = str(url_or_id or "").lower()
@@ -308,6 +350,7 @@ def check_text_record(item: dict, text: str, meta: dict, cfg: dict, *, arxiv_evi
     Shared by prepare() and vera.fulldoc_db (R3: the DB path re-applies the same filters, never ingest-time judgement)."""
     check_declared_kind(meta, cfg, "conversion record")
     check_content(text, meta, cfg)
+    check_injection(item, text, cfg)
     return check_licence(item, meta, cfg, arxiv_evidence=arxiv_evidence)
 
 

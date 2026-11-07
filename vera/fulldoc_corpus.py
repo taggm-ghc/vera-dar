@@ -368,6 +368,8 @@ def _load(base: Path, cfg: dict, ingest_cfg: dict | None) -> FullDocCorpus:
             if rec["content_hash"] in seen_hashes:  # D-057 parity: identity is the content, not the URL
                 raise fulltext_loader.Refused(R_DUP, "same full text already acquired under another canonical URL")
         except fulltext_loader.Refused as e:
+            if isinstance(e, fulltext_loader.InjectionRefused):
+                fulltext_loader.log_injection_drop(e.code)
             unusable.append(_unusable(did, e.code, e))
             continue
         except Exception as e:  # noqa: BLE001
