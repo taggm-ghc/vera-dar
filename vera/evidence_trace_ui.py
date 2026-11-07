@@ -35,6 +35,8 @@ def render_trace(st, trace, public=None, redact=None) -> bool:
     shown = False
     if passages:
         st.markdown("**How VERA-DAR chose the evidence**")
+        if trace.get("origin") == "fetched":  # SELFQ-RCA-1107 D2: these are not the passages counted from the collection
+            st.caption("Passages from documents fetched for this question:")
         for p in passages:
             n = s(p.get("n"))
             if p.get("cited"):

@@ -1212,7 +1212,8 @@ def _self_cfg(cfg: RouterConfig | None) -> dict:
 
 
 def self_reflective(question: str, cfg: RouterConfig | None = None) -> bool:
-    """True only for a benign second-person question about VERA-DAR's identity, capabilities or how it works that
+    """True only for a benign question about VERA-DAR's identity, capabilities or how it works (second person, or
+    third person naming VERA-DAR, SELFQ-RCA-1107) that
     FULLY matches one pattern of the closed list `self_reflective.patterns`. Injection, deny and marker checks run
     first (layer 1 verdict DECLINE or a classifier marker -> False), so an instruction/config/prompt request never
     qualifies. Fails closed (False) on a missing key, a bad pattern or any error."""
@@ -1240,6 +1241,8 @@ def self_reflective_text(cfg: RouterConfig | None = None) -> str:
         if not isinstance(ident, str) or not ident.strip():
             return ""
         from vera.disclosure import disclosure_text
-        return f"{ident.strip()} {disclosure_text()}"
+        ptr = _self_cfg(cfg).get("pages_pointer")  # SELFQ-RCA-1107 D1: point to the published About / How to use pages
+        ptr = f" {ptr.strip()}" if isinstance(ptr, str) and ptr.strip() else ""
+        return f"{ident.strip()} {disclosure_text()}{ptr}"
     except Exception:  # noqa: BLE001
         return ""

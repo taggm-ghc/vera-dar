@@ -75,8 +75,8 @@ def test_search_counts_combines_base_and_acquired_and_never_carries_set_sizes():
 def test_headline_counts_only_matching_documents():
     assert u.fallback_text(TOK, n_inspected=9, n_matched=0) == _cfg()["insufficient_no_match_text"]
     two = u.fallback_text(TOK, n_inspected=9, n_matched=2)
-    assert two.startswith("2 stored full documents had passages related to this question; none answered it")
-    assert u.fallback_text(TOK, n_inspected=9, n_matched=1).startswith("1 stored full document had passages")
+    assert two.startswith("2 stored full documents shared words with this question, but no passage answered it")
+    assert u.fallback_text(TOK, n_inspected=9, n_matched=1).startswith("1 stored full document shared words")
     assert u.fallback_text(TOK, n_inspected=9) == _cfg()["insufficient_nocount_text"]  # unknown: no count, no 9
     assert u.fallback_text(TOK, n_inspected=9, n_fetched=1, n_matched=0) == _cfg()["insufficient_nocount_text"]
 
@@ -86,13 +86,13 @@ def test_old_wording_only_with_flag_off():
     assert "searched 9 full documents" in u.fallback_text(TOK, cfg=off, n_inspected=9, n_matched=0)
     assert "checked 30 full documents" in u.fallback_text("model_insufficient", cfg=off, n_inspected=30, n_selected=2)
     assert u.fallback_text("model_insufficient", n_inspected=30, n_selected=2).startswith(
-        "Passages from 2 stored full documents looked related")
+        "Passages from 2 stored full documents were selected as possible evidence")
 
 
 def test_api_headline_counts_base_and_acquired():
     used = {"ev_base": _ev([0] * 9), "ev_acq": _ev([0, 0, 2] + [0] * 27, "a")}
     assert ask_service._search_counts(used) == {"matched": 1}
-    assert ask_service._insufficient(_cfg(), used["ev_base"], used).startswith("1 stored full document had passages")
+    assert ask_service._insufficient(_cfg(), used["ev_base"], used).startswith("1 stored full document shared words")
     none = {"ev_base": _ev([0] * 9), "ev_acq": _ev([0] * 30, "a")}
     assert ask_service._insufficient(_cfg(), none["ev_base"], none) == _cfg()["insufficient_no_match_text"]
     bad = {"ev_base": _ev([0] * 9), "ev_acq": SimpleNamespace(examined_full_documents=({"document_id": "x"},))}
@@ -106,15 +106,15 @@ def test_api_headline_counts_base_and_acquired():
 def test_api_unsupported_counts_only_passage_documents():
     ev = _ev([3, 3] + [0] * 28, admitted=({"document_id": "d0"}, {"document_id": "d1"}, {"document_id": "d1"}))
     t = ask_service._unsupported(_cfg(), "unsupported_text", ev)
-    assert t.startswith("Passages from 2 stored full documents looked related") and "30" not in t
+    assert t.startswith("Passages from 2 stored full documents were selected as possible evidence") and "30" not in t
 
 
 def test_scope_line_never_states_set_size_or_inspected():
     assert u.evidence_scope_line(_data([0] * 9, matched=0)) == (
-        "Evidence scope: 0 stored documents with passages matching the question; no passages selected as possible "
+        "Evidence scope: 0 stored documents sharing words with the question; no passages selected as possible "
         "evidence.")
     live = u.evidence_scope_line(_data([3, 3] + [0] * 28, matched=2, adm=(0, 0, 0, 1, 1, 1), fallback="model_insufficient"))
-    assert live == ("Evidence scope: 2 stored documents with passages matching the question; 6 passages from 2 "
+    assert live == ("Evidence scope: 2 stored documents sharing words with the question; 6 passages from 2 "
                     "documents selected as possible evidence.")
     nocount = _data([0] * 9)
     nocount["examined_full_documents"] = [{"document_id": f"d{i}"} for i in range(9)]
@@ -127,7 +127,7 @@ def test_render_fallback_reason_uses_the_matched_count():
     """Kills M6 (n_matched=None in render_fallback_reason): the rendered headline carries the matched count."""
     st = _St()
     u.render_fallback_reason(st, _data([0] * 9, matched=3))
-    assert len(st.info_calls) == 1 and st.info_calls[0].startswith("3 stored full documents had passages")
+    assert len(st.info_calls) == 1 and st.info_calls[0].startswith("3 stored full documents shared words")
     st = _St()
     u.render_fallback_reason(st, _data([0] * 9, matched=0))
     assert st.info_calls == [_cfg()["insufficient_no_match_text"]]

@@ -118,7 +118,7 @@ def _post(monkeypatch, case):
     reader, store = Reader(), Store()
     svc = ms.MemoryService(dict(STORE_CFG), load_gate_config(), reader, store)
     monkeypatch.setattr(main, "memory_from_env", lambda block: svc)
-    r = TestClient(main.app).post("/ask", json={"question": "What is VERA-DAR?"}, headers={"X-API-Key": "k" * 20})
+    r = TestClient(main.app).post("/ask", json={"question": "What is retrieval-augmented generation?"}, headers={"X-API-Key": "k" * 20})
     assert r.status_code == 200, r.text
     body = r.json()
     if case == "missing":  # an older API without result_kind: the page must still fail closed
@@ -134,7 +134,7 @@ def _page(monkeypatch, body):
     monkeypatch.setattr(requests, "post", lambda *a, **k: SimpleNamespace(status_code=200, json=lambda: body))
     monkeypatch.setattr(requests, "get", lambda *a, **k: SimpleNamespace(json=lambda: {"commit": "abcdef1234"}))
     at = AppTest.from_file(str(ROOT / "streamlit_app.py"), default_timeout=30).run()
-    at.text_input[0].set_value("What is VERA-DAR?")
+    at.text_input[0].set_value("What is retrieval-augmented generation?")
     at.button[0].click()
     at = at.run()
     assert not at.exception

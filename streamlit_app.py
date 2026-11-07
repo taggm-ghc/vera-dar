@@ -116,7 +116,10 @@ def _layer2_heading(data: dict, answer: bool) -> None:
 
 def _trace_of(data: dict):
     c = data.get("contract") if isinstance(data, dict) else None
-    return (c or {}).get("trace") if isinstance(c, dict) else None
+    t = (c or {}).get("trace") if isinstance(c, dict) else None
+    if isinstance(t, dict) and t and c.get("trace_attempt") == "fetched":  # SELFQ-RCA-1107 D2: say whose passages
+        t = dict(t, origin="fetched")
+    return t
 
 
 def _layer3_answer(data: dict, full: bool) -> None:

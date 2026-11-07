@@ -83,7 +83,7 @@ def test_trace_on_no_answer_outcome_and_contract(monkeypatch):
     assert isinstance(out, tuple) and out[1] == "claim_check_insufficient"
     tr = ask_service._FD_TRACE.get()
     assert tr and tr["view"] == "public" and all(not p["cited"] and p["reason"] for p in tr["passages"])
-    assert ask_service._fd_trace_contract() == {"trace": tr}
+    assert ask_service._fd_trace_contract() == {"trace": tr, "trace_attempt": "stored"}  # SELFQ-RCA-1107 D2: origin tag
     # a later attempt starts clean: the stale trace never leaks into it
     monkeypatch.setattr(fulldoc_corpus, "get_corpus", lambda c: None)
     assert _fulldoc() is None and ask_service._FD_TRACE.get() is None

@@ -67,7 +67,7 @@
         "heading": "How to read the citations",
         "paragraphs": [
           "A number in the answer matches the same number in the cited passages under Evidence and limitations and in the source list. Where no excerpt is shown, the line says so and gives the passage reference instead.",
-          "Under Research and verification, the Evidence scope line says how many documents had passages related to your question and how many passages were selected as possible evidence. The Claim check line says how many cited claims a model checked against the passages, and how many were supported, partly supported or removed.",
+          "Under Research and verification, the Evidence scope line says how many stored documents share words with your question and how many passages were selected as possible evidence. The Claim check line says how many cited claims a model checked against the passages, and how many were supported, partly supported or removed.",
           "Where a licence requires it, an attribution line names the creator, title and licence of the cited document."
         ]
       },

@@ -165,12 +165,17 @@ _LEDGER_EV: contextvars.ContextVar = contextvars.ContextVar("midterms_wp10_ledge
 # NONASK-1103 E4m: the public evidence trace of the latest full-document attempt that produced no answer (response-only,
 # never logged or stored). _fulldoc sets it; the no-answer contracts merge it. Reset at the start of every attempt.
 _FD_TRACE: contextvars.ContextVar = contextvars.ContextVar("nonask_fd_trace", default=None)
+# SELFQ-RCA-1107 D2: True when that trace came from an attempt on documents fetched for THIS request (the inline round's
+# ephemeral corpus or lane pages), whose passages are not the response's admitted_evidence (the held attempt's).
+_FD_TRACE_FETCHED: contextvars.ContextVar = contextvars.ContextVar("selfq_fd_trace_fetched", default=False)
 _INLINE_COUNTS: contextvars.ContextVar = contextvars.ContextVar("vera_inline_counts", default=None)  # NONASK-1103 A6-4: {stored, fetched} of the inline attempt in progress
 
 
 def _fd_trace_contract() -> dict:
     t = _FD_TRACE.get()
-    return {"trace": t} if t else {}
+    if not t:
+        return {}
+    return {"trace": t, "trace_attempt": "fetched" if _FD_TRACE_FETCHED.get() else "stored"}  # SELFQ-RCA-1107 D2
 
 
 # Post-inline LLM calls that can follow an inline search, per the auto_acquire.json _calibration_note: one answer writer,
@@ -306,7 +311,7 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         _rt_event("outcome", "reading_list", detail={"branch": "fulldoc_not_configured"})
         return out
     trig = {"acquire_trigger": "insufficient"} if acq is not None and _acq_on_insufficient(acq) and inline_note is None else {}
-    text = _with_fetched(text, ev, ia)  # SCOPE-COUNT-1106
+    text = _with_fetched(text, ev, ia, token, used_in)  # SCOPE-COUNT-1106; SELFQ-RCA-1107: same headline as the UI
     _a, _n = _nonanswer_note(text, res.notes, inline_note, strip=False)
     out = replace(res, answer=_a, notes=_n, evidence=ev,
                   contract={**(res.contract or {"layers": contract.layers()}), "fallback": token,
@@ -1071,6 +1076,7 @@ def _fulldoc(question, model, pricing, decision, chained, grounding, acquired_on
     counts = _INLINE_COUNTS.get()
     qualified = False  # C6: True when the writer runs only because answer.always_attempt promoted an "insufficient" bundle
     _FD_TRACE.set(None)  # NONASK-1103 E4m: a stale trace of an earlier attempt never reaches this attempt's body
+    _FD_TRACE_FETCHED.set(bool(acquired_only and (ephemeral is not None or lanes is not None)))  # SELFQ-RCA-1107 D2
     try:
         cfg = fulldoc_corpus.load_config()
         # DAR-1021-ASKDIAG: the acquired-only branch never reads the base corpus, so it must not wait on its load
@@ -1171,11 +1177,39 @@ def _plural_docs(n: int, m: int = 0) -> str:
     return base if m <= 0 else f"{base} from VERA-DAR's collection and {m} fetched for this question"
 
 
-def _with_fetched(text: str, ev, ia) -> str:
+_SAME_AS_UI = ("insufficient_full_document_evidence", "premise_unverified", "model_insufficient")
+
+
+def _ui_headline(text: str, ev, ia, token, used) -> str:
+    """SELFQ-RCA-1107 D2: with answer.count_matching_documents on, the server no-answer sentence for the count-worded
+    tokens is exactly the headline vera.ui_evidence.render_fallback_reason shows for the same response (same token,
+    same fetched / matched / selected counts), so the page never carries two different no-answer reasons. Other tokens,
+    the flag off, or any error: `text` unchanged."""
+    from vera import ui_evidence
+    cfg = ui_evidence._cfg()
+    if token not in _SAME_AS_UI or not ui_evidence.count_matching_on(cfg):
+        return text
+    adm = [a for a in (getattr(ev, "admitted", ()) or ()) if isinstance(a, dict)]
+    sc = _search_counts(used) if isinstance(used, dict) and used.get("ev_base") is not None else None
+    data = {"corpus_source": {"kind": getattr(ev, "corpus_source", None)}, "admitted_evidence": adm,
+            "examined_full_documents": _rows(ev) or [],
+            "contract": {"fallback": token, "inline_acquisition": ia if isinstance(ia, dict) else None,
+                         **({"search_counts": sc} if sc is not None else {})}}
+    return ui_evidence.fallback_text(token, cfg, n_inspected=len(data["examined_full_documents"]),
+                                     n_selected=ui_evidence._distinct_docs(adm) if adm else 0,
+                                     n_fetched=ui_evidence.fetched_for_request(data), n_matched=ui_evidence.matched_for(data))
+
+
+def _with_fetched(text: str, ev, ia, token=None, used=None) -> str:
     """SCOPE-COUNT-1106: re-word a "searched N full documents" headline once the inline round's fetched documents are
-    known (they are checked after the held-collection text was built). Unchanged when none, or when text lacks the phrase."""
+    known (they are checked after the held-collection text was built). Unchanged when none, or when text lacks the phrase.
+    SELFQ-RCA-1107 D2: with a fallback `token` and count_matching_documents on, the UI headline for the same response."""
     try:
         from vera import ui_evidence
+        if token is not None and ev is not None:
+            new = _ui_headline(text, ev, ia, token, used)
+            if new != text:
+                return new
         m = ui_evidence.fetched_for_request({"corpus_source": {"kind": getattr(ev, "corpus_source", None)},
                                              "contract": {"inline_acquisition": ia}})
         if m <= 0:

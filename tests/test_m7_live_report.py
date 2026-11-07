@@ -154,7 +154,7 @@ def test_live_report_renders_all_sections_and_leaks_nothing(monkeypatch, public_
     heads = [h.value for h in at.header]
     assert heads == ["Answer", "Evidence and limitations"]  # public: layers 1-2 as on Ask; no numeric prefixes
     assert not [e for e in at.expander if e.label == "Technical details"]
-    assert "Evidence scope: 1 stored document with passages matching the question; 2 passages from 1 document selected as possible evidence." in text
+    assert "Evidence scope: 1 stored document sharing words with the question; 2 passages from 1 document selected as possible evidence." in text
     assert "Q" * ui_evidence._quote_cap() in text
     assert "](https://example.org/one)" in text
     assert "(javascript" not in text and "<b>" not in text
@@ -354,7 +354,7 @@ def test_no_related_documents_shows_one_honest_line_not_the_base_set():
     from tests.test_report_page_nonask import _body as nb, _render
     at = _render(nb(examined_full_documents=[_doc(i, 0) for i in range(9)]), False)
     text = _tree_text(at)
-    assert "ZZDoc" not in text and "No stored document had passages related to this question." in text
+    assert "ZZDoc" not in text and "No stored document shared words with this question." in text
     assert "Documents with related passages" not in text.replace("Documents with related passages:", "")
 
 

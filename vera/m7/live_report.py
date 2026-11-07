@@ -534,7 +534,7 @@ def _render_technical(st, rep: dict, r) -> None:
                        "Candidate passages": d["candidate_spans"],
                        "Selected passages": "" if d["admitted_spans"] is None else d["admitted_spans"]} for d in ins])
         elif rows:
-            st.caption("No stored document had passages related to this question.")
+            st.caption("No stored document shared words with this question.")
         st.markdown("**Search and acquisition**")
         s = rep.get("search") or {}
         st.caption(f"Results found or used: {s.get('results', 0)}. Counts only; individual search services are not named.")

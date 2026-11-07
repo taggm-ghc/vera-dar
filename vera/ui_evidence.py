@@ -123,12 +123,12 @@ def count_matching_on(cfg) -> bool:
 _MATCH_DEFAULT = {
     "insufficient_no_match_text": "VERA-DAR has no stored full documents on this subject yet, so it has not written an "
                                   "answer or answered from memory.",
-    "insufficient_matched_text": "{n_stored_phrase} had passages related to this question; none answered it well "
+    "insufficient_matched_text": "{n_stored_phrase} shared words with this question, but no passage answered it well "
                                  "enough, so VERA-DAR has not written an answer or answered from memory.",
     "insufficient_nocount_text": "VERA-DAR found no stored passage that answers this question well enough, so it has "
                                  "not written an answer or answered from memory.",
-    "unsupported_matched_text": "Passages from {n_stored_phrase} looked related to this question, but they did not "
-                                "support an answer, so VERA-DAR has not answered.",
+    "unsupported_matched_text": "Passages from {n_stored_phrase} were selected as possible evidence, but they did "
+                                "not support an answer, so VERA-DAR has not answered.",
     "unsupported_nocount_text": "The passages VERA-DAR selected did not support an answer, so it has not answered.",
 }
 
@@ -219,12 +219,48 @@ def fetched_for_request(data: dict | None) -> int:
     inline round's answer-only documents (reason below_persist_min) are then absent from it. Otherwise 0 (no double count)."""
     data = data if isinstance(data, dict) else {}
     cs = data.get("corpus_source")
-    if not (isinstance(cs, dict) and cs.get("kind") == "bundle"):
-        return 0
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    # SELFQ-RCA-1107 D2: a non-answer (contract.fallback set) always carries the held-collection attempt as its evidence
+    # (ask_service.answer_in_scope: evidence=ev of _fulldoc), so the inline round's answer-only documents are never in
+    # examined_full_documents there either, whatever the corpus kind; counting them cannot double count.
+    no_answer = isinstance(contract.get("fallback"), str) and bool(contract.get("fallback"))
+    if not (isinstance(cs, dict) and cs.get("kind") == "bundle") and not no_answer:
+        return 0
     ia = contract.get("inline_acquisition")
     docs = ia.get("documents") if isinstance(ia, dict) and isinstance(ia.get("documents"), list) else []
     return sum(1 for d in docs if isinstance(d, dict) and d.get("reason") == "below_persist_min")
+
+
+def _trace_n(data: dict) -> int:
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    tr = contract.get("trace") if isinstance(contract.get("trace"), dict) else {}
+    ps = tr.get("passages")
+    return sum(1 for p in ps if isinstance(p, dict)) if isinstance(ps, list) else 0
+
+
+def trace_fetched(data: dict | None) -> bool:
+    """SELFQ-RCA-1107 D2: the evidence trace shown came from an attempt on documents fetched for this request
+    (contract.trace_attempt "fetched", set by the server), so its passages are NOT the response's admitted_evidence
+    (the held-collection attempt's). Legacy bodies without the tag: fetched when admitted_evidence is empty but the
+    trace lists passages (the only shape in which the two can differ without the tag)."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    tag = contract.get("trace_attempt")
+    if tag in ("fetched", "stored"):
+        return tag == "fetched"
+    return _count(data.get("admitted_evidence")) == 0 and _trace_n(data) > 0
+
+
+def trace_selected(data: dict | None) -> int:
+    """SELFQ-RCA-1107 D2: passages of documents fetched for this request listed in the evidence trace (0 when the
+    trace is the held attempt's: those passages are admitted_evidence and are counted from it)."""
+    data = data if isinstance(data, dict) else {}
+    return _trace_n(data) if trace_fetched(data) else 0
+
+
+def _no_answer(data: dict) -> bool:
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    return isinstance(contract.get("fallback"), str) and bool(contract.get("fallback"))
 
 
 def evidence_scope_line(data: dict | None) -> str | None:
@@ -240,7 +276,7 @@ def evidence_scope_line(data: dict | None) -> str | None:
         mt = matched_for(data)
         parts = []
         if mt is not None:
-            parts.append(f"{mt} stored document{'s' if mt != 1 else ''} with passages matching the question")
+            parts.append(f"{mt} stored document{'s' if mt != 1 else ''} sharing words with the question")
         if f:
             parts.append(f"{f} document{'s' if f != 1 else ''} fetched for this question")
         head = "Evidence scope: " + (" and ".join(parts) + "; " if parts else "")
@@ -248,9 +284,16 @@ def evidence_scope_line(data: dict | None) -> str | None:
         head = f"Evidence scope: {n} document{'s' if n != 1 else ''} from VERA-DAR's collection and {f} fetched for this question inspected; "
     else:
         head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
+    t = trace_selected(data)  # SELFQ-RCA-1107 D2: the trace's fetched-document passages are named, never denied
+    tail = "; none was used in an answer." if _no_answer(data) else "."
+    fetched_part = f"{t} passage{'s' if t != 1 else ''} from documents fetched for this question" if t else ""
     if not m:
+        if t:
+            return head + fetched_part + " selected as possible evidence" + tail
         return head + "no passages selected as possible evidence."
     frm = f" from {k} document{'s' if k != 1 else ''}" if k else ""
+    if t:
+        return head + f"{m} passage{'s' if m != 1 else ''}{frm} in VERA-DAR's collection and {fetched_part} selected as possible evidence" + tail
     return head + f"{m} passage{'s' if m != 1 else ''}{frm} selected as possible evidence."
 
 
@@ -268,8 +311,15 @@ def evidence_source_line(data: dict | None) -> str | None:
         only = sum(1 for d in docs if d.get("reason") == "below_persist_min")
         held = _count(ia.get("reused")) + _count(ia.get("n_persisted"))
         admitted = _count(data.get("admitted_evidence")) > 0  # SEC U3: "used for this answer" needs admitted evidence
+        t = trace_selected(data)  # SELFQ-RCA-1107 D2: passages of the fetched documents listed in the trace
+        if only and not admitted and t:
+            return ("Evidence source: documents fetched for this request (not saved); passages from them were selected "
+                    "as possible evidence but not used in an answer.")
         if only and not admitted:
             return "Evidence source: documents fetched for this request (not saved); none were selected as possible evidence."
+        if only and _no_answer(data):  # SELFQ-RCA-1107 D2: no answer was written, so nothing was "used for this answer"
+            return ("Evidence source: stored database and documents fetched for this request (not saved); no answer was "
+                    "written.")
         if only and held:
             return "Evidence source: stored database and documents used for this answer only."
         if only:
