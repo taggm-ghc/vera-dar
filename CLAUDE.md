@@ -10,6 +10,6 @@ Critical rules (the full list is in AGENTS.md, imported above):
 - Memory gate: /ask writes passing findings as pending. Only owner-confirmed findings are recall-eligible. Rejected rows are never recall-eligible. Legacy pre-D6 automatically saved rows are not recall-eligible unless the owner confirms them individually.
 - No secrets, `.env` contents or live host URL in the repo, the UI, logs or commits.
 - No decision threshold (cutoff, floor, cap, rank) ships without a calibration note: the real data it was measured on, the spread seen, why this value, and what would change it. Fake fixtures alone never justify a number.
-- The local database is the production database. Use only the three VERA-DAR accounts. No DDL, DELETE or admin use without the owner's approval in the same turn.
+- The local database is the production database (`vera_dar_db`). An owner-run rehearsal database may exist on the same server (OD-1106-HITL H8); agents never connect to it. Use only the three VERA-DAR accounts. No DDL, DELETE or admin use without the owner's approval in the same turn.
 
 When compacting, keep these rules, the active plan item and any open approvals.
