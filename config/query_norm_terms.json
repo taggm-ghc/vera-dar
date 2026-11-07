@@ -1,0 +1,15 @@
+{
+  "_doc": "A-P1-NORM-1107: deterministic lay/garbled-wording -> field-term mapping for vera/query_norm.py. SEED / FALLBACK ONLY (owner rule: a curated table is a DB table; the DB table, when it exists, is read through query_norm.set_db_rows and overrides this seed). Closed, owner-curated list; the same terms are the ONLY vocabulary an LLM rewrite may pick from.",
+  "version": 1,
+  "source": "Planner/implementer seed v1, 2026-11-07, A-P1-NORM-1107: hand-written pairs of everyday phrasing and the standard textbook field term (e.g. stellar nucleosynthesis, myocardial infarction). Not harvested from the corpus and not measured on real queries.",
+  "_calibration_note": "UNCALIBRATED. Membership and triggers are not measured on real data. Method before 'on': run the shadow log (stage query_norm) and the WP-E replay; for every entry count questions that trigger it and that the held corpus already answers (must stay answered) and the off-topic admit rate with the term appended (must not rise). Add an entry only if its trigger words do not collide with another field's common wording.",
+  "entries": [
+    {"id": "stellar_nucleosynthesis", "triggers": [["stellar", "genesis"], ["star", "genesis"], ["nuclear", "star", "formation"]], "terms": ["stellar nucleosynthesis"]},
+    {"id": "myocardial_infarction", "triggers": [["heart", "attack"]], "terms": ["myocardial infarction"]},
+    {"id": "hypertension", "triggers": [["high", "blood", "pressure"]], "terms": ["hypertension"]},
+    {"id": "climate_change", "triggers": [["global", "warming"]], "terms": ["climate change"]},
+    {"id": "type2_diabetes", "triggers": [["sugar", "disease"], ["adult", "onset", "diabetes"]], "terms": ["type 2 diabetes"]},
+    {"id": "gravitational_waves", "triggers": [["ripples", "spacetime"], ["ripples", "space", "time"]], "terms": ["gravitational waves"]},
+    {"id": "photosynthesis", "triggers": [["plants", "sunlight", "food"]], "terms": ["photosynthesis"]}
+  ]
+}

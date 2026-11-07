@@ -404,6 +404,8 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
         _rt_event("acquire", "budget_used")
         return None, ia
     target = acq_rounds.target_of(acq)
+    from vera import query_norm  # A-P1-NORM-1107: shadow logs only; 'on' adds one vouched-terms retry round
+    qn, q_cur, qn_retried = query_norm.start(question), question, False
     tried = set(_doc_keys(used_in.get("acq")))
     eligible = 0
     ledger = None  # WP10: examined-source ledger merged across rounds
@@ -428,7 +430,7 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
         budget.inline_used = True
         info: dict = {}
         t0 = time.monotonic()
-        inl = _inline(question, model, pricing, decision, chained, grounding, _round_acq(acq, secs),
+        inl = _inline(q_cur, model, pricing, decision, chained, grounding, _round_acq(acq, secs),
                       tried=set(tried), in_scope=True, info=info)
         rounds += 1
         out = info.get("outcome") or {}
@@ -460,6 +462,13 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
         else:
             eligible += int(out.get("admitted", 0) or 0) + int(out.get("reused", 0) or 0)
         stop = str(((out.get("acquisition") or {}).get("status")) or "")
+        if qn is not None and not qn_retried and stop not in ("busy", "off", "capped", "error"):
+            _q2, _code = query_norm.retry_for(question, qn, eligible, qn_retried)
+            if _code != "none":
+                _rt_event("query_norm", _code)
+            if _q2 is not None:  # mode 'on' only; the same time check at the top of the loop applies
+                q_cur, qn_retried = _q2, True
+                continue
         if inl is None or eligible >= target or stop != "incomplete_deadline" or not new_keys:
             break
     if (spent_t or spent_c) and isinstance(note, str):

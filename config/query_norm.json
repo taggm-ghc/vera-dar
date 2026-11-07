@@ -1,0 +1,29 @@
+{
+  "_doc": "A-P1-NORM-1107 (plan work/DOMAIN-RETRIEVAL-1107/plan.r2.md A-P1 and A-P2): query normalisation, lay or garbled wording -> field terms. mode: off | shadow | on; anything else is off. SHADOW ships: terms and the would-be retry are logged as counts and fixed codes only (stage query_norm, request trace); no answer, notice, search or admission changes. 'on' appends only VOUCHED terms (deterministic mapping) to the original question for ONE retry round and never removes an original word.",
+  "mode": "shadow",
+  "vocabulary_path": "config/query_norm_terms.json",
+  "stem_len": 5,
+  "_stem_len_note": "Not a new number: equals relevance_stem_len of config/domain_routing.json (existing).",
+  "llm": {
+    "enabled": false,
+    "_enabled_note": "Ships FALSE (review A-P1-REVIEW-1107 finding 1): shadow measures the deterministic path only so it cannot compete with /ask for the shared free Groq quota. Turn on later, after deterministic shadow data exists. When true: used only when no deterministic term matched, always in a background thread (shadow and on; its terms are log-only until admission is integrated), skipped while vera.provider_exhaustion reports exhaustion, a 429 is recorded there. Free Groq chain entries only (price exactly 0), first listed (gpt-oss-20b); never a paid fallback.",
+    "timeout_s": 5,
+    "max_completion_tokens": 80,
+    "max_terms": 4,
+    "max_term_chars": 40,
+    "_calibration_note": "PROVISIONAL, all: timeout_s 5 (plan r2 A-P1), max_terms 4 and max_term_chars 40 (plan r2 point 3), max_completion_tokens 80 (not measured), transient_cooldown_s 60 (same value as config/topic_tagging.json transient_cooldown_s; the cooldown after a 429 without Retry-After, and the cap on a Retry-After, per plan r2). SAFETY BOUND, not a decision threshold: max_shadow_threads 2 (concurrent background LLM calls; when full the call is skipped and counted as llm=busy). Heuristic constants in code, labelled there: +1 s slack in the post-hoc timeout check (the client timeout is the real bound) and the plural rule in trigger matching (word, word+s, word+es). Latency is logged as a bucket code (lt100 lt500 lt1000 lt2500 lt5000 ge5000, PROVISIONAL bucket edges) to recalibrate timeout_s from the shadow log.",
+    "transient_cooldown_s": 60,
+    "max_shadow_threads": 2
+  },
+  "retry": {
+    "_doc": "At most one rewritten-query round, inside the existing _acquire_rounds time budget (no new cap). Trigger in this patch: a round ended with nothing counted (eligible == 0). The plan's 'metadata_irrelevant is dominant' trigger needs the A-P0 reason codes and is added after A-P0 lands (share PROVISIONAL, uncalibrated)."
+  },
+  "vocabulary_bounds": {
+    "_note": "SAFETY BOUNDS (not decision thresholds), applied to the file seed and to DB rows: they stop an unbounded or one-common-word vocabulary (review A-P1-REVIEW-1107 finding 3). All PROVISIONAL.",
+    "max_entries": 500,
+    "max_terms_per_entry": 4,
+    "max_triggers_per_entry": 10,
+    "min_trigger_words": 2,
+    "min_trigger_chars": 8
+  }
+}

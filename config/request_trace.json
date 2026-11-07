@@ -152,6 +152,14 @@
         "inline_status"
       ],
       "reason": "ask_service outcome events: decline category, fallback token, branch, cause, inline status"
+    },
+    "query_norm": {
+      "keys": [
+        "mode",
+        "llm",
+        "lat"
+      ],
+      "reason": "A-P1-NORM-1107 vera/query_norm.py: mode (off|shadow|on), the LLM-step status code (not_needed|disabled|cooldown|exhausted|busy|no_client|rate_limited|error|timeout|rejected|ok) and a latency bucket code (lt100|lt500|lt1000|lt2500|lt5000|ge5000); counts (det, llm, vouched terms) go in counts. Never the question or any term text."
     }
   },
   "limits": {
