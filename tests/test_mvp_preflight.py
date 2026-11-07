@@ -249,7 +249,7 @@ def test_f8_preflight_uses_the_passed_config_for_the_canary_judge(tmp_path):
 def test_pf13_search_chain_needs_no_key_and_checks_seed(tmp_path):
     rep = run()
     pf13 = next(c for c in rep.checks if c.id == "PF13")
-    assert pf13.ok and "no key required" in pf13.detail and "arxiv" in pf13.detail
+    assert pf13.ok and "no key required" in pf13.detail and "arxiv" not in pf13.detail  # ARXIV-OFF-1107
     from vera.eval_config import load_eval_config
     import dataclasses
     cfg = load_eval_config()

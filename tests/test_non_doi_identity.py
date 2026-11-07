@@ -64,7 +64,9 @@ def test_ac1_doi_outputs_are_byte_identical_to_the_pre_change_tree():
     # abcfe3010a5e4b19e32fbfc4f2f48948507a9053497f2d3d282440760e20866d
     # NONASK-1103 COMP: moves ONLY because the auto-acquired Europe PMC item now carries the CC BY attribution dict
     # (auto_acquire.tasl_attribution) instead of None. Previous pin: 1615dd535bfd1918fe4bedf552fae7391b855270aaf670ca97e9341bdce0c89e
-    assert got == "adfdb7f3660a7e32dbafadc1e4bec1f87d83529e3ada46f0db0b8b28942c4652"
+    # ARXIV-OFF-1107: moves ONLY because "arxiv" left config search.providers (the provenance acquisition.providers arrays).
+    # Previous pin: adfdb7f3660a7e32dbafadc1e4bec1f87d83529e3ada46f0db0b8b28942c4652
+    assert got == "4ffad1fab0285da57a0e4b52110729905b95fca895632b63ab77c9c2098c4f86"
 
 
 def test_ac1_doi_item_with_an_identifier_keeps_the_doi_identity():

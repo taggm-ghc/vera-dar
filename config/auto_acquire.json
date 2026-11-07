@@ -50,9 +50,9 @@
   },
   "search": {
     "providers": [
-      "openalex",
-      "arxiv"
+      "openalex"
     ],
+    "_arxiv_off_note": "CONTROL-GAPS-1107 ARXIV-OFF: off because export.arxiv.org robots.txt disallows / for all agents and arxiv.org disallows /api; interim until the owner decides (H-1). \"arxiv\" removed from search.providers; restore it together with search.arxiv.enabled in vera_eval_run.json. arxiv_route (abs/html/pdf full text) is unchanged and stays on.",
     "_providers_note": "plan D-3 + s11 V9, updated NONASK-1103 WP-F0: openalex and arxiv (ARX-A2 supersedes \"Europe PMC refuses preprints\": the arxiv_route fetches CC-licensed arXiv HTML; remove \"arxiv\" to restore openalex only). arXiv is called once per job, separately from OpenAlex (OpenAlex results are all kept), counted in bounds.max_search_calls_per_job; its candidates rank in tier 1 only while arxiv_route.enabled is true; the licence is still decided at fetch. This applies only to this providers list. DuckDuckGo (ddg_first.enabled), Europe PMC and the Wikipedia reference portal run concurrently in acquisition search (vera/search_providers.py acquisition_search); a DDG result still becomes a candidate only via a scholarly identifier. Provider instances are the /ask chain's cached instances (shared rate gates).",
     "openalex_profile": {
       "_note": "ACQ-SEARCH-1021 (acquisition only; /ask unchanged). filter: OpenAlex works held by PubMed Central (source S2764455111), the only place Europe PMC full text comes from. and_extra_max/generic_terms: when the question has no core phrase, AND the distinctive terms instead of OR-ing every token (OR let ambiguous 'mma' match alpha-gal papers). No model call. Remove the block to restore the previous query.",

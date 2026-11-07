@@ -152,7 +152,7 @@ def test_doaj_registered_in_chain_and_config():
     assert "doaj" in CFG["providers"]
     on = {**CFG, "doaj": {**DOAJ, "enabled": True}}  # shipped config has DOAJ switched off
     chain = build_chain(on, repo_root=ROOT)
-    assert [p.name for p in chain] == ["duckduckgo_lite", "openalex", "doaj", "arxiv"]  # ROUTE-R3: DDG first, arXiv last
+    assert [p.name for p in chain] == ["duckduckgo_lite", "openalex", "doaj"]  # ROUTE-R3: DDG first; ARXIV-OFF-1107: arXiv skipped (search.arxiv.enabled=false)
     assert DOAJ["min_interval_s"] == 0.6 and DOAJ["daily_search_budget"] == 200 and (DOAJ["year_from"], DOAJ["year_to"]) == (2023, 2026)
     off = real_run()["search"]
     off["doaj"]["enabled"] = False

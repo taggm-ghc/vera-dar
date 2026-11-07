@@ -131,7 +131,8 @@ def test_budget_shipped_6_with_arxiv_counts_it_lookup_left_zero(monkeypatch):
 
 def test_shipped_config_cap_and_providers():
     cfg = acq_config.load_config()
-    assert cfg["search"]["providers"] == ["openalex", "arxiv"] and cfg["bounds"]["max_search_calls_per_job"] == 7
+    assert cfg["search"]["providers"] == ["openalex"] \
+        and cfg["bounds"]["max_search_calls_per_job"] == 7  # ARXIV-OFF-1107: arxiv removed; cap unchanged
     left = 7 - 2 - 1 - 1 - 1 - 1  # openalex 2, ddg, epmc, wiki, arxiv
     assert left == 1
 

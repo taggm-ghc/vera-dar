@@ -52,7 +52,7 @@ def test_job_stores_open_access_full_text_with_full_provenance_and_g4_chunking()
     acq = prov["acquisition"]
     assert acq["marker"] == "vera-dar-auto-acquire-v1" and len(acq["job_id"]) == 32
     assert "trigger" not in acq and "relevance_score" not in acq  # WED-P17-VER item 3: nothing question-derived
-    assert acq["resolver"] == "europepmc" and acq["providers"] == ["openalex", "arxiv"]  # NONASK-1103 WP-F0
+    assert acq["resolver"] == "europepmc" and acq["providers"] == ["openalex"]  # ARXIV-OFF-1107 (was openalex+arxiv, NONASK-1103 WP-F0)
     assert prov["bundle"]["manifest_sha256"] and prov["bundle"]["sums_sha256"] == prov["text_sha256"]
     assert "isbn" not in prov  # not a book
     assert all(u.startswith("https://www.ebi.ac.uk/") for u in web.urls)

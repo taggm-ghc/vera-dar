@@ -128,6 +128,8 @@
       "sha256": null
     },
     "arxiv": {
+      "enabled": false,
+      "_note": "CONTROL-GAPS-1107 ARXIV-OFF: off because export.arxiv.org robots.txt disallows / for all agents and arxiv.org disallows /api; interim until the owner decides (H-1). search.arxiv.enabled=false is honoured by search_providers.build_chain (provider skipped; no code deleted). The arXiv full-text route (auto_acquire.json arxiv_route) stays on.",
       "endpoint": "https://export.arxiv.org/api/query",
       "min_interval_s": 3.0,
       "max_concurrency": 1,

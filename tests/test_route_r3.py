@@ -31,11 +31,11 @@ def no_network(monkeypatch):
 def test_reading_list_chain_is_ddg_first_arxiv_last():
     s = real_run()["search"]
     names = [p.name for p in build_chain(s, repo_root=ROOT)]
-    assert names[0] == "duckduckgo_lite" and names[-1] == "arxiv" and "openalex" in names, names
-    assert names.index("openalex") < names.index("arxiv")
+    # ARXIV-OFF-1107: arXiv is skipped by search.arxiv.enabled=false; DDG stays first
+    assert names[0] == "duckduckgo_lite" and "openalex" in names and "arxiv" not in names, names
     # grounding / off-topic lists only FILTER the chain: their call order is the chain order
     sub = [p.name for p in build_chain(s, repo_root=ROOT) if p.name in {"arxiv", "openalex", "duckduckgo_lite"}]
-    assert sub == ["duckduckgo_lite", "openalex", "arxiv"]
+    assert sub == ["duckduckgo_lite", "openalex"]  # ARXIV-OFF-1107: arxiv skipped
 
 
 def test_soft_share_and_memory_cache_are_config_and_marked_uncalibrated():
