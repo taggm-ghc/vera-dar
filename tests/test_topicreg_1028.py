@@ -188,7 +188,8 @@ def test_app_code_sql_statements_against_the_registry_are_exactly_the_allowed_se
     import ast
     allowed = {tr.TOPIC_SQL_PARENT_ACTIVE, tr.TOPIC_SQL_EXISTS, tr.TOPIC_SQL_ROWS, tr.TOPIC_SQL_KEY_EXISTS, tr.TOPIC_SQL_MATCHABLE, tr.TOPIC_SQL_INSERT,
                tr.TOPIC_SQL_ACTIVATE, tr.TOPIC_SQL_SUSPEND, tr.TOPIC_SQL_LOCK, tr.TOPIC_SQL_OWNER, tr.TOPIC_SQL_INSERT_REFUSED,
-                   tr.TOPIC_SQL_MATCHABLE_JUDGE, tr.TOPIC_SQL_DUPLICATE, tr.TOPIC_SQL_REFUSED_EXISTING, tr.TOPIC_SQL_EXISTING}  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
+                   tr.TOPIC_SQL_MATCHABLE_JUDGE, tr.TOPIC_SQL_DUPLICATE, tr.TOPIC_SQL_REFUSED_EXISTING, tr.TOPIC_SQL_EXISTING,
+               tr.TOPIC_SQL_LATEST_ROW}  # TAXO-INDUCE-1107: read of the newest row for the owner's batch approval (SELECT only)  # TOPICJUDGE-1028: the judge's read-only snapshot of the same candidate rows
     verbs = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|TRUNCATE|ALTER|COPY|DROP|WITH|MERGE)\b", re.I)
     mentioning = []
     for p in (ROOT / "vera").rglob("*.py"):

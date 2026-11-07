@@ -1,0 +1,21 @@
+{
+ "_note": "TAXO-INDUCE-1107: owner-run taxonomy induction (vera/taxonomy_induction.py, scripts/taxonomy_induce.py). Read-only dry run by default; --write inserts DRAFT registry rows only; activation is the owner's batch approval (scripts/taxonomy_approve.py).",
+ "_calibration_note": "PROVISIONAL, 2026-11-07: not measured on real data (agents have no DB read; work/CORPUS-COUNTS-OWNER-1107 has scripts but no output yet). scan_max_documents, chunks_per_doc, chunk_chars, max_clusters_*, max_iter, keyphrases, anchor_terms, max_proposals and naming.* are work bounds. Decision values: min_docs 3 (a proposed topic must cover at least 3 documents), min_similarity 0.12 (cosine of a chunk to a cluster centroid, below = noise), max_df_share 0.25 (a term in more than a quarter of the chunks is treated as a stop word), min_df 3, subtopic_min_chunks 30, min_chunk_votes 1. The BM25 acceptance value is micro_topic.count_min_score.anchor_bm25.scholarly (2.0, PROVISIONAL). Calibrate from the first owner dry-run manifest: cluster sizes, cohesion spread, keyphrase quality and the projected not-matched share; change a value when clusters are boilerplate (raise min_docs or lower max_df_share) or the projected share stays high (lower min_similarity).",
+ "scan_max_documents": 2000,
+ "chunks_per_doc": 16,
+ "chunk_chars": 1200,
+ "min_chunk_votes": 1,
+ "min_df": 3,
+ "max_df_share": 0.25,
+ "terms_per_chunk": 12,
+ "max_clusters_new": 24,
+ "max_clusters_per_topic": 4,
+ "min_docs": 3,
+ "min_similarity": 0.12,
+ "max_iter": 8,
+ "keyphrases": 15,
+ "anchor_terms": 40,
+ "subtopic_min_chunks": 30,
+ "max_proposals": 60,
+ "naming": {"batch_size": 6, "timeout_s": 20, "max_calls": 20, "max_tokens": 60000, "max_completion_tokens": 900, "max_rate_limited": 10}
+}

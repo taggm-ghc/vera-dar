@@ -1080,7 +1080,14 @@ def run_table_digest(overview: dict, profile: dict, table: dict, llm, cfg: dict,
 # connect_timeout_s / statement_timeout_ms: PROVISIONAL safety bounds (not decision thresholds; uncalibrated) so a slow DB
 # cannot hold a page view; on timeout the page shows the "not available right now" line.
 SUBJECT_DEFAULTS = {"enabled": True, "display_domains": 8, "display_topics": 3, "display_subtopics": 2,
-                    "scan_max": 2000, "cache_s": 300.0, "connect_timeout_s": 5, "statement_timeout_ms": 5000}
+                    "scan_max": 2000, "cache_s": 300.0, "connect_timeout_s": 5, "statement_timeout_ms": 5000,
+                    "chunk_votes": False, "chunks_per_doc": 16, "chunk_chars": 1200, "min_chunk_votes": 1}
+# TAXO-INDUCE-1107 (owner 2026-11-07: "each chunk should be re-analyzed"): with subject_areas.chunk_votes true, each document's
+# primary key is the chunk vote of vera.chunk_topics over an evenly spread sample of its stored chunks (evidence_spans; many
+# documents are chunk-stored with little or no sources.content, so the title + window match saw almost nothing of them). Order:
+# chunk vote, else the stored acquisition key, else the title + window match. Computed in memory only: no applied table can hold
+# chunk links before migration 020. A failed chunk read falls back to the document-level match. chunks_per_doc and chunk_chars are
+# work bounds; min_chunk_votes 1 is a PROVISIONAL prior (uncalibrated; see config subject_areas._calibration_note).
 SUBJECT_ROWS_SQL = (  # latest version of each canonical source; read-only; titles and text never leave this module
     "SELECT s.canonical_source_id, coalesce(s.provenance->>'title', k.title), left(s.content, :w), "
     "s.provenance->'acquisition'->'micro_topic' FROM vera_vjay.sources s "
@@ -1124,16 +1131,51 @@ def assign_topic(reg, title, text, stored, threshold: float, window: int) -> str
     return str(b[1]["id"]) if b is not None and b[0] >= threshold else None
 
 
-def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_timeout_ms: int = 5000) -> dict:
+def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_timeout_ms: int = 5000,
+                            scfg: dict | None = None) -> dict:
     """SEAM (TAXONOMY-SCHEMA-1107): {document id: primary topic key or None} for up to scan_max documents (newest first).
     Today: one read-only SELECT plus the read-time anchor match. Repoint here at a stored document-topic table."""
     from sqlalchemy import text as sql
     window = int(mt_cfg.get("text_window_chars") or 2000)
     threshold = float((((mt_cfg.get("count_min_score") or {}).get("anchor_bm25") or {}).get("scholarly", 2.0)))
+    chunks = {}
     with engine.connect() as c:  # transaction-local statement timeout (PROVISIONAL safety bound), then the one SELECT
         c.execute(sql("SELECT set_config('statement_timeout', :ms, true)"), {"ms": str(int(statement_timeout_ms))})
         rows = c.execute(sql(SUBJECT_ROWS_SQL), {"w": window, "n": int(scan_max)}).all()
-    return {int(r[0]): assign_topic(reg, r[1], r[2], r[3], threshold, window) for r in rows}
+        if scfg and scfg.get("chunk_votes") is True and rows:
+            chunks = document_chunks(c, [int(r[0]) for r in rows], {"chunk_chars": _bounded(scfg.get("chunk_chars"), 1200, 100, 8000),
+                                                                    "chunks_per_doc": _bounded(scfg.get("chunks_per_doc"), 16, 1, 200)})
+    votes = chunk_primary(reg, chunks, threshold, _bounded((scfg or {}).get("min_chunk_votes"), 1, 1, 50)) if chunks else {}
+    return {int(r[0]): votes.get(int(r[0])) or assign_topic(reg, r[1], r[2], r[3], threshold, window) for r in rows}
+
+
+def _bounded(v, default: int, lo: int, hi: int) -> int:
+    """An integer setting inside lo..hi, else the default (a bad config value never breaks the page)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi else default
+
+
+def document_chunks(conn, ids: list, scfg: dict) -> dict:
+    """{document id: [chunk texts]} from one bounded read-only SELECT (vera.taxonomy_induction.CHUNK_ROWS_SQL); {} on any
+    failure (the caller then uses the document-level match). Chunk text never leaves this module."""
+    from sqlalchemy import text as sql
+    from vera import taxonomy_induction
+    out: dict = {}
+    try:
+        for cid, t in conn.execute(sql(taxonomy_induction.CHUNK_ROWS_SQL), {"cw": int(scfg["chunk_chars"]), "ids": ids,
+                                                                            "k": int(scfg["chunks_per_doc"])}).all():
+            if t:
+                out.setdefault(int(cid), []).append(str(t))
+    except Exception as exc:  # noqa: BLE001 - class only; fall back to the document-level match
+        logger.warning("corpus subject areas: chunk read failed (%s); document-level match used", type(exc).__name__)
+        return {}
+    return out
+
+
+def chunk_primary(reg, chunks: dict, threshold: float, min_votes: int) -> dict:
+    """{document id: leaf key or None} by chunk vote over the same active registry entries as `reg`. Pure."""
+    from vera import chunk_topics
+    idx = chunk_topics.ChunkIndex(reg.entries)
+    return {d: chunk_topics.document_primary(idx, cs, threshold, min_votes) for d, cs in chunks.items()}
 
 
 def _share(n: int, d: int) -> float:
@@ -1192,7 +1234,7 @@ def subject_areas_for(engine, cfg: dict | None, mt_cfg: dict | None = None, regi
         return None
     reg = micro_topic.Registry(data)
     return subject_areas(data["entries"], document_primary_topics(engine, reg, mt, int(scfg["scan_max"]),
-                                                                  int(scfg["statement_timeout_ms"])), scfg)
+                                                                  int(scfg["statement_timeout_ms"]), scfg), scfg)
 
 
 class CorpusDescriber:

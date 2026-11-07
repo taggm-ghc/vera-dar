@@ -548,3 +548,85 @@ def scrutiny_flag(category_code, settings: dict) -> dict:
     except TopicRegistryError:
         return none
     return none if st is None else {"category_code": category_code, "state": st}
+
+
+# --- TAXO-INDUCE-1107: owner-run induced drafts and the owner's batch decision (CLIs scripts/taxonomy_induce.py and
+# scripts/taxonomy_approve.py only; never on a request path). Same SQL as runtime registration: INSERT a runtime DRAFT, then
+# draft -> active (approve) or draft -> suspended (reject); one short transaction per key under the registry advisory lock.
+TOPIC_SQL_LATEST_ROW = ("SELECT topic_key, version, label, field, anchor_text, parent_topic_key, origin, state "
+                        "FROM vera_vjay.topreg_topics WHERE topic_key = :k ORDER BY version DESC LIMIT 1")
+
+
+def _fold_label(label) -> str:  # the normalisation of the unique label index and TOPIC_SQL_DUPLICATE
+    return re.sub(r"\s+", " ", str(label or "").strip()).lower()
+
+
+def read_all_rows(engine, cfg: dict | None = None) -> list:
+    """Every registry row (all states), validated (fail closed); TopicRegistryError when the table is absent."""
+    exists, rows = read_topic_rows(engine, roles=app_role_names(registry_table_settings(cfg)))
+    if not exists:
+        raise TopicRegistryError("topic registry table absent")
+    registry_data_from_rows(rows)
+    return rows
+
+
+def insert_induced_drafts(engine, proposals: list) -> list:
+    """[(key, status)]: each proposal ({key, label, field, anchor_text, parent}) inserted as a runtime DRAFT (invisible to every
+    reader), or skipped: key_exists, duplicate_label, parent_not_active, insert_failed:<class> (e.g. a race with an unlocked
+    writer; the rest continue). One transaction per key under the registry lock. Nothing becomes active here."""
+    from sqlalchemy import text
+    out = []
+    for p in proposals:
+        try:
+            with engine.begin() as c:
+                c.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
+                if c.execute(text(TOPIC_SQL_KEY_EXISTS), {"k": p["key"]}).first() is not None:
+                    st = "key_exists"
+                elif c.execute(text(TOPIC_SQL_DUPLICATE), {"k": p["key"], "nl": _fold_label(p["label"])}).first() is not None:
+                    st = "duplicate_label"
+                elif p["parent"] is not None and c.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": p["parent"]}).first() is None:
+                    st = "parent_not_active"
+                else:
+                    c.execute(text(TOPIC_SQL_INSERT), {"k": p["key"], "label": p["label"], "field": p["field"],
+                                                       "anchor": p["anchor_text"], "parent": p["parent"]})
+                    st = "draft_inserted"
+        except Exception as exc:  # noqa: BLE001 - class only
+            st = f"insert_failed:{type(exc).__name__}"
+        out.append((p["key"], st))
+    return out
+
+
+def latest_rows(engine, keys) -> dict:
+    """{key: newest row dict or None}, READ ONLY."""
+    from sqlalchemy import text
+    out = {}
+    with engine.connect() as c:
+        c.execute(text("SET TRANSACTION READ ONLY"))
+        for k in keys:
+            r = c.execute(text(TOPIC_SQL_LATEST_ROW), {"k": k}).mappings().first()
+            out[k] = dict(r) if r is not None else None
+    return out
+
+
+def decide_drafts(engine, decisions: list) -> list:
+    """[(key, status)] for [(key, 'approve'|'reject', parent, verify)]: under the lock, verify(newest row) must return
+    'draft_ok' (the caller's content check); approve also needs an ACTIVE parent; then draft -> active or suspended."""
+    from sqlalchemy import text
+    out = []
+    for key, act, _manifest_parent, verify in decisions:
+        if act not in ("approve", "reject"):
+            raise ValueError("action must be approve or reject")
+        with engine.begin() as c:
+            c.execute(text(TOPIC_SQL_LOCK), {"n": TOPIC_LOCK_ID})
+            r = c.execute(text(TOPIC_SQL_LATEST_ROW), {"k": key}).mappings().first()
+            st = verify(dict(r) if r is not None else None)
+            if st != "draft_ok":
+                out.append((key, st))
+                continue
+            parent = r["parent_topic_key"]  # the STORED parent (hash-checked by verify), never the caller's copy
+            if act == "approve" and parent and c.execute(text(TOPIC_SQL_PARENT_ACTIVE), {"p": parent}).first() is None:
+                out.append((key, "parent_not_active"))
+                continue
+            n = c.execute(text(TOPIC_SQL_ACTIVATE if act == "approve" else TOPIC_SQL_SUSPEND), {"k": key}).rowcount
+            out.append((key, ("activated" if act == "approve" else "suspended") if n == 1 else "no_change"))
+    return out
