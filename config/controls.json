@@ -1,0 +1,21 @@
+{
+  "_doc": "In-repo subset of the cross-cutting controls register (PROC-PIN-1107 C1/T2). The tests cannot read the owner's records, so this file carries only what the coverage tests need: control id, the evidence or write paths it must cover, which are covered, dated exceptions, and the test that proves coverage. The canonical, fuller owner register lives outside this repository; keep the two in step. No hosts or secrets.",
+  "schema_version": 1,
+  "paths": {
+    "E1": "vera/fulldoc_db.py:load_from_rows",
+    "E2": "vera/fulldoc_db.py:load_acquired_rows"
+  },
+  "controls": [
+    {
+      "id": "CTL-PIN",
+      "control": "per-document pin held outside the rw-writable rows",
+      "must_cover": ["E1", "E2"],
+      "covered": ["E1"],
+      "exceptions": [
+        {"path": "E2", "reason": "acquired documents are served without pins (WED-ACQ2 V2)", "accepted_by": null, "review_by": "2026-11-21", "owner": "orchestrator", "site": "vera/fulldoc_db.py:_load_acquired", "exit": "signed or admin-written pins for acquired documents"}
+      ],
+      "owner": "orchestrator",
+      "test": "tests/test_evidence_controls.py::test_acquired_loader_tamper_matches_register"
+    }
+  ]
+}

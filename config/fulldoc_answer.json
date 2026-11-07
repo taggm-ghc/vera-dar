@@ -5,6 +5,7 @@
   "manifest_name": "manifest-filled.https.json",
   "sums_name": "texts.SHA256SUMS",
   "pins": {
+    "_constraint": {"kind": "temporary", "what": "base corpus = exactly the 9 pinned DAR-9 documents (set equality, vera/fulldoc_db.py)", "origin": "FAST-1020 D-1/D-2 calibration set; OWN-1021-G4APPROVED one-shot ingestion", "conflicts_with": ["OD-1027", "OD-1103"], "review_by": "2026-11-14", "owner": "orchestrator", "exit": "pinned batch promotion or signed pins"},
     "_note": "sha256 of the DAR-9 canonical bundle files (manifest 92c4eeda, sums 4e8c497a); null = unpinned (tests only). A mismatch makes the whole bundle UNUSABLE.",
     "manifest_sha256": "92c4eeda8b67b0cafdd3a78b87ffd1884c74613eb5699ee38c99560ea3637b93",
     "sums_sha256": "4e8c497a2527854e8c264389e37ca6ea1fc4e746d6d1dc485700942ff9901004",

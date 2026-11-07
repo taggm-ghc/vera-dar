@@ -724,6 +724,43 @@ def _isolated() -> bool:
     return bool(sys.flags.isolated)
 
 
+def _review_due_notes(root: Path) -> list[str]:
+    """Notes about temporary `_constraint` markers in config/*.json (and config/controls.json exceptions) whose review_by
+    has passed ("REVIEW-DUE ..."), and about config files whose markers could not be read ("MALFORMED ...").
+    Each file is read on its own, so one bad file cannot hide the notes of the others. Informational only; never raises."""
+    import datetime
+    out: list[str] = []
+    try:
+        today = datetime.date.today()
+        files = sorted((Path(root) / "config").glob("*.json"))
+    except Exception:  # noqa: BLE001
+        return ["MALFORMED config directory could not be listed; review dates not checked"]
+    for f in files:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            found: list[str] = []
+            stack = [(f.name, d)]
+            while stack:
+                where, node = stack.pop()
+                if not isinstance(node, dict):
+                    continue
+                c = node.get("_constraint")
+                cands = [(where, c)] if isinstance(c, dict) and c.get("kind") == "temporary" else []
+                if f.name == "controls.json":
+                    cands += [(f"{where}:{x.get('path')}", x) for k in node.get("controls", []) for x in k.get("exceptions", [])]
+                for w, m in cands:
+                    try:
+                        if datetime.date.fromisoformat(str(m.get("review_by"))) < today:
+                            found.append(f"REVIEW-DUE {w}: review_by {m.get('review_by')} passed; owner {m.get('owner')}; exit: {m.get('exit')}")
+                    except ValueError:
+                        found.append(f"REVIEW-DUE {w}: review_by missing or invalid")
+                stack += [(f"{where}.{k}", v) for k, v in node.items() if isinstance(v, dict) and k != "_constraint"]
+            out += found
+        except Exception as e:  # noqa: BLE001
+            out.append(f"MALFORMED {f.name}: markers not read ({type(e).__name__}); review dates in this file not checked")
+    return out
+
+
 def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--live", action="store_true", help="also re-run scope router layer 1 only (zero cost; never default)")
@@ -748,6 +785,8 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
     if a.skip_tests:
         print("  WARNING: --skip-tests: suite not run; result cannot be a full pass")
+    for _note in _review_due_notes(ROOT):  # PROC-PIN-1107 T3: a NOTE, never a failing check (cutoffs never block fixes)
+        print(f"  NOTE  {_printable(_note)}")
     results = run_offline_checks(ROOT, run_tests=not a.skip_tests, catalog_evidence=a.catalog_evidence,
                                  expect_candidate_sha=a.expect_candidate_sha, isolate_candidate_code=True)
     if a.live:
