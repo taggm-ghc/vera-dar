@@ -193,8 +193,8 @@ def _crawl_cfg(on: bool):
     return cfg
 
 
-def test_crawl_delay_flag_ships_off_and_off_means_no_wait(monkeypatch):
-    assert A.cfg()["crawl_delay"]["enforce_on_acquisition"] is False  # OWNER-PENDING H-5
+def test_crawl_delay_flag_ships_on_and_off_means_no_wait(monkeypatch):
+    assert A.cfg()["crawl_delay"]["enforce_on_acquisition"] is True  # H5-CRAWL-1107: H-5(a) approved (OD-1107-HITL)
     waits = []
     monkeypatch.setattr(acq_discovered, "_sleep", waits.append)
     web = _xml_web({ROBOTS: _txt("User-agent: *\nCrawl-delay: 10\n")})
@@ -215,13 +215,17 @@ def test_crawl_delay_enforced_when_flag_on(monkeypatch, fn):
         else:
             acq_discovered._b_get(JATS, {"www.ebi.ac.uk"}, {"application/xml"}, 100000, 2, A.deps([], web), cfg,
                                   lambda: t[0], None, None)
-    assert [round(w) for w in waits] == [10]  # the second document request waited the host's Crawl-delay
+    # H5-CRAWL-1107: every request to the host is paced, the gate's own reads too: robots.txt (no delay known yet),
+    # tdmrep.json +10, the document +10; the second document +10.
+    assert [round(w) for w in waits] == [10, 10, 10]
 
 
 def test_crawl_delay_past_the_deadline_is_a_crawl_delay_stop_not_an_attempt(monkeypatch):
     monkeypatch.setattr(acq_discovered, "_sleep", lambda s: None)
     web = _xml_web({ROBOTS: _txt("User-agent: *\nCrawl-delay: 10\n")})
     cfg = _crawl_cfg(True)
+    from tests.test_h5_crawl_1107 import seed_robots  # H5-CRAWL-1107: gate reads cached, so only documents are paced
+    seed_robots("www.ebi.ac.uk", "User-agent: *\nCrawl-delay: 10\n")
     auto_acquire._guarded_get(JATS, cfg, A.deps([], web), 100000, 5.0, False, clock=A.clock_at(1.0), deadline=5.0)
     n = len(web.urls)
     with pytest.raises(auto_acquire._Stop) as e:

@@ -108,7 +108,7 @@ def test_first_ask_reading_list_starts_acquisition(h, monkeypatch, override):
     assert r.result_kind == "reading_list" and r.sources and r.accepted is not False  # the normal list carries the found sources
     assert s.calls and set(s.calls) == {False}  # never the restricted scholarly list
     assert r.acquire_trigger == "insufficient" and "offtopic" not in (r.contract or {})
-    assert sr.offtopic_notice() not in r.answer and cfg["scope_expansion"]["reading_list_notice_listing"] not in r.answer
+    assert sr.offtopic_notice() not in r.answer and "has started a background search" not in r.answer  # H5-CRAWL-1107 r2
     assert not r.answer.startswith(cfg["scope_expansion"]["override_answer_prefix"])
 
 

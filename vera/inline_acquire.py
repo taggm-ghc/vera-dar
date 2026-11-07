@@ -1710,14 +1710,13 @@ BACKGROUND_NOTE = ("Further sources VERA-DAR found for this question may be acqu
 
 
 BACKGROUND_NOTE_PERSIST = (
-    "VERA-DAR has tried every search available for this question. {n} source(s) it could not finish now were handed "
-    "to a best-effort background queue; any that pass its licence, content and relevance checks are added to its "
-    "collection, and asking again later may use them. This answer will not update.")
+    "VERA-DAR has tried every search available for this question. {n} source(s) it found but could not finish now may "
+    "be checked later, but this is not guaranteed, and this answer will not update.")
+# H5-CRAWL-1107 r3 (need-to-know): plain wording, no back-end detail; shown only when sources were really queued.
 # Review F1: used when the keep-searching rounds stopped for any reason other than exhausting the variants.
 BACKGROUND_NOTE_PERSIST_STOPPED = (
-    "VERA-DAR stopped searching before every search option was tried ({reason}). {n} source(s) it could not finish "
-    "now were handed to a best-effort background queue; any that pass its licence, content and relevance checks are "
-    "added to its collection, and asking again later may use them. This answer will not update.")
+    "VERA-DAR stopped searching before every search option was tried ({reason}). {n} source(s) it found but could "
+    "not finish now may be checked later, but this is not guaranteed, and this answer will not update.")
 _STOP_REASON_TEXT = {"deadline": "the time limit was reached", "ceiling31": "the per-question reading limit was reached",
                      "rate": "the current search limit was reached", "disconnect": "the connection ended",
                      "search_failed": "a search could not be completed", stream_ctx.STALLED: "no further progress was made",

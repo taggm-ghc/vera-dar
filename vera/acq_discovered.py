@@ -31,6 +31,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import threading
 import time
@@ -354,7 +355,7 @@ def gate_b_admit(plan: dict) -> None:
 _ROBOTS: dict = {}
 _ROBOTS_LOCK = threading.Lock()
 _TDMREP: dict = {}  # CONTROL-GAPS-1107: host -> (monotonic time, parsed tdmrep.json rules | "unreadable")
-_CRAWL_LAST: dict = {}  # CONTROL-GAPS-1107 r2 (H-5, flag off): host -> monotonic time of the last paced request
+_CRAWL_LAST: dict = {}  # H-5 / H5-CRAWL-1107: host -> monotonic time of its latest BOOKED request slot (may be ahead)
 _sleep = time.sleep  # test seam (tests never sleep for real)
 
 
@@ -420,14 +421,16 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
             raise aa._Stop(acq_config.reason(acq, "cycle"))
         visited.add(_norm(cur))
         if robots:  # CONTROL-GAPS-1107: robots.txt AND the TDM opt-out, the one per-hop access gate (hop_access)
+            t_gate = clock()
             refused = hop_access(cur, hosts, deps, acq, clock, deadline)
             if refused:
                 raise aa._Stop(acq_config.reason(acq, refused))
+            g = max(0.0, clock() - t_gate)  # H5-CRAWL-1107: the gate's own (paced) reads are not this fetch's time
+            end = end + g if deadline is None else min(end + g, deadline)
         if chain is not None:
             chain.append(_clean(cur, 2000))
-        if robots:
-            w = crawl_wait(cur, acq, clock, deadline)  # H-5 (flag off by default): per-host Crawl-delay
-            end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
+        w = crawl_wait(cur, acq, clock, deadline)  # H-5 / H5-CRAWL-1107: every request to the host, gate reads too
+        end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
         try:
             resp = deps.http_get(cur, headers={"User-Agent": sf.USER_AGENT, "Accept-Encoding": "identity"},
                                  timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
@@ -446,6 +449,10 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                 cur = nxt
                 continue
             if resp.status_code not in ok_status:
+                if robots and resp.status_code == 429:
+                    # H5-CRAWL-1107: a server 429 on a document request is a rate limit, not a failed attempt (owner
+                    # rule: 429/cooldown tries never count): background-eligible, never R-ACQ-UNREACHABLE.
+                    raise aa._Stop(acq_config.rate_limited_code(acq, "throttled"))
                 if robots is False and resp.status_code in _throttle_statuses(cur):
                     # CONTROL-GAPS-1107 r2: a server throttle (429 / the portal's throttle_statuses) on robots.txt or
                     # tdmrep.json is a rate limit, not a verdict: refused now, never cached, never an attempt.
@@ -535,7 +542,8 @@ def _passthrough(stop, acq) -> bool:
     or the JOB deadline ran out (r2). It is raised as itself (still a refusal for this request: fail closed) and is
     not cached, so neither ROBOTS nor TDM is recorded for a host that never answered."""
     code = str(getattr(stop, "code", ""))
-    return (code in (acq_config.reason(acq, "host"), acq_config.reason(acq, "deadline"))
+    return (code in (acq_config.reason(acq, "host"), acq_config.reason(acq, "deadline"),
+                     acq_config.reason(acq, "crawl_delay"))  # H5-CRAWL-1107: a pacing stop sent nothing
             or code.startswith(acq_config.reason(acq, "rate_limited")))
 
 
@@ -553,39 +561,91 @@ def _throttle_statuses(url: str) -> set:
 
 
 def crawl_enforced(acq) -> bool:
-    """H-5 OWNER-PENDING: config auto_acquire.json crawl_delay.enforce_on_acquisition, exactly true (default off)."""
+    """H-5 (approved OD-1107-HITL; H5-CRAWL-1107): config auto_acquire.json crawl_delay.enforce_on_acquisition,
+    exactly true (shipped true; missing or non-true = off)."""
     c = (acq or {}).get("crawl_delay")
     return isinstance(c, dict) and c.get("enforce_on_acquisition") is True
 
 
+def crawl_interval(url: str, rp=None) -> float:
+    """H5-CRAWL-1107 (owner OD-1107-HITL H-5(a)): the per-host spacing of acquisition requests, from config only: the
+    larger (stricter) of the host's robots.txt Crawl-delay (robots_ai.crawl_delay: own UA, * and AI-agent groups) and
+    the spacing of the host's documented rate in config/rate_limits.json (1 / rate_per_s of its portal; rate_per_s is
+    set at or below the documented ceiling there). 0.0 when the host declares no Crawl-delay: its portal's token
+    bucket (vera.rate_limit, on every acquisition request through deps.http_get) then paces it alone. inf = a
+    Crawl-delay that is not a finite number (the request is never sent)."""
+    from vera import robots_ai
+    from vera import selective_fetch as sf
+    cd = robots_ai.crawl_delay(rp, sf.USER_AGENT) if rp not in (None, True, False) else None
+    if not cd:
+        return 0.0
+    cd = float(cd)
+    if not math.isfinite(cd) or cd < 0:
+        return math.inf
+    return max(cd, _documented_spacing(url))
+
+
+def _documented_spacing(url: str) -> float:
+    """1 / rate_per_s of the config/rate_limits.json portal serving the URL's host; 0.0 when none (or disabled)."""
+    try:
+        from vera import rate_limit
+        ad = rate_limit.get_registry().portal_for_url(url)
+        if ad is None or ad.c.get("enabled") is False:
+            return 0.0
+        r = float(ad.c.get("rate_per_s") or 0.0)
+        return 1.0 / r if r > 0 else 0.0
+    except Exception:  # noqa: BLE001  config error: Crawl-delay alone (never less strict than robots)
+        return 0.0
+
+
+def _min_call_s(url: str) -> float:
+    """config/rate_limits.json min_call_s (the host's portal, else the defaults): the least time left for a request to
+    be worth sending. A slot later than deadline - min_call_s is not booked."""
+    try:
+        from vera import rate_limit
+        ad = rate_limit.get_registry().portal_for_url(url)
+        if ad is not None:
+            return float(ad.c.get("min_call_s") or 0.0)
+        return float(rate_limit.load_config()["defaults"]["min_call_s"])
+    except Exception:  # noqa: BLE001
+        return 1.0
+
+
 def crawl_wait(url: str, acq, clock, deadline) -> float:
-    """H-5 (only when crawl_enforced): wait out the host's robots.txt Crawl-delay (robots_ai.crawl_delay: own UA, *
-    and AI groups) since the last paced request to that host, then mark this request. A wait that would pass the job
-    deadline stops with R-ACQ-CRAWL_DELAY (no request sent: not an attempt). Off: no effect at all. Returns the
-    seconds waited (the caller's per-fetch clock does not count them)."""
+    """H-5 (only when crawl_enforced; H5-CRAWL-1107: shipped true): every acquisition request to a host (robots.txt,
+    tdmrep.json, landing, API and full text) books the host's next free slot UNDER the lock, then sleeps until it
+    outside the lock, so concurrent workers are serialized per host: slot = max(now, last slot + crawl_interval).
+    A slot that would leave less than min_call_s before the deadline is not booked and stops with R-ACQ-CRAWL_DELAY
+    (no request sent: not an attempt; inline it is background-eligible, vera.inline_acquire._transient). A booked
+    slot is never moved earlier. Off: no effect at all. Returns the seconds waited (the caller's per-fetch clock does
+    not count them)."""
     if not crawl_enforced(acq):
         return 0.0
     from vera import auto_acquire as aa
-    from vera import robots_ai
-    from vera import selective_fetch as sf
     host = (urlsplit(url).hostname or "").lower()
     with _ROBOTS_LOCK:
         rp = (_ROBOTS.get(host) or (0, None))[1]
-        last = _CRAWL_LAST.get(host)
-    cd = robots_ai.crawl_delay(rp, sf.USER_AGENT) if rp not in (None, True, False) else None
-    waited = 0.0
-    if cd and last is not None:
-        wait = last + float(cd) - clock()
-        if wait > 0:
-            if deadline is not None and clock() + wait >= deadline:
-                raise aa._Stop(acq_config.reason(acq, "crawl_delay"))
-            from vera import progress as _prog  # NOISY-UI
-            with _prog.waiting(_prog.ACT_POLITE, wait):
-                _sleep(wait)
-            waited = wait
+    gap = crawl_interval(url, rp)
+    if gap == math.inf:
+        raise aa._Stop(acq_config.reason(acq, "crawl_delay"))
+    margin = _min_call_s(url) if gap else 0.0
     with _ROBOTS_LOCK:
-        _CRAWL_LAST[host] = clock()
-    return waited
+        now = clock()
+        last = _CRAWL_LAST.get(host)
+        slot = now if last is None or not gap else max(now, last + gap)
+        if slot > now and deadline is not None and slot + margin > deadline:
+            raise aa._Stop(acq_config.reason(acq, "crawl_delay"))  # nothing booked, nothing sent
+        _CRAWL_LAST.pop(host, None)
+        _CRAWL_LAST[host] = slot if last is None else max(last, slot)
+        while len(_CRAWL_LAST) > 512:
+            _CRAWL_LAST.pop(next(iter(_CRAWL_LAST)))
+    wait = slot - now
+    if wait > 0:
+        from vera import progress as _prog  # NOISY-UI
+        with _prog.waiting(_prog.ACT_POLITE, wait):
+            _sleep(wait)
+        return wait
+    return 0.0
 
 
 def _tdmrep_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:

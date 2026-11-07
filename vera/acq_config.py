@@ -339,13 +339,6 @@ def override_answer_prefix(cfg: dict | None) -> str:
     return t if isinstance(t, str) else ""
 
 
-def reading_list_notice(cfg: dict | None) -> str:
-    """DAR-1021: the sentence appended to the off-topic reading list when acquisition was started for the question."""
-    se = (cfg or {}).get("scope_expansion") or {} if isinstance(cfg, dict) else {}
-    t = se.get("reading_list_notice_answering" if override_layer2_declines(cfg) else "reading_list_notice_listing")
-    return t if isinstance(t, str) else ""
-
-
 def licence_url_for(declared, cfg: dict) -> str | None:
     """Version-less CC family URL for a declared Europe PMC licence string; None (= hold) when unmapped."""
     m = ((cfg or {}).get("resolve") or {}).get("licence_url_map") or {}

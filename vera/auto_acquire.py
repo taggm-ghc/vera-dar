@@ -626,9 +626,12 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             from vera import acq_discovered as _ad
             h = (sp.hostname or "").lower()
             if h not in _ad._ROBOTS or h not in _ad._TDMREP:
+                t_gate = clock()
                 refused = _ad.hop_access(current, allowed, deps, cfg, clock, deadline)  # r2: JOB deadline (uncached)
                 if refused:
                     raise _Stop(acq_config.reason(cfg, refused))
+                g = max(0.0, clock() - t_gate)  # H5-CRAWL-1107: the gate's own (paced) reads are not this fetch's time
+                end = end + g if deadline is None else min(end + g, deadline)
             ok, _why = check(current)
             if not ok:
                 raise _Stop(acq_config.reason(cfg, "host"))
@@ -637,7 +640,7 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 raise _Stop(acq_config.reason(cfg, refused))
             if chain is not None:
                 chain.append(acq_discovered._clean(current, 2000))
-            w = _ad.crawl_wait(current, cfg, clock, deadline)  # H-5 (flag off by default): per-host Crawl-delay
+            w = _ad.crawl_wait(current, cfg, clock, deadline)  # H-5 / H5-CRAWL-1107: per-host pacing slot, under the lock
             end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
             hdrs = {"User-Agent": sf.USER_AGENT} if chain is None else {"User-Agent": sf.USER_AGENT,
                                                                         "Accept-Encoding": "identity"}
@@ -658,6 +661,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 continue
             break
         if resp.status_code != 200:
+            if resp.status_code == 429:
+                # H5-CRAWL-1107: a server 429 is a rate limit, not a failed attempt (owner rule: 429/cooldown tries
+                # never count); background-eligible, never R-ACQ-UNREACHABLE. Other statuses (503 too) are unchanged.
+                raise _Stop(acq_config.rate_limited_code(cfg, "throttled"))
             raise _Stop(acq_config.reason(cfg, "unreachable"))
         if chain is not None and str(resp.headers.get("Content-Encoding") or "identity").strip().lower() != "identity":
             raise _Stop(acq_config.reason(cfg, "encoding"))
