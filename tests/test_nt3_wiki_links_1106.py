@@ -62,8 +62,8 @@ def test_merge_from_none_lanes():
 
 def test_with_web_merges_and_survives_no_web():
     from vera import inline_acquire as ia
-    wp.record_links("q", ["https://apnews.com/a"])
-    out = ia.with_web(None, None, "q")
+    wp.record_links("latest news q", ["https://apnews.com/a"])  # LINKS-RC-1107: merged only for news-intent questions
+    out = ia.with_web(None, None, "latest news q")
     assert out is not None and out.links[0]["read"] is False
     assert ia.with_web(None, None) is None  # old 2-arg call unchanged
 

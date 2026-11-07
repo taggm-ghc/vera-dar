@@ -38,7 +38,25 @@ def render_lane_links(st, data) -> None:
     links, credits = lane_links_of(data)
     if not links:
         return
-    st.markdown("#### Current reporting (links only)")
+    # LINKS-RC-1107: the "Current reporting" heading is for reporting-lane items only; web-route and official-lane links
+    # (lane "web" / other) go under their own heading instead of being mislabelled as news.
+    rep = [lk for lk in links if lk.get("lane", "reporting") == "reporting"]
+    oth = [lk for lk in links if lk.get("lane", "reporting") != "reporting"]
+    if rep:
+        st.markdown("#### Current reporting (links only)")
+        _render(st, rep)
+    if oth:
+        st.markdown("#### Related pages (links only)")
+        _render(st, oth)
+    for cr in credits:
+        name, url = _t(cr.get("name") or cr.get("text") or cr.get("title")), _http(cr.get("url"))
+        if name and url:
+            st.caption(safe_markdown(f"[{name}]({url})"))
+        elif name:
+            st.caption(name)
+
+
+def _render(st, links) -> None:
     for lk in links:
         meta = ", ".join(p for p in (_t(lk.get("outlet") or lk.get("entity")), _t(lk.get("published"), 40)) if p)
         mark = "read" if lk.get("read") is True else "link only"
@@ -46,9 +64,3 @@ def render_lane_links(st, data) -> None:
             mark += f", {_t(lk.get('credit'), 80)}"
         title = _t(lk.get("title")) or _t(_http(lk["url"]))
         st.markdown(safe_markdown(f"- [{title}]({_http(lk['url'])})" + (f" ({meta})" if meta else "") + f" - {mark}"))
-    for cr in credits:
-        name, url = _t(cr.get("name") or cr.get("text") or cr.get("title")), _http(cr.get("url"))
-        if name and url:
-            st.caption(safe_markdown(f"[{name}]({url})"))
-        elif name:
-            st.caption(name)

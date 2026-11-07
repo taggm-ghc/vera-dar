@@ -247,20 +247,74 @@ def _wiki_host(url: str) -> bool:
         return True
 
 
+_ARCHIVE = re.compile(r"^https?://(?:www\.|web\.|wayback\.)?archive\.org(?::443)?/web/[0-9*]+(?:[a-z_]{2,3})?/(.+)$", re.I)
+# snapshot mirrors whose inner URL cannot be recovered from the link: fail closed (deny all, allow exceptions)
+_ARCHIVE_MIRRORS = ("archive.ph", "archive.today", "archive.is", "archive.li", "archive.vn", "archive.md", "archive.fo",
+                    "archive.org", "webcache.googleusercontent.com")
+_BARE_HOST = re.compile(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?::\d+)?(?:[/?#]|$)", re.I)
+
+
+def _is_archive_host(url: str) -> bool:
+    try:
+        h = (urlsplit(url).hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return True
+    return any(h == m or h.endswith("." + m) for m in _ARCHIVE_MIRRORS)
+
+
+def _unwrap_archive(url: str):
+    """LINKS-RC-1107 r2: the page a Wayback snapshot URL archives (schemeless, percent-encoded, wildcard-timestamp, :443,
+    archive.org/web/ and wayback.archive.org forms), repeated up to 3 times. Not an archive URL: returned unchanged.
+    An archive/mirror URL whose inner http(s) URL cannot be recovered: None (the caller drops the link)."""
+    from urllib.parse import unquote
+    cur = url
+    for _ in range(3):
+        if not _is_archive_host(cur):
+            return cur
+        m = _ARCHIVE.match(cur)
+        if not m:
+            return None
+        inner = m.group(1)
+        if "://" not in inner and "%" in inner:
+            inner = unquote(inner)
+        if not inner.lower().startswith(("http://", "https://")):
+            if not _BARE_HOST.match(inner):
+                return None
+            inner = "https://" + inner
+        try:
+            if not urlsplit(inner).hostname:
+                return None
+        except ValueError:
+            return None
+        cur = inner
+    return None if _is_archive_host(cur) else cur
+
+
+def _link_key(url: str) -> str:
+    u = re.sub(r"^https?://(?:www\.)?", "", (_unwrap_archive(url) or url).strip().lower()).split("#", 1)[0]
+    return u.rstrip("/")
+
+
 def wiki_link_items(urls, seen=()) -> list:
     """NT-3: Wikipedia-citation URLs as LINK-ONLY news items (read False, never fetched, never evidence, never counted
     toward the full-text target). Outlet from the host; an outlet the owner list marks "exclude" is dropped; the
     credit is the only mention of the source. Pure: no network, no DB. Never raises."""
-    out, have = [], set(seen)
+    out, have = [], {_link_key(str(s)) for s in seen if s}
     try:
         for u in urls or []:
             u = str(u or "")
-            if not u.startswith(("http://", "https://")) or u in have:
+            if not u.startswith(("http://", "https://")) or _link_key(u) in have:
                 continue
-            if reporting_lane.outlet_verdict(u) == "exclude" or _wiki_host(u):
+            real = _unwrap_archive(u)  # outlet checks use the archived page's host, not web.archive.org
+            from vera.search_providers import safe_target_url
+            # unrecoverable archive/mirror URL, or an unwrapped inner URL that is not a safe public https target
+            # (userinfo/backslash tricks, IP literals, internal hosts): dropped (fail closed)
+            if real is None or (real != u and not safe_target_url(real)):
                 continue
-            have.add(u)
-            host = reporting_lane._domain(u)
+            if reporting_lane.outlet_verdict(real) == "exclude" or _wiki_host(real):
+                continue
+            have.add(_link_key(u))
+            host = reporting_lane._domain(real)
             out.append({"lane": "reporting", "label": "Reported", "title": host, "url": u, "published": "date unknown",
                         "outlet": host, "read": False, "credit": WIKI_CREDIT})
     except Exception:  # noqa: BLE001

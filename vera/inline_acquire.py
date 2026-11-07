@@ -1060,7 +1060,8 @@ def with_web(o, lanes, question=None):
     None when neither exists). Request-local only, like lane_pass."""
     web = getattr(o, "web", None) if o is not None else None
     from vera import lane_evidence
-    if question:  # NT-3: Wikipedia-citation links, link-only (lane_evidence.merge_wiki_links)
+    from vera import lane_router
+    if question and lane_router.reporting_cue(str(question), str(question)):  # NT-3, LINKS-RC-1107: news-intent only
         lanes = lane_evidence.merge_wiki_links(lanes, question)
     if web is None or not (web.pages or web.listed):
         return lanes

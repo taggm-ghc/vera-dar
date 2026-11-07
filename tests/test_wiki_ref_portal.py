@@ -20,7 +20,7 @@ ARTICLE_A = (
     "An unrelated SYNTHETIC remark on weather.<ref>{{cite journal |doi=10.9999/synth.w.002}}</ref> "
     "SYNTHETIC zorblat breeds and gait inheritance were studied.<ref name=\"b\">{{cite journal "
     "|doi=10.9999/synth.breed.003 |arxiv=2101.01234v2}}</ref> "
-    "A SYNTHETIC news remark.<ref>{{cite news |url=https://news.example.org/story-1 |title=" + HOSTILE + "}}</ref> "
+    "A SYNTHETIC zorblat breeds gait news remark.<ref>{{cite news |url=https://news.example.org/story-1 |title=" + HOSTILE + "}}</ref> "
     "Hostile value.<ref>{{cite journal |doi=10.9999/evil\"><script>" + HOSTILE + " |pmc=PMC12x}}</ref> "
     "Repeat of the first source.<ref>[https://doi.org/10.9999/SYNTH.GAIT.001 SYNTHETIC link]</ref> "
     "PMID only.<ref>{{cite journal |pmid=32000002}}</ref> "

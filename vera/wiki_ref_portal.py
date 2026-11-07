@@ -155,6 +155,19 @@ def citation_ids(chunk: str) -> tuple[dict, list]:
     return ids, urls
 
 
+DEFAULT_LINK_MIN_SCORE = 0.5  # PRIOR, not calibrated (LINKS-RC-1107): fraction of question stems in the citing sentence
+
+
+def link_min_score(cfg: Mapping | None) -> float:
+    """config `min_link_score` (fraction of question stems the citing sentence must contain); invalid -> default.
+    Always > 0, so a citation with no overlap (score 0, incl. cite templates outside <ref>) never yields a link."""
+    try:
+        v = float((cfg or {}).get("min_link_score", DEFAULT_LINK_MIN_SCORE))
+    except (TypeError, ValueError):
+        return DEFAULT_LINK_MIN_SCORE
+    return v if 0 < v <= 1 else DEFAULT_LINK_MIN_SCORE
+
+
 def _stems(text: str, n: int, strip: set) -> set:
     return {w[:n] for w in _WORD.findall(str(text or "").lower()) if w not in strip and len(w) > 1}
 
@@ -379,7 +392,13 @@ def discover(question: str, cfg: Mapping | None = None, *, http_get: Callable | 
     counts["citations"] = len(cites)
     links, seen_links = [], set()
     from vera.search_providers import safe_target_url
+    # LINKS-RC-1107: a non-scholarly URL is offered only when the sentence that cites it shares enough stems with the
+    # question (same transient score the identifiers are ranked by). Before this, every URL of every matched article
+    # was kept, so an off-topic article's whole citation list reached the reading list.
+    min_link = link_min_score(cfg)
     for c in cites:
+        if c["score"] < min_link:
+            continue
         for u in c["urls"]:
             s = safe_target_url(u)
             if s and s not in seen_links and len(links) < int(cfg["max_links"]):

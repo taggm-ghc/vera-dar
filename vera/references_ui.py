@@ -10,6 +10,10 @@ _TYPES = {"preprint": "preprint", "article-journal": "article-journal", "journal
           "journal": "article-journal", "article": "article-journal", "news": "article-newspaper",
           "article-newspaper": "article-newspaper", "webpage": "webpage", "dataset": "dataset",
           "software": "software", "book": "book", "chapter": "chapter", "report": "report", "thesis": "thesis"}
+_PREPRINT_DOI = re.compile(r"^(?:10\.48550/|10\.1101/(?:\d{4}\.\d{2}\.\d{2}\.)?\d{6,}(?:v\d+)?$|10\.2139/ssrn|"
+                           r"10\.21203/rs\.|10\.20944/preprints|10\.31219/osf|10\.31234/osf|10\.26434/chemrxiv|10\.31235/|10\.31223/|10\.36227/|10\.22541/)")
+_BOOK_DOI = re.compile(r"^10\.\d{4,9}/97[89][-\d]+_|^10\.1016/b97[89][-\dx]+")  # Springer ISBN_chapter; Elsevier B978-... (book/chapter)
+_WHOLE_BOOK_DOI = re.compile(r"^10\.\d{4,9}/97[89][-\d]+$")  # Springer-style whole-book DOI (no _chapter)
 _ARXIV_ID = re.compile(r"^arxiv:\s*(\S+)$", re.I)
 
 
@@ -27,6 +31,12 @@ def csl_from_source(s: dict) -> dict:
     typ = _TYPES.get(str(s.get("source_type") or s.get("type") or "").lower(), "")
     if not typ and str(s.get("provider") or "").lower().startswith("arxiv"):
         typ = "preprint"
+        # LINKS-RC-1107: an arXiv record's <arxiv:doi> is the JOURNAL version's DOI; the arXiv copy is then labelled
+        # by that version, not "preprint" (a preprint-server DOI such as 10.48550/... stays a preprint)
+        d = str(s.get("doi") or "").strip().lower().removeprefix("https://doi.org/").removeprefix("doi:")
+        if d.startswith("10.") and "/" in d and not _PREPRINT_DOI.match(d):
+            typ = ("book" if _WHOLE_BOOK_DOI.match(d) else "chapter") if (_BOOK_DOI.match(d) or _WHOLE_BOOK_DOI.match(d)) \
+                else "article-journal"
     rec: dict = {"title": s.get("title") or "", "URL": s.get("url") or ""}
     if typ:
         rec["type"] = typ
