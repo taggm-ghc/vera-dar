@@ -34,6 +34,7 @@ ARTICLE_B = "SYNTHETIC second article.<ref>{{cite journal |doi=10.9999/synth.gai
 
 def cfg(**over):
     c = copy.deepcopy(w.load_config())
+    c["enabled"] = True  # WIKI-OFF-1107: shipped config is off; these tests opt in explicitly
     assert w.enabled(c)
     for k, v in over.items():
         c[k] = v

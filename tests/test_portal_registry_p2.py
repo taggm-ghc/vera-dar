@@ -312,7 +312,7 @@ def test_configured_reads_live_config_and_reports_source():
         assert st[k]["configured"] is (k in live), k  # eval-run config alone never makes a portal configured
         assert st[k]["eval_configured"] is True and st[k]["eval_configured_from"] == ["config/vera_eval_run.json"]
     assert st["ddg"]["configured_from"] == ["config/auto_acquire.json"]
-    assert st["wikipedia"]["configured_from"] == ["config/wiki_ref_portal.json"]
+    assert st["wikipedia"]["configured_from"] == []  # WIKI-OFF-1107: shipped switch off, so not configured
     for k, p in reg.portals.items():
         assert all(pr_["file"] != "config/vera_eval_run.json" for pr_ in p.config_probes), k
 

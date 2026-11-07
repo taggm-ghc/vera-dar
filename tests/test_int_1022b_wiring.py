@@ -14,6 +14,12 @@ from vera import auto_acquire as aa
 from vera import search_providers as sp
 
 
+def _wiki_on(monkeypatch):
+    # WIKI-OFF-1107: shipped config is off; pipeline tests opt in explicitly
+    from vera import search_providers as sp_
+    monkeypatch.setattr(sp_, "_wiki_cfg", lambda: {**wiki_ref_portal.load_config(), "enabled": True})
+
+
 def _wiki_fake(monkeypatch, cands, seen):
     def factory(cfg, *, http_get=None, url_check=None, clock=None):
         seen["http_get"] = http_get
@@ -54,6 +60,7 @@ WIKI_CAND = {"url": "https://doi.org/10.9999/wiki.7", "doi": "10.9999/wiki.7", "
 @pytest.mark.wiki_portal
 def test_wiki_portal_runs_in_its_own_slot_and_merges_last(monkeypatch):
     seen = {}
+    _wiki_on(monkeypatch)
     _wiki_fake(monkeypatch, [WIKI_CAND], seen)
     fn, calls = _acq(6)
     out = fn(Q, 10, 5)
@@ -76,6 +83,7 @@ def test_wiki_portal_gets_no_slot_when_the_cap_is_spent(monkeypatch):
 @pytest.mark.wiki_portal
 def test_injected_wiki_get_is_used_and_portal_runs_in_a_copied_context(monkeypatch):
     seen, fake_get = {}, object()
+    _wiki_on(monkeypatch)
     _wiki_fake(monkeypatch, [], seen)
     fn, _ = _acq(6, wiki_get=fake_get)
     with rate_limit.deadline_scope(12345.0):
@@ -88,7 +96,7 @@ def test_offline_suite_keeps_the_portal_off_by_default(monkeypatch):
     _wiki_fake(monkeypatch, [WIKI_CAND], seen)
     fn, _ = _acq(6)
     fn(Q, 10, 5)
-    assert "calls" not in seen and wiki_ref_portal.load_config()["enabled"] is True  # shipped config stays on
+    assert "calls" not in seen and wiki_ref_portal.load_config()["enabled"] is False  # WIKI-OFF-1107: shipped off
 
 
 def test_config_reason_code_for_a_rate_limit_skip():
