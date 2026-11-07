@@ -7,11 +7,14 @@ def setup_function(_):
     wp._LINK_SINK.clear()
 
 
-def test_portal_search_records_links(monkeypatch):
+def test_portal_search_no_longer_records_links(monkeypatch):
+    # WIKI-REDESIGN-1107 (owner 2026-11-07): no "via Wikipedia citations" reading list; followed sources go to the
+    # normal lanes as candidates. The record/take API stays for lane_evidence.merge_wiki_links.
     monkeypatch.setattr(wp, "discover", lambda *a, **k: ([], ["https://apnews.com/x", "https://npr.org/y"], {}))
     assert wp.make_portal_search({})("midterms?", 5, 3.0) == []
-    assert wp.take_links("  Midterms? ") == ["https://apnews.com/x", "https://npr.org/y"]
-    assert wp.take_links("midterms?") == []  # popped once
+    assert wp.take_links("  Midterms? ") == []
+    wp.record_links("midterms?", ["https://apnews.com/x"])
+    assert wp.take_links("  Midterms? ") == ["https://apnews.com/x"] and wp.take_links("midterms?") == []
 
 
 def test_sink_bounded():

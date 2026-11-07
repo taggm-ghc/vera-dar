@@ -17,7 +17,9 @@ def test_shipped_config_is_disabled():
 
 
 def test_discover_returns_disabled_without_http():
-    cands, links, counts = w.discover("zorblat gait patterns", http_get=_no_http, url_check=lambda u: (True, "ok"))
+    # WIKI-REDESIGN-1107: counts have no "requests" key; no search call and no article fetch stand for it
+    cands, links, counts = w.discover("zorblat gait patterns", http_get=_no_http, url_check=lambda u: (True, "ok"),
+                                      site_search=_no_http, robots_ok=_no_http)
     assert cands == [] and links == []
     assert counts["error"] == "disabled"
-    assert counts["requests"] == 0
+    assert counts["search"] == 0 and counts["articles"] == 0 and counts["robots_denied"] == 0

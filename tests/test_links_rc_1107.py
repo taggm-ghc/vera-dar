@@ -4,57 +4,8 @@ from vera import lane_evidence as le
 from vera import references_ui as ru
 from vera import wiki_ref_portal as wp
 
-CFG = {"enabled": True, "api_url": "https://en.wikipedia.org/w/api.php", "allowed_hosts": ["en.wikipedia.org"],
-       "user_agent": "t", "max_articles": 3, "max_refs": 20, "max_links": 10, "timeout_s": 3,
-       "budget": {"max_requests_per_question": 4, "max_response_bytes": 4000000},
-       "query": {"max_terms": 8, "max_query_chars": 100, "strip_terms": ["what", "is"]},
-       "rank": {"stem_len": 5, "use_citing_sentence": True, "max_context_chars": 400}, "skip_disambiguation": True}
-
-
-def _doc(text):
-    return {"batchcomplete": True, "query": {"pages": [{"pageid": 1, "index": 1, "revisions": [
-        {"slots": {"main": {"content": text}}}]}]}}
-
-
-class _R:
-    status_code, headers = 200, {"Content-Type": "application/json"}
-
-    def __init__(self, d):
-        import json
-        self._b = json.dumps(d).encode()
-
-    def iter_content(self, n):
-        yield self._b
-
-    def close(self):
-        pass
-
-
-def _discover(text, q="What is nuclear stellar genesis?"):
-    get = lambda *a, **k: _R(_doc(text))  # noqa: E731
-    return wp.discover(q, CFG, http_get=get, url_check=lambda u: True)[1]
-
-
-def test_offtopic_article_links_dropped():
-    txt = ("Bingley is a town in Yorkshire.<ref>https://www.nytimes.com/2001/a.html</ref> "
-           "The church was rebuilt.<ref>https://bingley.church/history</ref>")
-    assert _discover(txt) == []
-
-
-def test_relevant_citing_sentence_keeps_link():
-    txt = ("Stellar nucleosynthesis builds nuclear species in stars.<ref>https://astro.example.org/nuc</ref> "
-           "Unrelated tower.<ref>https://bingley.church/x</ref>")
-    assert _discover(txt) == ["https://astro.example.org/nuc"]
-
-
-def test_template_outside_ref_has_no_score_so_no_link():
-    assert _discover("Text. {{cite web|url=https://astro.example.org/nuc|title=x}}") == []
-
-
-def test_min_link_score_invalid_falls_back():
-    for bad in (0, -1, 2, "x", None):
-        assert wp.link_min_score({"min_link_score": bad}) == wp.DEFAULT_LINK_MIN_SCORE
-    assert wp.link_min_score({"min_link_score": 0.25}) == 0.25
+# WIKI-REDESIGN-1107: the wiki_ref_portal citing-sentence link tests (MediaWiki API fixtures, link_min_score) were
+# removed: the portal no longer reads article text or produces a links-only list (tests/test_wiki_ref_portal.py).
 
 
 def test_archive_urls_unwrapped_and_deduped(monkeypatch):

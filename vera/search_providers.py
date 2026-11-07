@@ -1545,9 +1545,9 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     B0 = budget(cap0)
     use_wiki = B0["wiki"]
     if wiki_on and wiki_get is None:
-        import requests
-        from vera import rate_limit
-        wiki_get = rate_limit.limited("wikipedia", requests.get)
+        from vera import rate_limit, selective_fetch
+        # WIKI-REDESIGN-1107: article pages only (robots-checked in the portal); pinned GET, never a redirect
+        wiki_get = rate_limit.limited("wikipedia", selective_fetch.pinned_get)
 
     def search(question, n, timeout_s):
         import concurrent.futures as cf

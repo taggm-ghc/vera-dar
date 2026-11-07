@@ -1,25 +1,32 @@
-"""WIKIREF-1022: English Wikipedia as a DISCOVERY PORTAL only.
+"""WIKI-REDESIGN-1107: English Wikipedia as a REFERENCE-LIST portal only (supersedes the WIKIREF-1022 API design).
 
-Owner decision 2026-10-22: "ignore wikipedia for information, it is usable only as a portal to search for urls to
-sources". Wikipedia text is NEVER evidence: it is never stored, chunked, quoted, logged, or sent to the answer writer,
-and it never appears in an emitted candidate. This module only:
+Owner 2026-11-07: "for Wikipedia, we shouldn't use its page contents. instead, only search for reference links to follow
+those for original sources". Owner 2026-10-22: Wikipedia is never evidence, only a portal. Standing rules: robots.txt
+first and default-deny; never violate robots, terms or a deny-list.
 
-  1. searches English Wikipedia (MediaWiki Action API, generator=search, at most max_articles articles) and receives
-     the articles' wikitext in the same request (prop=revisions), continuation within the request budget;
-  2. extracts, transiently and in memory, the scholarly identifiers the articles CITE (DOI, PMCID, PMID, arXiv) with
-     strict patterns, grouped per citation (a {{cite journal}} with doi + pmc + pmid is ONE source);
-  3. optionally orders them by the stem overlap between the question and the sentence that carries the <ref>
-     (computed transiently, then discarded);
-  4. emits candidate dicts in the format vera.search_providers' DDG mapping produces (_ddg_cand), so they flow
-     through the UNCHANGED acquisition path: rank_candidates -> resolve (Europe PMC by DOI) -> JATS fetch -> licence,
-     injection, relevance and admission gates.
+Flow (no /w/, no /api/, no Special: path is ever requested; en.wikipedia.org/robots.txt disallows them for `*`):
 
-Emitted candidates carry identifiers and fixed labels only: title and snippet are empty, no Wikipedia URL, title,
-sentence or citation text. Non-scholarly citation URLs (news, blogs) are never candidates; at most max_links of them
-are returned separately as reading-list links (held, like the DDG rule "unclear-licence pages held as links only").
+  1. DISCOVER articles with the project's existing DuckDuckGo Lite instance (DDG first) and ONE explicit
+     `site:en.wikipedia.org` query. Only main-namespace article URLs https://en.wikipedia.org/wiki/<Title> are kept.
+  2. ROBOTS: each article URL goes through vera.selective_fetch.robots_allowed (RFC 9309 matcher, AI-agent groups and
+     statements, fail closed) BEFORE any request to it; a deny or an unreadable robots.txt means no fetch. The
+     host's Crawl-delay is honoured (crawl_reserve: never sent early). Public-address check, no redirect, byte cap,
+     deadline.
+  3. EXTRACT only the reference metadata: the COinS spans (<span class="Z3988" title="...">, OpenURL ContextObject
+     key/value pairs that MediaWiki's citation templates emit per reference). The parser reads tag attributes only
+     and has no text handler, so article prose is never read, stored, scored, logged or returned. References with no
+     COinS (bare links, explanatory notes) are skipped.
+  4. RELEVANCE from the reference's OWN metadata (title and venue) against the question; news/time cue words and
+     years are not counted as question stems (LINKS-VERIFY-1107 finding 3).
+  5. HAND-OFF: each kept reference becomes an ordinary acquisition candidate: a scholarly identifier (DOI, PMCID,
+     arXiv) in the search_providers candidate format, or the ORIGINAL https URL as a URL-only candidate (a
+     web.archive.org snapshot is unwrapped to the page it archives; other archive mirrors are dropped). Everything
+     after that is the unchanged pipeline: resolve, robots, licence, TDM opt-out, H19 ND/news links-only, full-text
+     only, injection, relevance and admission gates. No Wikipedia URL, title or text is ever in a candidate, and the
+     portal no longer offers a "via Wikipedia citations" reading list (record_links is not called).
 
-Network is injected (http_get, url_check, clock) so the offline tests never open a socket. No model call, no DB, no
-env read. The question is used only to build the search query and the transient ranking.
+Network is injected (site_search, http_get, url_check, robots_ok, clock) so the offline tests never open a socket. No
+model call, no DB, no env read.
 """
 from __future__ import annotations
 
@@ -28,34 +35,38 @@ import logging
 import re
 import threading
 import time
-from vera import strict_json
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "wiki_ref_portal.json"
 PORTAL = "wikipedia_refs"
 SOURCE = "wikipedia_portal"
-REQUIRED_KEYS = ("enabled", "api_url", "allowed_hosts", "user_agent", "max_articles", "max_refs", "max_links",
-                 "timeout_s", "budget", "query", "rank", "skip_disambiguation")
+REQUIRED_KEYS = ("enabled", "article_host", "allowed_hosts", "user_agent", "max_articles", "max_refs", "timeout_s",
+                 "max_response_bytes", "query", "relevance")
 logger = logging.getLogger("vera.autoacq")
 
-# Identifier syntax (format definitions, not tunables). DOI: the Crossref-recommended pattern; PMCID/PMID: NCBI forms;
-# arXiv: new-style YYMM.NNNN(N) and old-style archive(.SC)/YYMMNNN, an optional version is dropped.
+# Identifier syntax (format definitions, not tunables).
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 PMCID_RE = re.compile(r"(?:PMC)?(\d{1,10})", re.I)
 PMID_RE = re.compile(r"\d{1,9}")
 ARXIV_RE = re.compile(r"(?:arxiv:)?(\d{4}\.\d{4,5}|[a-z][a-z\-]*(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?", re.I)
 _DOI_TRAIL = re.compile(r"(?:[.,;:]|/full|/abstract|/epdf|/pdf|\.pdf)+$", re.I)
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
-_REF = re.compile(r"<ref(?:\s[^>/]*)?>(.*?)</ref\s*>", re.S | re.I)
-_TEMPLATE = re.compile(r"\{\{\s*(?:cite|citation|vcite)[^{}]*\}\}", re.I | re.S)
-_PARAM = re.compile(r"\|\s*([a-z0-9\-]+)\s*=\s*([^|}]*)", re.I)
-_DOI_TPL = re.compile(r"\{\{\s*doi\s*\|\s*([^|}]*)\}\}", re.I)
-_URL = re.compile(r"https?://[^\s|\]\[}{<>\"']+", re.I)
-_SENT_END = re.compile(r"[.!?]\s|\n")
 _WORD = re.compile(r"[a-z0-9]+")
+_YEAR = re.compile(r"^(?:1[5-9]|20)\d\d$")
+# Main-namespace article path only: no query, no namespace prefix (":"), no sub-page, nothing under /w/ or /api/.
+_ARTICLE_PATH = re.compile(r"^/wiki/[^:/?#\s]{1,250}$")
+# Wayback snapshot: /web/<14-digit-or-shorter timestamp>[flag_]/<original absolute URL>
+_WAYBACK = re.compile(r"^https?://(?:www\.)?web\.archive\.org/web/\d{1,14}(?:[a-z]{2}_)?/(https?://.+)$", re.I)
+_MIRRORS = re.compile(r"(?:^|\.)(?:archive\.(?:ph|today|is|li|vn|fo|md)|archive\.org|webcitation\.org|"
+                      r"ghostarchive\.org|wikiwix\.com)$", re.I)
+_WIKI_FAMILY = re.compile(r"(?:^|\.)(?:wikipedia|wikimedia|wikidata|wiktionary|wikibooks|wikiquote|wikisource|"
+                          r"wikiversity|wikivoyage|wikinews|mediawiki)\.org$", re.I)
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+_MAX_TITLE_CHARS = 300  # safety bound on an editor-supplied title (display/relevance only), not a tunable
 
 
 class PortalError(Exception):
@@ -90,7 +101,7 @@ def is_candidate(c) -> bool:
 # ------------------------------------------------------------------------------------------------ identifiers
 def norm_doi(v) -> str | None:
     s = _COMMENT.sub("", str(v or "")).strip()
-    s = re.sub(r"^(?:doi:\s*|https?://(?:dx\.)?doi\.org/)", "", s, flags=re.I).strip()
+    s = re.sub(r"^(?:doi:\s*|info:doi/|https?://(?:dx\.)?doi\.org/)", "", s, flags=re.I).strip()
     s = _DOI_TRAIL.sub("", s)
     return s.lower() if DOI_RE.fullmatch(s) else None
 
@@ -126,111 +137,160 @@ def _ids_from_url(url: str) -> dict:
     return out
 
 
-def citation_ids(chunk: str) -> tuple[dict, list]:
-    """One citation's text -> ({doi?, pmcid?, pmid?, arxiv?}, [non-scholarly https URLs]). Strict: a value that does
-    not FULLY match its pattern is dropped (no prefix salvage), so markup or prose in a value never passes."""
-    ids, urls = {}, []
-    body = _COMMENT.sub("", chunk or "")
-    for m in _PARAM.finditer(body):
-        k, v = m.group(1).lower(), m.group(2)
-        if k == "doi" and norm_doi(v):
-            ids.setdefault("doi", norm_doi(v))
-        elif k == "pmc" and norm_pmcid(v):
-            ids.setdefault("pmcid", norm_pmcid(v))
-        elif k == "pmid" and norm_pmid(v):
-            ids.setdefault("pmid", norm_pmid(v))
-        elif k in ("arxiv", "eprint") and norm_arxiv(v):
-            ids.setdefault("arxiv", norm_arxiv(v))
-    for m in _DOI_TPL.finditer(body):
-        if norm_doi(m.group(1)):
-            ids.setdefault("doi", norm_doi(m.group(1)))
-    for m in _URL.finditer(body):
-        u = m.group(0)
-        got = _ids_from_url(u)
-        if got:
+# ------------------------------------------------------------------------------------------------ URLs
+def _host(url: str) -> str:
+    try:
+        return (urlsplit(str(url or "")).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def article_url(url: str, cfg: Mapping) -> str | None:
+    """The canonical https://<article_host>/wiki/<Title> for a search result, or None (any other host, namespace,
+    query, sub-page or path, including everything under /w/ and /api/). The fragment is dropped."""
+    try:
+        sp = urlsplit(str(url or "").strip())
+        port = sp.port
+    except ValueError:
+        return None
+    if sp.scheme != "https" or (sp.hostname or "").lower() != str(cfg["article_host"]).lower() \
+            or sp.username or sp.password or port not in (None, 443) or sp.query:
+        return None
+    path = sp.path or ""
+    if not _ARTICLE_PATH.fullmatch(path) or ":" in unquote(path):
+        return None
+    return f"https://{str(cfg['article_host']).lower()}{path}"
+
+
+_MAX_UNWRAP = 3  # nested Wayback snapshots unwrapped at most this deep (a format bound, not a tunable)
+
+
+def unwrap_archive(url: str) -> str | None:
+    """A web.archive.org snapshot -> the original URL it archives, unwrapping nested snapshots up to _MAX_UNWRAP deep
+    (r2: the inner URL is re-checked every time); a URL that is, or still points into, any archive mirror after that
+    -> None (dropped, fail closed); a URL with whitespace or control characters -> None; every other URL unchanged.
+    Gates and fetches then see the ORIGINAL page, never an archive."""
+    u = str(url or "").strip()
+    for _ in range(_MAX_UNWRAP + 1):
+        if not u or re.search(r"[\s\x00-\x1f\x7f]", u):
+            return None
+        m = _WAYBACK.match(u)
+        if not m:
+            break
+        u = m.group(1).strip()
+    else:
+        return None  # nested deeper than the bound
+    return None if (_WAYBACK.match(u) or _MIRRORS.search(_host(u))) else u
+
+
+# ------------------------------------------------------------------------------------------------ COinS
+class _CoinsParser(HTMLParser):
+    """Collects the title attribute of every <span class="... Z3988 ..."> (COinS). Attributes only: there is no
+    handle_data, so no text node of the page is ever read. Bounded by max_refs_scanned."""
+
+    def __init__(self, limit: int):
+        super().__init__(convert_charrefs=True)
+        self.coins: list[str] = []
+        self.limit = limit
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "span" or len(self.coins) >= self.limit:
+            return
+        a = dict(attrs)
+        if "Z3988" in str(a.get("class") or "").split() and a.get("title"):
+            self.coins.append(str(a["title"]))
+
+
+def _clean(s, n: int = _MAX_TITLE_CHARS) -> str:
+    s = " ".join(_CTRL.sub(" ", str(s or "")).split())
+    return s[:n]
+
+
+def parse_coins(title_attr: str) -> dict | None:
+    """One COinS ContextObject -> {"title", "venue", "genre", "ids": {doi?, pmcid?, pmid?, arxiv?}, "url"?} or None.
+    Only OpenURL keys are read; values are clipped and stripped of control characters."""
+    try:
+        pairs = parse_qsl(str(title_attr or ""), keep_blank_values=False, max_num_fields=200)
+    except ValueError:
+        return None
+    kv: dict = {}
+    rft_ids: list = []
+    for k, v in pairs:
+        if k == "rft_id":
+            rft_ids.append(v.strip())
+        elif k.startswith("rft.") and k not in kv:
+            kv[k] = v
+    title = _clean(kv.get("rft.atitle") or kv.get("rft.btitle") or kv.get("rft.title") or "")
+    venue = _clean(kv.get("rft.jtitle") or (kv.get("rft.btitle") if kv.get("rft.atitle") else "") or "")
+    ids, url = {}, None
+    for r in rft_ids:
+        low = r.lower()
+        if low.startswith("info:doi/") and norm_doi(r):
+            ids.setdefault("doi", norm_doi(r))
+        elif low.startswith("info:pmid/") and norm_pmid(r[10:]):
+            ids.setdefault("pmid", norm_pmid(r[10:]))
+        elif low.startswith("info:arxiv/") and norm_arxiv(r[11:]):
+            ids.setdefault("arxiv", norm_arxiv(r[11:]))
+        elif low.startswith(("http://", "https://")):
+            if re.search(r"[\s\x00-\x1f\x7f]", r):
+                continue  # r2: a URL with whitespace or control characters is malformed: ignored
+            got = _ids_from_url(r)
             for k, v in got.items():
                 ids.setdefault(k, v)
-        else:
-            urls.append(u)
-    return ids, urls
+            if not got and url is None:
+                url = r
+    if not ids and not url:
+        return None
+    rec = {"title": title, "venue": venue, "genre": _clean(kv.get("rft.genre") or "", 40), "ids": ids}
+    if url:
+        rec["url"] = url
+    return rec
 
 
-DEFAULT_LINK_MIN_SCORE = 0.5  # PRIOR, not calibrated (LINKS-RC-1107): fraction of question stems in the citing sentence
-
-
-def link_min_score(cfg: Mapping | None) -> float:
-    """config `min_link_score` (fraction of question stems the citing sentence must contain); invalid -> default.
-    Always > 0, so a citation with no overlap (score 0, incl. cite templates outside <ref>) never yields a link."""
+def extract_references(html: str, limit: int) -> list:
+    """Article HTML -> [reference records] in page order, from COinS only. Nothing else of the page leaves."""
+    p = _CoinsParser(limit)
     try:
-        v = float((cfg or {}).get("min_link_score", DEFAULT_LINK_MIN_SCORE))
-    except (TypeError, ValueError):
-        return DEFAULT_LINK_MIN_SCORE
-    return v if 0 < v <= 1 else DEFAULT_LINK_MIN_SCORE
-
-
-def _stems(text: str, n: int, strip: set) -> set:
-    return {w[:n] for w in _WORD.findall(str(text or "").lower()) if w not in strip and len(w) > 1}
-
-
-def _context_before(text: str, pos: int, max_chars: int) -> str:
-    """The sentence ending at pos (transient; for ranking only)."""
-    lo = max(0, pos - max_chars)
-    seg = _REF.sub(" ", text[lo:pos])
-    ends = list(_SENT_END.finditer(seg))
-    return seg[ends[-1].end():] if ends else seg
-
-
-def extract_citations(wikitext: str, question: str, cfg: Mapping) -> list:
-    """Wikitext -> [{"ids": {...}, "urls": [...], "score": float}] in article order. Inline <ref> citations first
-    (scored against their citing sentence when rank.use_citing_sentence), then cite templates outside <ref> (score 0).
-    The wikitext and the sentences are local variables only: nothing derived from them except identifiers, scores and
-    URLs leaves this function."""
-    text = str(wikitext or "")
-    rk = cfg["rank"]
-    strip = {str(t).lower() for t in (cfg["query"].get("strip_terms") or ())}
-    n = int(rk["stem_len"])
-    q = _stems(question, n, strip)
+        p.feed(str(html or ""))
+        p.close()
+    except Exception:  # noqa: BLE001  malformed markup: what was parsed so far stands
+        pass
     out = []
-    for m in _REF.finditer(text):
-        ids, urls = citation_ids(m.group(1))
-        if not ids and not urls:
-            continue
-        score = 0.0
-        if rk.get("use_citing_sentence") is True and q:
-            score = len(q & _stems(_context_before(text, m.start(), int(rk["max_context_chars"])), n, strip)) / len(q)
-        out.append({"ids": ids, "urls": urls, "score": round(score, 6)})
-    rest = _REF.sub(" ", text)
-    for m in _TEMPLATE.finditer(rest):
-        ids, urls = citation_ids(m.group(0))
-        if ids or urls:
-            out.append({"ids": ids, "urls": urls, "score": 0.0})
-    for m in _DOI_TPL.finditer(rest):
-        if norm_doi(m.group(1)):
-            out.append({"ids": {"doi": norm_doi(m.group(1))}, "urls": [], "score": 0.0})
+    for t in p.coins:
+        rec = parse_coins(t)
+        if rec is not None:
+            out.append(rec)
     return out
 
 
-def _keys(ids: Mapping) -> set:
-    return {f"{k}:{v}" for k, v in ids.items()}
+# ------------------------------------------------------------------------------------------------ relevance
+def ref_match(question: str, rec: Mapping, cfg: Mapping) -> tuple[int, int]:
+    """(matched, total) question content stems found in the reference's OWN title and venue. Content stems: words of
+    3+ characters, minus strip_terms, the news/time cue terms and years (LINKS-VERIFY-1107 finding 3), cut to stem_len.
+    A stem matches a title/venue word with the same prefix, or a word that contains (or is contained in) a question
+    word when both have at least min_contain_len characters (nucleosynthesis / synthesis). Wikipedia prose is never
+    an input."""
+    r = cfg["relevance"]
+    n, mc = int(r["stem_len"]), int(r.get("min_contain_len", 6))
+    drop = {str(t).lower() for t in (cfg["query"].get("strip_terms") or ())} | \
+        {str(t).lower() for t in (r.get("cue_terms") or ())}
+    qwords = {w for w in _WORD.findall(str(question or "").lower())
+              if len(w) > 2 and w not in drop and not _YEAR.match(w)}
+    rwords = {w for w in _WORD.findall((str(rec.get("title") or "") + " " + str(rec.get("venue") or "")).lower())
+              if len(w) > 2}
+    rstems = {w[:n] for w in rwords}
+    qstems: dict = {}
+    for w in qwords:
+        qstems.setdefault(w[:n], set()).add(w)
+    hit = sum(1 for stem, ws in qstems.items()
+              if stem in rstems or any(len(a) >= mc and len(b) >= mc and (a in b or b in a) for a in ws for b in rwords))
+    return hit, len(qstems)
 
 
-def dedupe(cites: list) -> list:
-    """Merge citations that share any identifier (union of ids, max score, first position kept)."""
-    out, index = [], {}
-    for c in cites:
-        if not c["ids"]:
-            continue
-        hit = next((index[k] for k in _keys(c["ids"]) if k in index), None)
-        if hit is None:
-            hit = {"ids": dict(c["ids"]), "score": c["score"], "order": len(out)}
-            out.append(hit)
-        else:
-            for k, v in c["ids"].items():
-                hit["ids"].setdefault(k, v)
-            hit["score"] = max(hit["score"], c["score"])
-        for k in _keys(hit["ids"]):
-            index[k] = hit
-    return out
+def relevant(match: tuple[int, int], cfg: Mapping) -> bool:
+    """Kept when at least min_hits question stems match (all of them when the question has fewer)."""
+    hit, total = match
+    return total > 0 and hit >= min(total, max(1, int(cfg["relevance"]["min_hits"])))
 
 
 # ------------------------------------------------------------------------------------------------ candidates
@@ -251,9 +311,27 @@ def to_candidate(ids: Mapping, rank: int) -> dict | None:
     return None
 
 
+def to_url_candidate(url: str, title: str = "", rank: int = 0) -> dict | None:
+    """The ORIGINAL source URL (archive unwrapped) as a URL-only candidate, the shape of
+    search_providers._ddg_url_cand: never fetched here; the web route and follow_url take it through their gates.
+    https only, no Wikimedia-family host, no archive mirror. r2: the title is the URL's HOST, never the editor-written
+    COinS title (no editor text reaches a prompt or the UI through the candidate); `title` is accepted and ignored."""
+    from vera.search_providers import safe_target_url
+    orig = unwrap_archive(url)
+    if not orig or _WIKI_FAMILY.search(_host(orig)):
+        return None
+    safe = safe_target_url(orig)
+    if not safe:
+        return None
+    return {"url": safe, "title": _host(safe), "snippet": "", "doi": None, "provider": SOURCE,
+            "acq_source": SOURCE, "portal": PORTAL, "portal_rank": rank, "ref_id_kind": "url",
+            "discovered_url": safe}
+
+
 def build_query(question: str, cfg: Mapping) -> str:
     q = cfg["query"]
     strip = {str(t).lower() for t in q.get("strip_terms") or ()}
+    strip |= {str(t).lower() for t in ((cfg.get("relevance") or {}).get("cue_terms") or ())}
     from vera.search_query import drop_generic  # DDFIX-1023/REL: idioms such as "de facto", "status quo"
     words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", drop_generic(str(question or "")))
     keep = [w for w in words if w.lower() not in strip][: int(q["max_terms"])]
@@ -261,16 +339,20 @@ def build_query(question: str, cfg: Mapping) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ guarded GET
-def get_json(params: dict, cfg: Mapping, *, http_get: Callable, url_check: Callable | None = None,
-             clock: Callable = time.monotonic, deadline: float | None = None) -> dict:
-    """One GET of the API: https, allowlisted host, public-address check, no redirect, JSON only, byte cap, wall-clock
-    limit timeout_s over the whole streamed body (capped by deadline). Raises PortalError(code). Never retried."""
-    url = str(cfg["api_url"]) + "?" + urlencode(params)
-    sp = urlsplit(url)
-    if sp.scheme != "https" or (sp.hostname or "").lower() not in {h.lower() for h in cfg["allowed_hosts"]}:
+def _guard_path(url: str) -> None:
+    """Defence in depth: the portal never requests /w/ (action API, index.php), /api/ (REST) or Special: pages."""
+    path = unquote(urlsplit(url).path or "")
+    if path.startswith(("/w/", "/api/")) or "/w/" in path or not path.startswith("/wiki/") or ":" in path:
+        raise PortalError("path")
+
+
+def get_article(url: str, cfg: Mapping, *, http_get: Callable, url_check: Callable, clock: Callable,
+                deadline: float | None) -> str:
+    """One GET of an allowed article page: https, the article host only, public address, no redirect, text/html only,
+    byte cap, wall-clock limit over the streamed body. Raises PortalError(code). Never retried."""
+    _guard_path(url)
+    if _host(url) != str(cfg["article_host"]).lower() or _host(url) not in {h.lower() for h in cfg["allowed_hosts"]}:
         raise PortalError("host")
-    if url_check is None:
-        from vera.selective_fetch import is_public_url as url_check
     ok = url_check(url)
     if not (ok[0] if isinstance(ok, tuple) else ok):
         raise PortalError("host")
@@ -278,44 +360,23 @@ def get_json(params: dict, cfg: Mapping, *, http_get: Callable, url_check: Calla
     end = clock() + timeout_s if deadline is None else min(clock() + timeout_s, deadline)
     if clock() >= end:
         raise PortalError("deadline")
-    max_bytes = int(cfg["budget"]["max_response_bytes"])
+    max_bytes = int(cfg["max_response_bytes"])
     resp = None
     try:
         try:
-            resp = http_get(url, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "application/json"},
+            resp = http_get(url, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "text/html"},
                             timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
         except Exception as e:  # noqa: BLE001
-            if "rate limit" in str(e).lower():
-                raise PortalError("rate_limited") from None
-            raise PortalError("unreachable") from None
+            raise PortalError("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)
         if status == 429:
             raise PortalError("rate_limited")
         if status != 200:
-            raise PortalError("unreachable")
+            raise PortalError("unreachable")  # redirects included: never followed
         ctype = ((getattr(resp, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
+        if ctype != "text/html":
             raise PortalError("unreachable")
-        chunks, size = [], 0
-        try:
-            for chunk in resp.iter_content(65536):
-                size += len(chunk)
-                if size > max_bytes:
-                    raise PortalError("too_large")
-                if clock() > end:
-                    raise PortalError("deadline")
-                chunks.append(chunk)
-        except PortalError:
-            raise
-        except Exception:  # noqa: BLE001
-            raise PortalError("unreachable") from None
-        try:
-            doc = strict_json.loads(b"".join(chunks).decode("utf-8"))
-        except Exception:  # noqa: BLE001
-            raise PortalError("unreachable") from None
-        if not isinstance(doc, dict) or "error" in doc:
-            raise PortalError("unreachable")
-        return doc
+        return _read_body(resp, max_bytes, end, clock).decode("utf-8", "replace")
     finally:
         try:
             if resp is not None and hasattr(resp, "close"):
@@ -324,111 +385,185 @@ def get_json(params: dict, cfg: Mapping, *, http_get: Callable, url_check: Calla
             pass
 
 
-def search_params(question: str, cfg: Mapping) -> dict:
-    return {"action": "query", "format": "json", "formatversion": "2", "generator": "search",
-            "gsrsearch": build_query(question, cfg), "gsrnamespace": "0", "gsrlimit": str(int(cfg["max_articles"])),
-            "gsrprop": "", "prop": "revisions|pageprops", "rvprop": "content", "rvslots": "main",
-            "ppprop": "disambiguation", "redirects": "1"}
+def _read_body(resp, max_bytes: int, end: float, clock: Callable) -> bytes:
+    """r2: the whole body must arrive before `end` (one overall deadline, not a per-read one). The reads run in a
+    daemon worker; the caller waits at most until `end`, then closes the response (which unblocks a slow-drip read)
+    and raises PortalError("deadline"). Byte cap enforced as the chunks arrive."""
+    box: dict = {"chunks": [], "err": None, "done": False}
+    stop = threading.Event()
+
+    def pump():
+        size = 0
+        try:
+            for chunk in resp.iter_content(16384):
+                if stop.is_set():
+                    return
+                size += len(chunk)
+                if size > max_bytes:
+                    box["err"] = "too_large"
+                    return
+                box["chunks"].append(chunk)
+        except Exception:  # noqa: BLE001
+            box["err"] = "unreachable"
+        finally:
+            box["done"] = True
+
+    t = threading.Thread(target=pump, name="wikiref-read", daemon=True)
+    t.start()
+    t.join(max(0.0, end - clock()))
+    if t.is_alive() or not box["done"]:
+        stop.set()
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+        raise PortalError("deadline")
+    if box["err"]:
+        raise PortalError(box["err"])
+    if clock() > end:
+        raise PortalError("deadline")
+    return b"".join(box["chunks"])
+
+
+def _default_site_search(query: str, host: str, n: int) -> list:
+    """The shared /ask DuckDuckGo Lite instance (as vera.official_lane): ONE explicit site: query, through its cache,
+    daily cap, rate gate and robots check. [] when DuckDuckGo is not in the chain."""
+    from vera import search_and_fetch, search_providers as sp
+    chain, _m, _mode = search_and_fetch.cached_chain()
+    ddg = next((p for p in chain if getattr(p, "name", None) == sp.DDG_NAME), None)
+    if ddg is None:
+        return []
+    q = {"group": "wikipedia", "query": f"{query} (site:{host})"[:int(ddg.s.get("max_query_chars", 500))]}
+    return ddg.parse(ddg.call(q["query"], n, float(ddg.s.get("timeout_s", 10) or 10), queries=[q]), n)
+
+
+def _default_robots(http_get: Callable, url_check: Callable, ua: str) -> Callable:
+    def ok(url: str) -> bool:
+        from vera import selective_fetch as sf
+        return sf.robots_allowed(url, http_get=http_get, url_check=url_check, user_agent=ua)
+    return ok
+
+
+def _crawl_ok(url: str, ua: str) -> bool:
+    """robots Crawl-delay of the host (cached by robots_allowed): the request is never sent early."""
+    from vera import selective_fetch as sf
+    return sf.crawl_reserve(_host(url), sf.robots_crawl_delay(url, ua))
 
 
 # ------------------------------------------------------------------------------------------------ portal
-def discover(question: str, cfg: Mapping | None = None, *, http_get: Callable | None = None,
-             url_check: Callable | None = None, clock: Callable = time.monotonic, deadline: float | None = None,
+def discover(question: str, cfg: Mapping | None = None, *, site_search: Callable | None = None,
+             http_get: Callable | None = None, url_check: Callable | None = None, robots_ok: Callable | None = None,
+             clock: Callable = time.monotonic, deadline: float | None = None,
              max_refs: int | None = None) -> tuple[list, list, dict]:
-    """-> (candidates, reading-list links, counts). Never raises: a failure returns what was gathered so far plus a
-    counts["error"] code. Counts carry numbers and fixed codes only (no titles, no question)."""
+    """-> (candidates, [], counts). Never raises: a failure returns what was gathered so far plus counts["error"].
+    The second element (reading-list links) is always empty since WIKI-REDESIGN-1107 (no news dump). Counts carry
+    numbers and fixed codes only (no titles, no question, no URL)."""
     cfg = load_config() if cfg is None else cfg
-    counts = {"requests": 0, "articles": 0, "citations": 0, "ids": 0, "candidates": 0, "held_pmid_only": 0,
-              "links": 0}
+    counts = {"search": 0, "articles_found": 0, "robots_denied": 0, "articles": 0, "refs": 0, "relevant": 0,
+              "candidates": 0, "candidates_url": 0, "held_pmid_only": 0, "held_url": 0, "duplicates": 0}
     if not enabled(cfg):
         counts["error"] = "disabled"
         return [], [], counts
-    if http_get is None:
-        import requests
-        http_get = requests.get
-    budget = int(cfg["budget"]["max_requests_per_question"])
+    ua = str(cfg["user_agent"])
+    if http_get is None or url_check is None:
+        from vera import selective_fetch as sf
+        http_get = http_get or sf.pinned_get
+        url_check = url_check or sf.is_public_url
+    robots_ok = robots_ok or _default_robots(http_get, url_check, ua)
     max_articles = int(cfg["max_articles"])
-    params = search_params(question, cfg)
-    pages: dict = {}
-    while True:
-        if counts["requests"] >= budget:
-            counts["error"] = "budget"
+    try:
+        counts["search"] = 1
+        results = list((site_search or _default_site_search)(build_query(question, cfg), str(cfg["article_host"]),
+                                                               max(max_articles * 3, 5)) or [])
+    except Exception:  # noqa: BLE001  a failed search ends the portal for this question (the other providers stand)
+        counts["error"] = "search"
+        results = []
+    arts = []
+    for r in results:
+        u = article_url((r or {}).get("url") if isinstance(r, Mapping) else None, cfg)
+        if u and u not in arts:
+            arts.append(u)
+    arts = arts[:max_articles]
+    counts["articles_found"] = len(arts)
+    refs = []
+    scan_limit = int(cfg["relevance"].get("max_refs_scanned", 500))
+    for i, url in enumerate(arts):
+        if deadline is not None and clock() >= deadline:
+            counts["error"] = "deadline"
             break
-        counts["requests"] += 1
         try:
-            doc = get_json(params, cfg, http_get=http_get, url_check=url_check, clock=clock, deadline=deadline)
+            allowed = bool(robots_ok(url))
+        except Exception:  # noqa: BLE001  fail closed
+            allowed = False
+        if not allowed:
+            counts["robots_denied"] += 1
+            continue
+        try:
+            if not _crawl_ok(url, ua):
+                counts["error"] = "crawl_delay"
+                continue
+        except Exception:  # noqa: BLE001
+            counts["error"] = "crawl_delay"
+            continue
+        try:
+            html = get_article(url, cfg, http_get=http_get, url_check=url_check, clock=clock, deadline=deadline)
         except PortalError as e:
             counts["error"] = str(e)
-            break
-        for p in ((doc.get("query") or {}).get("pages") or ()) if isinstance(doc.get("query"), dict) else ():
-            if not isinstance(p, dict) or not isinstance(p.get("pageid"), int):
-                continue
-            slot = pages.setdefault(p["pageid"], {"index": p.get("index"), "content": None, "disambig": False})
-            if isinstance(p.get("index"), int):
-                slot["index"] = p["index"]
-            if isinstance(p.get("pageprops"), dict) and "disambiguation" in p["pageprops"]:
-                slot["disambig"] = True
-            for r in p.get("revisions") or ():
-                c = (((r or {}).get("slots") or {}).get("main") or {}).get("content") if isinstance(r, dict) else None
-                if isinstance(c, str):
-                    slot["content"] = c
-        # Follow "continue" only while the batch is incomplete (prop=revisions split the content). After
-        # batchcomplete, "continue" carries gsroffset = the NEXT search page: never followed (max_articles holds).
-        cont = doc.get("continue")
-        if (doc.get("batchcomplete") or not isinstance(cont, dict)
-                or all(v["content"] is not None for v in pages.values())):
-            break
-        params = {**search_params(question, cfg), **{k: str(v) for k, v in cont.items()}}
-    ordered = sorted(pages.values(), key=lambda v: (v["index"] if isinstance(v["index"], int) else 1 << 30))
-    cites = []
-    for i, art in enumerate(ordered[:max_articles]):
-        if art["content"] is None or (art["disambig"] and cfg["skip_disambiguation"] is True):
             continue
         counts["articles"] += 1
-        for c in extract_citations(art["content"], question, cfg):
-            c["article"] = i
-            cites.append(c)
-        art["content"] = None  # discard the article text as soon as its identifiers are out
-    counts["citations"] = len(cites)
-    links, seen_links = [], set()
-    from vera.search_providers import safe_target_url
-    # LINKS-RC-1107: a non-scholarly URL is offered only when the sentence that cites it shares enough stems with the
-    # question (same transient score the identifiers are ranked by). Before this, every URL of every matched article
-    # was kept, so an off-topic article's whole citation list reached the reading list.
-    min_link = link_min_score(cfg)
-    for c in cites:
-        if c["score"] < min_link:
-            continue
-        for u in c["urls"]:
-            s = safe_target_url(u)
-            if s and s not in seen_links and len(links) < int(cfg["max_links"]):
-                seen_links.add(s)
-                links.append(s)
-    groups = dedupe([c for c in cites if c["ids"]])
-    counts["ids"] = len(groups)
-    groups.sort(key=lambda g: (-g["score"], g["order"]))
+        for rec in extract_references(html, scan_limit):
+            rec["article"] = i
+            refs.append(rec)
+        html = None  # the page is discarded as soon as its reference metadata is out
+    counts["refs"] = len(refs)
+    scored = []
+    for k, rec in enumerate(refs):
+        m = ref_match(question, rec, cfg)
+        if relevant(m, cfg):
+            scored.append((round(m[0] / m[1], 6), k, rec))
+    counts["relevant"] = len(scored)
+    scored.sort(key=lambda t: (-t[0], t[1]))
     cap = int(cfg["max_refs"]) if max_refs is None else min(int(cfg["max_refs"]), int(max_refs))
-    out = []
-    for g in groups:
+    out, seen = [], set()
+    for s, _k, rec in scored:
         if len(out) >= cap:
             break
-        cand = to_candidate(g["ids"], len(out))
-        if cand is None:
-            counts["held_pmid_only"] += 1
-            continue
+        ids = rec["ids"]
+        keys = {f"{a}:{b}" for a, b in ids.items()}
+        if ids:
+            if keys & seen:
+                counts["duplicates"] += 1
+                continue
+            cand = to_candidate(ids, len(out))
+            if cand is None:
+                counts["held_pmid_only"] += 1
+                continue
+        else:
+            cand = to_url_candidate(rec.get("url") or "", rank=len(out))
+            if cand is None:
+                counts["held_url"] += 1
+                continue
+            keys = {"url:" + cand["url"].lower().rstrip("/")}
+            if keys & seen:
+                counts["duplicates"] += 1
+                continue
+            counts["candidates_url"] += 1
+        seen |= keys
+        cand["ref_score"] = s
         out.append(cand)
-    counts["candidates"], counts["links"] = len(out), len(links)
+    counts["candidates"] = len(out)
     logger.info("autoacq wikiref %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    return out, links, counts
+    return out, [], counts
 
 
-_LINK_SINK: dict = {}  # NT-3: question -> discovered news links, popped once by take_links (bounded, in memory)
+_LINK_SINK: dict = {}  # NT-3 API kept for lane_evidence.merge_wiki_links; the portal no longer records links
 _LINK_SINK_MAX = 32
 _LINK_LOCK = threading.Lock()
 
 
 def record_links(question: str, links: list) -> None:
-    """Keep this question's reading-list links for the news lane. Discovery only, never evidence; never persisted."""
+    """NT-3 API (kept for callers and tests). WIKI-REDESIGN-1107: discover never calls it, so no Wikipedia-citation
+    reading list reaches the news lane; followed sources appear in the normal lanes under their own type."""
     try:
         key = " ".join(str(question or "").split()).lower()
         if not key or not links:
@@ -437,7 +572,7 @@ def record_links(question: str, links: list) -> None:
             while len(_LINK_SINK) >= _LINK_SINK_MAX:
                 _LINK_SINK.pop(next(iter(_LINK_SINK)), None)
             _LINK_SINK[key] = list(links)
-    except Exception:  # noqa: BLE001 - fail quiet: link recording must never break the search
+    except Exception:  # noqa: BLE001
         logger.debug("autoacq wikiref record_links failed", exc_info=True)
 
 
@@ -448,12 +583,13 @@ def take_links(question: str) -> list:
 
 
 def make_portal_search(cfg: Mapping | None = None, *, http_get: Callable | None = None,
-                       url_check: Callable | None = None, clock: Callable = time.monotonic) -> Callable:
+                       url_check: Callable | None = None, clock: Callable = time.monotonic,
+                       site_search: Callable | None = None, robots_ok: Callable | None = None) -> Callable:
     """A search(question, n, timeout_s) -> [candidates] callable for search_providers.acquisition_search's pool. The
     deadline is now + timeout_s; n caps the emitted candidates together with max_refs."""
     def search(question, n, timeout_s):
-        cands, links, _counts = discover(question, cfg, http_get=http_get, url_check=url_check, clock=clock,
+        cands, _links, _counts = discover(question, cfg, site_search=site_search, http_get=http_get,
+                                          url_check=url_check, robots_ok=robots_ok, clock=clock,
                                           deadline=clock() + float(timeout_s), max_refs=n or None)
-        record_links(question, links)  # NT-3: was discarded; now offered to the news lane as link-only items
         return cands
     return search
