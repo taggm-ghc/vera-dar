@@ -986,6 +986,11 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                 return None
             if not _landing_url_ok(cur) or _is_wikipedia(cur):
                 return None
+            from vera import selective_fetch as _sf_api
+            try:  # API-URL-GATE-1108: an API URL (first or redirect hop) needs its api_permissions entry, any transport
+                _sf_api.api_gate(cur, "fulltext")
+            except _sf_api.ApiRefused:
+                return None
             ok = url_check(cur)
             if not (ok[0] if isinstance(ok, tuple) else ok):
                 return None

@@ -335,10 +335,21 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
     while True:
         if clock() > end:
             raise FetchRefused("timeout")
+        try:  # API-URL-GATE-1108: also before DNS, on the URL as given (re-checked below on the canonical URL)
+            sf.api_gate(cur, "fulltext")
+        except sf.ApiRefused:
+            raise FetchRefused("api_denied") from None
         cur, host, port, ips = check_url(cur, cfg, resolve, timeout=end - clock())
         if cur in seen:
             raise FetchRefused("cycle")
         seen.add(cur)
+        # API-URL-GATE-1108: an API URL (first URL, redirect target, robots.txt or tdmrep.json on an API host) needs
+        # its config/api_permissions.json entry for "fulltext" BEFORE the hop gate, robots.txt or the request;
+        # fails closed when that config is unusable. Refused -> FetchRefused("api_denied"), nothing sent.
+        try:
+            api_d = sf.api_gate(cur, "fulltext")
+        except sf.ApiRefused:
+            raise FetchRefused("api_denied") from None
         if hop_gate is not None:
             refused = hop_gate(cur)
             if refused:
@@ -351,16 +362,34 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         hdrs = {"User-Agent": cfg["user_agent"], "Accept-Encoding": "identity",
                 "Host": host + ("" if port == 443 else f":{port}")}
+        permit = None
+        if api_d is not None:  # API-URL-GATE-1108: a permitted API hop: the entry's User-Agent and rate portal
+            from vera import api_permissions, rate_limit
+            hdrs = api_permissions.headers_for(api_d, hdrs)
+            permit = rate_limit.get_registry().portal(str(api_d.conditions["rate_portal"])).acquire(
+                deadline=time.monotonic() + max(0.0, end - clock()))  # review (5): never wait past this fetch's end
+            if not permit.ok:
+                raise FetchRefused("rate_limited")  # skipped, nothing sent
         resp = None
-        for ip in ips[:sf.PIN_MAX_ADDRS]:
-            try:
-                resp = _call_transport(transport, (host, ip, port, target, hdrs, max(0.1, end - clock())),
-                                       end - clock())
-                break
-            except FetchRefused as exc:
-                if exc.reason == "timeout":
-                    raise
-                continue
+        try:
+            for ip in ips[:sf.PIN_MAX_ADDRS]:
+                try:
+                    resp = _call_transport(transport, (host, ip, port, target, hdrs, max(0.1, end - clock())),
+                                           end - clock())
+                    break
+                except FetchRefused as exc:
+                    if exc.reason == "timeout":
+                        raise
+                    continue
+        except BaseException as e:
+            if permit is not None:
+                permit.record(error=e)
+            raise
+        if permit is not None:
+            if resp is None:
+                permit.record(error=ConnectionError("unreachable"))
+            else:
+                permit.record(status=getattr(resp, "status_code", None), headers=getattr(resp, "headers", None))
         if resp is None:
             raise FetchRefused("unreachable")
         fired = threading.Event()

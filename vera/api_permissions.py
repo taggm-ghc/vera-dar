@@ -15,6 +15,8 @@ The owner flips an entry with owner_switch ("permit" needs owner_decision) and n
 Logs carry only the fixed code and the entry id (never the URL, query or response)."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import re
@@ -147,7 +149,13 @@ def normalise_path(path: str) -> str:
 def _split(url: str) -> tuple[str, str]:
     sp = urlsplit(str(url or ""))
     # r3: a fully-qualified host ("api.openalex.org.") is the same host: strip trailing dots before matching
-    return (sp.hostname or "").lower().rstrip("."), normalise_path(sp.path)
+    host = (sp.hostname or "").lower()
+    if not host.isascii():  # API-URL-GATE-1108 review (3): IDNA/NFKC mapping, so a look-alike or full-width spelling
+        try:                # of an API host (U+FF41, U+3002 dot) is matched as that host
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            pass
+    return host.rstrip("."), normalise_path(sp.path)
 
 
 def match(url: str, policy: Policy | None = None) -> tuple[str, Mapping] | None:
@@ -270,17 +278,59 @@ def call(fn: Callable, url: str, *a, headers: Mapping | None = None, purpose: st
         kw.pop("params", None)  # already part of the first URL; the Location carries its own query
 
 
+# API-URL-GATE-1108: the purpose a generic transport (selective_fetch.pinned_get) checks an API URL against. A
+# generic fetch reads a document, so the default is "fulltext"; gate_api_urls sets its caller's purpose for the
+# duration of the call (a contextvar, so the transport under the wrapper checks the same purpose, never a wider one).
+_PURPOSE: contextvars.ContextVar = contextvars.ContextVar("vera_api_purpose", default=None)
+
+
+def current_purpose(default: str = "fulltext") -> str:
+    return _PURPOSE.get() or default
+
+
+@contextlib.contextmanager
+def purpose_scope(purpose: str):
+    tok = _PURPOSE.set(purpose)
+    try:
+        yield
+    finally:
+        _PURPOSE.reset(tok)
+
+
+def gate_url(url: str, purpose: str | None = None, policy: Policy | None = None) -> Decision | None:
+    """API-URL-GATE-1108: the check for EVERY generic outbound fetch hop (a URL that may come from search results,
+    portal links or a redirect). None: not an API URL (robots/read gates apply as before). A Decision: an API URL
+    whose entry permits this purpose (default: current_purpose(), i.e. "fulltext"). Otherwise ApiDenied, nothing sent.
+    Fail closed: when config/api_permissions.json is unusable no URL can be classed as non-API, so EVERY URL is refused
+    (R-API-DENIED, config_unusable)."""
+    policy = policy or get_policy()
+    if policy.error:
+        logger.warning("%s entry=none why=config_unusable", DENIED)
+        raise ApiDenied(DENIED, None, "config_unusable")
+    try:
+        api = is_api_url(url, policy)
+    except ValueError:  # an unparseable URL (e.g. invalid IPv6 literal) cannot be classed: refused
+        logger.warning("%s entry=none why=unparseable_url", DENIED)
+        raise ApiDenied(DENIED, None, "unparseable_url") from None
+    if not api:
+        return None
+    return require(url, purpose or current_purpose(), policy)
+
+
 def gate_api_urls(fn: Callable) -> Callable:
     """Wrap a requests.get-compatible fetcher used for websites AND APIs (auto_acquire's hop transport): a URL that is
     an API call (is_api_url) must pass require() and gets the entry's User-Agent; other URLs pass unchanged (they
-    stay under the robots/TDM gate). The wrapper is marked api_gated so callers can pre-check before robots.txt."""
+    stay under the robots/TDM gate). The wrapper is marked api_gated so callers can pre-check before robots.txt.
+    API-URL-GATE-1108: fails closed (gate_url) and runs fn under the caller's purpose, so a gated transport below
+    (pinned_get) re-checks the same purpose."""
     def wrapped(url, *a, api_purpose: str = "fulltext", **kw):
         # r2 (3): the caller's purpose ("metadata" for JSON lookups, "fulltext" for documents) is checked against the
         # entry's content_scope here too; a caller that names none gets the stricter "fulltext".
-        if is_api_url(url):
-            d = require(url, api_purpose)
+        d = gate_url(url, api_purpose)
+        if d is not None:
             kw["headers"] = headers_for(d, kw.get("headers"))
-        return fn(url, *a, **kw)
+        with purpose_scope(api_purpose):
+            return fn(url, *a, **kw)
     wrapped.__wrapped__ = fn
     wrapped.api_gated = True
     return wrapped

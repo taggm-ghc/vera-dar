@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 import requests.adapters
 
+from vera import api_permissions
 from vera.cost_ledger import CostLedger
 
 USER_AGENT = "VERA-research-fetcher/0.1 (+bounded research; contact via repo owner)"
@@ -189,6 +190,25 @@ class PinnedRefused(requests.exceptions.InvalidURL):
     """pinned_get refused the URL (failed validation); nothing was sent."""
 
 
+class ApiRefused(PinnedRefused, api_permissions.ApiDenied):
+    """API-URL-GATE-1108: pinned_get refused an API URL that config/api_permissions.json does not permit for this
+    purpose (or the config is unusable: every URL refused). Nothing was sent. A RequestException (so generic callers
+    treat it as a failed fetch) AND an ApiDenied (code R-API-DENIED / R-API-COND / R-API-SCOPE, entry, why)."""
+
+    def __init__(self, err: "api_permissions.ApiDenied"):
+        PinnedRefused.__init__(self, f"blocked: {err.code} ({err.entry or 'no_entry'}: {err.why})")
+        self.code, self.entry, self.why = err.code, err.entry, err.why
+
+
+def api_gate(url: str, purpose: str | None = None):
+    """API-URL-GATE-1108: api_permissions.gate_url for a generic fetch hop; a refusal is raised as ApiRefused.
+    Returns None (not an API URL) or the permitting Decision."""
+    try:
+        return api_permissions.gate_url(url, purpose)
+    except api_permissions.ApiDenied as e:
+        raise ApiRefused(e) from None
+
+
 def _take_pin(url: str):
     pin, _PIN.slot = _PIN.slot, None
     if pin is None or pin[0] != url or time.monotonic() - pin[5] > PIN_MAX_AGE_S:
@@ -226,6 +246,13 @@ def pinned_get(url: str, *, headers=None, timeout=None, allow_redirects=False, s
     bundles are ignored (trust_env=False): a proxy would resolve the name itself and defeat pinning."""
     if allow_redirects:
         raise ValueError("pinned_get never follows redirects; re-validate each hop")
+    # API-URL-GATE-1108: every hop on this transport (search-result URLs, portal links, redirect targets, robots.txt)
+    # is checked against config/api_permissions.json before anything is resolved or sent. An API URL needs an entry
+    # permitting the current purpose (gate_api_urls sets it; default "fulltext"); refused -> ApiRefused. A permitted
+    # API URL gets the entry's User-Agent.
+    d = api_gate(url)
+    if d is not None:
+        headers = api_permissions.headers_for(d, headers)
     pin = _take_pin(url)
     if pin is None:
         ok, why = is_public_url(url)
@@ -543,6 +570,12 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
     current, hops = url, 0
     try:
         while True:
+            # API-URL-GATE-1108: an API URL (first URL or redirect target) needs its api_permissions entry for
+            # "fulltext" BEFORE robots.txt or the page is requested, whatever transport was injected.
+            try:
+                api_d = api_gate(current, "fulltext")
+            except ApiRefused as e:
+                return None, None, None, hops, None, f"blocked: {e.code}"
             ok, why = url_check(current)
             if not ok:
                 return None, None, None, hops, None, f"blocked: {why}"
@@ -561,8 +594,19 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
                 return None, None, None, hops, None, "crawl_delay"
             if cd and not crawl_reserve(urlsplit(current).hostname or "", cd, crawl_clock):
                 return None, None, None, hops, None, "crawl_delay"
-            resp = http_get(current, headers={"User-Agent": USER_AGENT}, timeout=timeout_s,
-                            allow_redirects=False, stream=True)
+            hdrs = {"User-Agent": USER_AGENT}
+            if api_d is not None and http_get is pinned_get:
+                # API-URL-GATE-1108: a permitted API hop on the bare default transport goes through the entry's
+                # rate-limit portal (a wrapped transport, e.g. rate_limit.limited_by_url, already applies its own).
+                from vera import rate_limit
+                ad = rate_limit.get_registry().portal(str(api_d.conditions["rate_portal"]))
+                try:
+                    resp = rate_limit.call_with_limit(ad, http_get, current, headers=hdrs, timeout=timeout_s,
+                                                      allow_redirects=False, stream=True)
+                except rate_limit.RateLimited:
+                    return None, None, None, hops, None, "rate_limited"
+            else:
+                resp = http_get(current, headers=hdrs, timeout=timeout_s, allow_redirects=False, stream=True)
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
                 hops += 1
                 if hops > MAX_REDIRECTS:
