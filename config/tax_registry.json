@@ -1,0 +1,7 @@
+{
+  "_note": "TAXO-EXTENSIBLE-1108. Every flag is OFF until migration 022 is applied and the owner enables it. read_from_tax: the matcher may read the registry from the vera_vjay.tax_* views; write_proposals: induction proposals may be written as proposed rows; approve_enabled: the owner approval script may activate or reject proposals; sync_enabled: tax anchors may be seeded from the topreg registry. Only literal true enables a flag.",
+  "read_from_tax": false,
+  "write_proposals": false,
+  "approve_enabled": false,
+  "sync_enabled": false
+}

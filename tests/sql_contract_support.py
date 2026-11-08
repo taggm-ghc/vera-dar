@@ -56,6 +56,8 @@ _TBL = re.compile(r"\b(?:from|join|into|update|table)\s+(?:if\s+exists\s+)?(?:(?
 PENDING_DRAFT_ALLOWLIST = (
     "016-DRAFT-lists-to-db.sql.draft",   # lstreg_active_lists_v, lstreg_active_items_v (vera/list_tables.py, topic_tagging.py)
     "017-DRAFT-topic-tags.sql.draft",    # toptag_document_topics (vera/corpus_description.py)
+    "020-DRAFT-taxonomy.sql.draft",      # tax_domains, tax_topics, tax_subtopics, tax_domain_topic, tax_topic_subtopic (vera/tax_registry.py; 020 is applied in production per the owner, the draft stays here only as the SQL-contract fixture, as for 021)
+    "022-DRAFT-taxonomy-extensible.sql.draft",  # tax_anchors, tax_registry_active_v, tax_registry_eval_v (vera/tax_registry.py)
 )
 PENDING_DIR = "db/migrations/pending"
 _DRAFT_NAME = re.compile(r"^\d{3}-DRAFT-[A-Za-z0-9-]+\.sql\.draft$")

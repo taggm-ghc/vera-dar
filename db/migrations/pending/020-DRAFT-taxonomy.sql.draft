@@ -1,0 +1,511 @@
+-- 020_vera_taxonomy.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (convention of 007/011/012/017); rename only at approval.
+-- TAXONOMY-SCHEMA-1107 DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL. Not a live migration: it sits in pending/ and is invisible
+-- to the runner. APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin-run only, rehearsal first
+-- (work/TAXONOMY-SCHEMA-1107/scripts/rehearse_020.sh in vera_dar_rehearsal), never via db/apply_migrations.py.
+-- Owner, 2026-11-07: "Domains and documents are comprised of topics. topics are comprised of subtopics. ingested chunks are associated with
+--   subtopics." / "there should be normalized db tables for subtopics, topics, and domains. and, there should be associated tables between
+--   topics and subtopics; chunks and subtopics and topics; source docs and topics; domains and topics" / "source docs and domains".
+-- Design and rationale: work/TAXONOMY-SCHEMA-1107/design.md.
+-- Owner decisions 2026-11-07 (OD-1107-HITL): D1 rehearsal approved, PRODUCTION APPLY NOT APPROVED; D2 no grant of any kind to the wo
+--   (ingest-only) account; D3 draft 007 abandoned, 017 kept as the tagger feeding 020; D4 permissive source_domain, with documents in a
+--   domain but no topic reported explicitly (tax_about_topics_v rows with topic NULL).
+-- REQUIRES: PostgreSQL 16 or newer (pg_auth_members.inherit_option/set_option; security_invoker views need 15+); applied 001u, 003 (sources,
+--   evidence_spans); group roles vera_vjay_rw and vera_vjay_ro and the three app logins (db/accounts/create_vera_accounts.sql). It does NOT
+--   depend on 007, 011 (its rows are only a seed SOURCE read by app code), 013, 016, 017, 018 or 019 and can be applied before or after them.
+-- NO TAXONOMY NAMES are written by this file. Entity rows are inserted on the app path (rw) by scripts/taxonomy_sync.py from the curated
+--   topic registry (011 topreg_topics active rows); links by scripts/taxonomy_backfill.py. Both ship off (config/taxonomy.json).
+-- Objects (prefix tax_):
+--   entities   tax_domains, tax_topics, tax_subtopics               (BIGINT identity id, normalized UNIQUE slug, state active|retired)
+--   junctions  tax_domain_topic, tax_topic_subtopic                 (hierarchy, many-to-many)
+--              tax_chunk_subtopic                                   (primary grain: chunk = vera_vjay.evidence_spans row)
+--              tax_chunk_topic, tax_source_topic, tax_source_domain (DIRECT assertions only; implied links are derived in views)
+--   views      tax_chunk_topic_eff_v, tax_source_topic_eff_v, tax_source_domain_eff_v (direct UNION derived, with basis)
+--              tax_about_topics_v, tax_about_subtopics_v           (About-page aggregation; active entities and links only)
+-- Every link row carries provenance: assigned_via, classifier_name, classifier_version, score, score_kind, created_at; retiring a link sets
+--   state = 'retired' and retired_at (guard trigger); a retired link never becomes active again (insert a new row instead).
+-- FKs are ON DELETE RESTRICT everywhere (sources/evidence_spans precedent): app roles have no DELETE; retire, never delete.
+-- Grants (rw and ro ONLY; the owner instruction for this task): rw SELECT + column INSERT + column UPDATE (state, label, description on
+--   entities; state on links); ro SELECT. vera_vjay_wo and PUBLIC get nothing (an ingest worker running as wo cannot write links; see
+--   design.md section 6, decision D2).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SET LOCAL lock_timeout = '5s';   -- the FKs lock sources/evidence_spans briefly; never queue behind ingest for long
+SELECT set_config('vera020.rw', :'app_rw_login', true), set_config('vera020.ro', :'app_ro_login', true);
+
+-- Preflight 1: parents keyed; nothing this file creates exists (strictly additive).
+DO $$
+DECLARE n text;
+BEGIN
+  IF pg_catalog.current_setting('server_version_num')::int < 160000 THEN
+    RAISE EXCEPTION '020 requires PostgreSQL 16 or newer.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.sources') IS NULL OR pg_catalog.to_regclass('vera_vjay.evidence_spans') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                     WHERE c.conrelid = 'vera_vjay.sources'::pg_catalog.regclass AND c.contype IN ('p','u')
+                       AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'source_id')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                     WHERE c.conrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass AND c.contype IN ('p','u')
+                       AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'span_id')
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.sources'::pg_catalog.regclass
+                     AND a.attname = 'canonical_source_id' AND NOT a.attisdropped)
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass
+                     AND a.attname = 'source_id' AND NOT a.attisdropped) THEN
+    RAISE EXCEPTION '020 requires sources(source_id, canonical_source_id) and evidence_spans(span_id, source_id) (001u/003 first).';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['tax_domains','tax_topics','tax_subtopics','tax_domain_topic','tax_topic_subtopic','tax_chunk_subtopic',
+                           'tax_chunk_topic','tax_source_topic','tax_source_domain','tax_chunk_topic_eff_v','tax_source_topic_eff_v',
+                           'tax_source_domain_eff_v','tax_about_topics_v','tax_about_subtopics_v'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                WHERE ns.nspname = 'vera_vjay' AND (c.relname = n OR c.relname LIKE n || '\_%')) THEN
+      RAISE EXCEPTION '020 already applied or name collision (relation %)', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['tax_entity_touch_trgfn','tax_link_guard_trgfn'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '020 already applied or name collision (function %)', n;
+    END IF;
+  END LOOP;
+END $$;
+
+-- Preflight 2: roles exist; logins inherit their groups; the account running this file is not an app role nor reachable from one.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera020.rw')], ['vera_vjay_ro', current_setting('vera020.ro')]];
+BEGIN
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '020 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '020 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '020: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF current_user = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera020.rw'), current_setting('vera020.ro')])
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname IN ('vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera020.rw'), current_setting('vera020.ro'))
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '020 must not run as, or as a member of, an app group or login role: the table owner is unrestricted.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera020.rw'), current_setting('vera020.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '020: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- Entities. slug: the NORMALIZED key (app normalizes: NFKC, casefold, non-alphanumeric runs to one hyphen, trim hyphens; vera/taxonomy.py
+-- normalize_slug). label: printable text, capped. origin_ref: where the row came from, e.g. 'topreg:<topic_key>' or 'topreg-field:<field>'.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_domains (
+    domain_id   BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_domains_pk PRIMARY KEY,
+    slug        TEXT NOT NULL CONSTRAINT tax_domains_slug_chk CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(slug) BETWEEN 2 AND 64),
+    label       TEXT NOT NULL CONSTRAINT tax_domains_label_chk CHECK (label ~ '^[^[:cntrl:]]+$' AND btrim(label) <> '' AND length(label) BETWEEN 2 AND 120),
+    description TEXT CONSTRAINT tax_domains_desc_chk CHECK (description IS NULL OR (description !~ '[[:cntrl:]]' AND length(description) BETWEEN 1 AND 600)),
+    origin      TEXT NOT NULL CONSTRAINT tax_domains_origin_chk CHECK (origin IN ('registry','curator')),
+    origin_ref  TEXT CONSTRAINT tax_domains_oref_chk CHECK (origin_ref IS NULL OR origin_ref ~ '^[a-z][a-z-]*:[ -~]{1,160}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_domains_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT tax_domains_slug_uq UNIQUE (slug)
+);
+CREATE TABLE vera_vjay.tax_topics (
+    topic_id    BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_topics_pk PRIMARY KEY,
+    slug        TEXT NOT NULL CONSTRAINT tax_topics_slug_chk CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(slug) BETWEEN 2 AND 64),
+    label       TEXT NOT NULL CONSTRAINT tax_topics_label_chk CHECK (label ~ '^[^[:cntrl:]]+$' AND btrim(label) <> '' AND length(label) BETWEEN 2 AND 120),
+    description TEXT CONSTRAINT tax_topics_desc_chk CHECK (description IS NULL OR (description !~ '[[:cntrl:]]' AND length(description) BETWEEN 1 AND 600)),
+    origin      TEXT NOT NULL CONSTRAINT tax_topics_origin_chk CHECK (origin IN ('registry','curator')),
+    origin_ref  TEXT CONSTRAINT tax_topics_oref_chk CHECK (origin_ref IS NULL OR origin_ref ~ '^[a-z][a-z-]*:[ -~]{1,160}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_topics_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT tax_topics_slug_uq UNIQUE (slug)
+);
+CREATE TABLE vera_vjay.tax_subtopics (
+    subtopic_id BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_subtopics_pk PRIMARY KEY,
+    slug        TEXT NOT NULL CONSTRAINT tax_subtopics_slug_chk CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND length(slug) BETWEEN 2 AND 64),
+    label       TEXT NOT NULL CONSTRAINT tax_subtopics_label_chk CHECK (label ~ '^[^[:cntrl:]]+$' AND btrim(label) <> '' AND length(label) BETWEEN 2 AND 120),
+    description TEXT CONSTRAINT tax_subtopics_desc_chk CHECK (description IS NULL OR (description !~ '[[:cntrl:]]' AND length(description) BETWEEN 1 AND 600)),
+    origin      TEXT NOT NULL CONSTRAINT tax_subtopics_origin_chk CHECK (origin IN ('registry','curator')),
+    origin_ref  TEXT CONSTRAINT tax_subtopics_oref_chk CHECK (origin_ref IS NULL OR origin_ref ~ '^[a-z][a-z-]*:[ -~]{1,160}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_subtopics_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT tax_subtopics_slug_uq UNIQUE (slug)
+);
+-- One active label per table (case and whitespace folded), so the About page never lists two entities with the same name.
+CREATE UNIQUE INDEX tax_domains_active_label_uq ON vera_vjay.tax_domains ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state = 'active';
+CREATE UNIQUE INDEX tax_topics_active_label_uq ON vera_vjay.tax_topics ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state = 'active';
+CREATE UNIQUE INDEX tax_subtopics_active_label_uq ON vera_vjay.tax_subtopics ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state = 'active';
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- Junctions. Common provenance columns:
+--   assigned_via       registry_sync (copied from the curated registry) | curator (owner/curator script) | classifier (a model or matcher)
+--                      | backfill (classifier run over existing rows; classifier_* still required)
+--   classifier_name    e.g. 'micro_topic_bm25', 'toptag'; required unless assigned_via is registry_sync or curator
+--   classifier_version e.g. the anchor registry version + registry signature, or tagger_version; required with classifier_name
+--   score, score_kind  optional raw score and its kind ('bm25', 'llm', 'cosine', 'share'); both NULL or both set; no range is
+--                      assumed (BM25 is unbounded); any acceptance threshold lives in config with a calibration note, not here
+--   state              active | retired; at most one ACTIVE row per pair (partial unique index); history is kept
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_domain_topic (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_domain_topic_pk PRIMARY KEY,
+    domain_id   BIGINT NOT NULL CONSTRAINT tax_domain_topic_domain_fk REFERENCES vera_vjay.tax_domains (domain_id) ON DELETE RESTRICT,
+    topic_id    BIGINT NOT NULL CONSTRAINT tax_domain_topic_topic_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_domain_topic_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_domain_topic_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_domain_topic_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_domain_topic_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_domain_topic_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_domain_topic_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_domain_topic_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_domain_topic_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_domain_topic_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_domain_topic_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_domain_topic_active_uq ON vera_vjay.tax_domain_topic (domain_id, topic_id) WHERE state = 'active';
+CREATE INDEX tax_domain_topic_topic_idx ON vera_vjay.tax_domain_topic (topic_id) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.tax_topic_subtopic (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_topic_subtopic_pk PRIMARY KEY,
+    topic_id    BIGINT NOT NULL CONSTRAINT tax_topic_subtopic_topic_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    subtopic_id BIGINT NOT NULL CONSTRAINT tax_topic_subtopic_sub_fk REFERENCES vera_vjay.tax_subtopics (subtopic_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_topic_subtopic_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_topic_subtopic_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_topic_subtopic_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_topic_subtopic_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_topic_subtopic_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_topic_subtopic_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_topic_subtopic_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_topic_subtopic_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_topic_subtopic_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_topic_subtopic_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_topic_subtopic_active_uq ON vera_vjay.tax_topic_subtopic (topic_id, subtopic_id) WHERE state = 'active';
+CREATE INDEX tax_topic_subtopic_sub_idx ON vera_vjay.tax_topic_subtopic (subtopic_id) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.tax_chunk_subtopic (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_chunk_subtopic_pk PRIMARY KEY,
+    span_id     BIGINT NOT NULL CONSTRAINT tax_chunk_subtopic_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    subtopic_id BIGINT NOT NULL CONSTRAINT tax_chunk_subtopic_sub_fk REFERENCES vera_vjay.tax_subtopics (subtopic_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_chunk_subtopic_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_chunk_subtopic_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_chunk_subtopic_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_chunk_subtopic_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_chunk_subtopic_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_chunk_subtopic_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_chunk_subtopic_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_chunk_subtopic_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_chunk_subtopic_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_chunk_subtopic_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_chunk_subtopic_active_uq ON vera_vjay.tax_chunk_subtopic (span_id, subtopic_id) WHERE state = 'active';
+CREATE INDEX tax_chunk_subtopic_sub_idx ON vera_vjay.tax_chunk_subtopic (subtopic_id) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.tax_chunk_topic (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_chunk_topic_pk PRIMARY KEY,
+    span_id     BIGINT NOT NULL CONSTRAINT tax_chunk_topic_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    topic_id    BIGINT NOT NULL CONSTRAINT tax_chunk_topic_topic_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_chunk_topic_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_chunk_topic_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_chunk_topic_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_chunk_topic_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_chunk_topic_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_chunk_topic_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_chunk_topic_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_chunk_topic_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_chunk_topic_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_chunk_topic_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_chunk_topic_active_uq ON vera_vjay.tax_chunk_topic (span_id, topic_id) WHERE state = 'active';
+CREATE INDEX tax_chunk_topic_topic_idx ON vera_vjay.tax_chunk_topic (topic_id) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.tax_source_topic (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_source_topic_pk PRIMARY KEY,
+    source_id   BIGINT NOT NULL CONSTRAINT tax_source_topic_source_fk REFERENCES vera_vjay.sources (source_id) ON DELETE RESTRICT,
+    topic_id    BIGINT NOT NULL CONSTRAINT tax_source_topic_topic_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_source_topic_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_source_topic_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_source_topic_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_source_topic_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_source_topic_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_source_topic_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_source_topic_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_source_topic_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_source_topic_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_source_topic_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_source_topic_active_uq ON vera_vjay.tax_source_topic (source_id, topic_id) WHERE state = 'active';
+CREATE INDEX tax_source_topic_topic_idx ON vera_vjay.tax_source_topic (topic_id) WHERE state = 'active';
+
+CREATE TABLE vera_vjay.tax_source_domain (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_source_domain_pk PRIMARY KEY,
+    source_id   BIGINT NOT NULL CONSTRAINT tax_source_domain_source_fk REFERENCES vera_vjay.sources (source_id) ON DELETE RESTRICT,
+    domain_id   BIGINT NOT NULL CONSTRAINT tax_source_domain_domain_fk REFERENCES vera_vjay.tax_domains (domain_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_source_domain_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_source_domain_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_source_domain_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_source_domain_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_source_domain_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_source_domain_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_source_domain_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_source_domain_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_source_domain_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_source_domain_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_source_domain_active_uq ON vera_vjay.tax_source_domain (source_id, domain_id) WHERE state = 'active';
+CREATE INDEX tax_source_domain_domain_idx ON vera_vjay.tax_source_domain (domain_id) WHERE state = 'active';
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- Triggers. Entities: modified_at is set by the database. Links: an app role may only retire an active link (active -> retired); retired_at
+-- is set by the database; a retired link is final for every role except the table owner. Column grants already stop other column changes.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE FUNCTION vera_vjay.tax_entity_touch_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+BEGIN
+  NEW.modified_at := now();
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.tax_link_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE is_owner boolean;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user INTO is_owner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state <> 'active' AND NOT is_owner THEN
+      RAISE EXCEPTION '%: app roles insert active links only', TG_TABLE_NAME;
+    END IF;
+    IF NEW.state = 'active' THEN NEW.retired_at := NULL; END IF;
+    RETURN NEW;
+  END IF;
+  IF NOT is_owner AND NOT (OLD.state = 'active' AND NEW.state = 'retired') THEN
+    RAISE EXCEPTION '%: app roles may only retire an active link (active -> retired)', TG_TABLE_NAME;
+  END IF;
+  IF NEW.state = 'retired' AND OLD.state = 'active' THEN NEW.retired_at := now(); END IF;
+  IF NEW.state = 'active' THEN NEW.retired_at := NULL; END IF;   -- owner-only reactivation keeps tax_*_ret_chk true
+  RETURN NEW;
+END $f$;
+
+CREATE TRIGGER tax_domains_touch_trg BEFORE UPDATE ON vera_vjay.tax_domains FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_touch_trgfn();
+CREATE TRIGGER tax_topics_touch_trg BEFORE UPDATE ON vera_vjay.tax_topics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_touch_trgfn();
+CREATE TRIGGER tax_subtopics_touch_trg BEFORE UPDATE ON vera_vjay.tax_subtopics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_touch_trgfn();
+CREATE TRIGGER tax_domain_topic_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_domain_topic FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+CREATE TRIGGER tax_topic_subtopic_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_topic_subtopic FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+CREATE TRIGGER tax_chunk_subtopic_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_chunk_subtopic FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+CREATE TRIGGER tax_chunk_topic_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_chunk_topic FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+CREATE TRIGGER tax_source_topic_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_source_topic FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+CREATE TRIGGER tax_source_domain_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_source_domain FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- Effective views (security_invoker: the reader's own privileges apply). basis = 'direct' | 'derived' | 'both'.
+--   chunk -> topic   : direct tax_chunk_topic  UNION  tax_chunk_subtopic x tax_topic_subtopic
+--   source -> topic  : direct tax_source_topic UNION  chunk->topic (effective) rolled up through evidence_spans.source_id
+--   source -> domain : direct tax_source_domain UNION source->topic (effective) x tax_domain_topic
+-- Only active links and active entities count. Derived links are never stored, so they cannot go stale.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE VIEW vera_vjay.tax_chunk_topic_eff_v WITH (security_invoker = true) AS
+  SELECT u.span_id, u.topic_id,
+         CASE WHEN bool_or(u.direct) AND bool_or(NOT u.direct) THEN 'both' WHEN bool_or(u.direct) THEN 'direct' ELSE 'derived' END AS basis
+    FROM (SELECT ct.span_id, ct.topic_id, true AS direct FROM vera_vjay.tax_chunk_topic ct WHERE ct.state = 'active'
+          UNION ALL
+          SELECT cs.span_id, ts.topic_id, false FROM vera_vjay.tax_chunk_subtopic cs
+            JOIN vera_vjay.tax_topic_subtopic ts ON ts.subtopic_id = cs.subtopic_id AND ts.state = 'active'
+            JOIN vera_vjay.tax_subtopics sb ON sb.subtopic_id = cs.subtopic_id AND sb.state = 'active'
+           WHERE cs.state = 'active') u
+    JOIN vera_vjay.tax_topics t ON t.topic_id = u.topic_id AND t.state = 'active'
+   GROUP BY u.span_id, u.topic_id;
+
+CREATE VIEW vera_vjay.tax_source_topic_eff_v WITH (security_invoker = true) AS
+  SELECT u.source_id, u.topic_id, sum(u.n_chunks)::bigint AS n_chunks,
+         CASE WHEN bool_or(u.direct) AND bool_or(NOT u.direct) THEN 'both' WHEN bool_or(u.direct) THEN 'direct' ELSE 'derived' END AS basis
+    FROM (SELECT st.source_id, st.topic_id, 0::bigint AS n_chunks, true AS direct FROM vera_vjay.tax_source_topic st WHERE st.state = 'active'
+          UNION ALL
+          SELECT e.source_id, c.topic_id, count(*)::bigint, false FROM vera_vjay.tax_chunk_topic_eff_v c
+            JOIN vera_vjay.evidence_spans e ON e.span_id = c.span_id
+           GROUP BY e.source_id, c.topic_id) u
+    JOIN vera_vjay.tax_topics t ON t.topic_id = u.topic_id AND t.state = 'active'
+   GROUP BY u.source_id, u.topic_id;
+
+CREATE VIEW vera_vjay.tax_source_domain_eff_v WITH (security_invoker = true) AS
+  SELECT u.source_id, u.domain_id,
+         CASE WHEN bool_or(u.direct) AND bool_or(NOT u.direct) THEN 'both' WHEN bool_or(u.direct) THEN 'direct' ELSE 'derived' END AS basis
+    FROM (SELECT sd.source_id, sd.domain_id, true AS direct FROM vera_vjay.tax_source_domain sd WHERE sd.state = 'active'
+          UNION ALL
+          SELECT s.source_id, dt.domain_id, false FROM vera_vjay.tax_source_topic_eff_v s
+            JOIN vera_vjay.tax_domain_topic dt ON dt.topic_id = s.topic_id AND dt.state = 'active') u
+    JOIN vera_vjay.tax_domains d ON d.domain_id = u.domain_id AND d.state = 'active'
+   GROUP BY u.source_id, u.domain_id;
+
+-- About aggregation, one row per (domain, topic), documents = distinct canonical sources. A source in a domain with no topic link appears
+-- once per domain with topic columns NULL (direct source_domain only), so the page can say "not yet assigned a topic" instead of hiding it.
+CREATE VIEW vera_vjay.tax_about_topics_v WITH (security_invoker = true) AS
+  SELECT d.slug AS domain_slug, d.label AS domain_label, t.slug AS topic_slug, t.label AS topic_label,
+         count(DISTINCT s.canonical_source_id)::bigint AS n_documents, coalesce(sum(st.n_chunks), 0)::bigint AS n_chunks
+    FROM vera_vjay.tax_domains d
+    JOIN vera_vjay.tax_domain_topic dt ON dt.domain_id = d.domain_id AND dt.state = 'active'
+    JOIN vera_vjay.tax_topics t ON t.topic_id = dt.topic_id AND t.state = 'active'
+    LEFT JOIN vera_vjay.tax_source_topic_eff_v st ON st.topic_id = t.topic_id
+    LEFT JOIN vera_vjay.sources s ON s.source_id = st.source_id
+   WHERE d.state = 'active'
+   GROUP BY d.slug, d.label, t.slug, t.label
+  UNION ALL
+  SELECT d.slug, d.label, NULL, NULL, count(DISTINCT s.canonical_source_id)::bigint, 0::bigint
+    FROM vera_vjay.tax_source_domain_eff_v sd
+    JOIN vera_vjay.tax_domains d ON d.domain_id = sd.domain_id
+    JOIN vera_vjay.sources s ON s.source_id = sd.source_id
+   WHERE NOT EXISTS (SELECT 1 FROM vera_vjay.tax_source_topic_eff_v x
+                       JOIN vera_vjay.tax_domain_topic y ON y.topic_id = x.topic_id AND y.domain_id = sd.domain_id AND y.state = 'active'
+                       JOIN vera_vjay.sources s2 ON s2.source_id = x.source_id
+                      WHERE s2.canonical_source_id = s.canonical_source_id)   -- document level: no version of it has a topic in this domain
+   GROUP BY d.slug, d.label;
+
+CREATE VIEW vera_vjay.tax_about_subtopics_v WITH (security_invoker = true) AS
+  SELECT t.slug AS topic_slug, sb.slug AS subtopic_slug, sb.label AS subtopic_label,
+         count(DISTINCT s.canonical_source_id)::bigint AS n_documents, count(DISTINCT cs.span_id)::bigint AS n_chunks
+    FROM vera_vjay.tax_topics t
+    JOIN vera_vjay.tax_topic_subtopic ts ON ts.topic_id = t.topic_id AND ts.state = 'active'
+    JOIN vera_vjay.tax_subtopics sb ON sb.subtopic_id = ts.subtopic_id AND sb.state = 'active'
+    LEFT JOIN vera_vjay.tax_chunk_subtopic cs ON cs.subtopic_id = sb.subtopic_id AND cs.state = 'active'
+    LEFT JOIN vera_vjay.evidence_spans e ON e.span_id = cs.span_id
+    LEFT JOIN vera_vjay.sources s ON s.source_id = e.source_id
+   WHERE t.state = 'active'
+   GROUP BY t.slug, sb.slug, sb.label;
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- Grants: default deny, then exact grants to the rw and ro groups only.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+REVOKE ALL ON vera_vjay.tax_domains, vera_vjay.tax_topics, vera_vjay.tax_subtopics, vera_vjay.tax_domain_topic, vera_vjay.tax_topic_subtopic,
+              vera_vjay.tax_chunk_subtopic, vera_vjay.tax_chunk_topic, vera_vjay.tax_source_topic, vera_vjay.tax_source_domain,
+              vera_vjay.tax_chunk_topic_eff_v, vera_vjay.tax_source_topic_eff_v, vera_vjay.tax_source_domain_eff_v,
+              vera_vjay.tax_about_topics_v, vera_vjay.tax_about_subtopics_v
+  FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.tax_domains, vera_vjay.tax_topics, vera_vjay.tax_subtopics, vera_vjay.tax_domain_topic, '
+    'vera_vjay.tax_topic_subtopic, vera_vjay.tax_chunk_subtopic, vera_vjay.tax_chunk_topic, vera_vjay.tax_source_topic, vera_vjay.tax_source_domain, '
+    'vera_vjay.tax_chunk_topic_eff_v, vera_vjay.tax_source_topic_eff_v, vera_vjay.tax_source_domain_eff_v, vera_vjay.tax_about_topics_v, '
+    'vera_vjay.tax_about_subtopics_v FROM %I, %I', current_setting('vera020.rw'), current_setting('vera020.ro'));
+END $$;
+-- Identity sequences: 001/001u default privileges give vera_vjay_rw USAGE on new sequences; identity INSERTs need no sequence privilege,
+-- so revoke everything on the nine tax_ identity sequences (review S1; same fix as 016).
+DO $$
+DECLARE q text;
+BEGIN
+  FOR q IN SELECT pg_catalog.pg_get_serial_sequence('vera_vjay.' || v.t, v.c) FROM (VALUES ('tax_domains','domain_id'), ('tax_topics','topic_id'),
+             ('tax_subtopics','subtopic_id'), ('tax_domain_topic','link_id'), ('tax_topic_subtopic','link_id'), ('tax_chunk_subtopic','link_id'),
+             ('tax_chunk_topic','link_id'), ('tax_source_topic','link_id'), ('tax_source_domain','link_id')) v(t, c) LOOP
+    IF q IS NULL THEN RAISE EXCEPTION '020: identity sequence not found'; END IF;
+    EXECUTE pg_catalog.format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro, %I, %I',
+                              q, current_setting('vera020.rw'), current_setting('vera020.ro'));
+  END LOOP;
+END $$;
+GRANT SELECT ON vera_vjay.tax_domains, vera_vjay.tax_topics, vera_vjay.tax_subtopics, vera_vjay.tax_domain_topic, vera_vjay.tax_topic_subtopic,
+                vera_vjay.tax_chunk_subtopic, vera_vjay.tax_chunk_topic, vera_vjay.tax_source_topic, vera_vjay.tax_source_domain,
+                vera_vjay.tax_chunk_topic_eff_v, vera_vjay.tax_source_topic_eff_v, vera_vjay.tax_source_domain_eff_v,
+                vera_vjay.tax_about_topics_v, vera_vjay.tax_about_subtopics_v
+  TO vera_vjay_rw, vera_vjay_ro;
+GRANT INSERT (slug, label, description, origin, origin_ref, state) ON vera_vjay.tax_domains, vera_vjay.tax_topics, vera_vjay.tax_subtopics TO vera_vjay_rw;
+GRANT UPDATE (label, description, state) ON vera_vjay.tax_domains, vera_vjay.tax_topics, vera_vjay.tax_subtopics TO vera_vjay_rw;
+GRANT INSERT (domain_id, topic_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_domain_topic TO vera_vjay_rw;
+GRANT INSERT (topic_id, subtopic_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_topic_subtopic TO vera_vjay_rw;
+GRANT INSERT (span_id, subtopic_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_chunk_subtopic TO vera_vjay_rw;
+GRANT INSERT (span_id, topic_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_chunk_topic TO vera_vjay_rw;
+GRANT INSERT (source_id, topic_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_source_topic TO vera_vjay_rw;
+GRANT INSERT (source_id, domain_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_source_domain TO vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.tax_domain_topic, vera_vjay.tax_topic_subtopic, vera_vjay.tax_chunk_subtopic, vera_vjay.tax_chunk_topic,
+                        vera_vjay.tax_source_topic, vera_vjay.tax_source_domain TO vera_vjay_rw;
+
+-- Final privilege check against the actual logins (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  rw text := current_setting('vera020.rw'); ro text := current_setting('vera020.ro');
+  t text; r text; p text; c text; ins text[]; upd text[];
+BEGIN
+  FOR t, ins, upd IN SELECT * FROM (VALUES
+      ('vera_vjay.tax_domains',        ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[]),
+      ('vera_vjay.tax_topics',         ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[]),
+      ('vera_vjay.tax_subtopics',      ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[]),
+      ('vera_vjay.tax_domain_topic',   ARRAY['domain_id','topic_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_topic_subtopic', ARRAY['topic_id','subtopic_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_chunk_subtopic', ARRAY['span_id','subtopic_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_chunk_topic',    ARRAY['span_id','topic_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_source_topic',   ARRAY['source_id','topic_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_source_domain',  ARRAY['source_id','domain_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[], ARRAY['state']::text[])
+    ) v(t, ins, upd) LOOP
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '020 grant check failed: login % needs SELECT on %.', r, t; END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '020 grant check failed: login % holds table-wide % on %.', r, p, t; END IF;
+      END LOOP;
+    END LOOP;
+    FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+      IF pg_catalog.has_column_privilege(rw, t, c, 'INSERT') <> (c = ANY (ins)) THEN
+        RAISE EXCEPTION '020 grant check failed: column INSERT for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(rw, t, c, 'UPDATE') <> (c = ANY (upd)) THEN
+        RAISE EXCEPTION '020 grant check failed: column UPDATE for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE') THEN
+        RAISE EXCEPTION '020 grant check failed: ro login holds a column write privilege on %.%.', t, c;
+      END IF;
+    END LOOP;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['vera_vjay.tax_chunk_topic_eff_v','vera_vjay.tax_source_topic_eff_v','vera_vjay.tax_source_domain_eff_v',
+                           'vera_vjay.tax_about_topics_v','vera_vjay.tax_about_subtopics_v'] LOOP
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '020 grant check failed: login % needs SELECT on %.', r, t; END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '020 grant check failed: login % holds % on %.', r, p, t; END IF;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+  -- security_invoker views: the readers also need SELECT on the base tables the views read.
+  FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+    IF NOT (pg_catalog.has_column_privilege(r, 'vera_vjay.evidence_spans', 'span_id', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.evidence_spans', 'source_id', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.sources', 'source_id', 'SELECT')
+            AND pg_catalog.has_column_privilege(r, 'vera_vjay.sources', 'canonical_source_id', 'SELECT')) THEN
+      RAISE EXCEPTION '020 grant check failed: login % lacks SELECT on evidence_spans(span_id, source_id) or sources(source_id, canonical_source_id).', r;
+    END IF;
+  END LOOP;
+  -- wo and PUBLIC hold nothing on the new objects.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname LIKE 'tax\_%' AND k.relkind IN ('r','v')
+                AND (x.grantee = 0 OR x.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))) THEN
+    RAISE EXCEPTION '020 grant check failed: PUBLIC or vera_vjay_wo holds a privilege on a tax_ object.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname LIKE 'tax\_%' AND k.relkind = 'S'
+                AND (x.grantee = 0 OR x.grantee IN (SELECT oid FROM pg_catalog.pg_roles
+                                                     WHERE rolname IN ('vera_vjay_wo','vera_vjay_rw','vera_vjay_ro', rw, ro)))) THEN
+    RAISE EXCEPTION '020 grant check failed: an app role or PUBLIC holds a privilege on a tax_ identity sequence.';
+  END IF;
+END $$;
+
+COMMIT;

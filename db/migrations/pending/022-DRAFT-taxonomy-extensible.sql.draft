@@ -1,0 +1,583 @@
+-- 022_vera_taxonomy_extensible.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (convention of 007/011/012/017/020); rename only at approval.
+-- TAXO-EXTENSIBLE-1108 DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL. APPLYING IT NEEDS OWNER-APPROVED DDL in that turn
+-- (AGENTS.md section 7), admin-run only, rehearsal first (work/TAXO-EXTENSIBLE-1108/scripts/rehearse_022.sh in vera_dar_rehearsal),
+-- never via db/apply_migrations.py. Number 022: 020 = taxonomy (applied 2026-11-08), 021 = ACQ-QUEUE-DB-1108 (independent).
+-- Owner, 2026-11-08: "the normalized tables for subtopics, topics, and domains should all be extensible -- not rigidly fixed forever".
+-- Owner OD-1108-HITL item 8: new domains proposed by topic induction are PROPOSALS requiring owner review before activation.
+-- Design and rationale: work/TAXO-EXTENSIBLE-1108/plan.md.
+-- REQUIRES: PostgreSQL 16 or newer; migration 020 applied (all 14 relations and 2 functions); group roles vera_vjay_rw/_ro and the
+--   app logins (as 020). Independent of 021.
+-- NO TAXONOMY NAMES are written by this file. Rows come from the app path (rw): vera/tax_registry.py (sync, proposals, approval).
+-- What it changes (all names prefix tax_):
+--   entity lifecycle  tax_domains/tax_topics/tax_subtopics: state CHECK widened to proposed|active|retired|rejected; origin CHECK
+--                     widened to registry|curator|induction (same constraint names); live-label unique index (proposed + active);
+--                     guard trigger (app roles: an ACTIVE insert only with origin 'registry' (the 020 backfill copy of the
+--                     already-approved registry), every other insert starts proposed; transitions proposed->active|rejected and
+--                     active->retired only; proposing and deciding need vera.tax_actor, induction rows also vera.tax_batch);
+--                     event trigger (append-only history in tax_entity_events).
+-- WHAT THE DATABASE DOES NOT ENFORCE (review H1/M1, stated plainly): owner review runs through the rw app path (owner-run CLI
+--   vera/tax_registry.py approve). vera.tax_actor/vera.tax_batch are session settings any rw session can set, so rw CAN self-approve
+--   and CAN mislabel a row as origin 'registry'; the DB records the claimed actor, db_user and time in tax_entity_events and refuses
+--   only the shortcuts above. tax_entity_events refuses a plain INSERT, but a role holding TEMPORARY on the database could forge a row
+--   through its own temp-table trigger: the history is evidence, not proof. A hard owner-only activation (owner option A in
+--   work/TAXO-EXTENSIBLE-1108/review-sql.md H1) and REVOKE TEMPORARY are owner decisions, not part of this file.
+--   new tables        tax_anchors (anchor text + core terms per topic or subtopic; content immutable, versioned by row; the
+--                     matcher's data), tax_lineage (merge/split/replace records), tax_entity_events (trigger-written history).
+--   new views         tax_registry_active_v (strictly active: what the matcher reads), tax_registry_eval_v (active + proposed:
+--                     owner evaluation of drafts before activation). security_invoker.
+-- NOT changed: the six 020 junctions, their guard trigger, the five 020 views, every 020 grant. Link state stays active|retired.
+-- Test hook: a session that sets vera.tax_simulate_app = 'on' is treated as an app role by the guards even when it owns the
+--   tables. It can only ADD restrictions (the rehearsal uses it because the kit never logs in as an app login).
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SET LOCAL lock_timeout = '5s';   -- the ALTERs take a brief ACCESS EXCLUSIVE lock on the three entity tables; never queue for long
+SELECT set_config('vera022.rw', :'app_rw_login', true), set_config('vera022.ro', :'app_ro_login', true);
+
+-- Preflight 1: PG16+; 020 fully present; nothing this file creates exists (strictly additive apart from the two widened CHECKs).
+DO $$
+DECLARE n text; t text;
+BEGIN
+  IF pg_catalog.current_setting('server_version_num')::int < 160000 THEN
+    RAISE EXCEPTION '022 requires PostgreSQL 16 or newer.';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['tax_domains','tax_topics','tax_subtopics','tax_domain_topic','tax_topic_subtopic','tax_chunk_subtopic',
+                           'tax_chunk_topic','tax_source_topic','tax_source_domain','tax_chunk_topic_eff_v','tax_source_topic_eff_v',
+                           'tax_source_domain_eff_v','tax_about_topics_v','tax_about_subtopics_v'] LOOP
+    IF pg_catalog.to_regclass('vera_vjay.' || n) IS NULL THEN
+      RAISE EXCEPTION '022 requires migration 020 (relation vera_vjay.% is missing).', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['tax_entity_touch_trgfn','tax_link_guard_trgfn'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                    WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '022 requires migration 020 (function vera_vjay.% is missing).', n;
+    END IF;
+  END LOOP;
+  -- The 020 entity CHECKs this file replaces must still have their 020 meaning (no proposed state yet).
+  FOREACH t IN ARRAY ARRAY['tax_domains','tax_topics','tax_subtopics'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid = ('vera_vjay.' || t)::pg_catalog.regclass
+                    AND c.conname = t || '_state_chk' AND pg_catalog.pg_get_constraintdef(c.oid) NOT LIKE '%proposed%')
+       OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid = ('vera_vjay.' || t)::pg_catalog.regclass
+                    AND c.conname = t || '_origin_chk' AND pg_catalog.pg_get_constraintdef(c.oid) NOT LIKE '%induction%') THEN
+      RAISE EXCEPTION '022 already applied, or the 020 CHECKs of % changed (state_chk/origin_chk).', t;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['tax_anchors','tax_lineage','tax_entity_events','tax_registry_active_v','tax_registry_eval_v',
+                           'tax_domains_live_label_uq','tax_topics_live_label_uq','tax_subtopics_live_label_uq'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+                WHERE ns.nspname = 'vera_vjay' AND (c.relname = n OR c.relname LIKE n || '\_%')) THEN
+      RAISE EXCEPTION '022 already applied or name collision (relation %)', n;
+    END IF;
+  END LOOP;
+  FOREACH n IN ARRAY ARRAY['tax_entity_guard_trgfn','tax_entity_event_trgfn','tax_event_guard_trgfn','tax_anchor_guard_trgfn'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                WHERE p.proname = n AND ns.nspname = 'vera_vjay') THEN
+      RAISE EXCEPTION '022 already applied or name collision (function %)', n;
+    END IF;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_trigger g JOIN pg_catalog.pg_class c ON c.oid = g.tgrelid JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+              WHERE ns.nspname = 'vera_vjay' AND NOT g.tgisinternal
+                AND (g.tgname LIKE 'tax\_%\_guard\_trg' OR g.tgname LIKE 'tax\_%\_event\_trg')
+                AND c.relname IN ('tax_domains','tax_topics','tax_subtopics')) THEN
+    RAISE EXCEPTION '022 already applied or name collision (an entity guard or event trigger exists)';
+  END IF;
+END $$;
+
+-- Preflight 2 (as 020): roles exist; logins inherit their groups; the account running this file is not an app role nor reachable from one.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera022.rw')], ['vera_vjay_ro', current_setting('vera022.ro')]];
+BEGIN
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '022 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '022 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '022: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF current_user = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera022.rw'), current_setting('vera022.ro')])
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname IN ('vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera022.rw'), current_setting('vera022.ro'))
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '022 must not run as, or as a member of, an app group or login role: the table owner is unrestricted.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera022.rw'), current_setting('vera022.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '022: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+  -- The guards treat the TABLE OWNER as privileged; it must be the account running this file (the 020 owner).
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = 'vera_vjay.tax_domains'::pg_catalog.regclass
+                  AND pg_catalog.pg_get_userbyid(c.relowner) = current_user) THEN
+    RAISE EXCEPTION '022 must run as the owner of the 020 tax_ tables.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 1. Entity lifecycle. proposed = a draft awaiting owner review (invisible to every active reader); rejected = a declined proposal
+--    (kept, final). The 020 default state 'active' is kept so the existing registry backfill (origin 'registry') is unchanged.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+ALTER TABLE vera_vjay.tax_domains DROP CONSTRAINT tax_domains_state_chk;
+ALTER TABLE vera_vjay.tax_domains ADD CONSTRAINT tax_domains_state_chk CHECK (state IN ('proposed','active','retired','rejected'));
+ALTER TABLE vera_vjay.tax_domains DROP CONSTRAINT tax_domains_origin_chk;
+ALTER TABLE vera_vjay.tax_domains ADD CONSTRAINT tax_domains_origin_chk CHECK (origin IN ('registry','curator','induction'));
+ALTER TABLE vera_vjay.tax_topics DROP CONSTRAINT tax_topics_state_chk;
+ALTER TABLE vera_vjay.tax_topics ADD CONSTRAINT tax_topics_state_chk CHECK (state IN ('proposed','active','retired','rejected'));
+ALTER TABLE vera_vjay.tax_topics DROP CONSTRAINT tax_topics_origin_chk;
+ALTER TABLE vera_vjay.tax_topics ADD CONSTRAINT tax_topics_origin_chk CHECK (origin IN ('registry','curator','induction'));
+ALTER TABLE vera_vjay.tax_subtopics DROP CONSTRAINT tax_subtopics_state_chk;
+ALTER TABLE vera_vjay.tax_subtopics ADD CONSTRAINT tax_subtopics_state_chk CHECK (state IN ('proposed','active','retired','rejected'));
+ALTER TABLE vera_vjay.tax_subtopics DROP CONSTRAINT tax_subtopics_origin_chk;
+ALTER TABLE vera_vjay.tax_subtopics ADD CONSTRAINT tax_subtopics_origin_chk CHECK (origin IN ('registry','curator','induction'));
+-- A proposal may not reuse the label of a live (proposed or active) entity; the 020 active-only label index stays as it is.
+CREATE UNIQUE INDEX tax_domains_live_label_uq ON vera_vjay.tax_domains ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state IN ('proposed','active');
+CREATE UNIQUE INDEX tax_topics_live_label_uq ON vera_vjay.tax_topics ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state IN ('proposed','active');
+CREATE UNIQUE INDEX tax_subtopics_live_label_uq ON vera_vjay.tax_subtopics ((lower(regexp_replace(btrim(label), '\s+', ' ', 'g')))) WHERE state IN ('proposed','active');
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 2. New tables.
+-- tax_anchors: the matcher's data for one topic OR one subtopic. Content (anchor_text, core_terms) is immutable; a new version is a
+--   new row; at most one ACTIVE anchor per entity (activate the new one after retiring the old one, in one transaction).
+--   content_sha256 is computed by the database: sha256 of anchor_text || newline || core terms joined with '|' (empty when NULL),
+--   UTF-8, lowercase hex; vera/tax_registry.py anchor_sha256() mirrors it for the approval check.
+-- tax_lineage: merge, split and replace records between entities (any kind to any kind, e.g. a subtopic promoted to a topic).
+-- tax_entity_events: append-only history of entity and anchor inserts, state and label changes; a plain INSERT is refused (only the
+--   event trigger writes it; see the TEMPORARY caveat in the header).
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_anchors (
+    anchor_id   BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_anchors_pk PRIMARY KEY,
+    topic_id    BIGINT CONSTRAINT tax_anchors_topic_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    subtopic_id BIGINT CONSTRAINT tax_anchors_sub_fk REFERENCES vera_vjay.tax_subtopics (subtopic_id) ON DELETE RESTRICT,
+    anchor_text TEXT NOT NULL CONSTRAINT tax_anchors_text_chk CHECK (anchor_text ~ '^[ -~]+$' AND length(anchor_text) BETWEEN 20 AND 1200),
+    core_terms  TEXT[] CONSTRAINT tax_anchors_terms_chk CHECK (core_terms IS NULL OR (
+                    array_ndims(core_terms) = 1 AND cardinality(core_terms) BETWEEN 1 AND 60 AND array_position(core_terms, NULL) IS NULL
+                    AND array_to_string(core_terms, '') !~ '[|]'
+                    AND array_to_string(core_terms, '|') ~ '^[a-z0-9][a-z0-9 -]{0,47}([|][a-z0-9][a-z0-9 -]{0,47})*$')),
+    origin      TEXT NOT NULL CONSTRAINT tax_anchors_origin_chk CHECK (origin IN ('registry','curator','induction')),
+    origin_ref  TEXT CONSTRAINT tax_anchors_oref_chk CHECK (origin_ref IS NULL OR origin_ref ~ '^[a-z][a-z-]*:[ -~]{1,160}$'),
+    content_sha256 TEXT NOT NULL CONSTRAINT tax_anchors_sha_chk CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    state       TEXT NOT NULL DEFAULT 'proposed' CONSTRAINT tax_anchors_state_chk CHECK (state IN ('proposed','active','retired','rejected')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_anchors_target_chk CHECK (num_nonnulls(topic_id, subtopic_id) = 1),
+    CONSTRAINT tax_anchors_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_anchors_active_topic_uq ON vera_vjay.tax_anchors (topic_id) WHERE state = 'active' AND topic_id IS NOT NULL;
+CREATE UNIQUE INDEX tax_anchors_active_sub_uq ON vera_vjay.tax_anchors (subtopic_id) WHERE state = 'active' AND subtopic_id IS NOT NULL;
+CREATE UNIQUE INDEX tax_anchors_live_topic_content_uq ON vera_vjay.tax_anchors (topic_id, content_sha256) WHERE state IN ('proposed','active') AND topic_id IS NOT NULL;
+CREATE UNIQUE INDEX tax_anchors_live_sub_content_uq ON vera_vjay.tax_anchors (subtopic_id, content_sha256) WHERE state IN ('proposed','active') AND subtopic_id IS NOT NULL;
+
+CREATE TABLE vera_vjay.tax_lineage (
+    lineage_id  BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_lineage_pk PRIMARY KEY,
+    relation    TEXT NOT NULL CONSTRAINT tax_lineage_rel_chk CHECK (relation IN ('merged_into','split_into','replaced_by')),
+    from_domain_id   BIGINT CONSTRAINT tax_lineage_fdom_fk REFERENCES vera_vjay.tax_domains (domain_id) ON DELETE RESTRICT,
+    from_topic_id    BIGINT CONSTRAINT tax_lineage_ftop_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    from_subtopic_id BIGINT CONSTRAINT tax_lineage_fsub_fk REFERENCES vera_vjay.tax_subtopics (subtopic_id) ON DELETE RESTRICT,
+    to_domain_id     BIGINT CONSTRAINT tax_lineage_tdom_fk REFERENCES vera_vjay.tax_domains (domain_id) ON DELETE RESTRICT,
+    to_topic_id      BIGINT CONSTRAINT tax_lineage_ttop_fk REFERENCES vera_vjay.tax_topics (topic_id) ON DELETE RESTRICT,
+    to_subtopic_id   BIGINT CONSTRAINT tax_lineage_tsub_fk REFERENCES vera_vjay.tax_subtopics (subtopic_id) ON DELETE RESTRICT,
+    actor       TEXT NOT NULL CONSTRAINT tax_lineage_actor_chk CHECK (actor ~ '^[a-z][a-z0-9_.:-]{1,79}$'),
+    batch_sha256 TEXT CONSTRAINT tax_lineage_batch_chk CHECK (batch_sha256 IS NULL OR batch_sha256 ~ '^[0-9a-f]{64}$'),
+    note        TEXT CONSTRAINT tax_lineage_note_chk CHECK (note IS NULL OR (note !~ '[[:cntrl:]]' AND length(note) BETWEEN 1 AND 300)),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT tax_lineage_from_chk CHECK (num_nonnulls(from_domain_id, from_topic_id, from_subtopic_id) = 1),
+    CONSTRAINT tax_lineage_to_chk CHECK (num_nonnulls(to_domain_id, to_topic_id, to_subtopic_id) = 1),
+    CONSTRAINT tax_lineage_self_chk CHECK (coalesce(from_domain_id, -1) <> coalesce(to_domain_id, -2)
+                                           AND coalesce(from_topic_id, -1) <> coalesce(to_topic_id, -2)
+                                           AND coalesce(from_subtopic_id, -1) <> coalesce(to_subtopic_id, -2))
+);
+CREATE UNIQUE INDEX tax_lineage_edge_uq ON vera_vjay.tax_lineage (relation, coalesce(from_domain_id, 0), coalesce(from_topic_id, 0),
+    coalesce(from_subtopic_id, 0), coalesce(to_domain_id, 0), coalesce(to_topic_id, 0), coalesce(to_subtopic_id, 0));
+
+CREATE TABLE vera_vjay.tax_entity_events (
+    event_id    BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_entity_events_pk PRIMARY KEY,
+    entity_kind TEXT NOT NULL CONSTRAINT tax_entity_events_kind_chk CHECK (entity_kind IN ('domain','topic','subtopic','anchor')),
+    entity_id   BIGINT NOT NULL,
+    op          TEXT NOT NULL CONSTRAINT tax_entity_events_op_chk CHECK (op IN ('insert','update')),
+    old_state   TEXT,
+    new_state   TEXT NOT NULL,
+    old_label   TEXT,
+    new_label   TEXT,
+    actor       TEXT CONSTRAINT tax_entity_events_actor_chk CHECK (actor IS NULL OR actor ~ '^[a-z][a-z0-9_.:-]{1,79}$'),
+    batch_sha256 TEXT CONSTRAINT tax_entity_events_batch_chk CHECK (batch_sha256 IS NULL OR batch_sha256 ~ '^[0-9a-f]{64}$'),
+    db_user     TEXT NOT NULL DEFAULT current_user,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX tax_entity_events_entity_idx ON vera_vjay.tax_entity_events (entity_kind, entity_id);
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 3. Trigger functions (SET search_path, schema-qualified, no SECURITY DEFINER). Privileged = the table owner, unless the session
+--    set vera.tax_simulate_app = 'on' (restriction-only test hook).
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE FUNCTION vera_vjay.tax_entity_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE is_owner boolean; actor text; batch text;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user INTO is_owner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID;
+  IF is_owner AND coalesce(pg_catalog.current_setting('vera.tax_simulate_app', true), '') <> 'on' THEN
+    RETURN NEW;
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.state NOT IN ('proposed','active') THEN
+      RAISE EXCEPTION '%: app roles insert proposed or active entities only', TG_TABLE_NAME;
+    END IF;
+    IF NEW.state = 'active' AND NEW.origin <> 'registry' THEN
+      RAISE EXCEPTION '%: app roles insert curator and induction entities as proposed (owner review before activation)', TG_TABLE_NAME;
+    END IF;
+    IF NEW.state = 'proposed' THEN
+      actor := pg_catalog.current_setting('vera.tax_actor', true);
+      IF actor IS NULL OR actor !~ '^[a-z][a-z0-9_.:-]{1,79}$' THEN
+        RAISE EXCEPTION '%: a proposal needs the session setting vera.tax_actor', TG_TABLE_NAME;
+      END IF;
+      batch := pg_catalog.current_setting('vera.tax_batch', true);
+      IF NEW.origin = 'induction' AND (batch IS NULL OR batch !~ '^[0-9a-f]{64}$') THEN
+        RAISE EXCEPTION '%: an induction proposal needs the session setting vera.tax_batch (manifest batch sha256)', TG_TABLE_NAME;
+      END IF;
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.state IS DISTINCT FROM OLD.state THEN
+    IF NOT ((OLD.state = 'proposed' AND NEW.state IN ('active','rejected')) OR (OLD.state = 'active' AND NEW.state = 'retired')) THEN
+      RAISE EXCEPTION '%: app roles may only move proposed -> active|rejected or active -> retired (not % -> %)', TG_TABLE_NAME, OLD.state, NEW.state;
+    END IF;
+    IF OLD.state = 'proposed' THEN
+      actor := pg_catalog.current_setting('vera.tax_actor', true);
+      IF actor IS NULL OR actor !~ '^[a-z][a-z0-9_.:-]{1,79}$' THEN
+        RAISE EXCEPTION '%: deciding a proposal needs the session setting vera.tax_actor', TG_TABLE_NAME;
+      END IF;
+      batch := pg_catalog.current_setting('vera.tax_batch', true);
+      IF OLD.origin = 'induction' AND (batch IS NULL OR batch !~ '^[0-9a-f]{64}$') THEN
+        RAISE EXCEPTION '%: deciding an induction proposal needs the session setting vera.tax_batch (manifest batch sha256)', TG_TABLE_NAME;
+      END IF;
+    END IF;
+  ELSIF OLD.state IN ('retired','rejected') THEN
+    RAISE EXCEPTION '%: a % entity is final for app roles', TG_TABLE_NAME, OLD.state;
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.tax_anchor_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE is_owner boolean; ent text; actor text; batch text;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user INTO is_owner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID;
+  is_owner := is_owner AND coalesce(pg_catalog.current_setting('vera.tax_simulate_app', true), '') <> 'on';
+  IF TG_OP = 'INSERT' THEN
+    NEW.content_sha256 := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                            NEW.anchor_text || pg_catalog.chr(10) || coalesce(pg_catalog.array_to_string(NEW.core_terms, '|'), ''), 'UTF8')), 'hex');
+    NEW.retired_at := CASE WHEN NEW.state = 'retired' THEN coalesce(NEW.retired_at, pg_catalog.now()) END;
+    IF is_owner THEN RETURN NEW; END IF;
+    IF NEW.state NOT IN ('proposed','active') THEN
+      RAISE EXCEPTION 'tax_anchors: app roles insert proposed or active anchors only';
+    END IF;
+    IF NEW.state = 'active' AND NEW.origin <> 'registry' THEN
+      RAISE EXCEPTION 'tax_anchors: app roles insert curator and induction anchors as proposed (owner review before activation)';
+    END IF;
+    IF NEW.state = 'proposed' THEN
+      actor := pg_catalog.current_setting('vera.tax_actor', true);
+      IF actor IS NULL OR actor !~ '^[a-z][a-z0-9_.:-]{1,79}$' THEN
+        RAISE EXCEPTION 'tax_anchors: a proposal needs the session setting vera.tax_actor';
+      END IF;
+      batch := pg_catalog.current_setting('vera.tax_batch', true);
+      IF NEW.origin = 'induction' AND (batch IS NULL OR batch !~ '^[0-9a-f]{64}$') THEN
+        RAISE EXCEPTION 'tax_anchors: an induction proposal needs the session setting vera.tax_batch (manifest batch sha256)';
+      END IF;
+    END IF;
+    IF NEW.topic_id IS NOT NULL THEN
+      SELECT t.state INTO ent FROM vera_vjay.tax_topics t WHERE t.topic_id = NEW.topic_id;
+    ELSE
+      SELECT s.state INTO ent FROM vera_vjay.tax_subtopics s WHERE s.subtopic_id = NEW.subtopic_id;
+    END IF;
+    IF ent IS NULL OR ent NOT IN ('proposed','active') OR (NEW.state = 'active' AND ent <> 'active') THEN
+      RAISE EXCEPTION 'tax_anchors: an anchor needs a live entity, and an active anchor an active entity (entity state %)', coalesce(ent, 'missing');
+    END IF;
+    RETURN NEW;
+  END IF;
+  -- UPDATE
+  IF is_owner THEN
+    NEW.content_sha256 := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+                            NEW.anchor_text || pg_catalog.chr(10) || coalesce(pg_catalog.array_to_string(NEW.core_terms, '|'), ''), 'UTF8')), 'hex');
+    IF NEW.state = 'retired' AND OLD.state <> 'retired' THEN NEW.retired_at := pg_catalog.now(); END IF;
+    IF NEW.state <> 'retired' THEN NEW.retired_at := NULL; END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.anchor_text IS DISTINCT FROM OLD.anchor_text OR NEW.core_terms IS DISTINCT FROM OLD.core_terms
+     OR NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256 OR NEW.topic_id IS DISTINCT FROM OLD.topic_id
+     OR NEW.subtopic_id IS DISTINCT FROM OLD.subtopic_id THEN
+    RAISE EXCEPTION 'tax_anchors: anchor content is immutable (insert a new version instead)';
+  END IF;
+  IF NEW.state IS NOT DISTINCT FROM OLD.state THEN
+    RETURN NEW;
+  END IF;
+  IF NOT ((OLD.state = 'proposed' AND NEW.state IN ('active','rejected')) OR (OLD.state = 'active' AND NEW.state = 'retired')) THEN
+    RAISE EXCEPTION 'tax_anchors: app roles may only move proposed -> active|rejected or active -> retired (not % -> %)', OLD.state, NEW.state;
+  END IF;
+  IF OLD.state = 'proposed' THEN
+    actor := pg_catalog.current_setting('vera.tax_actor', true);
+    IF actor IS NULL OR actor !~ '^[a-z][a-z0-9_.:-]{1,79}$' THEN
+      RAISE EXCEPTION 'tax_anchors: deciding a proposal needs the session setting vera.tax_actor';
+    END IF;
+    batch := pg_catalog.current_setting('vera.tax_batch', true);
+    IF OLD.origin = 'induction' AND (batch IS NULL OR batch !~ '^[0-9a-f]{64}$') THEN
+      RAISE EXCEPTION 'tax_anchors: deciding an induction proposal needs the session setting vera.tax_batch (manifest batch sha256)';
+    END IF;
+    IF NEW.state = 'active' THEN
+      IF OLD.topic_id IS NOT NULL THEN
+        SELECT t.state INTO ent FROM vera_vjay.tax_topics t WHERE t.topic_id = OLD.topic_id;
+      ELSE
+        SELECT s.state INTO ent FROM vera_vjay.tax_subtopics s WHERE s.subtopic_id = OLD.subtopic_id;
+      END IF;
+      IF ent IS DISTINCT FROM 'active' THEN
+        RAISE EXCEPTION 'tax_anchors: activate the entity before its anchor (entity state %)', coalesce(ent, 'missing');
+      END IF;
+    END IF;
+  END IF;
+  IF NEW.state = 'retired' THEN NEW.retired_at := pg_catalog.now(); END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE FUNCTION vera_vjay.tax_entity_event_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE kind text; idcol text; o jsonb; n jsonb; actor text; batch text;
+BEGIN
+  kind := CASE TG_TABLE_NAME WHEN 'tax_domains' THEN 'domain' WHEN 'tax_topics' THEN 'topic' WHEN 'tax_subtopics' THEN 'subtopic'
+                             WHEN 'tax_anchors' THEN 'anchor' END;
+  idcol := CASE kind WHEN 'domain' THEN 'domain_id' WHEN 'topic' THEN 'topic_id' WHEN 'subtopic' THEN 'subtopic_id' ELSE 'anchor_id' END;
+  IF kind IS NULL THEN RAISE EXCEPTION 'tax_entity_event_trgfn: unexpected table %', TG_TABLE_NAME; END IF;
+  n := pg_catalog.to_jsonb(NEW);
+  IF TG_OP = 'UPDATE' THEN
+    o := pg_catalog.to_jsonb(OLD);
+    IF (o ->> 'state') IS NOT DISTINCT FROM (n ->> 'state') AND (o ->> 'label') IS NOT DISTINCT FROM (n ->> 'label')
+       AND (o ->> 'description') IS NOT DISTINCT FROM (n ->> 'description') THEN
+      RETURN NULL;
+    END IF;
+  END IF;
+  actor := pg_catalog.current_setting('vera.tax_actor', true);   -- a malformed setting is recorded as NULL (the guards enforce it)
+  IF actor !~ '^[a-z][a-z0-9_.:-]{1,79}$' THEN actor := NULL; END IF;
+  batch := pg_catalog.current_setting('vera.tax_batch', true);
+  IF batch !~ '^[0-9a-f]{64}$' THEN batch := NULL; END IF;
+  INSERT INTO vera_vjay.tax_entity_events (entity_kind, entity_id, op, old_state, new_state, old_label, new_label, actor, batch_sha256)
+  VALUES (kind, (n ->> idcol)::bigint, pg_catalog.lower(TG_OP), o ->> 'state', n ->> 'state', o ->> 'label', n ->> 'label', actor, batch);
+  RETURN NULL;
+END $f$;
+
+CREATE FUNCTION vera_vjay.tax_event_guard_trgfn() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, pg_temp AS $f$
+DECLARE is_owner boolean;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(c.relowner) = current_user INTO is_owner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID;
+  is_owner := is_owner AND coalesce(pg_catalog.current_setting('vera.tax_simulate_app', true), '') <> 'on';
+  IF TG_OP = 'UPDATE' AND NOT is_owner THEN
+    RAISE EXCEPTION 'tax_entity_events is append-only';
+  END IF;
+  IF TG_OP = 'INSERT' AND NOT is_owner AND pg_catalog.pg_trigger_depth() < 2 THEN
+    RAISE EXCEPTION 'tax_entity_events rows are written by the taxonomy triggers only';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.db_user := current_user;
+    NEW.created_at := pg_catalog.now();
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE TRIGGER tax_domains_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_domains FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_guard_trgfn();
+CREATE TRIGGER tax_topics_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_topics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_guard_trgfn();
+CREATE TRIGGER tax_subtopics_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_subtopics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_guard_trgfn();
+CREATE TRIGGER tax_domains_event_trg AFTER INSERT OR UPDATE ON vera_vjay.tax_domains FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_event_trgfn();
+CREATE TRIGGER tax_topics_event_trg AFTER INSERT OR UPDATE ON vera_vjay.tax_topics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_event_trgfn();
+CREATE TRIGGER tax_subtopics_event_trg AFTER INSERT OR UPDATE ON vera_vjay.tax_subtopics FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_event_trgfn();
+CREATE TRIGGER tax_anchors_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_anchors FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_anchor_guard_trgfn();
+CREATE TRIGGER tax_anchors_event_trg AFTER INSERT OR UPDATE ON vera_vjay.tax_anchors FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_entity_event_trgfn();
+CREATE TRIGGER tax_entity_events_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_entity_events FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_event_guard_trgfn();
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 4. Registry views: one row per topic or subtopic with its anchor, parents and domains (security_invoker).
+--    tax_registry_active_v: the entity, its anchor, its links and every parent/domain shown are ACTIVE (what the matcher reads).
+--    tax_registry_eval_v:   the same with PROPOSED entities and anchors included (links are active); includes_proposed marks a
+--                           row that depends on anything proposed. For owner evaluation of drafts before activation only.
+--    Order inside the arrays: link_id order (for subtopic domains: smallest parent link_id, then smallest domain link_id), then slug. An entity without a matching anchor has anchor_* NULL.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE VIEW vera_vjay.tax_registry_active_v (kind, entity_id, slug, label, description, entity_state, anchor_id, anchor_text, core_terms, anchor_sha256, anchor_state,
+    parent_slugs, domain_slugs, domain_labels, includes_proposed)
+  WITH (security_invoker = true) AS
+  WITH tdom AS (
+    SELECT dt.topic_id, array_agg(d.slug ORDER BY dt.link_id, d.slug) AS domain_slugs, array_agg(d.label ORDER BY dt.link_id, d.slug) AS domain_labels
+      FROM vera_vjay.tax_domain_topic dt JOIN vera_vjay.tax_domains d ON d.domain_id = dt.domain_id AND d.state = 'active'
+     WHERE dt.state = 'active' GROUP BY dt.topic_id),
+  spar AS (
+    SELECT ts.subtopic_id, array_agg(t.slug ORDER BY ts.link_id, t.slug) AS parent_slugs
+      FROM vera_vjay.tax_topic_subtopic ts JOIN vera_vjay.tax_topics t ON t.topic_id = ts.topic_id AND t.state = 'active'
+     WHERE ts.state = 'active' GROUP BY ts.subtopic_id),
+  sdom AS (
+    SELECT x.subtopic_id, array_agg(x.slug ORDER BY x.k1, x.k2, x.slug) AS domain_slugs, array_agg(x.label ORDER BY x.k1, x.k2, x.slug) AS domain_labels
+      FROM (SELECT ts.subtopic_id, d.slug, d.label, min(ts.link_id) AS k1, min(dt.link_id) AS k2
+              FROM vera_vjay.tax_topic_subtopic ts
+              JOIN vera_vjay.tax_topics t ON t.topic_id = ts.topic_id AND t.state = 'active'
+              JOIN vera_vjay.tax_domain_topic dt ON dt.topic_id = t.topic_id AND dt.state = 'active'
+              JOIN vera_vjay.tax_domains d ON d.domain_id = dt.domain_id AND d.state = 'active'
+             WHERE ts.state = 'active' GROUP BY ts.subtopic_id, d.slug, d.label) x
+     GROUP BY x.subtopic_id)
+  SELECT 'topic'::text AS kind, t.topic_id AS entity_id, t.slug, t.label, t.description, t.state AS entity_state,
+         a.anchor_id, a.anchor_text, a.core_terms, a.content_sha256 AS anchor_sha256, a.state AS anchor_state,
+         NULL::text[] AS parent_slugs, tdom.domain_slugs, tdom.domain_labels, false AS includes_proposed
+    FROM vera_vjay.tax_topics t
+    LEFT JOIN vera_vjay.tax_anchors a ON a.topic_id = t.topic_id AND a.state = 'active'
+    LEFT JOIN tdom ON tdom.topic_id = t.topic_id
+   WHERE t.state = 'active'
+  UNION ALL
+  SELECT 'subtopic'::text, s.subtopic_id, s.slug, s.label, s.description, s.state,
+         a.anchor_id, a.anchor_text, a.core_terms, a.content_sha256, a.state,
+         spar.parent_slugs, sdom.domain_slugs, sdom.domain_labels, false
+    FROM vera_vjay.tax_subtopics s
+    LEFT JOIN vera_vjay.tax_anchors a ON a.subtopic_id = s.subtopic_id AND a.state = 'active'
+    LEFT JOIN spar ON spar.subtopic_id = s.subtopic_id
+    LEFT JOIN sdom ON sdom.subtopic_id = s.subtopic_id
+   WHERE s.state = 'active';
+
+CREATE VIEW vera_vjay.tax_registry_eval_v (kind, entity_id, slug, label, description, entity_state, anchor_id, anchor_text, core_terms, anchor_sha256, anchor_state,
+    parent_slugs, domain_slugs, domain_labels, includes_proposed)
+  WITH (security_invoker = true) AS
+  WITH tdom AS (
+    SELECT dt.topic_id, array_agg(d.slug ORDER BY dt.link_id, d.slug) AS domain_slugs, array_agg(d.label ORDER BY dt.link_id, d.slug) AS domain_labels,
+           bool_or(d.state = 'proposed') AS any_proposed
+      FROM vera_vjay.tax_domain_topic dt JOIN vera_vjay.tax_domains d ON d.domain_id = dt.domain_id AND d.state IN ('proposed','active')
+     WHERE dt.state = 'active' GROUP BY dt.topic_id),
+  spar AS (
+    SELECT ts.subtopic_id, array_agg(t.slug ORDER BY ts.link_id, t.slug) AS parent_slugs, bool_or(t.state = 'proposed') AS any_proposed
+      FROM vera_vjay.tax_topic_subtopic ts JOIN vera_vjay.tax_topics t ON t.topic_id = ts.topic_id AND t.state IN ('proposed','active')
+     WHERE ts.state = 'active' GROUP BY ts.subtopic_id),
+  sdom AS (
+    SELECT x.subtopic_id, array_agg(x.slug ORDER BY x.k1, x.k2, x.slug) AS domain_slugs, array_agg(x.label ORDER BY x.k1, x.k2, x.slug) AS domain_labels,
+           bool_or(x.p) AS any_proposed
+      FROM (SELECT ts.subtopic_id, d.slug, d.label, min(ts.link_id) AS k1, min(dt.link_id) AS k2, bool_or(d.state = 'proposed') AS p
+              FROM vera_vjay.tax_topic_subtopic ts
+              JOIN vera_vjay.tax_topics t ON t.topic_id = ts.topic_id AND t.state IN ('proposed','active')
+              JOIN vera_vjay.tax_domain_topic dt ON dt.topic_id = t.topic_id AND dt.state = 'active'
+              JOIN vera_vjay.tax_domains d ON d.domain_id = dt.domain_id AND d.state IN ('proposed','active')
+             WHERE ts.state = 'active' GROUP BY ts.subtopic_id, d.slug, d.label) x
+     GROUP BY x.subtopic_id),
+  tanc AS (  -- per topic: the newest proposed anchor if any (what approval would produce), else the active anchor
+    SELECT DISTINCT ON (a.topic_id) a.* FROM vera_vjay.tax_anchors a
+     WHERE a.topic_id IS NOT NULL AND a.state IN ('proposed','active')
+     ORDER BY a.topic_id, (a.state = 'proposed') DESC, a.anchor_id DESC),
+  sanc AS (
+    SELECT DISTINCT ON (a.subtopic_id) a.* FROM vera_vjay.tax_anchors a
+     WHERE a.subtopic_id IS NOT NULL AND a.state IN ('proposed','active')
+     ORDER BY a.subtopic_id, (a.state = 'proposed') DESC, a.anchor_id DESC)
+  SELECT 'topic'::text AS kind, t.topic_id AS entity_id, t.slug, t.label, t.description, t.state AS entity_state,
+         a.anchor_id, a.anchor_text, a.core_terms, a.content_sha256 AS anchor_sha256, a.state AS anchor_state,
+         NULL::text[] AS parent_slugs, tdom.domain_slugs, tdom.domain_labels,
+         (t.state = 'proposed' OR coalesce(a.state = 'proposed', false) OR coalesce(tdom.any_proposed, false)) AS includes_proposed
+    FROM vera_vjay.tax_topics t
+    LEFT JOIN tanc a ON a.topic_id = t.topic_id
+    LEFT JOIN tdom ON tdom.topic_id = t.topic_id
+   WHERE t.state IN ('proposed','active')
+  UNION ALL
+  SELECT 'subtopic'::text, s.subtopic_id, s.slug, s.label, s.description, s.state,
+         a.anchor_id, a.anchor_text, a.core_terms, a.content_sha256, a.state,
+         spar.parent_slugs, sdom.domain_slugs, sdom.domain_labels,
+         (s.state = 'proposed' OR coalesce(a.state = 'proposed', false) OR coalesce(spar.any_proposed, false) OR coalesce(sdom.any_proposed, false))
+    FROM vera_vjay.tax_subtopics s
+    LEFT JOIN sanc a ON a.subtopic_id = s.subtopic_id
+    LEFT JOIN spar ON spar.subtopic_id = s.subtopic_id
+    LEFT JOIN sdom ON sdom.subtopic_id = s.subtopic_id
+   WHERE s.state IN ('proposed','active');
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 5. Grants: default deny on the new objects, then exact grants to the rw and ro groups only. The 020 grants are not touched.
+--    tax_entity_events: rw holds column INSERT only because the event trigger runs as the invoking role; the guard refuses any
+--    INSERT that does not come from a trigger (pg_trigger_depth), so a plain INSERT by rw fails (TEMPORARY caveat: see header).
+-- ---------------------------------------------------------------------------------------------------------------------------------
+REVOKE ALL ON vera_vjay.tax_anchors, vera_vjay.tax_lineage, vera_vjay.tax_entity_events, vera_vjay.tax_registry_active_v, vera_vjay.tax_registry_eval_v
+  FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.tax_anchors, vera_vjay.tax_lineage, vera_vjay.tax_entity_events, '
+    'vera_vjay.tax_registry_active_v, vera_vjay.tax_registry_eval_v FROM %I, %I', current_setting('vera022.rw'), current_setting('vera022.ro'));
+END $$;
+DO $$
+DECLARE q text;
+BEGIN
+  FOR q IN SELECT pg_catalog.pg_get_serial_sequence('vera_vjay.' || v.t, v.c) FROM (VALUES ('tax_anchors','anchor_id'), ('tax_lineage','lineage_id'),
+             ('tax_entity_events','event_id')) v(t, c) LOOP
+    IF q IS NULL THEN RAISE EXCEPTION '022: identity sequence not found'; END IF;
+    EXECUTE pg_catalog.format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro, %I, %I',
+                              q, current_setting('vera022.rw'), current_setting('vera022.ro'));
+  END LOOP;
+END $$;
+GRANT SELECT ON vera_vjay.tax_anchors, vera_vjay.tax_lineage, vera_vjay.tax_entity_events, vera_vjay.tax_registry_active_v, vera_vjay.tax_registry_eval_v
+  TO vera_vjay_rw, vera_vjay_ro;
+GRANT INSERT (topic_id, subtopic_id, anchor_text, core_terms, origin, origin_ref, state) ON vera_vjay.tax_anchors TO vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.tax_anchors TO vera_vjay_rw;
+GRANT INSERT (relation, from_domain_id, from_topic_id, from_subtopic_id, to_domain_id, to_topic_id, to_subtopic_id, actor, batch_sha256, note)
+  ON vera_vjay.tax_lineage TO vera_vjay_rw;
+GRANT INSERT (entity_kind, entity_id, op, old_state, new_state, old_label, new_label, actor, batch_sha256) ON vera_vjay.tax_entity_events TO vera_vjay_rw;
+
+-- Final privilege check against the actual logins (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  rw text := current_setting('vera022.rw'); ro text := current_setting('vera022.ro');
+  t text; r text; p text; c text; ins text[]; upd text[];
+BEGIN
+  FOR t, ins, upd IN SELECT * FROM (VALUES
+      ('vera_vjay.tax_anchors',       ARRAY['topic_id','subtopic_id','anchor_text','core_terms','origin','origin_ref','state']::text[], ARRAY['state']::text[]),
+      ('vera_vjay.tax_lineage',       ARRAY['relation','from_domain_id','from_topic_id','from_subtopic_id','to_domain_id','to_topic_id','to_subtopic_id','actor','batch_sha256','note']::text[], ARRAY[]::text[]),
+      ('vera_vjay.tax_entity_events', ARRAY['entity_kind','entity_id','op','old_state','new_state','old_label','new_label','actor','batch_sha256']::text[], ARRAY[]::text[]),
+      -- 020 entity grants must be unchanged by this file
+      ('vera_vjay.tax_domains',       ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[]),
+      ('vera_vjay.tax_topics',        ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[]),
+      ('vera_vjay.tax_subtopics',     ARRAY['slug','label','description','origin','origin_ref','state']::text[], ARRAY['label','description','state']::text[])
+    ) v(t, ins, upd) LOOP
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '022 grant check failed: login % needs SELECT on %.', r, t; END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '022 grant check failed: login % holds table-wide % on %.', r, p, t; END IF;
+      END LOOP;
+    END LOOP;
+    FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+      IF pg_catalog.has_column_privilege(rw, t, c, 'INSERT') <> (c = ANY (ins)) THEN
+        RAISE EXCEPTION '022 grant check failed: column INSERT for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(rw, t, c, 'UPDATE') <> (c = ANY (upd)) THEN
+        RAISE EXCEPTION '022 grant check failed: column UPDATE for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE') THEN
+        RAISE EXCEPTION '022 grant check failed: ro login holds a column write privilege on %.%.', t, c;
+      END IF;
+    END LOOP;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['vera_vjay.tax_registry_active_v','vera_vjay.tax_registry_eval_v'] LOOP
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '022 grant check failed: login % needs SELECT on %.', r, t; END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '022 grant check failed: login % holds % on %.', r, p, t; END IF;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname IN ('tax_anchors','tax_lineage','tax_entity_events','tax_registry_active_v','tax_registry_eval_v')
+                AND (x.grantee = 0 OR x.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))) THEN
+    RAISE EXCEPTION '022 grant check failed: PUBLIC or vera_vjay_wo holds a privilege on a new tax_ object.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname LIKE 'tax\_%' AND k.relkind = 'S'
+                AND (x.grantee = 0 OR x.grantee IN (SELECT oid FROM pg_catalog.pg_roles
+                                                     WHERE rolname IN ('vera_vjay_wo','vera_vjay_rw','vera_vjay_ro', rw, ro)))) THEN
+    RAISE EXCEPTION '022 grant check failed: an app role or PUBLIC holds a privilege on a tax_ identity sequence.';
+  END IF;
+END $$;
+
+COMMIT;
