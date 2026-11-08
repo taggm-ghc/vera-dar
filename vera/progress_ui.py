@@ -483,7 +483,14 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
     for done_k, total_k, name in pairs:
         total = counts.get(total_k)
         if type(total) is int and total > 0 and type(counts.get(done_k)) is int:
-            bars.append((f"{name} {min(counts[done_k], total)} of {total}", min(1.0, counts[done_k] / total)))
+            n = min(counts[done_k], total)
+            text = f"{name} {n} of {total}"
+            # NOANSWER-PAGE-1108 D5: a fact the status line already states is not repeated as the bar's text (the bar
+            # itself still shows the progress); "Saved n of t" matches the status wording "n of t saved".
+            said = label.casefold()
+            if text.casefold() in said or (name == "Saved" and f"{n} of {total} saved" in said):
+                text = ""
+            bars.append((text, min(1.0, counts[done_k] / total)))
     since = now - (holder.last_line_at or holder.t0)
     caption = f"Still working · {_duration(now - holder.t0)} · last update {max(0, int(since))} s ago"
     act = labels.activity_label(holder.activity) if holder.activity else None
@@ -515,7 +522,7 @@ def stream_tick(holder: StreamHolder, ses, ui, now, labels: Labels) -> bool:
                     if line != v["label"]:  # SELFQ-VARIANTS-1108: the status header already shows the latest line
                         ui.write(line)
             for text, frac in v["bars"]:
-                ui.progress(frac, text=text)
+                ui.progress(frac, text=text or None)
             ui.info(v["activity"]) if hasattr(ui, "info") else ui.caption(v["activity"])  # live status line: latest activity + elapsed
             ui.caption(v["caption"])
             ui.caption(labels.reload_caption)

@@ -15,7 +15,7 @@ from vera.m7.live_report import INLINE_STATUS
 from vera.lane_links_ui import render_lane_links
 from vera.memory_panel import render_memory_panel
 from vera.memory_review_panel import render_memory_review
-from vera import progress, progress_ui, ui_wake
+from vera import page_text, progress, progress_ui, ui_wake
 from vera.evidence_trace_ui import render_trace
 from vera.public_mode import (get_progress, is_public_mode, iter_ask_stream, post_ask, post_ask_tracked,
                               upstream_base_url)
@@ -123,10 +123,22 @@ def _trace_of(data: dict):
     return t
 
 
+def _trace_shows(trace) -> bool:
+    """NOANSWER-PAGE-1108 D4: True only when render_trace would write something (a trace with no passages, uncovered
+    parts, claims or not-used notes renders nothing, so it never opens a section on its own)."""
+    if not trace:
+        return False
+    probe = page_text.Probe()
+    try:
+        return bool(render_trace(probe, trace, public=PUBLIC)) and probe.shown
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _layer3_answer(data: dict, full: bool) -> None:
     cc_text = claim_check_text(data.get("claim_check"), None, full, layered=True)
     _tr = _trace_of(data)
-    if _note_texts(data.get("process_notes")) or cc_text or _tr:  # need-to-know: omit when nothing to explain
+    if _note_texts(data.get("process_notes")) or cc_text or _trace_shows(_tr):  # need-to-know: omit when nothing to explain
         with st.expander("Research and verification", expanded=False):
             render_process_notes(st, data)
             render_trace(st, _tr, public=PUBLIC)  # NONASK-1103 E5: no-op when absent
@@ -141,16 +153,25 @@ def _research_outcome_text(data: dict) -> str:
     return plain(_t) if isinstance(_t, str) and _t.strip() else ""
 
 
-def _layer3_other(data: dict) -> None:
-    _ro = _research_outcome_text(data)  # need-to-know: explains the user's own experience, so shown in public mode too
+def _layer3_other(data: dict, seen=None) -> None:
+    # NOANSWER-PAGE-1108 D4/D6: sentences already on the page are dropped first; the section opens only when something
+    # is left to show (process notes, research outcome, a trace that renders, or dev-mode research captions).
+    seen = seen if seen is not None else page_text.Seen()
+    notes = [t for t in (seen.take(x) for x in _note_texts(data.get("process_notes"))) if t]
+    _ro = seen.take(_research_outcome_text(data))  # need-to-know: explains the user's own experience (public too)
     _tr = _trace_of(data)
-    if _note_texts(data.get("process_notes")) or _ro or not PUBLIC or _tr:
+    dev = False
+    if not PUBLIC:
+        probe = page_text.Probe()
+        _render_research_captions(data, outcome=False, ui=probe)
+        dev = probe.shown
+    if notes or _ro or dev or _trace_shows(_tr):
         with st.expander("Research and verification", expanded=False):
-            render_process_notes(st, data)
+            render_process_notes(st, dict(data, process_notes=notes))
             render_trace(st, _tr, public=PUBLIC)  # NONASK-1103 E5: no-op when absent
             if _ro:
                 st.caption("**Research outcome:** " + _ro)  # FRESH-1023 C3
-            if not PUBLIC:  # counts/steps are owner-mode detail, not end-user explanation
+            if dev:  # counts/steps are owner-mode detail, not end-user explanation
                 _render_research_captions(data, outcome=False)
 
 
@@ -161,7 +182,8 @@ def _layer4(data: dict) -> None:
             st.json(data)
 
 
-def _render_research_captions(data: dict, outcome: bool = True) -> None:
+def _render_research_captions(data: dict, outcome: bool = True, ui=None) -> None:
+    st = ui if ui is not None else globals()["st"]  # NOANSWER-PAGE-1108: a Probe asks whether anything would render
     _ia = (data.get("contract") if isinstance(data.get("contract"), dict) else {}).get("inline_acquisition")
     if isinstance(_ia, dict) and _ia:  # P0-2: same status wording as the Report (live_report.INLINE_STATUS)
         st.caption("**New search for this question:** " + INLINE_STATUS.get(
@@ -235,13 +257,18 @@ def render_result(data: dict) -> None:
         if layered:
             _layer3_answer(data, full)
     else:
-        render_fallback_reason(st, data)  # AE-1020 G7: why there is no answer (no internal token)
-        render_discovery(st, data)
+        # NOANSWER-PAGE-1108 D1/D2: one page, each sentence once. The why-no-answer line is shown first; the reading
+        # list (no heading without a list) and the limitations then show only what the page has not said yet.
+        seen = page_text.Seen()
+        render_fallback_reason(page_text.Recording(st, seen), data)  # AE-1020 G7: why there is no answer
+        render_discovery(page_text.Recording(st, seen), dict(data, answer=seen.new(data.get("answer") or ""))
+                         if isinstance(data.get("answer"), str) else data)
         render_lane_links(st, data)  # LANE-LINKS-1106
         if layered:
-            _layer2_heading(data, False)
-            render_limitations(st, data)
-            _layer3_other(data)
+            lim = [t for t in (seen.take(x) for x in _note_texts(data.get("limitations"))) if t]
+            _layer2_heading(dict(data, limitations=lim), False)
+            render_limitations(st, dict(data, limitations=lim))
+            _layer3_other(data, seen)
         if not layered:
             _render_research_captions(data)
 

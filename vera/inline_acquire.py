@@ -1705,8 +1705,7 @@ def notice(acq: dict | None, status: str) -> str | None:
     return t if isinstance(t, str) else ""
 
 
-BACKGROUND_NOTE = ("Further sources VERA-DAR found for this question may be acquired in the background on a best-effort "
-                   "basis; any that are added must first pass its licence, content and relevance checks.")
+BACKGROUND_NOTE = research_outcome.BACKGROUND_SENTENCE  # NOANSWER-PAGE-1108 D6: one wording (said once on the page)
 
 
 BACKGROUND_NOTE_PERSIST = (

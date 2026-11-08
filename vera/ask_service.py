@@ -811,6 +811,16 @@ def _notice_class(r) -> str:
     return "other"  # selected_not_fetched: no route, already held, crawl delay
 
 
+# NOANSWER-PAGE-1108 D9: plain words per reason class of a candidate found but not retrieved (selected_not_fetched and
+# the other "other" statuses); keys are research_outcome reason classes.
+_OTHER_REASON_TEXT = {"already_in_corpus": "already held in VERA-DAR's collection",
+                      "no_route": "with no identifier or retrieval route VERA-DAR can use",
+                      "crawl_delay": "because the source's required pause between requests did not fit in the time left",
+                      "ineligible_no_identifier": "with no identifier or retrieval route VERA-DAR can use",
+                      "duplicate_or_in_corpus": "already held in VERA-DAR's collection",
+                      "duplicate": "found twice in this search"}
+
+
 def _docs(n: int) -> str:
     return f"{n} document{'' if n == 1 else 's'}"
 
@@ -878,8 +888,12 @@ def _inline_notice_body(acq, o):
     if n_un:
         parts.append(f"{n_un} not checked in this request ({un_parts})")
     if n["other"]:
-        parts.append(f"{n['other']} not retrieved for another recorded reason (already held, no identifier or no "
-                     "retrieval route)")
+        # NOANSWER-PAGE-1108 D9: the reasons listed are the records' own reason classes (research_outcome.diag_status
+        # status_reason: the codes the Research outcome line also uses), counted; never a fixed list that omits one.
+        why = Counter(r.get("status_reason") for r, c in zip(recs, cls) if c == "other")
+        rs = "; ".join(f"{v} {_OTHER_REASON_TEXT.get(k, 'for another recorded reason')}"
+                       for k, v in sorted(why.items(), key=lambda kv: (-kv[1], str(kv[0]))))
+        parts.append(f"{n['other']} not retrieved ({rs})")
     if n["unknown"]:
         parts.append(f"{n['unknown']} with no recorded outcome")
     return f"{lead}. It found {_docs(total)} and used none: {'; '.join(parts)}."

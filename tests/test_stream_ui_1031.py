@@ -116,8 +116,9 @@ def test_answer_terminal_and_view(labels):
     clk.t += 252
     v = progress_ui.stream_view(h, labels, clk())
     assert v["label"].startswith("Checked 7 of 9") and "12 possible sources found; 9 to check" in v["log"]
-    assert ("Checked 7 of 9", pytest.approx(7 / 9)) == (v["bars"][0][0], pytest.approx(v["bars"][0][1]))
-    assert v["bars"][1][0] == "Saved 2 of 6"
+    # NOANSWER-PAGE-1108 D5: the status line already says "Checked 7 of 9", so the bar keeps its fraction, not the text
+    assert ("", pytest.approx(7 / 9)) == (v["bars"][0][0], pytest.approx(v["bars"][0][1]))
+    assert v["bars"][1][0] == "" and v["label"].endswith("2 of 6 saved")  # D5: said once, in the status line
     assert v["caption"] == "Still working · 4 min 12 s · last update 252 s ago"
 
 

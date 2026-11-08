@@ -192,8 +192,10 @@ def test_ask_body_into_page(monkeypatch, case, fulldoc):
     assert not at.success and not answer_heading and CHECK not in page and TRACED not in page
     if case == "decline":
         assert body["candidates"] == [] and body["answer"] in _texts(at, "info") and "Reading list" not in page
-    else:
+    elif body["candidates"]:
         assert "Reading list" in page
+    else:  # NOANSWER-PAGE-1108 D1: no "Reading list" heading over an empty list
+        assert "Reading list" not in page
     # (d) the D1 line verbatim, first, when candidates exist
     if body["candidates"]:
         d1 = ac.not_read_line(body["candidates"])

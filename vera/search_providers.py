@@ -1680,7 +1680,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                                            ("epmc", ecfg.get("enabled") is True, use_epmc),
                                            ("wiki", wiki_ref_portal.enabled(wcfg), use_wiki),
                                            ("arxiv", "arxiv" in set(s.get("providers") or ()), use_arxiv)):
-                if enabled_cfg and not used:
+                if enabled_cfg and not used and not (key in ("ddg", "wiki") and SCHOLARLY_ONLY.get()):
+                    # NOANSWER-PAGE-1108 D8: a variant round skips DDG and Wikipedia BY DESIGN (SCHOLARLY_ONLY); that
+                    # is not a portal left without a search-call slot, so it is not recorded as not_attempted (which
+                    # research_record reads as "the search budget ran out").
                     record_portal(names[key], "not_attempted", 0)
         except Exception:  # noqa: BLE001
             pass

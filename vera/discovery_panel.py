@@ -191,9 +191,11 @@ def render_discovery(st, data: dict) -> None:
         return
     cands = _candidates(data.get("candidates"))
     why = _reasons_by_url(data)
-    st.markdown("### Reading list")
+    if cands:  # NOANSWER-PAGE-1108 D1: the heading only over a list (never over an empty section)
+        st.markdown("### Reading list")
     c_ = data.get("contract")
-    if cands and isinstance(c_, dict) and c_.get("offtopic") is True and isinstance(data.get("answer"), str):
+    if cands and isinstance(c_, dict) and c_.get("offtopic") is True and isinstance(data.get("answer"), str) \
+            and data["answer"].strip():  # NOANSWER-PAGE-1108: no empty box once the page said it
         st.info(safe_markdown(data["answer"]))  # FIX1-1021: outside-scope notice shown above the list
     if cands:
         whys = [why.get(c["url"].rstrip("/")) if c["acquisition"] == answer_contract.ACQ_NOT_ACQUIRED else None
@@ -235,7 +237,8 @@ def render_discovery(st, data: dict) -> None:
         if any(c["has_licence"] for c in cands):
             st.caption(LICENCE_SIDEBAR)
     elif kind == KIND_READING_LIST:
-        st.info(safe_markdown(data.get("answer") or ""))
+        if (data.get("answer") or "").strip():  # NOANSWER-PAGE-1108: nothing left to say once the page said it
+            st.info(safe_markdown(data["answer"]))
     else:
         st.warning(answer_contract.text("not_read_line"))
     _render_memory(st, data)

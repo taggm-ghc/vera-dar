@@ -404,9 +404,19 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         c = led["counted"]
         if c >= t:
             return None
+        head = f"Read {c} of the {t} sources targeted"
+        if aq.get("status") == "relevance_rejected":
+            # NOANSWER-PAGE-1108 D3: the status also counts documents judged not relevant from their title or abstract
+            # BEFORE any fetch (inline_acquire._supply_status), so the "fetched" clause is stated only for documents
+            # whose text was really examined (the same ledger as "Read N"), with that count; with none fetched, the
+            # line is the read count alone (the non-answer notice already itemises found / not relevant / not retrieved).
+            f = led["examined_unqualified"]
+            if f < 1:
+                return f"{head}.{_stop_clause(aq)}"
+            clause = (f"the {f} document fetched did not have enough relevant passages to keep." if f == 1
+                      else f"none of the {f} documents fetched had enough relevant passages to keep.")
         if clause is None:  # review F2: the stop disclosure does not depend on a status clause
             return _stop_clause(aq).strip() or None
-        head = f"Read {c} of the {t} sources targeted"
         if led["partial_text"] > 0:
             head += f" ({led['full_text']} in full, {led['partial_text']} in part)"
         kinds = [(k, led[k]) for k in evidence_ledger.KINDS if led[k] > 0]

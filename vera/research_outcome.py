@@ -28,8 +28,13 @@ KINDS = ("answered_with_new", "qualified_older_only", "no_valuable_source",
          "incomplete_search", "abstain")
 
 NO_VALUABLE_SENTENCE = "No sufficiently valuable source was found in the sources searched."
-BACKGROUND_SENTENCE = ("Further sources found by this search may be acquired in the background on a best-effort basis; "
-                       "any that are added must first pass the licence, content and relevance checks.")
+# NOANSWER-PAGE-1108 D6: the ONE wording of the background hand-off sentence; vera.inline_acquire.BACKGROUND_NOTE is this
+# constant, so the research outcome and the background note are the same sentence and the page shows it once.
+# BGQUEUE-CHECK-1108: the background queue is in memory (every push redeploys), so the sentence says, once, that queued
+# sources are not kept across a restart. Shown only when something was queued (callers check the hand-off first).
+BACKGROUND_SENTENCE = ("Further sources VERA-DAR found for this question may be acquired in the background on a "
+                       "best-effort basis (queued sources are not kept if the service restarts); any that are added "
+                       "must first pass its licence, content and relevance checks.")
 
 # Acquisition problems: a source may exist but could not be used.
 _ACQ_FAILURES = ("no_route", "fetch_failed", "extraction_failed", "abstract_only")
@@ -267,7 +272,9 @@ def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachabl
 
 
 def _cause_phrase(causes: list[str]) -> str:
-    return " and ".join(_CAUSE_TEXT[c] for c in causes)
+    """NOANSWER-PAGE-1108 D7: one plain list built from the cause codes ("a, b and c"), never "a and b and c"."""
+    parts = [_CAUSE_TEXT[c] for c in causes]
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
 
 
 def _detail(attempts, candidates, kind, complete, causes) -> dict:
