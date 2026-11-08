@@ -436,6 +436,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                                  timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
         except rate_limit.RateLimited as e:
             raise aa._Stop(acq_config.rate_limited_code(acq, e.reason)) from None  # F1: per-reason code
+        except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent
+            raise aa._Stop(acq_config.reason(acq, "host")) from None
         except Exception:  # noqa: BLE001
             raise aa._Stop(acq_config.reason(acq, "unreachable")) from None
         try:

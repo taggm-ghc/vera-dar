@@ -252,8 +252,7 @@
   },
   "fetch": {
     "allowed_hosts": [
-      "www.ebi.ac.uk",
-      "eutils.ncbi.nlm.nih.gov"
+      "www.ebi.ac.uk"
     ],
     "content_types": [
       "application/xml",

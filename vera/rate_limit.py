@@ -74,6 +74,16 @@ class RateLimited(RuntimeError):
         super().__init__(f"{portal} rate limit: skipped ({reason}); retry in {self.retry_in_s:.1f}s")
 
 
+class UnlistedHost(RuntimeError):
+    """OA-1: raised by limited_by_url(strict=True) for a URL whose host is in no portal of config/rate_limits.json. Nothing
+    was sent. Deliberately NOT a RateLimited: an unlisted host is a refusal (acquisition code R-ACQ-HOST), never a
+    retry-later skip."""
+
+    def __init__(self, host: str):
+        self.host = host
+        super().__init__("unlisted host: no rate-limit portal; request refused, nothing sent")
+
+
 class Outcome:
     OK = "ok"
     RATE_LIMITED = "rate_limited"
@@ -680,13 +690,17 @@ def limited(portal: str, fn: Callable | None = None, *, classify: Callable[[Any]
     return deco(fn) if fn is not None else deco
 
 
-def limited_by_url(fn: Callable, *, registry: Registry | None = None, classify: Callable[[Any], bool] | None = None):
+def limited_by_url(fn: Callable, *, registry: Registry | None = None, classify: Callable[[Any], bool] | None = None,
+                   strict: bool = False):
     """Wrap a requests.get-compatible callable used for several hosts: the portal is chosen from the URL (first
-    positional arg or url=). Hosts not in any portal pass through unlimited (and uncounted)."""
+    positional arg or url=). Hosts not in any portal pass through unlimited (and uncounted), unless strict=True
+    (OA-1, used by acquisition): then they fail CLOSED, UnlistedHost is raised and nothing is sent."""
     def wrapped(*a, **kw):
         url = a[0] if a else kw.get("url", "")
         ad = (registry or get_registry()).portal_for_url(url)
         if ad is None:
+            if strict:
+                raise UnlistedHost((urlsplit(str(url)).hostname or "").lower())
             return fn(*a, **kw)
         return call_with_limit(ad, fn, *a, classify=classify, **kw)
     wrapped.__wrapped__ = fn

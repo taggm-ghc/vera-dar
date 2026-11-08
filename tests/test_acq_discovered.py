@@ -485,7 +485,7 @@ def test_shipped_config_enables_use_discovered_only_with_landing_route_off_and_a
     assert c["inline"]["use_discovered"] is True and c["inline"]["landing_route"] is False  # owner D3/D5 2026-10-23
     assert c["landing_route"]["publisher_hosts"] == []
     assert c["landing_route"]["resolver_hosts"] == ["doi.org", "dx.doi.org"]
-    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk", "eutils.ncbi.nlm.nih.gov"]  # unchanged
+    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk"]  # unchanged
     from vera import rate_limit
     reg = rate_limit.get_registry()
     assert all(reg.portal_for_url(f"https://{h}/x") is not None for h in c["landing_route"]["resolver_hosts"])  # C4

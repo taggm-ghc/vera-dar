@@ -474,8 +474,8 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
         ro.dispose()
 
     # CMF-1022-I2 (E1/A4): pinned transport (connects only to the address is_public_url validated for the hop).
-    # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); other hosts pass through.
-    return Deps(search=search, http_get=rate_limit.limited_by_url(selective_fetch.pinned_get), lookup=RoLookup(ro, cfg),
+    # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); an unlisted host fails closed (OA-1, strict=True: R-ACQ-HOST, nothing sent).
+    return Deps(search=search, http_get=rate_limit.limited_by_url(selective_fetch.pinned_get, strict=True), lookup=RoLookup(ro, cfg),
                 store=WoStore(wo, ro, cfg),
                 corpus_keys=keys, url_check=selective_fetch.is_public_url, refresh=refresh, close=close)
 
@@ -649,6 +649,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                                      allow_redirects=False, stream=True)
             except rate_limit.RateLimited as e:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
                 raise _Stop(acq_config.rate_limited_code(cfg, e.reason)) from None  # F1: per-reason code
+            except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent; a refusal, not a retry-later skip
+                raise _Stop(acq_config.reason(cfg, "host")) from None
             except Exception:  # noqa: BLE001  unreachable = unusable (never substituted by an abstract)
                 raise _Stop(acq_config.reason(cfg, "unreachable")) from None
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):

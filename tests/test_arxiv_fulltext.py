@@ -294,7 +294,7 @@ def test_shipped_config_route_and_codes():
     r = c["arxiv_route"]
     assert r["enabled"] is True and r["hosts"] == ["arxiv.org"] and r["content_types"] == ["text/html"]
     assert r["pdf_extractor"] is None
-    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk", "eutils.ncbi.nlm.nih.gov"]  # Europe PMC list not widened
+    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk"]  # Europe PMC list not widened
     from vera import discovery_panel
     for k in ("arxiv_licence_hold", "arxiv_html_policy"):
         assert c["reason_codes"][k] in discovery_panel.REASON_TEXT

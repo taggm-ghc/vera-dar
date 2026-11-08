@@ -133,7 +133,7 @@ def test_C_security_default_transport_is_pinned_and_public_only():
     and pin tests are in tests/test_cmf_i2_pinning.py and tests/test_cmf_i3_pin_hygiene.py (ported, unchanged)."""
     import inspect
     src = inspect.getsource(auto_acquire)
-    assert "limited_by_url(selective_fetch.pinned_get)" in src
+    assert "limited_by_url(selective_fetch.pinned_get, strict=True)" in src
     assert "url_check=selective_fetch.is_public_url" in src
 
 

@@ -44,7 +44,7 @@ def test_shipped_config_enables_use_discovered_and_nothing_else():
     c = acq_config.load_config()  # the real file
     assert c["inline"]["use_discovered"] is True  # owner D3/D5 2026-10-23
     assert c["inline"]["landing_route"] is False and c["landing_route"]["publisher_hosts"] == []
-    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk", "eutils.ncbi.nlm.nih.gov"]
+    assert c["fetch"]["allowed_hosts"] == ["www.ebi.ac.uk"]
     assert c["inline"]["enabled"] is True and c["enabled"] is True
 
 
