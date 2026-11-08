@@ -71,7 +71,8 @@ def test_assign_chunk_vote_and_hierarchy():
     assert chunk_topics.document_vote([("a", 3.0)], min_votes=2) is None
     assert chunk_topics.document_vote([None, None]) is None
     prov = chunk_topics.provenance("db:v3", 2.0)
-    assert prov == {"classifier_name": "chunk_bm25", "classifier_version": "1:db:v3:t2", "score_kind": "bm25"}
+    assert prov == {"assigned_via": "backfill", "classifier_name": "chunk_bm25", "classifier_version": "2:db:v3:t2",
+                    "score_kind": "bm25"}  # TAXO-MATCH-FIX-1108: version 2, 020 assigned_via
 
 
 # --- deterministic clustering -------------------------------------------------------------------------------------------------

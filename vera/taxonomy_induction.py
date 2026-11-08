@@ -155,15 +155,17 @@ def active_entries(rows) -> list:
 
 
 # --- assignment and shares ------------------------------------------------------------------------------------------------
-def assign_corpus(entries, corpus: dict, threshold: float, min_votes: int) -> tuple[dict, dict]:
-    """({doc: primary leaf key or None}, {(doc, i): (key, score) or None})."""
-    idx = chunk_topics.ChunkIndex(entries)
+def assign_corpus(entries, corpus: dict, threshold: float, min_votes: int, rules: dict | None = None) -> tuple[dict, dict]:
+    """({doc: primary leaf key or None}, {(doc, i): (key, score) or None}). TAXO-MATCH-FIX-1108: the strict match rules of
+    config/chunk_topic_terms.json (rules None = load that file; raises on a bad file), the same rule as the Corpus page."""
+    rules = chunk_topics.load_rules() if rules is None else rules
+    idx = chunk_topics.ChunkIndex(entries, rules)
     per_chunk, primary = {}, {}
     for d, chunks in corpus.items():
         res = [chunk_topics.assign_chunk(idx, c, threshold) for c in chunks]
         for i, r in enumerate(res):
             per_chunk[(d, i)] = r
-        primary[d] = chunk_topics.document_vote(res, min_votes)
+        primary[d] = chunk_topics.document_vote(res, min_votes, rules["min_vote_share"])
     return primary, per_chunk
 
 
@@ -524,7 +526,7 @@ def induce(engine, rows: list, cfg: dict, mt_cfg: dict, *, use_llm: bool = True,
     proj = projected_primary(b["entries"], basis, corpus, threshold, cfg["min_chunk_votes"])
     proj_topics = [p for p in props if p["level"] == "topic"]
     return {"task": "TAXO-INDUCE-1107", "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "classifier": chunk_topics.provenance(f"active{len(b['entries'])}", threshold),
+            "classifier": chunk_topics.provenance(f"active{len(b['entries'])}", threshold, chunk_topics.load_rules()),
             "basis": {"documents": len(corpus), "chunks": b["n_chunks"], "active_registry_entries": len(b["entries"])},
             "unmatched_share_now": unmatched_share(b["primary"]),
             "unmatched_share_projected": unmatched_share(proj),

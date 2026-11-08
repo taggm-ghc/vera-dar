@@ -1088,6 +1088,10 @@ SUBJECT_DEFAULTS = {"enabled": True, "display_domains": 8, "display_topics": 3, 
 # chunk vote, else the stored acquisition key, else the title + window match. Computed in memory only: no applied table can hold
 # chunk links before migration 020. A failed chunk read falls back to the document-level match. chunks_per_doc and chunk_chars are
 # work bounds; min_chunk_votes 1 is a PROVISIONAL prior (uncalibrated; see config subject_areas._calibration_note).
+# TAXO-MATCH-FIX-1108 (classifier version 2): the chunk vote and the title + window match both use the strict match rules of
+# config/chunk_topic_terms.json (generic terms never score, >= 2 distinct non-generic shared terms, lead over the best other
+# subject area, votes from a share of the sampled chunks; all PROVISIONAL). A document whose chunks were read gets no second
+# try at document level (its chunk text is the fuller text). The rules load fails closed: no subject areas are shown.
 SUBJECT_ROWS_SQL = (  # latest version of each canonical source; read-only; titles and text never leave this module
     "SELECT s.canonical_source_id, coalesce(s.provenance->>'title', k.title), left(s.content, :w), "
     "s.provenance->'acquisition'->'micro_topic' FROM vera_vjay.sources s "
@@ -1112,8 +1116,9 @@ def registry_for_subjects(engine, mt_cfg: dict, reader=None) -> dict | None:
     return micro_topic.registry_active_data(mt_cfg, engine, reader)
 
 
-def assign_topic(reg, title, text, stored, threshold: float, window: int) -> str | None:
-    """Primary registry key of one document, or None (not matched). Pure and deterministic."""
+def assign_topic(reg, title, text, stored, threshold: float, window: int, idx=None) -> str | None:
+    """Primary registry key of one document, or None (not matched). Pure and deterministic. With idx (a chunk_topics.ChunkIndex
+    carrying match rules) the title + window text must pass the same strict rule as a chunk (TAXO-MATCH-FIX-1108)."""
     from vera import micro_topic
     if isinstance(stored, (str, bytes)):
         try:
@@ -1127,6 +1132,10 @@ def assign_topic(reg, title, text, stored, threshold: float, window: int) -> str
     body = micro_topic.doc_text(title, text, {"text_window_chars": window})
     if not body.strip():
         return None
+    if idx is not None:
+        from vera import chunk_topics
+        r = chunk_topics.assign_chunk(idx, body, threshold)
+        return r[0] if r is not None else None
     b = reg.best(body)
     return str(b[1]["id"]) if b is not None and b[0] >= threshold else None
 
@@ -1145,8 +1154,18 @@ def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_
         if scfg and scfg.get("chunk_votes") is True and rows:
             chunks = document_chunks(c, [int(r[0]) for r in rows], {"chunk_chars": _bounded(scfg.get("chunk_chars"), 1200, 100, 8000),
                                                                     "chunks_per_doc": _bounded(scfg.get("chunks_per_doc"), 16, 1, 200)})
-    votes = chunk_primary(reg, chunks, threshold, _bounded((scfg or {}).get("min_chunk_votes"), 1, 1, 50)) if chunks else {}
-    return {int(r[0]): votes.get(int(r[0])) or assign_topic(reg, r[1], r[2], r[3], threshold, window) for r in rows}
+    from vera import chunk_topics
+    idx = chunk_topics.ChunkIndex(reg.entries, chunk_topics.load_rules())  # raises on a bad rules file: fail closed
+    votes = chunk_primary(reg, chunks, threshold, _bounded((scfg or {}).get("min_chunk_votes"), 1, 1, 50), idx) if chunks else {}
+    out = {}
+    for r in rows:
+        d = int(r[0])
+        v = votes.get(d)
+        if v is None:  # stored acquisition key; the title + window match only for documents without read chunks
+            v = (assign_topic(reg, "", "", r[3], threshold, window, idx) if d in chunks
+                 else assign_topic(reg, r[1], r[2], r[3], threshold, window, idx))
+        out[d] = v
+    return out
 
 
 def _bounded(v, default: int, lo: int, hi: int) -> int:
@@ -1171,10 +1190,11 @@ def document_chunks(conn, ids: list, scfg: dict) -> dict:
     return out
 
 
-def chunk_primary(reg, chunks: dict, threshold: float, min_votes: int) -> dict:
-    """{document id: leaf key or None} by chunk vote over the same active registry entries as `reg`. Pure."""
+def chunk_primary(reg, chunks: dict, threshold: float, min_votes: int, idx=None) -> dict:
+    """{document id: leaf key or None} by chunk vote over the same active registry entries as `reg`. Pure. idx None = an index
+    with the strict match rules of config/chunk_topic_terms.json (TAXO-MATCH-FIX-1108)."""
     from vera import chunk_topics
-    idx = chunk_topics.ChunkIndex(reg.entries)
+    idx = idx if idx is not None else chunk_topics.ChunkIndex(reg.entries, chunk_topics.load_rules())
     return {d: chunk_topics.document_primary(idx, cs, threshold, min_votes) for d, cs in chunks.items()}
 
 
@@ -1219,7 +1239,7 @@ def subject_areas(entries: list, primary: dict, scfg: dict | None = None) -> dic
     matched = sum(dom.values())
     return {"basis_documents": n, "domains": domains,
             "other_domains": {"count": len(rest), "share": _share(sum(c for _, c in rest), n)},
-            "unmatched_share": _share(n - matched, n)}
+            "unmatched_share": _share(n - matched, n), "unmatched_count": n - matched}
 
 
 def subject_areas_for(engine, cfg: dict | None, mt_cfg: dict | None = None, registry_reader=None) -> dict | None:

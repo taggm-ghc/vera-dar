@@ -186,9 +186,9 @@ def test_render_fallback_describes_domains_topics_subtopics():
     sb.render_corpus(st, FALLBACK)
     text = _NORM(" ".join(cap))
     assert text.count("314 sources") == 1 and "temporarily unavailable" not in text
-    assert "Subject areas (share of 4 documents" in text
+    assert "Subject areas (provisional; share of 4 documents" in text  # TAXO-MATCH-FIX-1108 wording
     assert "Epidemiology: 50%. Topics: Label flu 50% (including Label flu-model 25%)." in text
-    assert "Ecology: 25%. Topics: Label coral 25%." in text and "Not matched to a listed subject area: 25%." in text
+    assert "Ecology: 25%. Topics: Label coral 25%." in text and "Not yet matched to a listed subject area: 1 of 4 documents (25%)." in text
 
 
 def test_render_without_subjects_says_so_and_drops_backend_labels():
