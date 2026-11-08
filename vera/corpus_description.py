@@ -1079,7 +1079,7 @@ def run_table_digest(overview: dict, profile: dict, table: dict, llm, cfg: dict,
 # follow-up: measure the matched share and spot-check assignments on real vera_vjay.sources rows.
 # connect_timeout_s / statement_timeout_ms: PROVISIONAL safety bounds (not decision thresholds; uncalibrated) so a slow DB
 # cannot hold a page view; on timeout the page shows the "not available right now" line.
-SUBJECT_DEFAULTS = {"enabled": False,  # CORPUS-INTERIM-1108: fail safe, a missing key hides per-subject output
+SUBJECT_DEFAULTS = {"enabled": True,  # CORPUS-PCT-B-1108: per-subject shares back on (the switch stays a kill switch)
                     "display_domains": 8, "display_topics": 3, "display_subtopics": 2,
                     "scan_max": 2000, "cache_s": 300.0, "connect_timeout_s": 5, "statement_timeout_ms": 5000,
                     "chunk_votes": False, "chunks_per_doc": 16, "chunk_chars": 1200, "min_chunk_votes": 1}

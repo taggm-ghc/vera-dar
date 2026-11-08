@@ -129,16 +129,16 @@ def _sa(n, unmatched, domains=None):
             "unmatched_count": unmatched}
 
 
-def test_not_matched_line_shows_exact_counts():
-    lines = sb._subject_lines(_sa(365, 1))
-    assert "Not yet matched to a listed subject area: 1 of 365 documents (under 1%)." in lines
-    assert "Not yet matched to a listed subject area: 120 of 365 documents (33%)." in sb._subject_lines(_sa(365, 120))
-    assert not any("matched to a listed" in ln for ln in sb._subject_lines(_sa(365, 0)))
+def test_remainder_is_one_last_other_mixed_line_never_a_not_matched_headline():
+    for u, want in ((1, "under 1"), (120, 33), (0, None)):  # CORPUS-PCT-B-1108: replaces the exact not-matched count line
+        lines = sb._subject_lines(_sa(365, u))
+        assert not any("matched" in ln.lower() for ln in lines[1:])
+        assert (lines[-1] == f"Other / mixed: {want}%") if want else lines[-1].startswith("Ecology")
 
 
-def test_subject_lines_say_provisional_nearest_subject():
+def test_subject_lines_say_automatic_approximate_nearest_subject():
     head = sb._subject_lines(_sa(10, 2))[0]
-    assert "provisional" in head.lower() and "nearest" in head.lower()
+    assert "automatic and approximate" in head.lower() and "nearest" in head.lower()
     assert "incomplete and still growing" in head  # OD-1108-HITL item 8: the listed areas are not the complete set
 
 

@@ -30,9 +30,10 @@ def on(monkeypatch):
     monkeypatch.setattr(sb, "subjects_enabled", lambda: True)
 
 
-def test_shipped_switch_is_off_and_sidebar_reads_it():
+def test_shipped_switch_is_on_and_sidebar_reads_it():
+    # CORPUS-PCT-B-1108: per-subject shares are back; the switch stays as the kill switch that restores the interim view
     cfg = json.loads((ROOT / "config" / "ask-provider-chain.json").read_text())
-    assert cfg["corpus_description"]["subject_areas"]["enabled"] is False and sb.subjects_enabled() is False
+    assert cfg["corpus_description"]["subject_areas"]["enabled"] is True and sb.subjects_enabled() is True
     assert not (ROOT / "config" / "corpus_disclosure.json").exists() and not hasattr(sb, "provisional_note")
 
 
@@ -87,7 +88,8 @@ def test_switch_on_restores_old_view(on):
     st, cap = _capture()
     sb.render_corpus(st, FALLBACK)
     text = _NORM(" ".join(cap))
-    assert "Subject areas (provisional; share of 4 documents" in text and "Not yet matched to a listed subject area: 1 of 4" in text
+    assert "Subject areas (automatic and approximate; share of 4 documents" in text and text.rstrip().endswith("Other / mixed: 25%")
+    assert "Not yet matched" not in text
     assert "provisional note" not in text.lower() and "Subject shares are provisional" not in text
 
 
@@ -103,12 +105,11 @@ def test_describer_off_has_no_subject_data_and_adds_phrases(monkeypatch):
 
 
 def test_describer_on_keeps_subject_areas(monkeypatch):
-    monkeypatch.setitem(cd.SUBJECT_DEFAULTS, "enabled", True)
     out = _describer(lambda: (True, ROWS)).current(_no_llm)
     assert out["subject_areas"]["domains"] and "frequent_subjects" not in out
 
 
-def test_page_via_apptest_shows_description_without_subject_numbers(monkeypatch, _offline):
+def test_page_via_apptest_shows_description_without_subject_numbers(monkeypatch, _offline, off):  # kill-switch (off) view
     monkeypatch.setattr("vera.public_mode.get_corpus_summary", lambda *a, **k: {**FALLBACK, **INTERIM})
     monkeypatch.setattr("vera.public_mode.upstream_base_url", lambda: "http://x")
     monkeypatch.setenv("VERA_API_KEY", "k")
@@ -116,11 +117,11 @@ def test_page_via_apptest_shows_description_without_subject_numbers(monkeypatch,
     assert not at.exception
     text = _NORM(" ".join(e.value for kind in ("title", "markdown", "caption") for e in getattr(at.main, kind)))
     assert "Frequent subjects include:" in text and "publication years 2005 to 2026" in text
-    assert not NUMBERS.search(text.replace("not yet show how many", "")), text
+    live = text[text.index("VERA-DAR's corpus:"):]  # the static help paragraphs now describe the shares; the live part must not
+    assert not NUMBERS.search(live), live
     assert "never names an individual source" in text
 
 
-def test_api_default_is_off_when_key_missing():
-    assert cd.subject_cfg({})["enabled"] is False and cd.subject_cfg({"subject_areas": {}})["enabled"] is False
-    assert cd.subject_areas_for(None, {}, {}, registry_reader=lambda: (True, ROWS)) is None  # no engine needed: off
-    assert cd.subject_cfg({"subject_areas": {"enabled": True}})["enabled"] is True
+def test_api_default_is_on_and_the_kill_switch_turns_it_off():
+    assert cd.subject_cfg({})["enabled"] is True and cd.subject_cfg({"subject_areas": {"enabled": False}})["enabled"] is False
+    assert cd.subject_areas_for(None, {"subject_areas": {"enabled": False}}, {}, registry_reader=lambda: (True, ROWS)) is None

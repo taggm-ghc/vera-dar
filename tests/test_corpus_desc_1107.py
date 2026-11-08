@@ -186,9 +186,9 @@ def test_render_fallback_describes_domains_topics_subtopics():
     sb.render_corpus(st, FALLBACK)
     text = _NORM(" ".join(cap))
     assert text.count("314 sources") == 1 and "temporarily unavailable" not in text
-    assert "Subject areas (provisional; share of 4 documents" in text  # TAXO-MATCH-FIX-1108 wording
+    assert "Subject areas (automatic and approximate; share of 4 documents" in text  # CORPUS-PCT-B-1108 wording
     assert "Epidemiology: 50%. Topics: Label flu 50% (including Label flu-model 25%)." in text
-    assert "Ecology: 25%. Topics: Label coral 25%." in text and "Not yet matched to a listed subject area: 1 of 4 documents (25%)." in text
+    assert "Ecology: 25%. Topics: Label coral 25%." in text and text.rstrip().endswith("Other / mixed: 25%") and "matched" not in text.lower().split("nearest")[1]
 
 
 def test_render_without_subjects_says_so_and_drops_backend_labels():
@@ -198,7 +198,7 @@ def test_render_without_subjects_says_so_and_drops_backend_labels():
     bad = {**SA, "domains": [{**SA["domains"][0], "label": "groq outputs"}]}
     assert sb._subject_lines(bad) == []
     assert sb._subject_lines({"basis_documents": 3, "domains": [], "other_domains": {}, "unmatched_share": 1.0})[-1] == \
-        "No document matched a listed subject area yet."
+        "Other / mixed: 100%"
 
 
 def test_render_checked_digest_shows_subjects_and_model_line():
