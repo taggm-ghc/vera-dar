@@ -182,13 +182,17 @@ def content_usage_signal(value: str) -> str:
     parts = [p for p in re.split(r"[,;\s]+", v0) if p]
     if not parts:
         return ""
-    ok = False
+    ok, train = False, False
     for part in parts:
         k, sep, v = part.partition("=")
         if sep and k.strip() and v.strip():
             ok = True
             if k.strip() == "ai-use" and v.strip() in ("n", "no"):
                 return "ai-input=no"
+            if k.strip() == "train-ai" and v.strip() in ("n", "no"):
+                train = True
+    if train:  # ROBOTS-FOLLOWUP-1108: train-ai=n is recorded as an informational signal only (never a bar)
+        return "ai-train=no"
     return "" if ok else "info:content-usage-unparsed"
 
 

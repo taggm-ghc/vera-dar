@@ -409,6 +409,10 @@ def parse_crawl_delay(text: str, user_agent=None) -> float | None:
         for g in groups:
             if any(a in ai for a in g["agents"]):
                 delays += g["delays"]
+        own = {_ra._base(str(t)) for t in _ra.load_config()["own_tokens"]}  # ROBOTS-FOLLOWUP-1108: any own-token group
+        for g in groups:
+            if any(_ra._base(a) in own for a in g["agents"]):
+                delays += g["delays"]
     except Exception:  # noqa: BLE001
         delays.append(math.inf)  # config unreadable: fail closed
     return max(delays) if delays else None
@@ -634,6 +638,12 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
             break
         if resp.status_code != 200:
             return None, None, None, hops, None, f"http {resp.status_code}"
+        try:  # ROBOTS-FOLLOWUP-1108: Content-Usage ai-use=n on the page response bars evidence use (fail closed)
+            from vera import source_permissions as _sp
+            if _sp.content_usage_signal(resp.headers.get("Content-Usage", "")) == "ai-input=no":
+                return None, None, None, hops, None, "blocked: Content-Usage ai-use=n"
+        except Exception:  # noqa: BLE001
+            return None, None, None, hops, None, "blocked: Content-Usage unreadable"
         ctype = resp.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype not in TEXT_TYPES:
             return None, None, None, hops, None, f"unsupported content-type {ctype or 'missing'!r}"

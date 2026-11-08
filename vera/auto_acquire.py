@@ -695,6 +695,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
         from vera import acq_discovered as _ad
         if _ad.tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
             raise _Stop(acq_config.reason(cfg, "tdm"))
+        if _ad.page_no_ai(resp.headers):  # ROBOTS-FOLLOWUP-1108: header no-AI signals (reason: robots family)
+            raise _Stop(acq_config.reason(cfg, "robots"))
         chunks, size = [], 0
         try:
             for chunk in resp.iter_content(65536):
@@ -710,6 +712,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
         body = b"".join(chunks)
         if _ad.tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
             raise _Stop(acq_config.reason(cfg, "tdm"))
+        if _ad.page_no_ai({}, body, ctype):  # ROBOTS-FOLLOWUP-1108: <meta> noai / ai-grounding in an HTML page
+            raise _Stop(acq_config.reason(cfg, "robots"))
         return body, current
     finally:
         _close(resp)

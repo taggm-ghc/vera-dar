@@ -226,7 +226,34 @@ def annotate(rp, text: str):
     rp.vera_ai_statement = statement_in(text, cfg)
     rp.vera_advisory_tokens = tuple(t for t in cfg["advisory_agent_tokens"] if _base(str(t)) in names)
     rp.vera_purpose_grants = _purpose_grants(text)  # PURPOSE-GRANTS-1108: shadow only, never consulted for access
+    rp.vera_own_delay = _own_delay(text, cfg)
     return rp
+
+
+def _own_delay(text: str, cfg: dict):
+    """ROBOTS-FOLLOWUP-1108: the largest Crawl-delay among groups naming ANY own token (inf = malformed), else None."""
+    import math
+    own = {_base(str(t)) for t in cfg["own_tokens"]}
+    out, mine, in_agents = [], False, False
+    for raw in _strip_bom(text).splitlines():
+        k, sep, v = raw.split("#", 1)[0].strip().partition(":")
+        if not sep:
+            continue
+        k, v = k.strip().lower(), v.strip()
+        if k == "user-agent":
+            if not in_agents:
+                mine = False
+            mine = mine or _base(v) in own
+            in_agents = True
+        else:
+            in_agents = False
+            if k == "crawl-delay" and mine:
+                try:
+                    d = float(v)
+                except ValueError:
+                    d = math.inf
+                out.append(d if math.isfinite(d) and d >= 0 else math.inf)
+    return max(out) if out else None
 
 
 def _purpose_grants(text: str) -> tuple:
@@ -272,6 +299,7 @@ def crawl_delay(rp, ua: str) -> float | None:
     file, kept as polite pacing (H13). None when none declares one."""
     if rp in (None, True, False):
         return None
-    ds = [rp.crawl_delay(ua)] + [rp.crawl_delay(t) for t in getattr(rp, "vera_advisory_tokens", ())]
+    ds = [rp.crawl_delay(ua), getattr(rp, "vera_own_delay", None)] \
+        + [rp.crawl_delay(t) for t in getattr(rp, "vera_advisory_tokens", ())]
     ds = [float(d) for d in ds if d is not None]
     return max(ds) if ds else None

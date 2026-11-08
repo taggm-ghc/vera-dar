@@ -470,6 +470,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                 raise aa._Stop(acq_config.reason(acq, "format_unsupported"))
             if robots and tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
                 raise aa._Stop(acq_config.reason(acq, "tdm"))
+            if robots and page_no_ai(resp.headers):  # ROBOTS-FOLLOWUP-1108: header no-AI signals (reason: robots family)
+                raise aa._Stop(acq_config.reason(acq, "robots"))
             buf, size = [], 0
             for chunk in resp.iter_content(65536):
                 size += len(chunk)
@@ -482,6 +484,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
             body = b"".join(buf)
             if robots and tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
                 raise aa._Stop(acq_config.reason(acq, "tdm"))
+            if robots and page_no_ai({}, body, ctype):  # ROBOTS-FOLLOWUP-1108: <meta> noai / ai-grounding in the page
+                raise aa._Stop(acq_config.reason(acq, "robots"))
             return body, cur, resp.status_code
         finally:
             aa._close(resp)
@@ -516,6 +520,8 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
                 p.parse(txt.splitlines())
                 from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI
                 _ra.annotate(p, txt)
+                from vera import source_permissions as _sp  # ROBOTS-FOLLOWUP-1108: Content-Signal / Content-Usage lines
+                p.vera_use_signal = _sp.robots_content_signal(txt)
                 rp = p
         except aa._Stop as e:
             if _passthrough(e, acq):
@@ -533,6 +539,9 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
         return False
     try:
         from vera import robots_ai as _ra
+        from vera import source_permissions as _sp
+        if _sp.robots_no_ai(_sp.robots_entries(getattr(rp, "vera_use_signal", ""))):  # ai-input=no / ai-use=n anywhere
+            return False
         return _ra.allowed(rp, sf.USER_AGENT, url) and _ra.block_reason(rp, url) is None
     except Exception:  # noqa: BLE001
         return False
@@ -716,6 +725,29 @@ def tdm_body_reserved(body: bytes, ctype: str) -> bool:
     from vera import public_fetch
     try:
         return public_fetch._tdm_meta(body[:200000].decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def page_no_ai(headers, body: bytes = b"", ctype: str = "") -> bool:
+    """ROBOTS-FOLLOWUP-1108: the page-level use-based no-AI signals the web route applies (source_permissions.evaluate),
+    read on an acquisition response: X-Robots-Tag or <meta name=robots|googlebot|vera-dar|ai> noai / noimageai /
+    noai-crawl / nocrawl, Content-Signal ai-input=no, Content-Usage ai-use=n, and Bing ai-grounding Disallow or
+    DisallowExtended (header or <meta name=Bingbot>). Evidence use is barred, so the document is not acquired. Any
+    error is True (fail closed)."""
+    try:
+        from vera import source_permissions as sp
+        h = sp._lower_headers(headers)
+        head = ""
+        if (ctype or "").split(";")[0].strip().lower() in ("text/html", "application/xhtml+xml") and body:
+            head = body[:200000].decode("utf-8", "replace")
+        xrt = sp._tokens(h.get("x-robots-tag", ""))
+        meta = sp._tokens(sp._meta_robots(head))
+        return bool({"noai", "noimageai", "noai-crawl", "nocrawl"} & (xrt | meta)
+                    or sp._content_signal_no_ai(h.get("content-signal", ""))
+                    or sp._content_signal_no_ai(sp.content_usage_signal(h.get("content-usage", "")))
+                    or sp.ai_grounding_disallow(h.get("x-robots-tag", ""))
+                    or sp.ai_grounding_disallow(sp._meta_robots(head)))
     except Exception:  # noqa: BLE001
         return True
 
