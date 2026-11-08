@@ -240,15 +240,30 @@ class _Deduper:
 
     def __init__(self):
         self.hard, self.titles, self.family = {}, {}, {}
+        from vera import work_key  # OA-3b: canonical work keys (config/work_key.json mode off|shadow|on)
+        self._wk_mode, self._wk_seen = work_key.mode(), set()
+
+    def _wk(self, it) -> set:
+        if self._wk_mode == "off":
+            return set()
+        from vera import work_key
+        return work_key.extra_keys(it, set(_dedupe_keys(it)))
+
+    def _keys(self, it) -> list:
+        ks = _dedupe_keys(it)
+        return ks + sorted("wk:" + k for k in self._wk(it)) if self._wk_mode == "on" else ks
 
     @staticmethod
     def _authors_ok(a, b) -> bool:
         return a is None or b is None or a == b
 
     def find(self, it):
-        for k in _dedupe_keys(it):
+        for k in self._keys(it):
             if k in self.hard:
                 return self.hard[k], k.split(":", 1)[0]
+        if self._wk_mode == "shadow" and self._wk(it) & self._wk_seen:
+            from vera import work_key
+            work_key.log_shadow("deduper", 1)  # the old keys did not match; the work key would have
         year, sur = _year(it), _first_surname(it)
         t = _norm_title(it.get("title"))
         if len(t) >= MIN_TITLE_KEY_CHARS:
@@ -263,8 +278,10 @@ class _Deduper:
         return None
 
     def add(self, it, idx) -> None:
-        for k in _dedupe_keys(it):
+        for k in self._keys(it):
             self.hard.setdefault(k, idx)
+        if self._wk_mode == "shadow":
+            self._wk_seen |= self._wk(it)
         year, sur = _year(it), _first_surname(it)
         t = _norm_title(it.get("title"))
         if len(t) >= MIN_TITLE_KEY_CHARS:

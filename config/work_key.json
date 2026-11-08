@@ -1,0 +1,4 @@
+{
+  "_note": "OA-3b (OA37-1108, owner OD-1108-HITL D3, shadow-first). mode off|shadow|on. off = the old dedup keys only. shadow = old keys decide; the canonical work key (vera/work_key.py) is computed alongside and only a count of merges it WOULD add is logged (no identifiers, no text). on = merge_sources and search_and_fetch._Deduper also match on the canonical work keys (DOI > PMCID > PMID > arXiv id > normalised URL). Switch to on only after the shadow counts and the OA-3 eval (M3 duplication, DAR-9 unchanged) are reviewed.",
+  "mode": "shadow"
+}

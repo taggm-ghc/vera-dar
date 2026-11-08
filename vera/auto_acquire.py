@@ -549,15 +549,8 @@ def routable_fulltext(c, cfg: dict) -> bool:
     URL). Metadata only (no request); never invents OA evidence."""
     if not isinstance(c, dict):
         return False
-    c = follow_url(c)
-    oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
-    if oa.get("epmc_ft") or _pmcid(c) or oa.get("is_oa") is True or oa.get("has_oa_location") is True:
-        return True
-    try:
-        from vera import arxiv_fulltext
-        return isinstance(c.get("arxiv"), dict) or arxiv_fulltext.search_candidate(c, _doi(c), cfg) is not None
-    except Exception:  # noqa: BLE001
-        return False
+    from vera import fulltext_routes  # OA-4: each route's metadata signal (unchanged order and rules)
+    return fulltext_routes.routable(follow_url(c), cfg)
 
 
 # ------------------------------------------------------------------------------------------------ resolve + fetch
@@ -1163,13 +1156,24 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     dur = {} if dur is None else dur
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
-    from vera import arxiv_fulltext
-    if not isinstance(cand.get("arxiv"), dict):  # INTEG-1023: an arXiv hit from the acquisition search -> same route
-        cand = arxiv_fulltext.search_candidate(cand, doi, cfg) or cand
-        doi = cand.get("doi") or doi
-    if isinstance(cand.get("arxiv"), dict):  # ARX-A2: arXiv full-text representations (vera/arxiv_fulltext.py)
-        return arxiv_fulltext.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur,
-                                       min_spans)
+    from vera import fulltext_routes  # OA-4: route registry (arXiv first, Europe PMC the default; unchanged order)
+    route, cand, doi = fulltext_routes.select(cand, doi, cfg)
+    plan, isbn = route.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur, min_spans)
+    from vera import work_key  # OA-3c: discovery events + version link in the provenance JSON (mode "on" only)
+    if work_key.mode() == "on":
+        try:
+            work_key.annotate_provenance(plan, cand)
+        except Exception:  # noqa: BLE001  (provenance annotation never blocks an acquisition)
+            logger.warning("work_key provenance annotation skipped")
+    return plan, isbn
+
+
+def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg: dict, deps: Deps, icfg: dict,
+                        fdcfg: dict, clock=time.monotonic, deadline: float | None = None, dur: dict | None = None,
+                        min_spans: int | None = None):
+    """OA-4: the Europe PMC route body (moved unchanged from evaluate_candidate): resolve OA -> fetch JATS (or the P0-5
+    DOI-landing step for a discovered candidate) -> convert + filters + licence -> injection scan -> plan -> gate."""
+    dur = {} if dur is None else dur
     t = clock()
     # P0-5: a discovered candidate (only present with inline.use_discovered) records its URL chain; Step B
     # (inline.landing_route) tries ONE DOI -> landing -> JATS location when Europe PMC has no open-access record.

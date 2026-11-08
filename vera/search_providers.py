@@ -1283,17 +1283,29 @@ def acq_portals(c: Mapping) -> list:
 def merge_sources(*lists) -> list:
     """Merge candidate lists in order, de-duplicated by DOI or PMCID; the first occurrence keeps its place and source,
     and absorbs a later duplicate's OA metadata (Europe PMC full text marks epmc_ft) and empty snippet/title."""
+    from vera import work_key  # OA-3b: canonical work keys (config/work_key.json mode off|shadow|on)
+    wk_mode, would, wk_index = work_key.mode(), 0, {}
     out, index = [], {}
     for lst in lists:
         for c in lst or ():
             if not isinstance(c, dict):
                 continue
             ids = _cand_ids(c)
+            wk = work_key.extra_keys(c, ids) if wk_mode != "off" else set()
+            if wk_mode == "on":
+                ids = ids | {"wk:" + k for k in wk}
             hit = next((index[k] for k in ids if k in index), None)
+            if wk_mode == "shadow":
+                if hit is None and any(k in wk_index for k in wk):
+                    would += 1
+                for k in wk:
+                    wk_index.setdefault(k, True)
             tk = title_key(c)
             if hit is None and tk and tk in index and _same_work_ids(index[tk], c):
                 hit = index[tk]  # same normalised title, no conflicting identifier: the same work (F0 follow-up)
             if hit is None:
+                if wk_mode == "on":  # OA-3c: the first sighting is the first discovery event
+                    work_key.note_discovery(c, c)
                 out.append(c)
                 for k in ids:
                     index[k] = c
@@ -1320,8 +1332,12 @@ def merge_sources(*lists) -> list:
             if c.get("part") is not None:  # NONASK-1103 S3: every sub-query that found this work
                 hit["parts"] = sorted(set(hit.get("parts") or ([hit["part"]] if hit.get("part") is not None else []))
                                       | {c["part"]})
+            if wk_mode == "on":  # OA-3c: the losing duplicate's discovery event is kept, not dropped
+                work_key.note_discovery(hit, c)
             for k in ids:
                 index.setdefault(k, hit)
+    if wk_mode == "shadow":
+        work_key.log_shadow("merge_sources", would)
     return out
 
 
