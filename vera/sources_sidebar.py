@@ -17,6 +17,7 @@ logger = logging.getLogger("vera")
 ROOT = Path(__file__).resolve().parent.parent
 CHAIN_PATH = ROOT / "config" / "ask-provider-chain.json"
 SELECTION_PATH = ROOT / "config" / "model-selection.json"
+DISCLOSURE_PATH = ROOT / "config" / "corpus_disclosure.json"  # CORPUS-DISCLOSE-1108: interim note; remove once validated
 SNAPSHOT_PATH = ROOT / "eval_results" / "trace_eval_v1.json"
 SNAPSHOT_FIELDS = frozenset({"count", "years", "questions", "captured"})  # aggregate only; never per-source
 _ARXIV_ID = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{2})(\d{2})\.\d{4,5}")
@@ -261,6 +262,16 @@ def _subject_lines(sa) -> list[str]:
         return []
 
 
+def provisional_note(path: Path = DISCLOSURE_PATH) -> str | None:
+    """CORPUS-DISCLOSE-1108: config-driven note that subject shares are unvalidated. None when disabled, missing,
+    malformed, or if the text contains a digit (the note never shows a number)."""
+    n = (_read(path) or {}).get("provisional_note")
+    if not isinstance(n, dict) or n.get("enabled") is not True or not isinstance(n.get("text"), str):
+        return None
+    t = n["text"].strip()
+    return plain(t) if t and not re.search(r"\d", t) and _model_text_ok(t) else None
+
+
 NO_SUBJECTS = "A description by subject area is not available right now."
 
 
@@ -281,6 +292,8 @@ def render_corpus(st, data: dict | None) -> None:
     if not checked:  # default deny: no model-written field without the checker-pass marker
         for line in subjects or [NO_SUBJECTS]:
             st.caption(line)
+        if subjects and provisional_note():
+            st.caption(provisional_note())
         return
     if data.get("summary"):
         st.caption(plain(data["summary"]) if _model_text_ok(data["summary"]) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
@@ -293,6 +306,8 @@ def render_corpus(st, data: dict | None) -> None:
     elif data.get("topics"):
         line = "Topics: " + ", ".join(data["topics"])
         st.caption(plain(line) if _model_text_ok(line) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
+    if (subjects or shares) and provisional_note():
+        st.caption(provisional_note())
     if checked:
         st.caption(f"Description written by a language model on {plain((data.get('summary_generated_at') or '')[:10])}; "
                    "refreshed when the corpus changes.")
