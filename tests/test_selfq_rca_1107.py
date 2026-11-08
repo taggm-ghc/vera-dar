@@ -82,6 +82,7 @@ def test_d1_pointer_missing_keeps_previous_reply():
 def _live(trace_n=6, fetched=2, kind="db"):
     return {"evidence_status": "insufficient", "corpus_source": {"kind": kind},
             "examined_full_documents": [{"document_id": f"d{i}", "candidate_spans": 1 if i < 5 else 0,
+                                         "relevant_spans": 1 if i < 5 else 0,  # NINE-DOCS-RC4-1108
                                          "admitted_spans": 0} for i in range(9)],
             "admitted_evidence": [],
             "contract": {"fallback": TOK, "search_counts": {"matched": 5},
@@ -110,8 +111,9 @@ def test_d2_no_trace_no_fetch_keeps_previous_lines():
     d = _live(trace_n=0, fetched=0)
     d["contract"].pop("inline_acquisition")
     head, scope, src = _lines(d)
-    assert head.startswith("5 stored full documents shared words with this question")
-    assert scope == "Evidence scope: 5 stored documents sharing words with the question; no passages selected as possible evidence."
+    assert head.startswith("5 stored full documents had passages matching this question's key terms")  # NINE-DOCS-RC4-1108
+    assert scope == ("Evidence scope: 5 stored documents with passages matching the question's key terms; "
+                     "no passages selected as possible evidence.")
     assert src == "Evidence source: stored database."
 
 
@@ -146,7 +148,8 @@ def test_d3_wording_never_claims_relevance_from_word_matches():
     a = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())["answer"]
     for k in ("insufficient_matched_text", "unsupported_matched_text", "insufficient_no_match_text"):
         assert "related" not in a[k] and "related" not in u._MATCH_DEFAULT[k]
-    assert "shared words" in a["insufficient_matched_text"]
+    assert "shared words" not in a["insufficient_matched_text"]  # NINE-DOCS-RC4-1108: word overlap is not relevance
+    assert "key terms" in a["insufficient_matched_text"]
     assert "related to your question" not in (ROOT / "config" / "ui_help_pages.json").read_text()
 
 
@@ -215,7 +218,8 @@ def test_r2_untagged_legacy_body(adm, fetched):
 
 def test_r2_server_headline_equals_ui_headline(monkeypatch):
     """_with_fetched (server) and render_fallback_reason (UI) give the same sentence for the same response."""
-    rows = [{"document_id": f"d{i}", "candidate_spans": 1 if i < 5 else 0, "admitted_spans": 0} for i in range(9)]
+    rows = [{"document_id": f"d{i}", "candidate_spans": 1 if i < 5 else 0, "relevant_spans": 1 if i < 5 else 0,
+             "admitted_spans": 0} for i in range(9)]  # NINE-DOCS-RC4-1108
     for tok, adm, fetched in itertools.product(_SAME := ("insufficient_full_document_evidence", "premise_unverified",
                                                          "model_insufficient"), (0, 2), (0, 2)):
         ev = SimpleNamespace(corpus_source="db", examined_full_documents=tuple(rows),

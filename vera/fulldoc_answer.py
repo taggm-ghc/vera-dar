@@ -21,7 +21,8 @@ _SENT = re.compile(r"(?<=[.!?])\s+")
 _TRAILING_CITES = re.compile(r"([.!?])[ \t]*((?:\[\d+(?:\s*,\s*\d+)*\][ \t]*)+)(?=\s|$)")
 _SEG = re.compile(r"(?<=[.!?])\s+(?=[A-Z\[(*#-])|\n+")  # the segmentation claim_check.split_claims uses
 _DOC_FIELDS = ("document_id", "canonical_source_id", "title", "url", "doi", "published", "licence", "licence_decision",
-               "text_sha256", "chars", "chunks_inspected", "candidate_spans", "admitted_spans")
+               "text_sha256", "chars", "chunks_inspected", "candidate_spans", "relevant_spans",
+               "admitted_spans")
 _ADM_FIELDS = ("span_id", "document_id", "canonical_source_id", "title", "url", "licence", "relevance", "text_sha256")
 
 

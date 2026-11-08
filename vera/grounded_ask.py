@@ -117,6 +117,28 @@ def _merge_stored(results: list, question: str, dar_corpus, cfg: dict, info: dic
         return results
 
 
+def _content_matcher(question: str):
+    """NINE-DOCS-RC4-1108: a predicate text -> True when `text` shares >= 1 CONTENT stem with the question: the
+    admission relevance tokenizer (config/fulldoc_answer.json admission.relevance: stopwords, question_generic_terms,
+    stem_len), i.e. after stopword and generic-word removal. A result that matches the question only on function or
+    generic words ("Come, Go" for "from where did vera come?") is not relevant and is never listed. A non-numeric
+    rule: no threshold. None (no filtering) when the question has no content stem of >= min_token_len letters (for
+    example "What is AI?": nothing to judge on) or the settings cannot be read."""
+    try:
+        from vera import fulldoc_admission as fa
+        from vera.fulldoc_corpus import load_config
+
+        rel = fa._routing(load_config())
+        icfg = rel.get("identification") or {}
+        n = int((rel.get("corpus") or {})["relevance_stem_len"])
+        q = fa._q_stems(question, icfg, n)
+        if not q or n <= 0:
+            return None
+        return lambda text: bool(q & fa._stems(str(text or ""), icfg, n))
+    except Exception:  # noqa: BLE001  (unreadable settings: the list is left as it was)
+        return None
+
+
 def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                  resolver: Callable | None = None, trace_out: dict | None = None,
                  dar_corpus=None) -> tuple[list[dict], list[dict]]:
@@ -163,11 +185,17 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
     if linked and rcfg.get("enabled"):
         direct += _resolve_links(linked, rcfg, resolver)
     out, seen, unused = [], set(), []
+    on_topic = _content_matcher(question)  # NINE-DOCS-RC4-1108: function-word-only matches are never listed
+    n_off = 0
     for r in direct:
         snippet = clean_text(r.get("snippet"), int(cfg["snippet_max_chars"]))
         url = str(r.get("url") or "")
         key = str(r.get("doi") or "").lower() or url.lower().rstrip("/")
         if not url.lower().startswith(("https://", "http://")) or key in seen:
+            continue
+        # judged after link resolution, on the title plus the abstract (or the title alone for a traced original)
+        if on_topic is not None and not on_topic(f"{r.get('title') or ''} {snippet or ''}"):
+            n_off += 1
             continue
         if not snippet:
             if r.get("discovered_via"):  # a traced original without a free abstract: show it, never ground on it
@@ -194,6 +222,8 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
         out.append(src)
         if len(out) >= int(cfg["num_results"]):
             break
+    if n_off:
+        logger.info("grounding: %d result(s) shared no content term with the question and were not listed", n_off)
     return out, unused[: int(cfg["num_results"])]
 
 

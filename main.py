@@ -273,6 +273,7 @@ class ExaminedDocument(BaseModel):
     chars: int | None = None
     chunks_inspected: int | None = None
     candidate_spans: int | None = None
+    relevant_spans: int | None = None  # NINE-DOCS-RC4-1108: passages that cleared this question's relevance rules
     admitted_spans: int | None = None
 
 

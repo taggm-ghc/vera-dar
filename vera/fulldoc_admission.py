@@ -617,6 +617,14 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             else:
                 kept.append(t)
         scored = kept
+    # NINE-DOCS-RC4-1108: per-document count of candidate passages that CLEARED this question's relevance rules
+    # (min_relevance, the matched-content-stem floor, topic anchor, pointer filter). candidate_spans stays the raw
+    # retrieval count, which matches on any non-stopword token ("did", "come") and so reached every document of the
+    # pinned 9-document base set; user-facing counts use relevant_spans (vera.ui_evidence.matched_documents).
+    n_rel: dict = {}
+    for t in scored:
+        k_r = str(t[3]["document_id"])
+        n_rel[k_r] = n_rel.get(k_r, 0) + 1
     scored.sort(key=lambda t: t[:3])
     extra_trace: dict = {}
     tfc = adm.get("topical_fit") if isinstance(adm.get("topical_fit"), dict) else {}
@@ -783,7 +791,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             "licence": d.get("licence"), "licence_decision": d.get("licence_decision"),
             "text_sha256": d.get("text_sha256"), "chars": d.get("chars"),
             "chunks_inspected": n_chunks if isinstance(n_chunks, int) else 0,
-            "candidate_spans": n_cand.get(did_s, 0), "admitted_spans": per_doc.get(did_s, 0),
+            "candidate_spans": n_cand.get(did_s, 0), "relevant_spans": n_rel.get(did_s, 0),
+            "admitted_spans": per_doc.get(did_s, 0),
             "corpus_added_at": _stamp_holder(corpus, did_s).get("corpus_added_at"),
             "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), None, None)})
     by_reason: dict = {}

@@ -1235,7 +1235,8 @@ def _rows(ev):
 
 def _search_counts(used) -> dict | None:
     """NOANSWER-RC-1107 r2: contract.search_counts {"matched": documents of the base AND the stored acquired corpus
-    (when searched) with candidate passages for this question}; None without a base attempt or an exact count."""
+    (when searched) with relevance-cleared passages (relevant_spans) for this question}; None without a base attempt
+    or an exact count."""
     if not isinstance(used, dict) or used.get("ev_base") is None:
         return None
     try:
@@ -1741,6 +1742,8 @@ def _relevant_docs(*evs) -> list:
     out = []
     for ev in evs:
         for d in (getattr(ev, "examined_full_documents", ()) or ()):
+            # NINE-DOCS-RC4-1108: deliberately raw candidates here (freshness-trigger input, not a displayed count;
+            # tests/test_p0dta_live_regression.py relies on near-miss documents triggering the freshness check)
             if isinstance(d, dict) and (d.get("candidate_spans") or 0) > 0:
                 out.append(d)
     return out

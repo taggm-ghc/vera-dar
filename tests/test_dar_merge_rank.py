@@ -41,7 +41,8 @@ N = GCFG["num_results"]
 
 
 def _ext(n=5):
-    return [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": "abstract"} for i in range(n)]
+    return [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": f"abstract on {VOCAB['reef'][0]}"}
+            for i in range(n)]  # NINE-DOCS-RC4-1108: an external result shares >= 1 content term with the question, or it is never listed
 
 
 def _cfg(c):
@@ -158,7 +159,8 @@ def test_dar6_irrelevant_stored_chunks_never_push_strong_external_evidence_out()
 
 def test_dar6_inverse_strongly_relevant_stored_chunk_is_included_beside_weak_external():
     weak = [{"doi": f"10.9999/ext.{10 + i}", "url": f"https://doi.org/10.9999/ext.{10 + i}", "title": f"Unrelated note {i}",
-             "snippet": "General commentary on publishing."} for i in range(1, 6)]
+             "snippet": f"General commentary on publishing; {VOCAB['reef'][0]} mentioned once."}
+            for i in range(1, 6)]  # NINE-DOCS-RC4-1108: an external result shares >= 1 content term with the question, or it is never listed
     out, _ = ga.retrieve_all(Q, GCFG, search=lambda _q: weak, dar_corpus=_corpus(per=3))
     urls = [s["url"] for s in out]
     assert any(u.startswith("https://stored.example/") for u in urls)  # strong stored evidence is not suppressed

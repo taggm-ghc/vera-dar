@@ -191,8 +191,8 @@ def _pipeline(data: dict, cc: dict, contract: dict, is_answer: bool, n_cands: in
     return [f"Listed as candidates (found, not read): {n_cands}.",
             f"Documents fetched for this question: {n_fetched}." if n_fetched else
             "Documents fetched for this question: not reported separately.",
-            (f"Documents with related passages: {mt}." if mt is not None else
-             "Documents with related passages: not reported."),
+            (f"Documents with passages matching the question's key terms: {mt}." if mt is not None else
+             "Documents with passages matching the question's key terms: not reported."),  # NINE-DOCS-RC4-1108
             f"Passages selected as possible evidence: {m}" + (f", from {k} document{'s' if k != 1 else ''}." if m and k else "."),
             f"Claims checked: {checked}; supported by their source passage: {supported}." if cc else
             "Claims checked: none.",
@@ -324,7 +324,8 @@ def build_live_report(data, question: str, latency_s: float) -> dict:
 
     inspected = [{"title": _str(d.get("title") or "document", 300), "url": _str(d.get("url"), 2000),
                   "published": _str(d.get("published"), 40), "chunks_inspected": _int(d.get("chunks_inspected")),
-                  "candidate_spans": _int(d.get("candidate_spans")), "admitted_spans": _int(d.get("admitted_spans"))}
+                  "candidate_spans": _int(d.get("candidate_spans")), "relevant_spans": _int(d.get("relevant_spans")),
+                  "admitted_spans": _int(d.get("admitted_spans"))}
                  for d in examined]
 
     uniq_sources = list({_source_key(x, i): x for i, x in reversed(list(enumerate(sources, 1)))}.values())[::-1]
@@ -523,18 +524,21 @@ def _render_technical(st, rep: dict, r) -> None:
                 st.caption(r(rep["scope_source"]))
         for line in rep.get("pipeline") or []:
             st.caption(r(line))
-        # M7-INSPECTED-1107: only documents with candidate passages for THIS question; never the fixed base set.
+        # M7-INSPECTED-1107 / NINE-DOCS-RC4-1108: only documents with passages that cleared THIS question's relevance
+        # rules (relevant_spans); never the fixed base set and never raw retrieval candidates (which match on any
+        # non-stopword token). Rows without relevant_spans (older reports) show no document table at all.
         rows = [d for d in rep.get("inspected") or []
                 if d.get("title") != "document" or any(d.get(k) for k in ("chunks_inspected", "candidate_spans", "admitted_spans"))]
-        ins = [d for d in rows if (d.get("candidate_spans") or 0) > 0]
+        ins = [d for d in rows if (d.get("relevant_spans") or 0) > 0]
         if ins:
-            st.markdown("**Documents with related passages** (passage counts; no document text is shown)")
+            st.markdown("**Documents with passages matching the question's key terms** (passage counts; no document "
+                        "text is shown)")
             st.table([{"Document": r(d["title"]), "Published": r(d["published"]),
                        "Passages scored": "" if d["chunks_inspected"] is None else d["chunks_inspected"],
-                       "Candidate passages": d["candidate_spans"],
+                       "Passages matching key terms": d["relevant_spans"],
                        "Selected passages": "" if d["admitted_spans"] is None else d["admitted_spans"]} for d in ins])
-        elif rows:
-            st.caption("No stored document shared words with this question.")
+        elif rows and all(d.get("relevant_spans") is not None for d in rows):
+            st.caption("No stored document was relevant to this question.")
         st.markdown("**Search and acquisition**")
         s = rep.get("search") or {}
         st.caption(f"Results found or used: {s.get('results', 0)}. Counts only; individual search services are not named.")

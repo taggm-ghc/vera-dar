@@ -216,7 +216,8 @@ def test_stored_branch_off_by_flag_or_missing_corpus_is_identical(monkeypatch):
 def test_stored_candidates_never_displace_the_reserved_external_head():
     c = _corpus()
     q = " ".join(VOCAB["reef"][:5])
-    ext = [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": "abstract"} for i in range(5)]
+    ext = [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": f"abstract on {VOCAB['reef'][0]}"}
+           for i in range(5)]  # NINE-DOCS-RC4-1108: an external result shares >= 1 content term with the question, or it is never listed
     tr = {}
     out, _ = ga.retrieve_all(q, GCFG, search=lambda _q: ext, dar_corpus=c, trace_out=tr)
     urls = [s["url"] for s in out]
@@ -362,7 +363,8 @@ def test_runtime_passes_configured_placeholder_span_text():
 def test_displacement_external_head_survives_and_stored_take_the_free_slots():
     c = _corpus()
     q = " ".join(VOCAB["reef"][:5])
-    ext = [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": "abstract"} for i in range(5)]
+    ext = [{"url": f"https://e.example/{i}", "title": f"e{i}", "snippet": f"abstract on {VOCAB['reef'][0]}"}
+           for i in range(5)]  # NINE-DOCS-RC4-1108: an external result shares >= 1 content term with the question, or it is never listed
     out, _ = ga.retrieve_all(q, GCFG, search=lambda _q: ext, dar_corpus=c)
     urls = [s["url"] for s in out]
     m = SHIPPED["corpus"]["stored_merge_max"]

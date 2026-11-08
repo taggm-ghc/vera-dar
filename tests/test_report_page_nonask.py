@@ -16,7 +16,7 @@ S_URL = "https://sentinel-host-nonask.example.invalid"
 S_KEY = "sk-SENTINELKEYnonask123456"
 FIX_CAUSE = "Fixture cause sentence for the visitor."
 # Dev-only strings (H1 list). Checked structurally: absent in public, present in dev where the fixture produces them.
-DEV_ONLY = ("Documents with related passages", "Search and acquisition", "Cost and latency", "Tokens used", "Latency (s)",
+DEV_ONLY = ("Documents with passages matching the question's key terms", "Search and acquisition", "Cost and latency", "Tokens used", "Latency (s)",
             "Answer-eligible", "stored:", "reused from the collection:", "Research was run because",
             "Evidence authorized", "Answer generated", "Listed as candidates", "Technical details")
 
@@ -44,7 +44,7 @@ def _body(kind="reading_list", **over):
                                    "candidates": [{"doi": "10.1/x", "outcome": "rejected", "reason": "R-X"}]}},
          "sources": [], "candidates": [{"n": 1, "title": "Cand one", "url": "https://example.org/c1", "provider": "arxiv"}],
          "examined_full_documents": [{"document_id": "d1", "title": "Inspected doc", "chunks_inspected": 9,
-                                      "candidate_spans": 4, "admitted_spans": 2}],
+                                      "candidate_spans": 4, "relevant_spans": 4, "admitted_spans": 2}],
          "admitted_evidence": _spans(6, 4), "citations": []}
     if kind == "answer":
         b["sources"] = [{"n": 1, "title": "Doc One", "url": "https://example.org/one", "provider": "arxiv"}]

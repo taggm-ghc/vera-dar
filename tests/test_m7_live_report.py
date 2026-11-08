@@ -42,7 +42,7 @@ def _body(kind="answer", **over):
                          "acquisition": "not_acquired", "licence_decision": "hold"}],
          "evidence_status": "ok", "corpus_source": {"kind": "db"},
          "examined_full_documents": [{"document_id": "d1", "title": "Doc One", "chunks_inspected": 9,
-                                      "candidate_spans": 4, "admitted_spans": 2, "text_sha256": "f" * 64}],
+                                      "candidate_spans": 4, "relevant_spans": 4, "admitted_spans": 2, "text_sha256": "f" * 64}],
          "admitted_evidence": [{"span_id": "s1", "document_id": "d1"}, {"span_id": "s2", "document_id": "d1"}],
          "citations": [{"claim_id": 1, "n": 1, "span_id": "s1", "document_id": "d1", "verdict": "supported",
                         "quote": LONG, "span": "chars=10-20",
@@ -154,7 +154,7 @@ def test_live_report_renders_all_sections_and_leaks_nothing(monkeypatch, public_
     heads = [h.value for h in at.header]
     assert heads == ["Answer", "Evidence and limitations"]  # public: layers 1-2 as on Ask; no numeric prefixes
     assert not [e for e in at.expander if e.label == "Technical details"]
-    assert "Evidence scope: 1 stored document sharing words with the question; 2 passages from 1 document selected as possible evidence." in text
+    assert "Evidence scope: 1 stored document with passages matching the question's key terms; 2 passages from 1 document selected as possible evidence." in text
     assert "Q" * ui_evidence._quote_cap() in text
     assert "](https://example.org/one)" in text
     assert "(javascript" not in text and "<b>" not in text
@@ -334,7 +334,8 @@ def test_p05b_report_tally_and_candidate_field():
 # --- M7-INSPECTED-1107: the technical table lists only documents with candidate passages --------------------------
 
 def _doc(i, cand):
-    return {"document_id": f"zz{i}", "title": f"ZZDoc{i}", "chunks_inspected": 9, "candidate_spans": cand, "admitted_spans": 0}
+    return {"document_id": f"zz{i}", "title": f"ZZDoc{i}", "chunks_inspected": 9, "candidate_spans": 5, "relevant_spans": cand,
+            "admitted_spans": 0}  # NINE-DOCS-RC4-1108: raw candidates everywhere
 
 
 def test_table_lists_only_documents_with_candidate_passages():
@@ -342,7 +343,7 @@ def test_table_lists_only_documents_with_candidate_passages():
     at = _render(nb(examined_full_documents=[_doc(1, 0), _doc(2, 3), _doc(3, 0)]), False)
     text = _tree_text(at)
     assert "ZZDoc2" in text and "ZZDoc1" not in text and "ZZDoc3" not in text
-    assert "Documents with related passages" in text and "Documents inspected" not in text
+    assert "Documents with passages matching the question's key terms" in text and "Documents inspected" not in text
     cols = [list(t.value.columns) for t in at.table]
     assert any(c[:2] == ["Document", "Published"] for c in cols)
     assert not any("Passages inspected" in c for c in cols) and any("Passages scored" in c for c in cols)
@@ -354,13 +355,13 @@ def test_no_related_documents_shows_one_honest_line_not_the_base_set():
     from tests.test_report_page_nonask import _body as nb, _render
     at = _render(nb(examined_full_documents=[_doc(i, 0) for i in range(9)]), False)
     text = _tree_text(at)
-    assert "ZZDoc" not in text and "No stored document shared words with this question." in text
-    assert "Documents with related passages" not in text.replace("Documents with related passages:", "")
+    assert "ZZDoc" not in text and "No stored document was relevant to this question." in text
+    assert "**Documents with passages" not in text and "Passages matching key terms" not in text
 
 
 def test_pipeline_line_counts_related_documents_only():
     rep = lr.build_live_report(_body(examined_full_documents=[_doc(i, 0) for i in range(9)]), "q", 1.0)
-    assert "Documents with related passages: 0." in rep["pipeline"]
+    assert "Documents with passages matching the question's key terms: 0." in rep["pipeline"]
     assert not any("inspected" in l.lower() for l in rep["pipeline"])
 
 
