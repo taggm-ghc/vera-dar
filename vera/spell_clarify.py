@@ -3,7 +3,9 @@
 check(question) -> None (no pause) or {"word", "suggestions": [{"word", "question"}], "as_typed": question, "text"}.
 A content word (the shared admission tokenizer: casefold, hyphen/underscore/space split, stopwords and generic question
 words removed) is KNOWN when it, or its relevance stem, is in the stored-document vocabulary, the help vocabulary or the
-A-P1 lay-term vocabulary (vera.query_norm). The first unknown word with at least one known word within the edit bound
+A-P1 lay-term vocabulary (vera.query_norm), or when it is in the vendored general English word list (SELFQ-RELEVANCE-1108
+fix: a correctly spelled word such as 'lava' is not a typo). Suggestions come from the first three only (what VERA-DAR
+holds), never from the English list. The first unknown word with at least one known word within the edit bound
 pauses the request; suggestions are ranked by edit distance, then corpus frequency, then alphabet. Never a silent
 correction: the caller re-asks with the chosen question, or with spell_check off ("search as typed"), a per-request
 parameter that is never stored.
@@ -185,6 +187,30 @@ def reset_for_tests() -> None:
         _VOCAB.update(words=None, stems=None, corpus_stems=None, key=None, at=None, building=False, failed_at=None)
 
 
+_ENGLISH: dict = {}
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+def english_words(cfg: dict) -> frozenset | None:
+    """The vendored general English word list (config english_wordlist; provenance and licence beside it in
+    config/wordlists/). A correctly spelled English word that the corpus and help lack is not a typo. None when the
+    list is not configured or unreadable (the caller then never pauses: fail open)."""
+    rel = cfg.get("english_wordlist")
+    if not isinstance(rel, str) or not rel:
+        return None
+    path = (_ROOT / rel).resolve()
+    if _ROOT not in path.parents:
+        return None
+    hit = _ENGLISH.get(str(path))
+    if hit is None:
+        try:
+            hit = frozenset(w for w in path.read_text(encoding="utf-8").split() if w.isalpha())
+        except OSError:
+            return None
+        _ENGLISH[str(path)] = hit
+    return hit or None
+
+
 def known(word: str, vocab, stem_n: int) -> bool:
     words, stems = vocab[0], vocab[1]
     return word in words or word[:stem_n] in stems
@@ -242,7 +268,8 @@ def check(question: str, cfg: dict | None = None, vocab=None) -> dict | None:
         if not icfg or stem_n <= 0:
             return None
         vocab = vocabulary(cfg) if vocab is None else vocab
-        if vocab is None:
+        english = english_words(cfg)
+        if vocab is None or english is None:
             return None
         from vera import fulldoc_admission as fa
         gen = {str(g).casefold() for g in icfg.get("question_generic_terms") or [] if isinstance(g, str)}
@@ -251,8 +278,8 @@ def check(question: str, cfg: dict | None = None, vocab=None) -> dict | None:
             if w in gen or w in seen:
                 continue
             seen.add(w)
-            if known(w, vocab, stem_n):
-                continue
+            if known(w, vocab, stem_n) or w in english:
+                continue  # known to the corpus, the help, the lay terms or general English: not a typo
             sug = suggestions(w, vocab[0], cfg)
             if not sug:
                 continue  # nothing to offer: no pause

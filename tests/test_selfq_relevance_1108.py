@@ -147,9 +147,9 @@ def test_bounds_by_length():
 
 
 def test_vare_offers_several_options():
-    c = sc.check("vare", vocab=VOCAB)
-    assert c is not None and 2 <= len(c["suggestions"]) <= 3
-    assert all(sc.osa_distance("vare", s["word"]) == 1 for s in c["suggestions"])
+    """The nearest-word ranking for 'vare' (the round itself does not pause on it: dwyl lists 'vare' as a word)."""
+    sug = sc.suggestions("vare", VOCAB[0], sc.load_config())
+    assert 2 <= len(sug) <= 3 and all(sc.osa_distance("vare", w) == 1 for w in sug)
 
 
 @pytest.mark.parametrize("q", ["What is VERA-DAR?", "How accurate are epidemic forecasting models?",
@@ -275,3 +275,44 @@ def test_failed_vocabulary_build_backs_off(monkeypatch):
     assert sc.vocabulary(corpora=(c,), sync=True, now=lambda: 101.0) is None
     assert calls == [1]  # no rebuild on every request after a failure
     sc.reset_for_tests()
+
+
+# ---- fix: correctly spelled English words are not typos (live regression b12c881: 'lava' paused) ---------------------
+@pytest.mark.parametrize("q", ["What are the latest findings on lunar lava tube habitat engineering?",
+                               "How do quarks get their mass?", "How does photosynthesis work?",
+                               "What drives plate tectonics?", "Who was Albert Einstein?", "Is London bigger than Paris?",
+                               "lava", "quarks", "photosynthesis", "tectonics"])
+def test_english_words_absent_from_corpus_and_help_never_pause(q):
+    assert sc.check(q, vocab=VOCAB) is None
+
+
+@pytest.mark.parametrize("q,word", [("vrea", "vrea"), ("what is vrea dar?", "vrea"), ("how do i anwser this", "anwser")])
+def test_typos_still_pause_with_the_english_list(q, word):
+    c = sc.check(q, vocab=VOCAB)
+    assert c is not None and c["word"] == word and c["suggestions"]
+
+
+def test_suggestions_come_from_what_vera_dar_holds_not_the_english_list():
+    c = sc.check("vrea", vocab=VOCAB)
+    held = VOCAB[0]
+    assert all(s["word"] in held for s in c["suggestions"])
+
+
+def test_english_list_missing_means_no_pause():
+    cfg = {**sc.load_config(), "english_wordlist": "config/wordlists/missing.txt"}
+    assert sc.check("vrea", vocab=VOCAB) is not None
+    assert sc.check("vrea", cfg=cfg, vocab=VOCAB) is None
+    assert sc.english_words({**cfg, "english_wordlist": "../outside.txt"}) is None
+
+
+def test_vendored_list_has_provenance_and_licence():
+    readme = (ROOT / "config" / "wordlists" / "README.md").read_text()
+    lic = (ROOT / "config" / "wordlists" / "LICENSE-dwyl-english-words.md").read_text()
+    assert "Unlicense" in readme and "sha256" in readme and "public domain" in lic and "@" not in lic + readme
+    words = sc.english_words(sc.load_config())
+    assert words and len(words) > 300000 and "lava" in words and "vrea" not in words
+
+
+def test_a_rare_real_word_is_not_a_typo():
+    """dwyl lists 'vare' (a rare real word): it is searched as typed, never paused (no hand-picked exceptions)."""
+    assert "vare" in sc.english_words(sc.load_config()) and sc.check("vare", vocab=VOCAB) is None

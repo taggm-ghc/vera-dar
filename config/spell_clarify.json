@@ -18,6 +18,8 @@
     }
   ],
   "_edit_bounds_calibration_note": "PROVISIONAL (orchestrator 2026-11-08, from work/CALIB-ANALYZE-1108/report.md section 3, a simulation over the real vocabulary, not live traffic): words of 3 letters or fewer never pause (ties 82.5% at 3 letters; every 4-letter word has a neighbour within two edits, p90 156); 4-7 letters allow 1 edit; 8 or more allow 2 (79.5% of 8-letter words have a neighbour within two edits, p90 7). Simulated one-edit typos were 0% wrong at both bounds. Consequences: 'vra' (3 letters) and two-edit typos of 4-7-letter words ('rvea', 'vrrea') get no pause and are searched as typed. Calibration path: the request trace records counts only (clarify offered, suggestion count); review 2 weeks of live traces for pauses on correctly spelled words and missed typos, then tighten or widen per length.",
+  "english_wordlist": "config/wordlists/english_words.txt",
+  "_english_wordlist_note": "SELFQ-RELEVANCE-1108 fix (live regression b12c881: 'lava' paused as a typo). A word in this general English list (dwyl/english-words words_alpha, The Unlicense) is never a typo, even when the corpus and help lack it. Source, sha256 and licence: config/wordlists/README.md. Not configured or unreadable: no pause ever (fail open).",
   "refresh_s": 600,
   "_refresh_s_note": "PROVISIONAL operating bound, not a decision threshold: the vocabulary is rebuilt in a background thread at most this often (and when a different corpus object is loaded). Chosen as 10x the acquired-corpus probe (serve.refresh_ttl_s 60) because building tokenizes every stored document. Change when build time is measured on the live corpus.",
   "text": "I don't recognise '{word}'. Did you mean:",
