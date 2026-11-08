@@ -266,3 +266,33 @@ def test_limited_transport_strict_keeps_oa1_fail_closed():
     get = ap.limited_transport(lambda url, **kw: pytest.fail("sent"), strict=True)
     with pytest.raises(rate_limit.UnlistedHost):
         get("https://unlisted-host.example/p")
+
+
+# ---- 1108C (review finding 2): wider API-like shapes, owner disposition H2
+NEW_API_SHAPES = [
+    ("https://example.org/api/v1beta1/models", "api_versioned"),
+    ("https://example.org/api/v2beta/items", "api_versioned"),
+    ("https://en.wikipedia.org/api/rest_v1/page/summary/Epidemic", "api_rest_versioned"),
+    ("https://en.wikipedia.org/w/api.php/extra/path?x=1", "mediawiki_api"),
+    ("https://en.wikipedia.org/w/rest.php/v1/page/Epidemic", "mediawiki_rest"),
+    ("https://example.org/s?q=x&format=jsonp", "format_json"),
+    ("https://example.org/s?q=x&output=jsonp", "output_json"),
+    ("https://example.org/select?q=x&wt=json.nl", "solr_json"),
+]
+ORDINARY_WEB = [
+    "https://example.org/apis-and-you", "https://example.org/rapid/v1beta",
+    "https://example.org/s?q=x&format=html", "https://example.org/page?output=pdf",
+    "https://en.wikipedia.org/wiki/Epidemic", "https://en.wikipedia.org/wiki/API",
+    "https://en.wikipedia.org/wiki/Api.php", "https://en.wikipedia.org/wiki/Special:Search?search=json",
+]
+
+
+@pytest.mark.parametrize("url,pid", NEW_API_SHAPES)
+def test_1108c_new_shapes_are_api_like(url, pid):
+    assert ap.api_like(url) == pid
+
+
+@pytest.mark.parametrize("url", ORDINARY_WEB)
+def test_1108c_ordinary_web_urls_are_not_api_like(url):
+    assert ap.api_like(url) is None
+    assert _refused(url) is None
