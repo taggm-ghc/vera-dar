@@ -222,10 +222,28 @@ def test_real_ro_lookup_statements_and_result_parsing():
     assert auto_acquire.RoLookup(ro2, A.cfg()).canonical_state("https://doi.org/" + DOI, "a" * 64) == (7, 2, False, False)
 
 
-def test_production_composition_default_deps_end_to_end_through_fake_transports(monkeypatch):
+@pytest.mark.parametrize("epmc_permitted", [False, True])
+def test_production_composition_default_deps_end_to_end_through_fake_transports(monkeypatch, epmc_permitted):
     """default_deps itself (the live wiring): real make_search over the /ask chain, real requests.get object, real
-    RoLookup/WoStore over engines from sqlalchemy.create_engine; only the transports below are fakes."""
+    RoLookup/WoStore over engines from sqlalchemy.create_engine; only the transports below are fakes.
+    API-ALLOW-1107: with the shipped config/api_permissions.json Europe PMC REST is UNRESOLVED, so the job stops with
+    R-API-DENIED and no Europe PMC request (robots.txt included) is sent; with the owner switch flipped the same wiring
+    stores the document."""
+    import copy
+    import json as _json
+
     import requests
+
+    from vera import api_permissions as AP
+    # API-ALLOW-R3-1108: shipped Europe PMC is permitted (OD-1108-HITL); the denied case flips the owner switch to deny.
+    raw = _json.loads(AP.CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["entries"]["europepmc_rest"].update(owner_switch="permit" if epmc_permitted else "deny", owner_decision="OD-1108-HITL")
+    AP.set_policy_for_tests(AP._validate(copy.deepcopy(raw)))
+    if epmc_permitted:  # shipped europepmc pacing is 0.1/s burst 1 (Crawl-delay 10): a job's 2 calls need burst 2 offline
+        from vera import rate_limit as _rl
+        _cfg = _rl.load_config()
+        _cfg["portals"]["europepmc"]["burst"] = 5.0
+        _rl.set_registry_for_tests(_rl.Registry(_cfg))
     import sqlalchemy
 
     from vera import search_and_fetch
@@ -250,7 +268,12 @@ def test_production_composition_default_deps_end_to_end_through_fake_transports(
     d = auto_acquire.default_deps(A.cfg(), A.ENV_ON)
     out = auto_acquire.run_job(A.job(), A.cfg(), d, clock=A.clock_at(), env=A.ENV_ON)
     d.close()
-    assert out["stored"] == 1 and out["codes"] == {"ACQ-STORED": 1}, out
     assert len(calls) == 1 and prov.last_query is None
-    assert any("INTO vera_vjay.sources" in s for s, _ in engines["wo"].calls)
     assert sorted(engines["disposed"]) == ["ro", "wo"]
+    if not epmc_permitted:
+        assert out["stored"] == 0 and out["codes"] == {"R-API-DENIED": 1}, out
+        assert not any("ebi.ac.uk" in u for u in web.urls), web.urls
+        assert not any("INTO vera_vjay.sources" in s for s, _ in engines["wo"].calls)
+        return
+    assert out["stored"] == 1 and out["codes"] == {"ACQ-STORED": 1}, out
+    assert any("INTO vera_vjay.sources" in s for s, _ in engines["wo"].calls)

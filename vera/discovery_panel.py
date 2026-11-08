@@ -55,6 +55,9 @@ REASON_TEXT = {
     "R-ACQ-HOST": "Blocked by network safety check.",
     "R-ACQ-ROBOTS": "Blocked by network safety check.",
     "R-ACQ-TDM": "Not used: the publisher reserves text and data mining rights.",  # CONTROL-GAPS-1107
+    "R-API-DENIED": "Not read: this source's API is not cleared for use.",  # API-ALLOW-1107
+    "R-API-COND": "Not read: this source's API is not cleared for use.",
+    "R-API-SCOPE": "Not read: this source's API is not cleared for use.",
     "R-ACQ-CYCLE": "Blocked by network safety check.",
     "R-ACQ-LARGE": "Document too large to read.",
     "R-ACQ-CONVERT": "Document could not be converted to readable text.",

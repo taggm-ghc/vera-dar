@@ -238,9 +238,12 @@ def _offline_wiki_portal_and_fresh_rate_limits(request, monkeypatch):
     if "wiki_portal" not in request.keywords:
         monkeypatch.setattr(sp, "_wiki_cfg", lambda: {"enabled": False})
     import vera.rate_limit as rl
+    import vera.api_permissions as ap  # API-ALLOW-1107: the shipped policy, re-read per test (no override leaks)
     rl.set_registry_for_tests(None)
+    ap.set_policy_for_tests(None)
     yield
     rl.set_registry_for_tests(None)
+    ap.set_policy_for_tests(None)
 
 
 @pytest.fixture(autouse=True)

@@ -42,11 +42,11 @@
       "_note": "rate 1.0 = the existing search.openalex.min_interval_s (vera_eval_run.json), max_concurrency 1 = existing; both under the documented 10 req/s. Remaining is a budget unit (credits), so pace=false: only remaining <= 0 sets a cooldown to the reset. base_cooldown_s 900 = the existing search.openalex_quota_cooldown_s (auto_acquire.json), now the no-Retry-After fallback. No mailto (none approved; the page documents none)."
     },
     "europepmc": {
-      "_comp_note": "COMP-1103 (R-050): forum-level evidence only (no official limit read) suggests staying under 10 requests/s per IP; rate_per_s 5 with burst 5 and max_concurrency 4 keeps VERA-DAR well under that.",
+      "_comp_note": "COMP-1103 (R-050): forum-level evidence only (no official limit read) suggests staying under 10 requests/s per IP; API-ALLOW-R3-1108 (OD-1108-HITL item 5): lowered to rate_per_s 0.1, burst 1, max_concurrency 1 = the recorded condition (stricter of robots Crawl-delay 10 and the documented rate; none documented), so far under that.",
       "hosts": ["www.ebi.ac.uk"],
-      "rate_per_s": 5.0,
-      "burst": 5,
-      "max_concurrency": 4,
+      "rate_per_s": 0.1,
+      "burst": 1,
+      "max_concurrency": 1,
       "daily_cap": null,
       "throttle_statuses": [429, 503],
       "contact_param": null,
@@ -54,7 +54,7 @@
         {"url": "https://europepmc.org/RestfulWebService", "read": "2026-10-21", "inspection": "fetch failed (HTTP 403); https://www.ebi.ac.uk/europepmc/webservices/rest/ returned 404",
          "claims": "no official limit found (observation as of 2026-10-21, not proof of absence); a third-party client defaults to 10 req/s (not official)"}
       ],
-      "_note": "prior. Covers the acquisition search, the resolve_oa DOI search and the fullTextXML (JATS) fetch: one host, one shared budget. max_concurrency 4 = auto_acquire inline.fetch_workers; rate 5/s is half the unofficial 10/s."
+      "_note": "prior. Covers the acquisition search, the resolve_oa DOI search and the fullTextXML (JATS) fetch: one host, one shared budget. API-ALLOW-R3-1108: now 0.1/s, burst 1, concurrency 1 (Crawl-delay 10, OD-1108-HITL item 5); the earlier 5/s, 4 prior is superseded."
     },
     "duckduckgo": {
       "hosts": ["lite.duckduckgo.com"],
@@ -218,6 +218,20 @@
          "claims": "none verified at source"}
       ],
       "_note": "PROPOSED, UNCALIBRATED (NONASK-1103 S7). Well under the reported 10k/h per IP. Lane flag ships OFF."
+    },
+    "crossref": {
+      "hosts": ["api.crossref.org"],
+      "rate_per_s": 0.5,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://www.crossref.org/documentation/retrieve-metadata/rest-api/", "read": "2026-11-07", "inspection": "summarizing read relayed in the API-ALLOW-1107 brief (exact URL not in the brief; re-confirm)",
+         "claims": "public pool: 5 requests per interval, 1 concurrent; back off on 429; descriptive User-Agent with a contact"}
+      ],
+      "_note": "API-ALLOW-1107 prior: interval not stated in the relayed summary, so 0.5/s (5 per 10 s), one at a time. No call site uses Crossref yet (config/api_permissions.json crossref_rest)."
     },
     "doi_landing": {
       "hosts": ["doi.org", "dx.doi.org"],

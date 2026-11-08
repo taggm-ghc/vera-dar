@@ -300,8 +300,6 @@ def _no_redirect_handler():
 
 
 def _default_http_get(url: str, headers: dict, timeout: tuple) -> tuple[int, dict, bytes]:
-    import urllib.error
-    import urllib.request
     sp = urlsplit(url)
     try:
         port = sp.port
@@ -310,6 +308,27 @@ def _default_http_get(url: str, headers: dict, timeout: tuple) -> tuple[int, dic
     if (sp.scheme != "https" or (sp.hostname or "").lower() not in API_HOSTS or port not in (None, 443)
             or sp.username is not None or sp.password is not None):
         return 0, {}, b""  # only the two fixed API hosts, https, default port, no userinfo
+    # API-ALLOW-1107: permission gate (config/api_permissions.json) BEFORE anything is sent; ApiDenied propagates to
+    # ReportingLane._call, which skips the portal. A permitted call goes through the entry's rate-limit portal.
+    from vera import api_permissions, rate_limit
+    d = api_permissions.require(url)
+    headers = api_permissions.headers_for(d, headers)
+    permit = rate_limit.get_registry().portal(str(d.conditions["rate_portal"])).acquire()
+    if not permit.ok:
+        permit.raise_()  # RateLimited: nothing sent
+    try:
+        status, rhdrs, body = _open(url, headers, timeout)
+    except BaseException as e:
+        permit.record(error=e)
+        raise
+    permit.record(status=status or None, headers=rhdrs)
+    return status, rhdrs, body
+
+
+def _open(url: str, headers: dict, timeout: tuple) -> tuple[int, dict, bytes]:
+    """The urllib request itself; only ever called by _default_http_get after the permission gate."""
+    import urllib.error
+    import urllib.request
     opener = urllib.request.build_opener(_no_redirect_handler())
     req = urllib.request.Request(url, headers=headers)
     deadline = time.monotonic() + float(timeout[0]) + float(timeout[1])  # total wall-clock bound for the body read
@@ -387,8 +406,15 @@ class ReportingLane:
             self.last_why = "spacing"  # PERF-MISS-1105-FIX2 F2: why the call returned None (trace only)
             return None
         status, headers, body = None, {}, b""
+        from vera import api_permissions, rate_limit
         try:
             status, headers, body = self._get(url, self._headers(), timeout)
+        except api_permissions.ApiDenied:  # API-ALLOW-1107: not permitted, nothing sent; not a failure or a backoff
+            self.last_why = "api_denied"
+            return None
+        except rate_limit.RateLimited:  # the portal's limiter skipped the call (nothing sent): like spacing
+            self.last_why = "spacing"
+            return None
         except Exception:  # timeout / network error counts as a transient failure
             status = None
         if status == 200:
@@ -491,7 +517,7 @@ class ReportingLane:
             if items is None:
                 why = self.last_why or "no_query"
                 src = {"spacing": "local_spacing", "throttled": "gdelt_response"}.get(why)
-                res["diag"].append({"portal": portal, "status": "skipped" if why in ("spacing", "no_query") else "called",
+                res["diag"].append({"portal": portal, "status": "skipped" if why in ("spacing", "no_query", "api_denied") else "called",
                                     "reason": why, "items": 0, "attempts": attempts,
                                     **({"throttle_source": src} if src else {})})
                 continue

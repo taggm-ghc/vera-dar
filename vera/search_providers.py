@@ -134,8 +134,8 @@ def licence_record(metadata: dict | None = None, content: dict | None = None) ->
 def arxiv_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for arXiv. Tests patch this to raise; nothing else may import requests."""
     import requests
-    from vera import rate_limit  # RATE-1022 A1
-    return rate_limit.limited("arxiv", requests.get)(url, params=params, headers=headers, timeout=timeout)
+    from vera import api_permissions  # API-ALLOW-1107: permission gate + the entry's rate portal (RATE-1022 A1)
+    return api_permissions.call(requests.get, url, params=params, headers=headers, timeout=timeout)
 
 
 def _stamp(date_iso: str, end: bool) -> str:
@@ -328,8 +328,8 @@ OPENALEX_SELECT = "id,doi,title,publication_year,publication_date,primary_locati
 def openalex_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for OpenAlex. Tests patch this (and requests.get) to raise."""
     import requests
-    from vera import rate_limit  # RATE-1022 A2
-    return rate_limit.limited("openalex", requests.get)(url, params=params, headers=headers, timeout=timeout)
+    from vera import api_permissions  # API-ALLOW-1107: permission gate + the entry's rate portal (RATE-1022 A2)
+    return api_permissions.call(requests.get, url, params=params, headers=headers, timeout=timeout)
 
 
 def openalex_key_env_name(settings: Mapping | None = None) -> str:
@@ -612,9 +612,9 @@ def acq_prefilter(cand: Mapping) -> str | None:
 def europepmc_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for the acquisition Europe PMC search. Tests patch this (or requests.get)."""
     import requests
-    from vera import rate_limit  # RATE-1022 A3 (search and id lookup)
-    return rate_limit.limited("europepmc", requests.get)(url, params=params, headers=headers, timeout=timeout,
-                                                         allow_redirects=False)
+    from vera import api_permissions  # API-ALLOW-1107: permission gate + rate portal (RATE-1022 A3: search, id lookup)
+    return api_permissions.call(requests.get, url, params=params, headers=headers, timeout=timeout,
+                                allow_redirects=False)
 
 
 def build_europepmc_query(question: str, terms_cfg: Mapping | None, profile: Mapping | None, suffix: str) -> str:
@@ -1721,8 +1721,8 @@ COST_BASIS_DOAJ = "keyless_doaj"
 def doaj_default_transport(url: str, params: dict, headers: dict, timeout: float):
     """THE one real network call for DOAJ. Tests patch this (and requests.get) to raise."""
     import requests
-    from vera import rate_limit  # RATE-1022 A4
-    return rate_limit.limited("doaj", requests.get)(url, params=params, headers=headers, timeout=timeout)
+    from vera import api_permissions  # API-ALLOW-1107: permission gate + the entry's rate portal (RATE-1022 A4)
+    return api_permissions.call(requests.get, url, params=params, headers=headers, timeout=timeout)
 
 
 def _doaj_words(question: str, terms_cfg: Mapping | None) -> tuple[list[str], list[str], str]:

@@ -52,6 +52,8 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
     "R-ACQ-TDM": "no_route",  # CONTROL-GAPS-1107: TDM reservation (tdmrep.json, header or meta)
+    # API-ALLOW-1107: the API is not permitted (config/api_permissions.json); nothing was sent
+    "R-API-DENIED": "no_route", "R-API-COND": "no_route", "R-API-SCOPE": "no_route",
     # fetch/transport failures
     "R-ACQ-UNREACHABLE": "fetch_failed", "R-ACQ-RATELIMITED": "fetch_failed",
     "R-ACQ-ERROR": "fetch_failed",

@@ -303,7 +303,10 @@ def test_tdm_code_is_mapped_for_the_ui_and_outcome():
 GATE, TRANSPORT, ROBOTS_FETCH = "gate", "transport", "robots_fetch"
 FIRST_PARTY, LLM_API = "exempt_first_party", "exempt_llm_api"
 NO_REQUEST = "no_request"  # references a network module only to classify errors or parse URLs
-API_UNGATED = "api_no_robots_check_owner_decision"   # CONTROL-GAPS-1107 finding: listed, not fixed (owner decision)
+# API-ALLOW-1107 (owner OD-1107-HITL): every API site goes through vera.api_permissions (config/api_permissions.json,
+# deny by default). The former class "api_no_robots_check_owner_decision" is gone. Entry: (API_GATE, the function that
+# holds the gate call, the call it must make).
+API_GATE = "api_permission_gate"
 TRACKED_GAP = "tracked_gap"  # none left: the Wikipedia portal became robots-gated at e87ef55 (WIKI-REDESIGN-1107)
 
 REGISTRY: dict[str, tuple] = {
@@ -349,18 +352,18 @@ REGISTRY: dict[str, tuple] = {
     "vera/run_mvp.py:run_mvp": (LLM_API,),
     "vera/rate_limit.py:httpx_transport._LimitedTransport.__init__": (LLM_API,),
     "vera/rate_limit.py:openai_http_client": (LLM_API,),
-    "vera/search_providers.py:arxiv_default_transport": (API_UNGATED,),
-    "vera/search_providers.py:openalex_default_transport": (API_UNGATED,),
-    "vera/search_providers.py:europepmc_default_transport": (API_UNGATED,),
-    "vera/search_providers.py:doaj_default_transport": (API_UNGATED,),
-    "vera/source_resolver.py:<module>": (API_UNGATED,),
-    "vera/source_resolver.py:_s2": (API_UNGATED,),
-    "vera/source_resolver.py:lookup_doi": (API_UNGATED,),
-    "vera/source_resolver.py:lookup_title": (API_UNGATED,),
-    "vera/source_resolver.py:with_abstract": (API_UNGATED,),
-    "vera/reporting_lane.py:ReportingLane.__init__": (API_UNGATED,),
-    "vera/reporting_lane.py:_default_http_get": (API_UNGATED,),
-    "vera/reporting_lane.py:_no_redirect_handler._H": (API_UNGATED,),
+    "vera/search_providers.py:arxiv_default_transport": (API_GATE, "vera/search_providers.py:arxiv_default_transport", "api_permissions.call("),
+    "vera/search_providers.py:openalex_default_transport": (API_GATE, "vera/search_providers.py:openalex_default_transport", "api_permissions.call("),
+    "vera/search_providers.py:europepmc_default_transport": (API_GATE, "vera/search_providers.py:europepmc_default_transport", "api_permissions.call("),
+    "vera/search_providers.py:doaj_default_transport": (API_GATE, "vera/search_providers.py:doaj_default_transport", "api_permissions.call("),
+    "vera/source_resolver.py:_api_get": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    "vera/source_resolver.py:_s2": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    "vera/source_resolver.py:lookup_doi": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    "vera/source_resolver.py:lookup_title": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    "vera/source_resolver.py:with_abstract": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    "vera/reporting_lane.py:ReportingLane.__init__": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
+    "vera/reporting_lane.py:_open": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
+    "vera/reporting_lane.py:_no_redirect_handler._H": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
     # WIKI-REDESIGN-1107 (e87ef55): article pages only, each after selective_fetch.robots_allowed (portal ships off)
     "vera/wiki_ref_portal.py:discover": (GATE, "robots_ok("),
     "vera/wiki_ref_portal.py:_default_robots.ok": (ROBOTS_FETCH,),
@@ -496,6 +499,9 @@ def test_gated_sites_still_name_their_robots_check():
             assert _calls(key, entry[1]), f"{key} no longer calls {entry[1]}"
         elif entry[0] == TRANSPORT:
             assert _calls(entry[1], entry[2]), f"{key}'s gate {entry[1]} no longer calls {entry[2]}"
+        elif entry[0] == API_GATE:
+            assert entry[2].startswith("api_permissions."), f"{key}: an API site must name an api_permissions gate"
+            assert _calls(entry[1], entry[2]), f"{key}'s API gate {entry[1]} no longer calls {entry[2]}"
 
 
 def test_gate_check_ignores_comments_and_strings(tmp_path, monkeypatch):
@@ -505,6 +511,48 @@ def test_gate_check_ignores_comments_and_strings(tmp_path, monkeypatch):
     import sys
     monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
     assert not _calls("vera/m.py:f", "hop_access(")
+
+
+def test_registry_fails_on_an_ungated_api_site(tmp_path, monkeypatch):
+    """API-ALLOW-1107: an API site registered as api_permission_gate whose gate function does not call the gate (only
+    names it in a comment or string) fails the registry check; an unregistered one fails as a new site."""
+    src = ('def gated(u):\n    return api_permissions.call(requests.get, u)\n'
+           'def ungated(u):\n    # api_permissions.call( is NOT called here\n    s = "api_permissions.call("\n'
+           '    return requests.get(u)\n')
+    (tmp_path / "vera").mkdir()
+    (tmp_path / "vera" / "m.py").write_text(src, encoding="utf-8")
+    import sys
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+    assert _calls("vera/m.py:gated", "api_permissions.call(")
+    assert not _calls("vera/m.py:ungated", "api_permissions.call(")
+    monkeypatch.setattr(sys.modules[__name__], "REGISTRY",
+                        {"vera/m.py:ungated": (API_GATE, "vera/m.py:ungated", "api_permissions.call(")})
+    with pytest.raises(AssertionError, match="no longer calls"):
+        test_gated_sites_still_name_their_robots_check()
+    monkeypatch.setattr(sys.modules[__name__], "REGISTRY", {})
+    with pytest.raises(AssertionError, match="new outbound fetch site"):
+        test_every_outbound_fetch_site_is_registered()
+
+
+FORMER_UNGATED_API_SITES = (  # CONTROL-GAPS-1107's frozen list of 12 (renamed only where the code changed)
+    "vera/search_providers.py:arxiv_default_transport", "vera/search_providers.py:openalex_default_transport",
+    "vera/search_providers.py:europepmc_default_transport", "vera/search_providers.py:doaj_default_transport",
+    "vera/source_resolver.py:_api_get",  # was "<module>" (the module-level limited getter, now this function)
+    "vera/source_resolver.py:_s2", "vera/source_resolver.py:lookup_doi", "vera/source_resolver.py:lookup_title",
+    "vera/source_resolver.py:with_abstract", "vera/reporting_lane.py:ReportingLane.__init__",
+    "vera/reporting_lane.py:_open",  # was "_default_http_get" (its urllib body moved here, behind the gate)
+    "vera/reporting_lane.py:_no_redirect_handler._H")
+
+
+@pytest.mark.parametrize("site", FORMER_UNGATED_API_SITES)
+def test_each_former_ungated_api_site_calls_the_gate(site):
+    """API-ALLOW-1107 r2 (5): every one of the 12 former api_no_robots_check_owner_decision sites is still found by the
+    scan, is classified api_permission_gate, and its gate function really calls the api_permissions gate."""
+    assert len(FORMER_UNGATED_API_SITES) == 12
+    assert site in _all_sites(), f"{site} no longer found by the scan: update the list with the reason"
+    kind, gate_fn, call = REGISTRY[site]
+    assert kind == API_GATE and call.startswith("api_permissions.")
+    assert _calls(gate_fn, call), f"{site}: {gate_fn} does not call {call}"
 
 
 def test_aliased_imports_are_caught(tmp_path):
@@ -530,8 +578,10 @@ def test_network_imports_are_registered():
     assert not extra, f"unregistered network-module imports (classify the new fetch path first): {extra}"
 
 
-def test_ungated_api_sites_do_not_grow():
-    """Search, metadata and news APIs queried without a robots.txt check: a frozen list awaiting an owner decision
-    (CONTROL-GAPS-1107 findings). Adding one fails here; removing one (now gated) means moving it to GATE."""
-    assert sum(1 for e in REGISTRY.values() if e[0] == API_UNGATED) == 12
+def test_no_ungated_api_sites_remain():
+    """API-ALLOW-1107: the frozen CONTROL-GAPS-1107 list of 12 ungated API sites is now fully gated (api_permission_gate);
+    no entry may use any other class for an API site, and none may come back as ungated."""
+    assert all(e[0] in (GATE, TRANSPORT, ROBOTS_FETCH, FIRST_PARTY, LLM_API, NO_REQUEST, API_GATE, TRACKED_GAP)
+               for e in REGISTRY.values())
+    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 12
     assert sum(1 for e in REGISTRY.values() if e[0] == TRACKED_GAP) == 0  # Wikipedia portal gated since e87ef55

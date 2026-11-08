@@ -1,0 +1,100 @@
+{
+  "_doc": "API-ALLOW-1107 (owner OD-1107-HITL, 2026-11-07): deny-by-default allowlist for outbound API calls, read by vera/api_permissions.py. Website robots.txt does not by itself settle API permission; each API is judged on its documented API authorization and source restrictions. A URL is matched to the entry with the same host and the longest path_prefix. NO MATCHING ENTRY = DENIED (code R-API-DENIED, no request sent). An entry is allowed only when its effective verdict is permitted AND its conditions validate against config/rate_limits.json (else R-API-COND, no request sent). Unreadable or invalid file = everything denied.",
+  "_owner_switch_note": "owner_switch per entry: \"default\" (follow verdict), \"permit\" (owner override; requires owner_decision naming the decision ID, else denied) or \"deny\" (owner override). To permit Europe PMC REST after reading its terms: set entries.europepmc_rest.owner_switch to \"permit\", owner_decision to the decision ID (must fully match ^OD-\\d{4}-[A-Z0-9][A-Z0-9-]*$, e.g. OD-1107-HITL; the trust root is the reviewed commit of this file, because the runtime cannot read records/decisions.md and a hash pin kept in this file could be re-pinned by whoever edits the switch: the reviewer checks the ID against records/decisions.md), update evidence/read level/date, and adjust conditions if the terms state limits. No code change is needed. A permit still requires valid conditions.",
+  "_api_hosts_note": "api_hosts: hosts on which EVERY path is an API call (a generic fetcher must apply this gate, not only robots/TDM). On other hosts only the entries' path prefixes are API calls; the rest is website content, gated by robots and TDM as before.",
+  "_read_level_note": "read levels: 'summarizer' = WebFetch summarizing read (paraphrase level, not raw page text); 'failed' = page not readable. Evidence for the 2026-11-07 verdicts is the research read relayed in the API-ALLOW-1107 brief (summarizer level); its own findings file was not located by the implementer, so URLs marked 'carried' are from earlier project records (config/rate_limits.json sources) and need re-confirmation at review_by.",
+  "version": 1,
+  "default": "deny",
+  "api_hosts": ["api.openalex.org", "api.crossref.org", "export.arxiv.org", "api.semanticscholar.org",
+                "api.gdeltproject.org", "hn.algolia.com", "api.unpaywall.org"],
+  "entries": {
+    "openalex": {
+      "host": "api.openalex.org", "path_prefix": "/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "default", "owner_decision": null,
+      "conditions": {"rate_portal": "openalex", "max_rate_per_s": 10.0, "respect_429": true, "user_agent": null,
+                     "send_email": false, "content_scope": ["metadata"],
+                     "_note": "no key; 10 req/s without a key; respect 429. Data CC0 (metadata only)."},
+      "evidence": [{"url": "https://help.openalex.org/how-to-use-the-api/rate-limits-and-authentication", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief); URL carried from config/rate_limits.json"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-12-07"
+    },
+    "crossref_rest": {
+      "host": "api.crossref.org", "path_prefix": "/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "default", "owner_decision": null,
+      "conditions": {"rate_portal": "crossref", "max_rate_per_s": 0.5, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": "VERA-DAR/1.0 (+https://github.com/taggm-ghc/vera-dar)", "send_email": false,
+                     "content_scope": ["metadata"], "store_abstracts": "only_after_licence_check",
+                     "_note": "public pool: 5 requests per interval, 1 concurrent; the interval was not stated in the relayed summary, so the rate is capped at 0.5/s (5 per 10 s) until re-read. Descriptive UA with the contact URL. No call site uses Crossref at API-ALLOW-1107."},
+      "evidence": [{"url": "https://www.crossref.org/documentation/retrieve-metadata/rest-api/", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief); exact URL not in the brief, re-confirm"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-12-07"
+    },
+    "gdelt_doc": {
+      "host": "api.gdeltproject.org", "path_prefix": "/api/v2/doc/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "default", "owner_decision": "OD-1108-HITL (item 10: existing GDELT metadata-only authorization confirmed; OD-1104 news lane enable)",
+      "conditions": {"rate_portal": "gdelt_doc", "max_rate_per_s": 0.2, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": null, "send_email": false, "content_scope": ["metadata"], "attribution": "GDELT Project citation and link",
+                     "_note": "Confirmed by the owner 2026-11-08 (OD-1108-HITL item 10). Carried from work/NEWS-LANE-1104/compliance.md (READ-SUMMARIZER 2026-11-04: free use with citation and link; api host robots.txt 404). Metadata only, 0.2 req/s ceiling, concurrency 1, honour 429."},
+      "evidence": [{"url": "https://www.gdeltproject.org/about.html", "read_level": "summarizer", "read": "2026-11-04", "provenance": "work/NEWS-LANE-1104/compliance.md"}],
+      "read_level": "summarizer", "read": "2026-11-04", "review_by": "2026-11-21"
+    },
+    "arxiv_export_api": {
+      "host": "export.arxiv.org", "path_prefix": "/",
+      "verdict": "OWNER-HOLD", "owner_switch": "deny", "owner_decision": "OD-1107-HITL (keep arXiv API search disabled pending resolution)",
+      "conditions": {"rate_portal": "arxiv", "max_rate_per_s": 0.333334, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": null, "send_email": false, "content_scope": ["metadata"],
+                     "_note": "ToU permits metadata use (1 request per 3 s, one connection, metadata only), but robots.txt disallows the host. Owner hold."},
+      "evidence": [{"url": "https://info.arxiv.org/help/api/tou.html", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief); URL carried from config/rate_limits.json"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-11-21"
+    },
+    "arxiv_web_api": {
+      "host": "arxiv.org", "path_prefix": "/api/",
+      "verdict": "OWNER-HOLD", "owner_switch": "deny", "owner_decision": "OD-1107-HITL",
+      "conditions": {"content_scope": ["metadata"], "_note": "arxiv.org robots.txt disallows /api; abs/html/pdf pages are website content (robots/TDM gate), not this entry."},
+      "evidence": [{"url": "https://info.arxiv.org/help/api/tou.html", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief)"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-11-21"
+    },
+    "europepmc_rest": {
+      "host": "www.ebi.ac.uk", "path_prefix": "/europepmc/webservices/rest/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "permit", "owner_decision": "OD-1108-HITL",
+      "conditions": {"rate_portal": "europepmc", "max_rate_per_s": 0.1, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": "VERA-DAR/1.0 (+https://github.com/taggm-ghc/vera-dar)", "send_email": false,
+                     "content_scope": ["metadata", "fulltext"], "crawl_delay_s": 10,
+                     "licence_gate": "per-article open-access licence check (existing gate; the document licence overrides any source-level verdict)",
+                     "attribution": "as the terms require (Europe PMC and the article licence credit)",
+                     "_note": "OD-1108-HITL item 5 applies the conditions recorded in work/HITL-1108/decisions.md s5 and work/HITL-1107B/decisions.md s4 option (a): metadata plus open-access full text; per-article licence gate; the stricter of Crawl-delay 10 (robots, www.ebi.ac.uk: 1 request per 10 s = 0.1/s) and the documented rate (none found); concurrency 1 and 429/503 as throttle per config/rate_limits.json; a User-Agent with a contact URL; attribution. The official terms pages returned 403 to our reader (11-07), so evidence is summarizer-grade; the owner applied the earlier conditional approval without a further read."},
+      "evidence": [{"url": "https://europepmc.org/RestfulWebService", "read_level": "failed", "read": "2026-11-07", "provenance": "11-07 research read: official terms pages returned HTTP 403; robots www.ebi.ac.uk Crawl-delay 10 (work/HITL-1107/decisions.md)"}],
+      "read_level": "failed", "read": "2026-11-08", "review_by": "2026-12-08"
+    },
+    "doaj_api": {
+      "host": "doaj.org", "path_prefix": "/api/",
+      "verdict": "UNRESOLVED", "owner_switch": "deny", "owner_decision": "OD-1108-HITL (denied until its terms check)",
+      "conditions": {"rate_portal": "doaj", "max_rate_per_s": 2.0, "max_concurrency": 1, "respect_429": true, "content_scope": ["metadata"],
+                     "_note": "no API terms or licence found (11-07)."},
+      "evidence": [{"url": "https://doaj.org/api/v4/docs", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief): no terms or licence found"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-12-07"
+    },
+    "unpaywall": {
+      "host": "api.unpaywall.org", "path_prefix": "/",
+      "verdict": "UNRESOLVED", "owner_switch": "deny", "owner_decision": "OD-1108-HITL (denied until its terms check)",
+      "conditions": {"send_email": true, "content_scope": ["metadata"],
+                     "_note": "requires an email parameter, which the project does not send; no call site."},
+      "evidence": [{"url": "https://unpaywall.org/products/api", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief)"}],
+      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-12-07"
+    },
+    "semantic_scholar": {
+      "host": "api.semanticscholar.org", "path_prefix": "/",
+      "verdict": "UNRESOLVED", "owner_switch": "deny", "owner_decision": "OD-1108-HITL item 11 (stays denied pending separate authorization)",
+      "conditions": {"rate_portal": "semantic_scholar", "max_rate_per_s": 1.0, "max_concurrency": 1, "respect_429": true, "content_scope": ["metadata"],
+                     "_note": "NOT in the 2026-11-07 read; API licence agreement not read. Denied by default (only effect: /ask link resolution skips the S2 abstract fill)."},
+      "evidence": [{"url": "https://www.semanticscholar.org/product/api", "read_level": "summarizer", "read": "2026-10-21", "provenance": "config/rate_limits.json (limits only, no terms)"}],
+      "read_level": "summarizer", "read": "2026-10-21", "review_by": "2026-12-07"
+    },
+    "hn_algolia": {
+      "host": "hn.algolia.com", "path_prefix": "/api/",
+      "verdict": "UNRESOLVED", "owner_switch": "deny", "owner_decision": "OD-1108-HITL item 11 (stays denied pending separate authorization)",
+      "conditions": {"rate_portal": "hn_algolia", "max_rate_per_s": 1.0, "max_concurrency": 1, "content_scope": ["metadata"],
+                     "_note": "no first-party terms found; Y Combinator terms bar robots and scraping (work/NEWS-LANE-1104/compliance.md). Already excluded from the lane fallback order."},
+      "evidence": [{"url": "https://hn.algolia.com/api", "read_level": "summarizer", "read": "2026-11-03", "provenance": "config/rate_limits.json"}],
+      "read_level": "summarizer", "read": "2026-11-03", "review_by": "2026-12-07"
+    }
+  }
+}

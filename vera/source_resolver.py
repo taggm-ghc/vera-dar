@@ -18,10 +18,19 @@ from vera import strict_json
 
 from vera.selective_fetch import fetch_html
 from vera.search_providers import OPENALEX_METADATA_LICENCE, USER_AGENT, licence_record, reconstruct_abstract
-from vera import rate_limit
+from vera import api_permissions
+from vera.api_permissions import ApiDenied
 
-# RATE-1022 A7: api.openalex.org -> openalex, api.semanticscholar.org -> semantic_scholar; other hosts pass through.
-_LIMITED_GET = rate_limit.limited_by_url(requests.get)
+
+def _api_get(url: str, **kw):
+    """API-ALLOW-1107: every request in this module is an API call (OpenAlex, Semantic Scholar): the permission gate
+    (config/api_permissions.json; a denial sends nothing and is a miss), then the entry's rate-limit portal (RATE-1022
+    A7: api.openalex.org -> openalex, api.semanticscholar.org -> semantic_scholar)."""
+    return api_permissions.call(requests.get, url, **kw)
+
+
+_LIMITED_GET = _api_get
+_MISS = (requests.RequestException, ValueError, ApiDenied)  # API-ALLOW-1107: a denied API is a miss, never an error
 
 logger = logging.getLogger("vera")
 
@@ -75,7 +84,7 @@ def _s2(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict:
         r = http_get(S2_PAPER.format(doi=doi), params={"fields": "title,abstract,publicationDate"},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
         return strict_json.response_json(r) if r.status_code == 200 else {}
-    except (requests.RequestException, ValueError):
+    except _MISS:
         return {}
 
 
@@ -104,7 +113,7 @@ def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None
         r = http_get(OPENALEX_WORK.format(doi=doi), params={"select": OPENALEX_FIELDS},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
         w = strict_json.response_json(r, keys="exact") if r.status_code == 200 else None
-    except (requests.RequestException, ValueError):
+    except _MISS:
         w = None
     if w:
         rec = _record(doi, w.get("title"), w.get("publication_date"),
@@ -132,7 +141,7 @@ def lookup_title(title: str, timeout_s: float, min_match: float, http_get=_LIMIT
         if r.status_code != 200:
             return None
         items = strict_json.response_json(r, keys="exact").get("results") or []
-    except (requests.RequestException, ValueError):
+    except _MISS:
         return None
     for w in items:
         got = _words(w.get("title"))

@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from vera import reporting_lane as rl
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -164,8 +166,17 @@ def test_default_client_no_redirect_size_and_type(monkeypatch):
     assert rl._default_http_get(u, {}, (5, 5))[0] == 200
     handlers = [h for h in seen[0].handlers if isinstance(h, urllib.request.HTTPRedirectHandler)]
     assert handlers and all(h.redirect_request(None, None, 302, "", {}, "https://evil.example/") is None for h in handlers)
+    # API-ALLOW-1107: the real client now goes through the gdelt_doc rate portal: an immediate second call is paced
+    # (nothing sent); a fresh registry per call below keeps the remaining checks about the client itself.
+    from vera import rate_limit
+    n = len(seen)
+    with pytest.raises(rate_limit.RateLimited):
+        rl._default_http_get(u, {}, (5, 5))
+    assert len(seen) == n
+    rate_limit.set_registry_for_tests(None)
     state["resp"] = _Resp("text/html", b"<html>")
     assert rl._default_http_get(u, {}, (5, 5)) == (0, {}, b"")
+    rate_limit.set_registry_for_tests(None)
     state["resp"] = _Resp("application/json", b"x" * (rl.MAX_BODY + 10))
     assert rl._default_http_get(u, {}, (5, 5)) == (0, {}, b"")
 

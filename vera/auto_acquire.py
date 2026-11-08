@@ -475,7 +475,10 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
 
     # CMF-1022-I2 (E1/A4): pinned transport (connects only to the address is_public_url validated for the hop).
     # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); an unlisted host fails closed (OA-1, strict=True: R-ACQ-HOST, nothing sent).
-    return Deps(search=search, http_get=rate_limit.limited_by_url(selective_fetch.pinned_get, strict=True), lookup=RoLookup(ro, cfg),
+    # API-ALLOW-1107: API URLs on that transport (Europe PMC REST, ...) need their config/api_permissions.json entry.
+    from vera import api_permissions
+    return Deps(search=search, http_get=api_permissions.gate_api_urls(rate_limit.limited_by_url(selective_fetch.pinned_get, strict=True)),
+                lookup=RoLookup(ro, cfg),
                 store=WoStore(wo, ro, cfg),
                 corpus_keys=keys, url_check=selective_fetch.is_public_url, refresh=refresh, close=close)
 
@@ -577,6 +580,11 @@ def _unknown_licence_obs(lic: str, doi, pmcid) -> dict | None:
     return cand if cand.get("licence_reason_code") == RC_UNKNOWN else None
 
 
+def _api_denied():
+    from vera import api_permissions
+    return api_permissions.ApiDenied
+
+
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
                  clock=time.monotonic, deadline: float | None = None, chain: list | None = None):
     """GET with the host allowlist checked on every hop, https only, the SSRF guard, manual redirects, content type, size
@@ -623,6 +631,16 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             # verdicts are not cached, the gate runs first: its own requests go through _b_get, which validates the
             # same host's address (a refusal is raised as R-ACQ-HOST, not cached), and this URL's check below is then
             # the last validation before the request (its address pin is the one the transport uses).
+            # API-ALLOW-1107: an API hop (Europe PMC REST search / fullTextXML, ...) needs its config/api_permissions.json
+            # entry BEFORE anything is sent to the host, robots.txt included. Applies when the real gated transport
+            # is in use (default_deps); that transport also refuses on its own (ApiDenied below).
+            if getattr(deps.http_get, "api_gated", False):
+                from vera import api_permissions as _ap
+                if _ap.is_api_url(current):
+                    d = _ap.decide(current, "metadata" if want_json else "fulltext")
+                    if not d.allowed:
+                        logger.warning("%s entry=%s why=%s", d.code, d.entry or "none", d.why)
+                        raise _Stop(d.code)  # R-API-DENIED / R-API-COND / R-API-SCOPE
             from vera import acq_discovered as _ad
             h = (sp.hostname or "").lower()
             if h not in _ad._ROBOTS or h not in _ad._TDMREP:
@@ -645,12 +663,17 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             hdrs = {"User-Agent": sf.USER_AGENT} if chain is None else {"User-Agent": sf.USER_AGENT,
                                                                         "Accept-Encoding": "identity"}
             try:
+                # API-ALLOW-1107 r2 (3): the gated transport checks the entry's content scope for this purpose
+                purpose = {"api_purpose": "metadata" if want_json else "fulltext"} if getattr(
+                    deps.http_get, "api_gated", False) else {}
                 resp = deps.http_get(current, headers=hdrs, timeout=timeout_s,
-                                     allow_redirects=False, stream=True)
+                                     allow_redirects=False, stream=True, **purpose)
             except rate_limit.RateLimited as e:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
                 raise _Stop(acq_config.rate_limited_code(cfg, e.reason)) from None  # F1: per-reason code
             except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent; a refusal, not a retry-later skip
                 raise _Stop(acq_config.reason(cfg, "host")) from None
+            except _api_denied() as e:  # API-ALLOW-1107: not permitted, nothing sent; never recorded as unreachable
+                raise _Stop(e.code) from None
             except Exception:  # noqa: BLE001  unreachable = unusable (never substituted by an abstract)
                 raise _Stop(acq_config.reason(cfg, "unreachable")) from None
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
