@@ -311,7 +311,7 @@ def _default_http_get(url: str, headers: dict, timeout: tuple) -> tuple[int, dic
     # API-ALLOW-1107: permission gate (config/api_permissions.json) BEFORE anything is sent; ApiDenied propagates to
     # ReportingLane._call, which skips the portal. A permitted call goes through the entry's rate-limit portal.
     from vera import api_permissions, rate_limit
-    d = api_permissions.require(url)
+    d = api_permissions.require(url, "metadata")  # API-URL-GATE-1108b (6): explicit purpose (content_scope checked)
     headers = api_permissions.headers_for(d, headers)
     permit = rate_limit.get_registry().portal(str(d.conditions["rate_portal"])).acquire()
     if not permit.ok:

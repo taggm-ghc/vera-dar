@@ -1,0 +1,20 @@
+{
+ "_doc": "API-URL-GATE-1108b (orchestrator ruling under the owner's deny-by-default API rule, feedback_deny_all_allowlist / feedback_api_robots_policy): a URL that LOOKS like an API call but has no config/api_permissions.json entry is refused by the generic fetchers (vera.api_permissions.gate_url, why unlisted_api_like:<pattern id>). A URL that matches an entry is decided by that entry, never by these patterns. An IP-literal host is refused unless listed in ip_literal_allow (why ip_literal). An unreadable or invalid file refuses every generic fetch (fail closed). Patterns are data: lower-case, matched against the IDNA-mapped host, the normalised path (vera.api_permissions.normalise_path: decoded, dot-segments resolved, lower-case, trailing /) and the lower-cased raw query.",
+ "_calibration_note": "Measured 2026-11-08 (offline, no network, no DB) on every URL and host name in repo config/*.json (190 URLs, 171 host names) and every URL literal in vera/*.py (38): scratch/API-URL-GATE-1108/cal/survey.py. Spread: the api./eutils. host prefixes matched only API hosts (api.openalex.org, api.crossref.org, api.gdeltproject.org, api.semanticscholar.org, api.unpaywall.org, eutils.ncbi.nlm.nih.gov, and the LLM endpoints api.groq.com / api.openai.com reached through their SDK clients, not these fetchers) plus api.slack.com, an official-lane host with no allowed path that 302s to docs.slack.dev. A bare '/api/' segment anywhere would also have matched four documentation PAGES (developers.openai.com/api/docs/pricing, info.arxiv.org/help/api/tou.html, unpaywall.org/products/api, www.semanticscholar.org/product/api), so the path rule is narrowed to a first segment 'api' that is the whole path or is followed by a version segment, or an 'api/v<N>' pair anywhere: it matches the API URLs (export.arxiv.org/api/query is listed; openrouter.ai/api/v1, hn.algolia.com/api/v1, doaj.org/api/v4) and none of those pages. No query marker matched a config or code URL. Page shapes the app fetches today (arXiv abs/pdf/html, doi.org, Europe PMC and PMC article pages, PubMed, en.wikipedia.org/wiki, publisher landing pages, official-lane and news-outlet hosts) are pinned unrefused by tests/test_api_url_gate_1108b.py. Change this file when a refused page shows up in the R-API-DENIED unlisted_api_like warnings, or when a new API is found reachable as a page.",
+ "version": 1,
+ "host_prefixes": {"api_host": "api.", "eutils_host": "eutils."},
+ "path_patterns": {
+  "api_root": "^/api/$",
+  "api_versioned": "(^|/)api/v[0-9]+(\\.[0-9]+)?/",
+  "mediawiki_api": "/api\\.php/$",
+  "eutils_path": "/eutils/",
+  "graphql": "/graphql/$"
+ },
+ "query_markers": {
+  "format_json": "(^|&)format=json(&|$)",
+  "output_json": "(^|&)output=json(&|$)",
+  "solr_json": "(^|&)wt=json(&|$)",
+  "retmode": "(^|&)retmode=(json|xml)(&|$)"
+ },
+ "ip_literal_allow": []
+}

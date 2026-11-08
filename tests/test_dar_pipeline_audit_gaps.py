@@ -359,6 +359,12 @@ class _WebRoutes:
 def test_R2_pipeline_with_real_is_public_url_and_pinned_get_connects_only_to_the_validated_ip(rig, net):
     web, _ = epmc_web()
     host = "www.ebi.ac.uk"
+    # API-URL-GATE-1108b (4): the bare pinned transport now takes the Europe PMC entry's own portal (shipped 0.1/s,
+    # burst 1); this job's several calls need a larger burst offline (as tests/test_acq_wiring.py does).
+    from vera import rate_limit as _rl
+    _cfg = _rl.load_config()
+    _cfg["portals"]["europepmc"]["burst"] = 10.0
+    _rl.set_registry_for_tests(_rl.Registry(_cfg))
     net.answers[host] = [[PUB4]]   # every validation resolves to the public IP
     net.routes = _WebRoutes(web)
     rig.setup(web=web, cands=[])

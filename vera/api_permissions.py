@@ -117,9 +117,11 @@ def get_policy() -> Policy:
 
 
 def set_policy_for_tests(policy: Policy | None) -> None:
-    global _POLICY
+    global _POLICY, _LIKE
     with _LOCK:
         _POLICY = policy
+        if policy is None:  # 1108b: a reset also re-reads config/api_like_patterns.json
+            _LIKE = None
 
 
 def normalise_path(path: str) -> str:
@@ -153,8 +155,8 @@ def _split(url: str) -> tuple[str, str]:
     if not host.isascii():  # API-URL-GATE-1108 review (3): IDNA/NFKC mapping, so a look-alike or full-width spelling
         try:                # of an API host (U+FF41, U+3002 dot) is matched as that host
             host = host.encode("idna").decode("ascii").lower()
-        except UnicodeError:
-            pass
+        except UnicodeError:  # 1108b review (5): an unmappable host cannot be classed; gate_url refuses it
+            raise ValueError("host not IDNA-encodable") from None
     return host.rstrip("."), normalise_path(sp.path)
 
 
@@ -278,61 +280,237 @@ def call(fn: Callable, url: str, *a, headers: Mapping | None = None, purpose: st
         kw.pop("params", None)  # already part of the first URL; the Location carries its own query
 
 
-# API-URL-GATE-1108: the purpose a generic transport (selective_fetch.pinned_get) checks an API URL against. A
-# generic fetch reads a document, so the default is "fulltext"; gate_api_urls sets its caller's purpose for the
-# duration of the call (a contextvar, so the transport under the wrapper checks the same purpose, never a wider one).
+# API-URL-GATE-1108: the purpose a generic fetch hop is checked against. Callers pass it explicitly (api_purpose=);
+# a generic fetch reads a document, so a hop that names none is checked as "fulltext". 1108b (6): the contextvar is
+# only a guarded fallback: gate_api_urls binds (url, purpose) for the duration of its call, and the binding applies
+# to THAT url only, so it can never widen any other hop (a redirect target, robots.txt) beyond "fulltext".
 _PURPOSE: contextvars.ContextVar = contextvars.ContextVar("vera_api_purpose", default=None)
+# 1108b (4): the rate portal already held for a permitted API hop (set by limited_transport while it holds the entry's
+# portal), so the transport underneath (pinned_get) does not take the same portal twice.
+_HELD: contextvars.ContextVar = contextvars.ContextVar("vera_api_portal_held", default=None)
 
 
-def current_purpose(default: str = "fulltext") -> str:
-    return _PURPOSE.get() or default
+def current_purpose(url: str, default: str = "fulltext") -> str:
+    bound = _PURPOSE.get()
+    if bound and bound[0] == url:
+        return bound[1]
+    return default
 
 
 @contextlib.contextmanager
-def purpose_scope(purpose: str):
-    tok = _PURPOSE.set(purpose)
+def purpose_scope(purpose: str, url: str):
+    """Bind purpose for exactly this url (never a wildcard)."""
+    tok = _PURPOSE.set((str(url), purpose))
     try:
         yield
     finally:
         _PURPOSE.reset(tok)
 
 
-def gate_url(url: str, purpose: str | None = None, policy: Policy | None = None) -> Decision | None:
+def held_portal() -> str | None:
+    return _HELD.get()
+
+
+@contextlib.contextmanager
+def holding(portal: str):
+    tok = _HELD.set(portal)
+    try:
+        yield
+    finally:
+        _HELD.reset(tok)
+
+
+# ------------------------------------------------------------------ 1108b (1)(2): unlisted API-like URLs, IP literals
+LIKE_PATH = Path(__file__).resolve().parent.parent / "config" / "api_like_patterns.json"
+
+
+@dataclass(frozen=True)
+class LikePatterns:
+    host_prefixes: Mapping
+    path_patterns: Mapping      # id -> compiled regex
+    query_markers: Mapping      # id -> compiled regex
+    ip_literal_allow: frozenset
+    error: str | None = None    # unreadable/invalid file: every generic fetch is refused
+
+
+def load_like(path: Path | str = LIKE_PATH) -> LikePatterns:
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        hp, pp, qm = raw["host_prefixes"], raw["path_patterns"], raw["query_markers"]
+        ipa = raw.get("ip_literal_allow", [])
+        if not all(isinstance(x, dict) and x for x in (hp, pp, qm)) or not isinstance(ipa, list):
+            raise ValueError("host_prefixes, path_patterns, query_markers: non-empty objects; ip_literal_allow: list")
+        if not all(isinstance(v, str) and v and v == v.lower() for v in hp.values()):
+            raise ValueError("host_prefixes: lowercase strings")
+        return LikePatterns(dict(hp), {k: re.compile(v) for k, v in pp.items()},
+                            {k: re.compile(v) for k, v in qm.items()}, frozenset(str(x).lower() for x in ipa))
+    except Exception as e:  # noqa: BLE001  fail closed
+        logger.error("api_like_patterns config unusable (%s): every generic fetch refused", type(e).__name__)
+        return LikePatterns({}, {}, {}, frozenset(), error=type(e).__name__)
+
+
+_LIKE: LikePatterns | None = None
+
+
+def get_like() -> LikePatterns:
+    global _LIKE
+    with _LOCK:
+        if _LIKE is None:
+            _LIKE = load_like()
+        return _LIKE
+
+
+def set_like_for_tests(like: LikePatterns | None) -> None:
+    global _LIKE
+    with _LOCK:
+        _LIKE = like
+
+
+_IP_LIKE = re.compile(r"(0x[0-9a-f]+|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}\.?")
+
+
+def is_ip_literal(host: str) -> bool:
+    """True for an IPv4/IPv6 literal and for the numeric forms a resolver also reads as an address (127.1, 2130706433,
+    0x7f.0.0.1)."""
+    import ipaddress
+    h = str(host or "").strip("[]").lower()
+    try:
+        ipaddress.ip_address(h.split("%", 1)[0])
+        return True
+    except ValueError:
+        return bool(h) and _IP_LIKE.fullmatch(h) is not None
+
+
+def api_like(url: str, like: LikePatterns | None = None) -> str | None:
+    """The id of the first pattern that classes the URL as an API call (host prefix, path, query marker), else None."""
+    like = like or get_like()
+    host, path = _split(url)
+    for pid, pre in like.host_prefixes.items():
+        if host.startswith(pre):
+            return pid
+    for pid, rx in like.path_patterns.items():
+        if rx.search(path):
+            return pid
+    q = normalise_query(urlsplit(str(url or "")).query)
+    for pid, rx in like.query_markers.items():
+        if q and rx.search(q):
+            return pid
+    return None
+
+
+def normalise_query(query: str) -> str:
+    """1108b review (1): the query as a server reads it, for marker matching: split on & and ;, each key and value
+    percent-decoded (+ as space) until stable (bounded), lower-cased, re-joined with &."""
+    from urllib.parse import unquote_plus
+    out = []
+    for part in re.split(r"[&;]", str(query or "")):
+        if not part:
+            continue
+        k, _, v = part.partition("=")
+        for _ in range(4):
+            k2, v2 = unquote_plus(k), unquote_plus(v)
+            if (k2, v2) == (k, v):
+                break
+            k, v = k2, v2
+        out.append(f"{k.strip().lower()}={v.strip().lower()}")
+    return "&".join(out)
+
+
+def _refuse(why: str, entry: str | None = None):
+    logger.warning("%s entry=%s why=%s", DENIED, entry or "none", why)
+    raise ApiDenied(DENIED, entry, why)
+
+
+def gate_url(url: str, purpose: str | None = None, policy: Policy | None = None,
+             like: LikePatterns | None = None) -> Decision | None:
     """API-URL-GATE-1108: the check for EVERY generic outbound fetch hop (a URL that may come from search results,
     portal links or a redirect). None: not an API URL (robots/read gates apply as before). A Decision: an API URL
-    whose entry permits this purpose (default: current_purpose(), i.e. "fulltext"). Otherwise ApiDenied, nothing sent.
-    Fail closed: when config/api_permissions.json is unusable no URL can be classed as non-API, so EVERY URL is refused
-    (R-API-DENIED, config_unusable)."""
+    whose entry permits this purpose. Otherwise ApiDenied (logged with its fixed code and why), nothing sent:
+    - config_unusable: config/api_permissions.json or config/api_like_patterns.json unusable (EVERY URL refused);
+    - unparseable_url;
+    - ip_literal: an IP-literal host not in ip_literal_allow (1108b (2));
+    - an entry's refusal (owner_deny, verdict_*, scope_*, ...): the URL matches an entry, which alone decides;
+    - unlisted_api_like:<pattern id>: no entry, but the URL looks like an API call (1108b (1)).
+    purpose: the caller's explicit purpose; None falls back to current_purpose(url) (default "fulltext")."""
     policy = policy or get_policy()
-    if policy.error:
-        logger.warning("%s entry=none why=config_unusable", DENIED)
-        raise ApiDenied(DENIED, None, "config_unusable")
+    like = like or get_like()
+    if policy.error or like.error:
+        _refuse("config_unusable")
     try:
+        host, _ = _split(url)
         api = is_api_url(url, policy)
     except ValueError:  # an unparseable URL (e.g. invalid IPv6 literal) cannot be classed: refused
-        logger.warning("%s entry=none why=unparseable_url", DENIED)
-        raise ApiDenied(DENIED, None, "unparseable_url") from None
-    if not api:
-        return None
-    return require(url, purpose or current_purpose(), policy)
+        _refuse("unparseable_url")
+    if is_ip_literal(host) and host not in like.ip_literal_allow:
+        _refuse("ip_literal")
+    if api:
+        return require(url, purpose or current_purpose(url), policy)
+    pid = api_like(url, like)
+    if pid:
+        _refuse("unlisted_api_like:" + pid)
+    return None
+
+
+def accepts_purpose(fn: Callable) -> bool:
+    """True for a transport that declares an api_purpose parameter by name (pinned_get, gate_api_urls,
+    limited_transport); a **kwargs stub does not count, so it is never handed a keyword it does not expect."""
+    if getattr(fn, "accepts_api_purpose", False):
+        return True
+    import inspect
+    try:
+        p = inspect.signature(fn).parameters.get("api_purpose")
+    except (TypeError, ValueError):
+        return False
+    return p is not None and p.kind in (p.KEYWORD_ONLY, p.POSITIONAL_OR_KEYWORD)
 
 
 def gate_api_urls(fn: Callable) -> Callable:
     """Wrap a requests.get-compatible fetcher used for websites AND APIs (auto_acquire's hop transport): a URL that is
     an API call (is_api_url) must pass require() and gets the entry's User-Agent; other URLs pass unchanged (they
     stay under the robots/TDM gate). The wrapper is marked api_gated so callers can pre-check before robots.txt.
-    API-URL-GATE-1108: fails closed (gate_url) and runs fn under the caller's purpose, so a gated transport below
-    (pinned_get) re-checks the same purpose."""
+    API-URL-GATE-1108: fails closed (gate_url). The purpose is passed on explicitly to a transport that takes it, and
+    otherwise bound to this url only (guarded fallback, current_purpose)."""
     def wrapped(url, *a, api_purpose: str = "fulltext", **kw):
         # r2 (3): the caller's purpose ("metadata" for JSON lookups, "fulltext" for documents) is checked against the
         # entry's content_scope here too; a caller that names none gets the stricter "fulltext".
         d = gate_url(url, api_purpose)
         if d is not None:
             kw["headers"] = headers_for(d, kw.get("headers"))
-        with purpose_scope(api_purpose):
+        if accepts_purpose(fn):
+            return fn(url, *a, api_purpose=api_purpose, **kw)
+        with purpose_scope(api_purpose, url):
             return fn(url, *a, **kw)
     wrapped.__wrapped__ = fn
     wrapped.api_gated = True
+    wrapped.accepts_api_purpose = True
+    return wrapped
+
+
+def limited_transport(fn: Callable, fixed_portal: str | None = None, *, strict: bool = False) -> Callable:
+    """1108b (4): rate-limit a requests.get-compatible transport. A permitted API hop always goes through ITS entry's
+    portal (never fixed_portal, never the host's portal) and the portal is marked held, so a gated transport below does
+    not take it twice. Any other URL: fixed_portal when given, else the host's portal (rate_limit.limited_by_url
+    semantics), else unlimited; with strict=True (OA-1, acquisition) a URL in no portal fails CLOSED with
+    rate_limit.UnlistedHost, nothing sent. A refused API URL raises ApiDenied, nothing sent."""
+    def wrapped(url, *a, api_purpose: str | None = None, **kw):
+        from vera import rate_limit
+        reg = rate_limit.get_registry()
+        if accepts_purpose(fn) and api_purpose is not None:
+            kw["api_purpose"] = api_purpose
+        d = gate_url(url, api_purpose)
+        if d is not None:
+            name = str(d.conditions["rate_portal"])
+            with holding(name):
+                return rate_limit.call_with_limit(reg.portal(name), fn, url, *a, **kw)
+        ad = reg.portal(fixed_portal) if fixed_portal else reg.portal_for_url(url)
+        if ad is None:
+            if strict:
+                raise rate_limit.UnlistedHost((urlsplit(str(url)).hostname or "").lower())
+            return fn(url, *a, **kw)
+        return rate_limit.call_with_limit(ad, fn, url, *a, **kw)
+    wrapped.__wrapped__ = fn
+    wrapped.accepts_api_purpose = True
+    wrapped.rate_portal = fixed_portal  # as rate_limit.limited marks its portal (None: per-host)
     return wrapped
 
 

@@ -233,7 +233,8 @@ def test_redirect_within_row_host_to_unlisted_path_is_refused():
                ("docs.slack.dev", "/"): redirect("https://api.slack.com/docs"),
                ("api.slack.com", "/robots.txt"): robots(), ("api.slack.com", "/docs"): html()})
     got = _lane(net).run(["Slack"])
-    assert got["links"][0]["reason"] == "read_lane_hop_refused" and not got["pages"]
+    # API-URL-GATE-1108b: the api.* host is now refused by the API gate before the read gate (either refusal holds)
+    assert got["links"][0]["reason"] in ("read_lane_hop_refused", "api_denied") and not got["pages"]
     assert ("api.slack.com", "/docs") not in net.sent  # api.slack.com has no allowed path (deny all)
 
 

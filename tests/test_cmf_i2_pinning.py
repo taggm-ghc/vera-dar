@@ -153,7 +153,7 @@ def test_i2_rebind_guarded_get_connects_to_first_validated_ip(net):
 def test_i2_default_deps_transport_is_the_pinned_getter():
     import inspect
     src = inspect.getsource(auto_acquire.default_deps)
-    assert "limited_by_url(selective_fetch.pinned_get, strict=True)" in src and "requests.get" not in src
+    assert "limited_transport(selective_fetch.pinned_get, strict=True)" in src and "requests.get" not in src  # 1108b (4)
 
 
 def test_i2_default_transports_are_pinned():

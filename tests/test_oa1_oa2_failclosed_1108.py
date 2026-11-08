@@ -47,7 +47,7 @@ def test_every_acquisition_host_has_a_portal(host):
 
 def test_acquisition_deps_wiring_is_strict():
     src = (ROOT / "vera" / "auto_acquire.py").read_text()
-    assert "limited_by_url(selective_fetch.pinned_get, strict=True)" in src
+    assert "limited_transport(selective_fetch.pinned_get, strict=True)" in src  # API-URL-GATE-1108b (4): strict kept
 
 
 def test_config_hosts_all_listed_and_eutils_removed():

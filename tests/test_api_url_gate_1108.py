@@ -94,7 +94,7 @@ def test_gate_api_urls_metadata_purpose_reaches_the_transport(no_net):
     assert not isinstance(ei.value, sf.ApiRefused) and no_net == [METADATA_ONLY]
     with pytest.raises(ap.ApiDenied):
         get(METADATA_ONLY)  # default purpose fulltext: out of the entry's scope
-    assert ap.current_purpose() == "fulltext"  # the scope does not leak past the call
+    assert ap.current_purpose(METADATA_ONLY) == "fulltext"  # the scope does not leak past the call
 
 
 # --------------------------------------------------------------- selective_fetch.fetch_html / fetch_candidate hops

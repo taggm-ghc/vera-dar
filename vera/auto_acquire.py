@@ -477,7 +477,7 @@ def default_deps(cfg: dict, env) -> Deps:  # live wiring; exercised offline by t
     # RATE-1022 A6: www.ebi.ac.uk is the europepmc portal (resolve_oa + JATS fetch); an unlisted host fails closed (OA-1, strict=True: R-ACQ-HOST, nothing sent).
     # API-ALLOW-1107: API URLs on that transport (Europe PMC REST, ...) need their config/api_permissions.json entry.
     from vera import api_permissions
-    return Deps(search=search, http_get=api_permissions.gate_api_urls(rate_limit.limited_by_url(selective_fetch.pinned_get, strict=True)),
+    return Deps(search=search, http_get=api_permissions.gate_api_urls(api_permissions.limited_transport(selective_fetch.pinned_get, strict=True)),
                 lookup=RoLookup(ro, cfg),
                 store=WoStore(wo, ro, cfg),
                 corpus_keys=keys, url_check=selective_fetch.is_public_url, refresh=refresh, close=close)

@@ -712,13 +712,13 @@ def test_df8_landing_fetch_restrictions():
 
 
 def test_df8_default_transport_is_pinned_and_rate_limited(monkeypatch):
-    from vera import rate_limit, selective_fetch
+    from vera import api_permissions, selective_fetch
     seen = {}
 
-    def fake_limited_by_url(fn, **k):
+    def fake_limited_transport(fn, **k):  # API-URL-GATE-1108b (4): host portal, or the API entry's own portal
         seen["fn"] = fn
         return lambda *a, **kw: _Resp(404)
-    monkeypatch.setattr(rate_limit, "limited_by_url", fake_limited_by_url)
+    monkeypatch.setattr(api_permissions, "limited_transport", fake_limited_transport)
     sp.landing_doi("https://papers.ssrn.com/p", 5, 4096, url_check=lambda u: (True, ""), robots_ok=lambda u: True)
     assert seen["fn"] is selective_fetch.pinned_get
 

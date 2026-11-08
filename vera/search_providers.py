@@ -982,9 +982,9 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
     Accept-Encoding identity, an HTML content type, the size cap and the hop/overall deadline. Owner P0 (2026-10-23):
     previously unknown public websites are allowed through this existing safe transport; no host list is added."""
     if get is None:  # CMF-1022-I2 (E1/A4): connect only to the address validated for this hop
-        from vera import rate_limit
+        from vera import api_permissions
         from vera.selective_fetch import pinned_get
-        get = rate_limit.limited_by_url(pinned_get)
+        get = api_permissions.limited_transport(pinned_get)  # 1108b (4): an API hop uses its own entry's portal
     if url_check is None:
         from vera.selective_fetch import is_public_url as url_check
     import time as _t
@@ -1025,8 +1025,9 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                 if left <= 0.2:
                     return None
                 from vera.selective_fetch import USER_AGENT as _FETCH_UA  # verifier D1: the UA robots.txt was checked for
+                _purpose = {"api_purpose": "fulltext"} if _sf_api.api_permissions.accepts_purpose(get) else {}  # 1108b (6)
                 r = get(cur, headers={"User-Agent": _FETCH_UA, "Accept-Encoding": "identity"}, timeout=left,
-                        allow_redirects=False, stream=True)
+                        allow_redirects=False, stream=True, **_purpose)
                 stop_at = clock() + left  # a trickling server cannot hold the thread past the hop budget or the deadline
                 try:
                     if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
@@ -1616,7 +1617,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
     if wiki_on and wiki_get is None:
         from vera import rate_limit, selective_fetch
         # WIKI-REDESIGN-1107: article pages only (robots-checked in the portal); pinned GET, never a redirect
-        wiki_get = rate_limit.limited("wikipedia", selective_fetch.pinned_get)
+        from vera import api_permissions as _ap_wiki  # 1108b (4): fixed portal for pages; an API hop uses its own
+        wiki_get = _ap_wiki.limited_transport(selective_fetch.pinned_get, fixed_portal="wikipedia")
 
     shape_state = {"recency": True, "review": False, "pending": False}  # QUERY-SHAPE-1108: set in round 0, review spent by the next round
 

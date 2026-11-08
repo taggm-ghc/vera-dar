@@ -271,4 +271,4 @@ def test_every_route_fails_closed_on_an_unlisted_host(monkeypatch, which):
 
 def test_live_wiring_is_strict_and_api_gated():
     src = (ROOT / "vera" / "auto_acquire.py").read_text()
-    assert "api_permissions.gate_api_urls(rate_limit.limited_by_url(selective_fetch.pinned_get, strict=True))" in src
+    assert "api_permissions.gate_api_urls(api_permissions.limited_transport(selective_fetch.pinned_get, strict=True))" in src
