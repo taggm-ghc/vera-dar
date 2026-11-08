@@ -72,7 +72,7 @@ _HOST = re.compile(r"^(?=.{4,253}$)([a-z0-9-]+\.)+[a-z]{2,}$")
 EXPECTED_REFUSED_HOSTS = {
     "api.gdeltproject.org", "api.openalex.org", "api.crossref.org", "api.semanticscholar.org", "api.unpaywall.org",
     "export.arxiv.org", "doaj.org", "hn.algolia.com", "openrouter.ai", "api.groq.com", "api.openai.com",
-    "api.slack.com", "eutils.ncbi.nlm.nih.gov", "127", "127.0.0.1"}
+    "api.slack.com", "eutils.ncbi.nlm.nih.gov", "127", "127.0.0.1", "inspirehep.net"}
 
 
 def _corpus():

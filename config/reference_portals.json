@@ -1,0 +1,97 @@
+{
+  "_doc": "ROUTES-1108 slice 1 (plan work/ROUTES-PLAN-1108/plan.md section 3). Generic REFERENCE PORTAL: owner 2026-11-08, \"most sites should be treated as portals if through those sites we find links to orginal sources\". Read only by vera/reference_portal.py. A portal page yields ONLY identifiers and approved outbound links (DOI, PMCID, PMID, arXiv id, handle, approved publisher landing URL); its prose is never read, stored, scored, logged or shown (the parser has no text handler). Every extracted candidate goes through the unchanged acquisition gates (route, API allowlist, robots/TDM per hop, rate and Crawl-delay, licence, injection, relevance, admission) and is acquired only as full text through a permitted route. A host is usable as a portal only when its row in config/portal_hosts.json is status active with terms permit (default deny: an unknown host is never fetched, only counted as host_unchecked) AND robots.txt allows the page for our user agent, * and every AI-agent group (vera.selective_fetch.robots_allowed, fail closed) AND none of the exclusion signals below holds AND the host is not in exclusions.hosts. The portal page's own licence is not checked: its text is never evidence. mode: off (nothing runs, no request) | shadow (runs in a background thread with its own deadline, logs counts only, hands NOTHING to acquisition, never delays the caller) | on (synchronous within the acquisition search deadline; candidates merged after every other provider). Ships off (orchestrator 2026-11-08, ROUTES-1108-OFF: shadow would fetch en.wikipedia.org live per question; deny by default). No key, no secret, no env read, no email in any User-Agent.",
+  "_dp1_note": "D-P1 ruling (orchestrator, 2026-11-08, under the owner's portal directive; PROVISIONAL, pending owner review): a host whose signals say only ai-train=no IS allowed as a portal, because extracting links is not training. A host is EXCLUDED as a portal when it has Content-Signal ai-input=no, a TDM reservation (TDM-Reservation: 1 header, <meta name=\"tdm-reservation\" content=\"1\">, or a /.well-known/tdmrep.json rule reserving the path; an unreadable tdmrep.json counts as reserved), a robots block on our agents (own UA, * or any robots_ai.json AI-agent group, or an AI-block statement), or terms forbidding automated or AI access (portal_hosts.json terms deny). Each is a key in exclusion_signals and has a test.",
+  "_calibration_note": "Every number here is a PLANNER PRIOR or a SAFETY bound, not a decision threshold: the decision gates are the unchanged acquisition gates. max_pages_per_question 4, max_pages_per_host 1, max_links_per_page 50 and max_candidates_per_question 30 (below auto_acquire inline.discovered_max 31) bound work per question; timeout_s 5 and max_page_bytes 4000000 are safety limits (two Wikipedia article pages read 2026-11-07 were 389 kB and 1.51 MB, work/WIKI-REDESIGN-1107/calibration.txt). shadow_deadline_s 30 bounds a background shadow run. relevance.* is copied from config/wiki_ref_portal.json (its calibration note applies: provisional, measured on 2 reference lists and 7 questions on 2026-11-07) and is used only to ORDER COinS references (never to admit). What would change them: the 'autoacq refportal' shadow counts (pages, links, candidates, host_unchecked, excluded_*) and, once on, the downstream relevance-gate pass rate and full-text yield of portal candidates over live questions.",
+  "mode": "off",
+  "user_agent": "VERA-DAR-reference-portal/0.1 (non-commercial educational research assistant; reference-link discovery only; https://github.com/taggm-ghc/vera-dar)",
+  "host_registry": "config/portal_hosts.json",
+  "caps": {
+    "max_pages_per_question": 4,
+    "max_pages_per_host": 1,
+    "max_links_per_page": 50,
+    "max_candidates_per_question": 30,
+    "max_hrefs_scanned": 5000,
+    "max_page_bytes": 4000000,
+    "timeout_s": 5,
+    "shadow_deadline_s": 30,
+    "tdmrep_max_bytes": 65536
+  },
+  "exclusion_signals": {
+    "ai_input_no": true,
+    "tdm_reservation": true,
+    "tdmrep_unreadable_is_reserved": true,
+    "robots_block": true,
+    "terms_forbid": true,
+    "ai_train_no_only": false,
+    "_note": "true = the signal EXCLUDES the host as a portal. The first five MUST be exactly true: validation refuses any other value (fail closed) and vera/reference_portal.fetch_page applies those five checks unconditionally, so they cannot be switched off by config. ai_train_no_only is a real switch: false (shipped, D-P1 provisional) = a host whose only signal is Content-Signal ai-train=no stays usable; true = such a host is excluded too (Skip ai_train_no; tested)."
+  },
+  "exclusions": {
+    "hosts": [
+      "openstax.org",
+      "oapen.org",
+      "doabooks.org",
+      "cds.cern.ch",
+      "biorxiv.org",
+      "medrxiv.org",
+      "docs.aws.amazon.com",
+      "docs.nvidia.com",
+      "learn.microsoft.com"
+    ],
+    "doi_prefixes": ["10.1101"],
+    "_note": "A host equal to, or a subdomain of, an entry is never read as a portal and no link TO it is kept, whatever portal_hosts.json says (exclusion wins). A DOI is a separate identifier: a doi.org link to an excluded publisher's work is dropped only when its prefix is in doi_prefixes (10.1101 = bioRxiv/medRxiv, OD-7), checked on every candidate from every adapter; other DOIs go to the unchanged acquisition gates. OpenStax: terms forbid generative-AI ingestion (GENSCI-SOURCES-1108 S3). OAPEN/DOAB: www.oapen.org robots disallows ClaudeBot and anthropic-ai (B2). CERN CDS: Anubis challenge, never bypassed (E1). bioRxiv/medRxiv: preprint policy OD-7. AWS, Nvidia, Microsoft Learn docs: terms forbid automated access (R-050)."
+  },
+  "classifier": {
+    "kinds": ["doi", "pmcid", "pmid", "arxiv", "handle", "landing"],
+    "landing_hosts_from": "auto_acquire.landing_route.publisher_hosts",
+    "drop_host_patterns": [
+      "(?:^|\\.)(?:wikipedia|wikimedia|wikidata|wiktionary|wikibooks|wikiquote|wikisource|wikiversity|wikivoyage|wikinews|mediawiki)\\.org$",
+      "(?:^|\\.)(?:archive\\.(?:ph|today|is|li|vn|fo|md)|webcitation\\.org|ghostarchive\\.org|wikiwix\\.com)$"
+    ],
+    "_note": "Deny-all: an href is kept only when it classifies as one of kinds. doi/pmcid/pmid/arxiv/handle use search_providers.ddg_identifier (the shared URL identifier rule); web.archive.org snapshots are unwrapped first (wiki_ref_portal.unwrap_archive); landing = an https URL whose host is in the approved publisher landing-host list (ships empty, so nothing is kept as landing until hosts are approved). Same-site, navigation, social and every other link is dropped. PMID-only references are dropped (they need the Europe PMC id lookup)."
+  },
+  "relevance": {
+    "stem_len": 5,
+    "min_contain_len": 6,
+    "min_hits": 2
+  },
+  "adapters": {
+    "openalex_rw": {
+      "enabled": true,
+      "max_seeds": 3,
+      "max_calls_per_question": 1,
+      "or_seeds": true,
+      "run_in_shadow": false,
+      "per_page": 50,
+      "cache_ttl_s": 86400,
+      "cache_max": 512,
+      "_note": "Keyless OpenAlex (OD-1108-SRC 4: no API key). Seeds are the OpenAlex works the acquisition search ALREADY returned (no new search call). ONE call per question at most: filter cited_by:W1|W2|W3 returns the works those seeds reference, with the OA fields, parsed by the shared OpenAlexProvider.parse. Through the shared openalex rate portal (1 req/s, concurrency 1) and the shared daily budget; skipped while the OpenAlex quota cooldown is active; a 429/quota error starts that cooldown and is never retried in the question. Results cached per seed set (cache_ttl_s, cache_max). or_seeds false = only the first seed (one call either way). UNVERIFIED until a recorded response confirms it: OR (|) support in the cited_by filter. run_in_shadow false (SECREV M2): in mode shadow this adapter makes NO call, so shadow never spends the shared keyless budget, holds the shared openalex slot or starts the process-wide quota cooldown; it runs only in mode on."
+    },
+    "wikipedia_title": {
+      "enabled": true,
+      "host": "en.wikipedia.org",
+      "max_title_tries": 2,
+      "_note": "No on-wiki search (robots disallows /w/ and /api/ for *). Page URLs are built directly from the question's content terms: https://en.wikipedia.org/wiki/<Title> as-is, then a naive singular (max_title_tries pages). They go through the same generic page path (registry row en.wikipedia.org, paths /wiki/<Title> only, 1 req/s rate portal wikipedia, robots, signals). OpenAlex-topic Wikipedia links are NOT used in slice 1 (field shape unverified)."
+    },
+    "generic_page": {
+      "enabled": true,
+      "sources": ["ddg", "openalex_landing"],
+      "_note": "Result pages already returned by DuckDuckGo (raw results) and OpenAlex landing URLs. A result that is not usable evidence can still be read as a portal when its host passes eligibility."
+    },
+    "arxiv_html_refs": {"enabled": false, "_note": "slice 2: shares the arXiv Crawl-delay 15 budget with the full-text route"},
+    "crossref_refs": {"enabled": false, "_note": "slice 2"},
+    "inspire_refs": {
+      "enabled": false,
+      "endpoint": "https://inspirehep.net/api/literature",
+      "size": 3,
+      "sort": "mostcited",
+      "fields": ["dois.value", "arxiv_eprints.value", "references.reference.dois", "references.reference.arxiv_eprint"],
+      "max_refs_per_seed": 30,
+      "max_query_terms": 6,
+      "max_response_bytes": 4000000,
+      "cooldown_min_s": 5,
+      "cache_ttl_s": 86400,
+      "cache_max": 256,
+      "_note": "INSPIRE batch (separate release, after API-ALLOW ships). Owner OD-1108-SRC item 2: API CLEARED for metadata and references only, 15 req / 5 s, CC0 metadata, email fields dropped. ONE literature search per question (size seeds, most cited) returning identifier fields only; each hit's own DOI/arXiv id plus up to max_refs_per_seed reference ids. Through vera.api_permissions.call (entry inspire_literature, rate portal inspire); without the API allowlist module nothing is sent. cooldown_min_s 5 = the documented wait after a 429 (GENSCI-SOURCES-1108 I2); size, max_refs_per_seed, max_query_terms and caches are planner priors (bounds, not decision thresholds; calibrate from 'autoacq refportal' inspire_* shadow counts). Field paths UNVERIFIED until one response is recorded; any other shape yields nothing. Ships enabled false in slice 1; the INSPIRE batch flips it."
+    }
+  }
+}

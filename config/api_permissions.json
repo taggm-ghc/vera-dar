@@ -95,6 +95,16 @@
                      "_note": "no first-party terms found; Y Combinator terms bar robots and scraping (work/NEWS-LANE-1104/compliance.md). Already excluded from the lane fallback order."},
       "evidence": [{"url": "https://hn.algolia.com/api", "read_level": "summarizer", "read": "2026-11-03", "provenance": "config/rate_limits.json"}],
       "read_level": "summarizer", "read": "2026-11-03", "review_by": "2026-12-07"
+    },
+    "inspire_literature": {
+      "host": "inspirehep.net", "path_prefix": "/api/literature",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "deny", "owner_decision": "OD-1108-SRC (cleared for metadata; shipped denied, owner flips to permit at activation)",
+      "conditions": {"rate_portal": "inspire", "max_rate_per_s": 3.0, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": "VERA-DAR/1.0 (+https://github.com/taggm-ghc/vera-dar)", "send_email": false, "content_scope": ["metadata"],
+                     "_note": "metadata and references only, 15 req/5 s, CC0 metadata; fields= lists identifier paths only; no full text from INSPIRE (full text only via arXiv CC route or SCOAP3)."},
+      "evidence": [{"url": "https://raw.githubusercontent.com/inspirehep/rest-api-doc/master/README.md", "read_level": "summarizer", "read": "2026-11-08", "provenance": "GENSCI-SOURCES-1108 I2"},
+                   {"url": "https://help.inspirehep.net/knowledge-base/terms-of-use", "read_level": "summarizer", "read": "2026-11-08", "provenance": "GENSCI-SOURCES-1108 I3"}],
+      "read_level": "summarizer", "read": "2026-11-08", "review_by": "2026-12-08"
     }
   }
 }

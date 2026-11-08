@@ -356,6 +356,7 @@ REGISTRY: dict[str, tuple] = {
     "vera/search_providers.py:openalex_default_transport": (API_GATE, "vera/search_providers.py:openalex_default_transport", "api_permissions.call("),
     "vera/search_providers.py:europepmc_default_transport": (API_GATE, "vera/search_providers.py:europepmc_default_transport", "api_permissions.call("),
     "vera/search_providers.py:doaj_default_transport": (API_GATE, "vera/search_providers.py:doaj_default_transport", "api_permissions.call("),
+    "vera/portal_inspire.py:_default_get": (API_GATE, "vera/portal_inspire.py:_default_get", "api_permissions.call("),  # ROUTES-1108 inspire (ships owner_switch deny)
     "vera/source_resolver.py:_api_get": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:_s2": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:lookup_doi": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
@@ -366,6 +367,12 @@ REGISTRY: dict[str, tuple] = {
     "vera/reporting_lane.py:_no_redirect_handler._H": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
     # WIKI-REDESIGN-1107 (e87ef55): article pages only, each after selective_fetch.robots_allowed (portal ships off)
     "vera/wiki_ref_portal.py:discover": (GATE, "robots_ok("),
+    # ROUTES-1108: the generic reference portal. fetch_page calls deps.robots_ok (selective_fetch.robots_allowed: own UA,
+    # * and AI-agent groups, fail closed) before its one GET; the host's tdmrep.json is read only from fetch_page, after
+    # the page's robots check passed (TDMRep well-known file; same rate portal, byte cap and deadline).
+    "vera/reference_portal.py:fetch_page": (GATE, "robots_ok("),
+    "vera/reference_portal.py:_default_deps": (TRANSPORT, "vera/reference_portal.py:fetch_page", "robots_ok("),
+    "vera/reference_portal.py:_tdmrep_ok": (TRANSPORT, "vera/reference_portal.py:fetch_page", "robots_ok("),
     "vera/wiki_ref_portal.py:_default_robots.ok": (ROBOTS_FETCH,),
     "vera/wiki_ref_portal.py:get_article": (TRANSPORT, "vera/wiki_ref_portal.py:discover", "robots_ok("),
     "vera/wiki_ref_portal.py:make_portal_search.search": (TRANSPORT, "vera/wiki_ref_portal.py:discover", "robots_ok("),
@@ -583,5 +590,5 @@ def test_no_ungated_api_sites_remain():
     no entry may use any other class for an API site, and none may come back as ungated."""
     assert all(e[0] in (GATE, TRANSPORT, ROBOTS_FETCH, FIRST_PARTY, LLM_API, NO_REQUEST, API_GATE, TRACKED_GAP)
                for e in REGISTRY.values())
-    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 12
+    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 13
     assert sum(1 for e in REGISTRY.values() if e[0] == TRACKED_GAP) == 0  # Wikipedia portal gated since e87ef55

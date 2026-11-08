@@ -1,0 +1,66 @@
+{
+  "_doc": "ROUTES-1108: per-host PORTAL verdicts for vera/reference_portal.py (seed; a DB table is the later target under the no-hardcoded-data rule, its DDL is owner-gated). DEFAULT DENY: a host with no row, or a row whose status is not active or whose terms is not permit, is never fetched as a portal (counted host_unchecked: the terms-reading queue). A row is matched by exact host. paths_allow is a full-match regex on the URL path (no query string is ever allowed); rate_portal must name a config/rate_limits.json portal that lists this host, else the row is invalid (no request). Robots.txt, Content-Signal and TDM signals are read at run time and can only narrow a row, never widen it. Terms verdicts are summarizer-level reads (WebFetch), dated, with review_by; a reviewer checks the evidence path before a row becomes active.",
+  "version": 1,
+  "entries": [
+    {
+      "host": "en.wikipedia.org",
+      "status": "active",
+      "terms": "permit",
+      "paths_allow": "/wiki/[^:/?#\\s]{1,250}",
+      "rate_portal": "wikipedia",
+      "evidence": "work/GENSCI-SOURCES-1108/verdicts.md rows W1-W4 (robots allows /wiki/ for *, no Claude group seen; WMF Robot policy and ToU: automated use must not be abusive; UA with contact URL, no email); orchestrator disposition 2026-11-08: /wiki/<Title> only, reference lists only, 1 req/s or slower",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    },
+    {
+      "host": "arxiv.org",
+      "status": "pending",
+      "terms": "permit",
+      "paths_allow": "/html/\\d{4}\\.\\d{4,5}v\\d+/?",
+      "rate_portal": "arxiv_web",
+      "evidence": "work/GENSCI-SOURCES-1108/verdicts.md A1-A9; portal role allowed (owner portal directive; OD-1108-SRC 1: default-licence papers are portal-only). PENDING: slice 2 (arxiv_html_refs); the Crawl-delay 15 budget goes to the full-text route in slice 1",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    },
+    {
+      "host": "repo.scoap3.org",
+      "status": "pending",
+      "terms": "permit",
+      "paths_allow": "/records/[0-9]+/?",
+      "rate_portal": null,
+      "evidence": "work/GENSCI-SOURCES-1108/verdicts.md C1-C3 (web full text CC BY, Crawl-delay 10 on scoap3.org, no robots file on repo host). PENDING: slice 2; needs a rate portal and a raw read of the record page structure",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    },
+    {
+      "host": "openstax.org",
+      "status": "excluded",
+      "terms": "deny",
+      "paths_allow": null,
+      "rate_portal": null,
+      "evidence": "GENSCI-SOURCES-1108 S3: book pages forbid ingestion into generative-AI offerings without written permission",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    },
+    {
+      "host": "www.oapen.org",
+      "status": "excluded",
+      "terms": "deny",
+      "paths_allow": null,
+      "rate_portal": null,
+      "evidence": "GENSCI-SOURCES-1108 B2: robots disallows ClaudeBot and anthropic-ai, EU DSM Art. 4 reservation",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    },
+    {
+      "host": "cds.cern.ch",
+      "status": "excluded",
+      "terms": "deny",
+      "paths_allow": null,
+      "rate_portal": null,
+      "evidence": "GENSCI-SOURCES-1108 E1: robots.txt behind an Anubis proof-of-work challenge; never bypassed",
+      "read": "2026-11-08",
+      "review_by": "2026-12-08"
+    }
+  ]
+}

@@ -170,7 +170,7 @@ def test_spacing_is_the_stricter_of_crawl_delay_and_the_configured_rate(reset):
     rp = lambda host: acq_discovered._ROBOTS[host][1]  # noqa: E731
     assert acq_discovered.crawl_interval(JATS, rp(EBI)) == 10.0  # Crawl-delay 10 > 1 / 5 per s
     arx = acq_discovered.crawl_interval("https://arxiv.org/abs/x", rp("arxiv.org"))
-    assert arx == pytest.approx(3.0, rel=1e-3)  # 1 / 0.333333 per s (rate_limits.json arxiv_web) > Crawl-delay 1
+    assert arx == pytest.approx(15.0, rel=1e-3)  # 1 / 0.066667 per s (rate_limits.json arxiv_web, ROUTES-1108) > Crawl-delay 1
     # from config, not hard-coded: a slower configured rate is honoured
     cfg = rate_limit.load_config()
     cfg["portals"]["europepmc"]["rate_per_s"] = 0.05

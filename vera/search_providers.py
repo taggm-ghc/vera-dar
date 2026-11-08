@@ -1241,7 +1241,7 @@ def _ddg_url_cand(r: Mapping) -> dict:
 
 
 def acq_source(c: Mapping) -> str:
-    if c.get("acq_source") in ("ddg", "wikipedia_portal", "discovered"):  # WIKIREF-1022 edit 2; P0-5 (flag on only)
+    if c.get("acq_source") in ("ddg", "wikipedia_portal", "discovered", "reference_portal"):  # WIKIREF-1022; P0-5; ROUTES-1108
         return c["acq_source"]
     return "epmc" if c.get("provider") == "europepmc" else "openalex"
 
@@ -1255,7 +1255,9 @@ def acq_rank_tier(c: Mapping, arxiv_route: bool = False) -> int:
         if c.get("ddg_id_kind") == "arxiv":
             return 1 if arxiv_route else 2
         return 0
-    if c.get("acq_source") == "wikipedia_portal":  # WIKIREF-1022 edit 2: arXiv refs last, others scholarly tier
+    if c.get("acq_source") == "wikipedia_portal" or (c.get("acq_source") == "reference_portal" and c.get("ref_id_kind")):
+        # WIKIREF-1022 edit 2 / ROUTES-1108 (page-extracted refs): arXiv refs last, others scholarly tier; OpenAlex
+        # reference-list records (no ref_id_kind) take the generic arXiv rule below (SECREV L6)
         return (1 if arxiv_route else 2) if c.get("ref_id_kind") == "arxiv" else 1
     if _arxiv_identified(c) and not _cand_pmcid(c):  # ROUTE-R3 (D3): no full-text route unless the arXiv route is on
         return 1 if (arxiv_route and _arxiv_routable(c)) else 2
@@ -1784,6 +1786,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         if base_err is not None and not ddg and not got.get("epmc") and not got.get("wiki"):
             raise base_err
         merged = merge_sources(ddg, base, got.get("epmc"), got.get("wiki"))  # DDG first; portal refs last
+        if not SCHOLARLY_ONLY.get():  # ROUTES-1108: generic reference portal, once per question (first round only);
+            from vera import reference_portal  # off = no work; shadow = background, logs only; on = merged last
+            merged = reference_portal.extend(question, merged, base=base, ddg_raw=got.get("ddg"), clock=clock,
+                                             deadline=t_end)
         by = {}
         for c in merged:
             by[acq_source(c)] = by.get(acq_source(c), 0) + 1

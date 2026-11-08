@@ -20,6 +20,13 @@
     "_note": "Planner priors. max_wait_s 2 keeps any in-request wait far below the 45 s inline deadline (config/auto_acquire.json inline.deadline_s); min_call_s 1 is the least time left for a call to be worth sending."
   },
   "portals": {
+    "inspire": {
+      "hosts": ["inspirehep.net"], "rate_per_s": 1.0, "burst": 1, "max_concurrency": 1, "daily_cap": null,
+      "throttle_statuses": [429, 503], "base_cooldown_s": 5.0, "max_cooldown_s": 300.0, "contact_param": null,
+      "sources": [{"url": "https://raw.githubusercontent.com/inspirehep/rest-api-doc/master/README.md", "read": "2026-11-08",
+                   "inspection": "summarizing fetch (GENSCI-SOURCES-1108 I2)", "claims": "15 requests per 5 s window per IP; 429 when exceeded, then wait at least 5 s"}],
+      "_note": "ROUTES-1108 / OD-1108-SRC: owner ceiling 15 req / 5 s (3/s); run at 1/s, serial. base_cooldown_s 5 = documented wait."
+    },
     "openalex": {
       "hosts": ["api.openalex.org"],
       "rate_per_s": 1.0,
@@ -89,7 +96,7 @@
     },
     "arxiv_web": {
       "hosts": ["arxiv.org"],
-      "rate_per_s": 0.333333,
+      "rate_per_s": 0.066667,
       "burst": 1,
       "max_concurrency": 1,
       "daily_cap": null,
@@ -99,7 +106,8 @@
         {"url": "https://info.arxiv.org/help/api/tou.html", "read": "2026-10-21", "inspection": "summarizing fetch (read for the export API portal above; arxiv.org robots.txt / crawl-delay NOT read in ARX-A2, no network)",
          "claims": "no more than one request every three seconds; a single connection at a time"}
       ],
-      "_note": "prior, ARX-A2 SECURITY-CONFIG CHANGE (needs security review): the arXiv full-text route (vera/arxiv_fulltext.py) reads robots.txt (cached), one abs page and one HTML page per record, one at a time, and itself waits arxiv_route.min_interval_s (or a longer robots.txt crawl-delay, up to arxiv_route.max_crawl_delay_s) between its requests; this portal is the process-wide ceiling: 1 request / 3 s, one connection, no burst. Separate from the export.arxiv.org API portal. What would change it: arxiv.org robots.txt crawl-delay (unverified) and live 429/503 counts."
+      "_routes_1108_note": "ROUTES-1108: 1 request / 15 s (rate_per_s 0.066667), the arxiv.org robots.txt Crawl-delay 15 for * (GENSCI-SOURCES-1108 A1, summarizer read listed line by line, 2026-11-08), stricter than the API ToU's 1 / 3 s, so this portal no longer looks looser than robots (crawl_delay.enforce_on_acquisition already applied the stricter value at run time).",
+      "_note": "SUPERSEDED rate (now 1/15 s, see _routes_1108_note): prior, ARX-A2 SECURITY-CONFIG CHANGE (needs security review): the arXiv full-text route (vera/arxiv_fulltext.py) reads robots.txt (cached), one abs page and one HTML page per record, one at a time, and itself waits arxiv_route.min_interval_s (or a longer robots.txt crawl-delay, up to arxiv_route.max_crawl_delay_s) between its requests; this portal is the process-wide ceiling: 1 request / 3 s, one connection, no burst. Separate from the export.arxiv.org API portal. What would change it: arxiv.org robots.txt crawl-delay (unverified) and live 429/503 counts."
     },
     "doaj": {
       "hosts": ["doaj.org"],
@@ -131,8 +139,8 @@
     },
     "wikipedia": {
       "hosts": ["en.wikipedia.org"],
-      "rate_per_s": 2.0,
-      "burst": 2,
+      "rate_per_s": 1.0,
+      "burst": 1,
       "max_concurrency": 1,
       "daily_cap": null,
       "throttle_statuses": [429, 503],
@@ -145,7 +153,8 @@
         {"url": "https://www.mediawiki.org/wiki/API:Etiquette", "read": "2026-10-21", "inspection": "summarizing fetch",
          "claims": "send requests serially; descriptive User-Agent with contact (username, email or URL)"}
       ],
-      "_note": "rate 2/s = 120/min, under 200/min, which needs the compliant User-Agent (config/encyclopedia_source.json user_agent carries a project URL, no email). Serial per the etiquette page. base_cooldown_s 5 = the documented no-Retry-After wait."
+      "_routes_1108_note": "ROUTES-1108 (orchestrator disposition 2026-11-08 on GENSCI-SOURCES-1108 W1-W4): 1 req/s or slower, serial, burst 1 (was 2/s, burst 2). Applies to the Wikipedia reference portal and the generic reference portal's /wiki/<Title> pages.",
+      "_note": "SUPERSEDED rate (now 1/s, see _routes_1108_note): rate 2/s = 120/min, under 200/min, which needs the compliant User-Agent (config/encyclopedia_source.json user_agent carries a project URL, no email). Serial per the etiquette page. base_cooldown_s 5 = the documented no-Retry-After wait."
     },
     "groq": {
       "enabled": false,

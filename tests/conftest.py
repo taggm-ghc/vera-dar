@@ -50,6 +50,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "boundary_probe: deliberately triggers a refused DB access; violations are expected")
     config.addinivalue_line("markers", "wiki_portal: this test keeps the Wikipedia reference portal enabled in "
                             "acquisition_search (it must inject wiki_get; no network)")
+    config.addinivalue_line("markers", "reference_portal: this test keeps vera.reference_portal's shipped config "
+                            "(mode shadow/on); without it the portal is OFF in every test (ROUTES-1108; inject fakes)")
     config.addinivalue_line("markers", "vera_sockets: this test explicitly requests local sockets (loopback, AF_UNIX under "
                             "the session basetemp); without it every socket connect is refused (owner decision OA-2)")
     _boundary.set_live_enabled(bool(config.getoption("--run-live-stages")) or alias_active(os.environ))
@@ -237,6 +239,10 @@ def _offline_wiki_portal_and_fresh_rate_limits(request, monkeypatch):
         import vera.search_providers as sp
     if "wiki_portal" not in request.keywords:
         monkeypatch.setattr(sp, "_wiki_cfg", lambda: {"enabled": False})
+    if "reference_portal" not in request.keywords:  # ROUTES-1108: the generic portal ships shadow; offline = off
+        import vera.reference_portal as _rp
+        _real = _rp.load_config
+        monkeypatch.setattr(_rp, "load_config", lambda path=None: {**_real(path), "mode": "off"})
     import vera.rate_limit as rl
     import vera.api_permissions as ap  # API-ALLOW-1107: the shipped policy, re-read per test (no override leaks)
     rl.set_registry_for_tests(None)
