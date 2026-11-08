@@ -130,10 +130,10 @@ def test_bad_numbers_fall_back_to_defaults():
     assert p.interval == 86400 and p.delay == 300
 
 
-def test_shipped_config_ships_off():
+def test_shipped_config_enabled_per_owner_decision():
     import json
     cfg = json.loads(rt.CONFIG_PATH.read_text())
-    assert cfg["retention_purge"]["enabled"] is False
+    assert cfg["retention_purge"]["enabled"] is True  # OD-1105-PURGE-ENABLE (owner 2026-11-05): enabled once 018 applied
 
 
 def test_writer_thread_runs_purge_on_own_engine_not_flush_engine():

@@ -22,8 +22,8 @@
     "statement_timeout_ms": 2000
   },
   "retention_purge": {
-    "_comment": "PURGE-WIRING-1105: daily in-app purge of trace rows older than 30 days by calling vera_vjay.purge_expired_trace() (migration 018, NOT applied; owner approval needed) on the wo account via vera/retention_purge.py from the trace writer thread. Ships OFF: while enabled is false no connection is opened. Needs db_sink.enabled. interval_s 86400 = once a day; initial_delay_s 300 = first run 5 min after the writer starts and the first retry delay (doubles on error, capped at interval_s); statement_timeout_ms 60000 because the flush engine's 2000 is too short for a bulk delete (PROVISIONAL: no live row counts exist; data that would change it: rows deleted and run time in the first week of 'vera_trace purge' log lines).",
-    "enabled": false,
+    "_comment": "PURGE-WIRING-1105: daily in-app purge of trace rows older than 30 days by calling vera_vjay.purge_expired_trace() (migration 018; owner approval needed) on the wo account via vera/retention_purge.py from the trace writer thread. Enabled per owner decision OD-1105-PURGE-ENABLE (2026-11-05); it needs migration 018 applied and fails closed without it. While enabled is false no connection is opened. Needs db_sink.enabled. interval_s 86400 = once a day; initial_delay_s 300 = first run 5 min after the writer starts and the first retry delay (doubles on error, capped at interval_s); statement_timeout_ms 60000 because the flush engine's 2000 is too short for a bulk delete (PROVISIONAL: no live row counts exist; data that would change it: rows deleted and run time in the first week of 'vera_trace purge' log lines).",
+    "enabled": true,
     "interval_s": 86400,
     "initial_delay_s": 300,
     "statement_timeout_ms": 60000
