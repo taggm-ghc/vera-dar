@@ -143,6 +143,8 @@ class Labels:
         if text is None:
             return None
         values = {k: v for k, v in c.items() if type(v) is int}
+        if "wait_s" in values and values["wait_s"] < 1:  # SELFQ-VARIANTS-1108: never "about 0 s"
+            text = text.replace("in about {wait_s} s", "shortly").replace(" about {wait_s} s", " briefly")
         return text.format_map(values) if _fields_of(text) <= set(values) else None
 
     def stage_label(self, stage: str, state: str, counts: dict | None, rid: str) -> str | None:
@@ -470,7 +472,7 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
                 and (at is None or last_key[3] is None or at - last_key[3] < _LOG_REFRESH_S)):
             log[-1] = text
             continue
-        if not log or log[-1] != text:
+        if text not in log:  # SELFQ-VARIANTS-1108: a repeated line (also non-adjacent) is never appended again
             log.append(text)
             last_key = (*key, held, at)
     counts = _latest_counts(list(holder.events))
@@ -487,7 +489,7 @@ def stream_view(holder: StreamHolder, labels: Labels, now: float) -> dict:
     act = labels.activity_label(holder.activity) if holder.activity else None
     if act is None and not holder.events and since >= 5:
         act = "Waiting for a connection"  # nothing received yet: say so instead of showing a silent spinner
-    line = f"{act or label} · {_duration(now - holder.t0)} elapsed"
+    line = f"{act or 'Working on your question'} · {_duration(now - holder.t0)} elapsed"  # SELFQ-VARIANTS-1108: not a third copy of the status label
     return {"label": label, "log": log[-_LOG_MAX:], "bars": bars, "caption": caption, "activity": line}
 
 
@@ -510,7 +512,8 @@ def stream_tick(holder: StreamHolder, ses, ui, now, labels: Labels) -> bool:
             v = stream_view(holder, labels, t)
             with ui.status(v["label"], state="running", expanded=True):
                 for line in v["log"]:
-                    ui.write(line)
+                    if line != v["label"]:  # SELFQ-VARIANTS-1108: the status header already shows the latest line
+                        ui.write(line)
             for text, frac in v["bars"]:
                 ui.progress(frac, text=text)
             ui.info(v["activity"]) if hasattr(ui, "info") else ui.caption(v["activity"])  # live status line: latest activity + elapsed

@@ -11,6 +11,7 @@ Limits live in config/progress.json (PROVISIONAL, plan s3c); an invalid config d
 """
 from __future__ import annotations
 
+import math
 import hmac
 import json
 import logging
@@ -417,7 +418,7 @@ class waiting:
         self.code, self.secs = code, secs
 
     def __enter__(self):
-        set_activity(self.code, wait_s=int(max(0, round(self.secs))))
+        set_activity(self.code, wait_s=int(math.ceil(max(0.0, self.secs))))  # SELFQ-VARIANTS-1108: rounded up, never "about 0 s"
         return self
 
     def __exit__(self, *exc):
