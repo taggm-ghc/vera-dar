@@ -692,7 +692,10 @@ def _tdmrep_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
     if rules == "unreadable":
         return False
     try:
-        return not public_fetch.tdmrep_reserved(rules, sp.path or "/")
+        if public_fetch.tdmrep_reserved(rules, sp.path or "/"):
+            public_fetch._tdm_purpose_shadow(rules, url)  # PURPOSE-GRANTS-1108: shadow record only; still refused
+            return False
+        return True
     except Exception:  # noqa: BLE001
         return False
 

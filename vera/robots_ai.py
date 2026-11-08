@@ -219,7 +219,27 @@ def annotate(rp, text: str):
     rp.vera_groups = groups
     rp.vera_ai_statement = statement_in(text, cfg)
     rp.vera_ai_tokens = tuple(t for t in cfg["ai_agent_tokens"] if _base(str(t)) in names)
+    rp.vera_purpose_grants = _purpose_grants(text)  # PURPOSE-GRANTS-1108: shadow only, never consulted for access
     return rp
+
+
+def _purpose_grants(text: str) -> tuple:
+    try:
+        from vera import purpose_grants
+        return purpose_grants.scan_robots(text) if purpose_grants.mode() == "shadow" else ()
+    except Exception:  # noqa: BLE001  shadow evidence is optional; access is decided without it
+        return ()
+
+
+def _shadow(kind: str, rp, url: str) -> None:
+    """PURPOSE-GRANTS-1108: record what a robots.txt purpose grant WOULD do to this block. The block stands."""
+    try:
+        g = getattr(rp, "vera_purpose_grants", ())
+        if g:
+            from vera import purpose_grants
+            purpose_grants.shadow(_DEFAULT_REASONS[kind], g, url)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def block_reason(rp, url: str) -> str | None:
@@ -228,9 +248,11 @@ def block_reason(rp, url: str) -> str | None:
     if rp in (None, True, False):
         return None
     if rp.vera_ai_statement:
+        _shadow("statement", rp, url)
         return reason_code("statement")
     for tok in rp.vera_ai_tokens:
         if not _decide(_applies(rp.vera_groups, {_base(tok)}, None), url):
+            _shadow("agent", rp, url)  # hyperscaler-only group: never overridable (pending H13); recorded only
             return reason_code("agent")
     return None
 

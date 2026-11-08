@@ -160,6 +160,10 @@
         "lat"
       ],
       "reason": "A-P1-NORM-1107 vera/query_norm.py: mode (off|shadow|on), the LLM-step status code (not_needed|disabled|cooldown|exhausted|busy|no_client|rate_limited|error|timeout|rejected|ok) and a latency bucket code (lt100|lt500|lt1000|lt2500|lt5000|ge5000); counts (det, llm, vouched terms) go in counts. Never the question or any term text."
+    },
+    "purpose_grant": {
+      "keys": ["mode", "restriction", "why", "channel", "kind", "purposes", "conditions", "evidence"],
+      "reason": "PURPOSE-GRANTS-1108 vera/purpose_grants.shadow: shadow record of what a site-owner purpose grant would do to a restriction. Code is the decision (would_admit|review|negated|not_overridable); detail holds closed tokens only: mode, restriction reason code, why token, channel (robots_comment|robots_field|http_header|tdmrep), grant kind, purpose and condition names joined by ':', and a list of 16-hex evidence ids. Never the verbatim text, URL or host: those stay in the owner-only in-process ring keyed by evidence id."
     }
   },
   "limits": {

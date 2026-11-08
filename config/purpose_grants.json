@@ -1,0 +1,254 @@
+{
+  "_doc": "PURPOSE-GRANTS-1108 (owner 2026-11-08: \"Allow educational|research|etc should also be a green light for us\"). One purpose vocabulary read by vera/purpose_grants.py. mode off|shadow: shadow records 'would admit under purpose grant' (codes in the request trace, verbatim evidence in an owner-only in-process ring) and changes NO admission. There is no 'on' mode: admission needs calibration on real traces and an owner decision; any other value means off. A grant counts only from site-owner channels (site_channels): robots.txt full-line comments and fields, HTTP response headers of the fetched page, and the host's own /.well-known/tdmrep.json. Page meta, page body and anything third-party are never grants. A grant can only lift restrictions in overridable (generic AI or TDM use restrictions it carves out); everything in never_overridable stays binding whatever a grant says. No per-site lists: matching is generic over the terms below.",
+  "mode": "shadow",
+  "_calibration": "PROVISIONAL, no real data yet: window 5 and carveout_window 4 (tokens between a purpose term and a permit/negation/carve-out term) and the limits were set on hand-written fixtures only (tests/test_purpose_grants_1108.py). They decide nothing in shadow mode, which exists to collect the real data: per-host would_admit/review events and their verbatim lines from production traces. Data that would change them: verbatim lines judged misread (window too wide) or missed (too narrow) in the shadow evidence review. No 'on' mode ships before that review and an owner decision.",
+  "site_channels": [
+    "robots_comment",
+    "robots_field",
+    "http_header",
+    "tdmrep"
+  ],
+  "purposes": {
+    "research": [
+      "research",
+      "researchers",
+      "scientific research",
+      "academic research",
+      "scholarly research",
+      "non-commercial research",
+      "noncommercial research",
+      "research purposes",
+      "research use"
+    ],
+    "educational": [
+      "education",
+      "educational",
+      "educational purposes",
+      "educational use"
+    ],
+    "teaching": [
+      "teaching",
+      "classroom",
+      "instruction",
+      "instructional"
+    ],
+    "scholarly": [
+      "scholarly",
+      "scholarship"
+    ],
+    "academic": [
+      "academic",
+      "academia"
+    ],
+    "non_commercial": [
+      "non-commercial",
+      "noncommercial",
+      "non commercial",
+      "not-for-profit",
+      "not for profit",
+      "nonprofit",
+      "non-profit"
+    ]
+  },
+  "permit_terms": [
+    "allowed",
+    "allow",
+    "allows",
+    "permitted",
+    "permit",
+    "permits",
+    "permission is granted",
+    "welcome",
+    "welcomed",
+    "granted",
+    "may",
+    "authorised",
+    "authorized",
+    "ok",
+    "okay",
+    "fine",
+    "exempt",
+    "exempted",
+    "encouraged"
+  ],
+  "negation_terms": [
+    "not",
+    "no",
+    "never",
+    "nor",
+    "without",
+    "prohibited",
+    "prohibit",
+    "prohibits",
+    "forbidden",
+    "forbid",
+    "forbids",
+    "banned",
+    "ban",
+    "disallowed",
+    "disallow",
+    "barred",
+    "excluded",
+    "exclude",
+    "excludes",
+    "restricted",
+    "denied",
+    "deny",
+    "cannot",
+    "can't",
+    "don't",
+    "dont",
+    "doesn't",
+    "blocked",
+    "block",
+    "blocks"
+  ],
+  "carveout_terms": [
+    "except",
+    "except for",
+    "excepting",
+    "other than",
+    "unless",
+    "unless for",
+    "with the exception of",
+    "apart from",
+    "save for",
+    "but"
+  ],
+  "ai_terms": [
+    "ai",
+    "artificial intelligence",
+    "llm",
+    "llms",
+    "machine learning",
+    "genai",
+    "generative ai",
+    "crawler",
+    "crawlers",
+    "bot",
+    "bots",
+    "scraper",
+    "scrapers",
+    "scraping",
+    "crawling",
+    "agents",
+    "assistants",
+    "training",
+    "ai-input",
+    "ai-use"
+  ],
+  "tdm_terms": [
+    "tdm",
+    "text and data mining",
+    "text-and-data mining",
+    "data mining",
+    "text mining",
+    "mining"
+  ],
+  "conditions": {
+    "attribution": [
+      "attribution",
+      "attribute",
+      "credit",
+      "cite",
+      "citation",
+      "acknowledge"
+    ],
+    "non_commercial": [
+      "non-commercial",
+      "noncommercial",
+      "non commercial",
+      "not-for-profit",
+      "nonprofit"
+    ],
+    "no_redistribution": [
+      "no redistribution",
+      "not redistribute",
+      "do not redistribute",
+      "redistribution",
+      "republication",
+      "republish",
+      "resale"
+    ],
+    "contact_first": [
+      "contact",
+      "permission from",
+      "prior permission",
+      "prior approval",
+      "written consent",
+      "request access",
+      "register",
+      "registration",
+      "api key",
+      "agreement"
+    ],
+    "rate_limit": [
+      "crawl-delay",
+      "crawl delay",
+      "slowly",
+      "rate limit",
+      "rate-limit",
+      "politely"
+    ]
+  },
+  "window": 5,
+  "carveout_window": 4,
+  "structured_permit_values": [
+    "y",
+    "yes",
+    "allow",
+    "allowed",
+    "permit",
+    "permitted"
+  ],
+  "overridable": {
+    "robots_ai_statement": {
+      "channels": [
+        "robots_comment"
+      ],
+      "needs": "linked",
+      "reason": "robots.txt comment says AI crawlers/assistants are blocked; a grant on the same comment line (carve-out) or an AI-scoped purpose grant in the same robots.txt lifts it"
+    },
+    "use_no_ai_signal": {
+      "channels": [
+        "robots_comment",
+        "robots_field",
+        "http_header"
+      ],
+      "needs": "linked",
+      "reason": "generic no-AI use signal (noai, Content-Signal ai-input=no, Content-Usage ai-use=n); only an AI-scoped or carve-out purpose grant from the same site lifts it"
+    },
+    "use_tdm_reserved": {
+      "channels": [
+        "robots_comment",
+        "robots_field",
+        "http_header",
+        "tdmrep"
+      ],
+      "needs": "tdm_linked",
+      "reason": "TDM reservation; only a TDM-scoped purpose grant from the same site lifts it. A tdm-policy that is present but unread goes to review"
+    }
+  },
+  "never_overridable": [
+    "robots_ai_agent_block",
+    "read_robots_disallow",
+    "read_deny_list",
+    "read_registry_forbid",
+    "read_login_paywall",
+    "read_no_crawl",
+    "read_host_round_cap",
+    "use_nd_licence",
+    "use_registry_forbid",
+    "licence_reject",
+    "crawl_delay",
+    "rate_limit"
+  ],
+  "_never_note": "robots_ai_agent_block (hyperscaler-only groups) stays binding pending owner decision H13. read_robots_disallow covers own-token and * disallows. The licence reject list (ND, no-educational-use, strictly-for-fee), login/paywall, deny list, registry forbid and rate/Crawl-delay limits are never lifted by a grant.",
+  "limits": {
+    "max_lines": 2000,
+    "max_line_chars": 500,
+    "max_grants": 16,
+    "evidence_ring": 200,
+    "verbatim_chars": 300
+  }
+}

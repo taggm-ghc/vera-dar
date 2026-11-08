@@ -584,9 +584,24 @@ def _tdmrep_signal(final, cfg, resolve, tr, clock, end, cache, hop_gate) -> str:
         rules = cache[key]
         if rules == "unreadable":
             return "unreadable"
-        return "1" if tdmrep_reserved(rules, fp.path or "/") else ""
+        if tdmrep_reserved(rules, fp.path or "/"):
+            _tdm_purpose_shadow(rules, final)
+            return "1"
+        return ""
     except Exception:  # noqa: BLE001
         return "unreadable"
+
+
+def _tdm_purpose_shadow(rules, url: str) -> None:
+    """PURPOSE-GRANTS-1108: a reserving tdmrep.json rule that names a tdm-policy is recorded for review (the policy is
+    not fetched). Shadow only: the reservation stands. Never raises."""
+    try:
+        from vera import purpose_grants
+        g = purpose_grants.scan_tdmrep(rules, urlsplit(url).path or "/")
+        if g:
+            purpose_grants.shadow("use_tdm_reserved", g, url)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,

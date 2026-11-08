@@ -272,6 +272,22 @@ def _record(cfg, read_c, use_c, ing_c) -> PermissionRecord:
         _phrase(cfg, "read", read_c), _phrase(cfg, "use", use_c), _phrase(cfg, "ingest", ing_c))
 
 
+def _purpose_shadow(url, lower_headers, robots_txt_entries, restrictions) -> None:
+    """PURPOSE-GRANTS-1108: what a site-owner purpose grant (this page's own headers; raw robots.txt text when the
+    caller passed it) WOULD do to these restrictions. Recorded only; the record above is unchanged. Never raises."""
+    try:
+        from vera import purpose_grants
+        if purpose_grants.mode() != "shadow":
+            return
+        g = purpose_grants.scan_headers(lower_headers)
+        if isinstance(robots_txt_entries, str) or isinstance(robots_txt_entries, (list, tuple)):
+            g = g + purpose_grants.scan_robots("\n".join(_robots_lines(robots_txt_entries)))
+        if g:
+            purpose_grants.shadow(restrictions, g, url)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def read_gate(url: str, *, robots_allowed: bool | None = None, page_signals: dict | None = None,
               registry=None, deny_list=None, config: dict | None = None) -> PermissionRecord:
     """Pre-fetch gate: host/registry/deny-list/robots (robots_allowed=None means robots not consulted = allowed).
@@ -321,6 +337,11 @@ def evaluate(url: str, *, licence=None, headers=None, html_head: str | None = No
         use_c = "use_registry_forbid"
     else:
         use_c = "use_ok_nd_news" if nd_news else "use_ok"
+    if use_c in ("use_tdm_reserved", "use_no_ai_signal"):  # PURPOSE-GRANTS-1108: shadow record only
+        _purpose_shadow(url, h, robots_txt_entries, [c for c, on in (
+            (read_c, read_c != "read_ok"), ("use_tdm_reserved", tdm), ("use_nd_licence", nd and not nd_news),
+            ("use_no_ai_signal", no_ai), ("use_registry_forbid", _verdict(row, "derivative_verdict") == "forbid"))
+            if on])
 
     if read_c != "read_ok":
         ing_c = "ingest_not_readable"
