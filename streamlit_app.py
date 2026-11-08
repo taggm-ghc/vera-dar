@@ -1,4 +1,5 @@
 # Streamlit UI for VERA-DAR `/ask` Endpoint
+import functools
 import os
 import secrets
 from pathlib import Path
@@ -187,6 +188,9 @@ def _render_research_captions(data: dict, outcome: bool = True) -> None:
 
 def render_result(data: dict) -> None:
     """Render one 200 /ask body (W4b-1: pure extract of the former inline block, unchanged output)."""
+    from vera import spell_clarify  # SELFQ-RELEVANCE-1108: an unknown word paused the request; the user picks
+    if spell_clarify.render_clarification(st, data, lambda p: ui_wake.queue_question(st.session_state, p)):
+        return
     layered = has_layers(data)  # ANS-LAYERS-1101: newer API; absent fields keep the unchanged rendering
     # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other
     # value (missing, unknown, reading_list, decline, ...) renders the reading-list branch.
@@ -258,12 +262,17 @@ def render_result(data: dict) -> None:
     st.info("💡 Ask a follow-up question to explore further.")
 
 
-def _send_question(question: str) -> None:
+def _spell_kw(pending: dict) -> dict:
+    """SELFQ-RELEVANCE-1108: {"spell_check": False} only after "search as typed"; {} otherwise (the call is unchanged)."""
+    return {"spell_check": False} if isinstance(pending, dict) and pending.get("spell_check") is False else {}
+
+
+def _send_question(question: str, spell_check: bool = True) -> None:
     """Send one /ask (after the wake-up) and render the result."""
     with st.spinner("🤔 Thinking..."):
         try:
             # Make API request
-            response = post_ask(api_base_url, question, "normal", api_key)
+            response = post_ask(api_base_url, question, "normal", api_key, **({} if spell_check else {"spell_check": False}))
 
             if response.status_code == 200:
                 data = response.json()
@@ -395,8 +404,8 @@ if STREAM_ON:
             _scfg = _stream_cfg()
             _sholder = progress_ui.start_stream(
                 _ses, ui_wake.clock,
-                lambda *a, **kw: iter_ask_stream(*a, connect_timeout=_scfg.connect_timeout_s,
-                                                 no_data_timeout=_scfg.client_no_data_s, **kw),
+                lambda *a, _sc=_spell_kw(_pending), **kw: iter_ask_stream(
+                    *a, connect_timeout=_scfg.connect_timeout_s, no_data_timeout=_scfg.client_no_data_s, **_sc, **kw),
                 (api_base_url, _pending["question"], "normal", api_key),
                 _scfg.orphan_s)
             st.rerun()
@@ -416,7 +425,8 @@ elif PROGRESS_ON:
         _pending = ui_wake.take_ready_question(st, api_base_url, allow_restart_hook=PUBLIC)
         if _pending:
             _inflight = progress_ui.start_tracked(
-                _ses, lambda: secrets.token_hex(16), _ses["vera_ptoken"], ui_wake.clock, post_ask_tracked,
+                _ses, lambda: secrets.token_hex(16), _ses["vera_ptoken"], ui_wake.clock,
+                functools.partial(post_ask_tracked, **_spell_kw(_pending)),
                 (api_base_url, _pending["question"], "normal", api_key),
                 st, LABELS)
             st.rerun()  # the Sending label was drawn before the worker started; the rerun hands over to the poller
@@ -433,7 +443,7 @@ else:
     if st.session_state.get(ui_wake.PENDING_KEY):
         _pending = ui_wake.take_ready_question(st, api_base_url, allow_restart_hook=PUBLIC)
         if _pending:
-            _send_question(_pending["question"])
+            _send_question(_pending["question"], **_spell_kw(_pending))
     elif not _clicked:
         st.info("👆 Click 'Ask' to get started.")
         ui_wake.page_load_check(st, api_base_url, allow_restart_hook=PUBLIC)  # at most once a minute per session

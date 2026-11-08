@@ -1201,48 +1201,6 @@ def offtopic_notice(cfg: RouterConfig | None = None) -> str:
     return t  # SCOPE-GATE-1104 S1: fixed text only (no {scope} substitution; there is no fixed Scope text)
 
 
-# ---- SELFREF-1028 (owner directive 2026-10-28): self-reflective questions answered from fixed public text -------------
-_SELF_TRAIL_RE = re.compile(r"[\s?.!]+$")
-_SELF_LEAD_RE = re.compile(r"^(hi|hello|hey|ok|okay|so|and)[ ,]+|^please[ ,]+")
-
-
-def _self_cfg(cfg: RouterConfig | None) -> dict:
-    sr = (cfg or load_config()).raw.get("self_reflective")
-    return sr if isinstance(sr, dict) else {}
-
-
-def self_reflective(question: str, cfg: RouterConfig | None = None) -> bool:
-    """True only for a benign question about VERA-DAR's identity, capabilities or how it works (second person, or
-    third person naming VERA-DAR, SELFQ-RCA-1107) that
-    FULLY matches one pattern of the closed list `self_reflective.patterns`. Injection, deny and marker checks run
-    first (layer 1 verdict DECLINE or a classifier marker -> False), so an instruction/config/prompt request never
-    qualifies. Fails closed (False) on a missing key, a bad pattern or any error."""
-    try:
-        cfg = cfg or load_config()
-        pats = _self_cfg(cfg).get("patterns")
-        if not isinstance(pats, list) or not pats or has_marker(question):
-            return False
-        if layer1(question, cfg)[0] == DECLINE:
-            return False
-        q = normalise(question)
-        if len(q) > 120:
-            return False
-        q = _SELF_TRAIL_RE.sub("", q)
-        q = _SELF_LEAD_RE.sub("", q)
-        return any(re.fullmatch(p, q, re.IGNORECASE) for p in pats if isinstance(p, str))
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def self_reflective_text(cfg: RouterConfig | None = None) -> str:
-    """The fixed reply: the configured identity line plus the public disclosure text. "" when not configured."""
-    try:
-        ident = _self_cfg(cfg).get("identity_text")
-        if not isinstance(ident, str) or not ident.strip():
-            return ""
-        from vera.disclosure import disclosure_text
-        ptr = _self_cfg(cfg).get("pages_pointer")  # SELFQ-RCA-1107 D1: point to the published About / How to use pages
-        ptr = f" {ptr.strip()}" if isinstance(ptr, str) and ptr.strip() else ""
-        return f"{ident.strip()} {disclosure_text()}{ptr}"
-    except Exception:  # noqa: BLE001
-        return ""
+# ---- SELFREF-1028 closed list REMOVED (SELFQ-RELEVANCE-1108, owner 2026-11-08: "we shouldn't have to hard-code response
+# processing for self-referencing questions"). Questions about VERA-DAR are scored against its published help by the
+# shared relevance code (vera/help_evidence.py); unknown words get a clarification round (vera/spell_clarify.py).

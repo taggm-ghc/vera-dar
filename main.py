@@ -179,6 +179,8 @@ class APIModel(BaseModel):
 class AskRequest(APIModel):
     question: str = Field(..., max_length=4000)
     mode: Literal["normal"] = "normal"  # single-valued; kept for API compatibility, anything else is a 422
+    # SELFQ-RELEVANCE-1108: false = "search as typed" after a clarification round (per request only; never stored)
+    spell_check: bool = True
 
 
 class AskSource(BaseModel):
@@ -1081,9 +1083,12 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
             sources_fn.unused = _unused_fn
             grounding = (sources_fn, GROUNDING)
         _tok = REQUEST_BUDGET.set(budget)  # shared by every provider tried in the chain; never restarted
+        from vera.spell_clarify import SPELL_CHECK
+        _stok = SPELL_CHECK.set(req.spell_check is not False)  # SELFQ-RELEVANCE-1108: this request only
         try:
             result, answered_by = answer_via_chain(req.question, ASK_CHAIN, grounding)
         finally:
+            SPELL_CHECK.reset(_stok)
             REQUEST_BUDGET.reset(_tok)
     except ProvidersExhausted as exc:  # REL-FIX-1031: legacy /ask keeps its pre-diff 429 for "every provider rate-limited/exhausted"
         from vera import stream_ctx as _sc

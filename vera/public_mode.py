@@ -176,23 +176,30 @@ def upstream_base_url(env=None, local_url_file: Path | None = None) -> str:
 ASK_TIMEOUT_S = 180
 
 
-def post_ask(base_url: str, question: str, mode: str, api_key: str, timeout: int = ASK_TIMEOUT_S):  # #79: search + link following
+def _ask_body(question: str, mode: str, spell_check: bool = True) -> dict:
+    """SELFQ-RELEVANCE-1108: `spell_check` is a per-request choice ("search as typed" sends false); the body is unchanged
+    when it is on, so older APIs keep accepting it."""
+    return {"question": question, "mode": mode, **({} if spell_check else {"spell_check": False})}
+
+
+def post_ask(base_url: str, question: str, mode: str, api_key: str, timeout: int = ASK_TIMEOUT_S,
+             spell_check: bool = True):  # #79: search + link following
     """Single place the key is attached to an outgoing request. `api_key` is server-side (public)
     or typed by the user (dev); the caller decides, this never reads a widget."""
     return requests.post(
         f"{base_url.rstrip('/')}/ask",
-        json={"question": question, "mode": mode},
+        json=_ask_body(question, mode, spell_check),
         headers={"Content-Type": "application/json", "X-API-Key": api_key},
         timeout=timeout,
     )
 
 
 def post_ask_tracked(base_url: str, question: str, mode: str, api_key: str, rid: str, session_token: str,
-                     timeout: int = ASK_TIMEOUT_S):
+                     timeout: int = ASK_TIMEOUT_S, spell_check: bool = True):
     """PROG-1027 W4a: post_ask plus the two progress headers (request id, per-browser-session token)."""
     return requests.post(
         f"{base_url.rstrip('/')}/ask",
-        json={"question": question, "mode": mode},
+        json=_ask_body(question, mode, spell_check),
         headers={"Content-Type": "application/json", "X-API-Key": api_key,
                  "X-VERA-Request-Id": rid, "X-VERA-Session": session_token},
         timeout=timeout,
@@ -278,8 +285,10 @@ def validate_stream_line(obj, sets=None) -> bool:
 class AskStream:
     """Iterator of validated line dicts. `.dropped` counts invalid lines; `.close()` ends the connection."""
 
-    def __init__(self, base_url, question, mode, api_key, *, connect_timeout, no_data_timeout, should_stop=None, session=None):
+    def __init__(self, base_url, question, mode, api_key, *, connect_timeout, no_data_timeout, should_stop=None, session=None,
+                 spell_check: bool = True):
         self._args = (base_url, question, mode, api_key)
+        self._spell_check = spell_check
         self._ct, self._nd = connect_timeout, no_data_timeout
         self._should_stop = should_stop
         self._http = session if session is not None else requests
@@ -314,7 +323,7 @@ class AskStream:
         try:
             try:
                 r = self._http.post(
-                    f"{base_url.rstrip('/')}/ask/stream", json={"question": question, "mode": mode},
+                    f"{base_url.rstrip('/')}/ask/stream", json=_ask_body(question, mode, self._spell_check),
                     headers={"Content-Type": "application/json", "X-API-Key": api_key, "Accept": "application/x-ndjson"},
                     stream=True, timeout=(self._ct, self._nd))
             except Exception:  # noqa: BLE001  no text kept: the message can carry the host
@@ -371,11 +380,11 @@ class AskStream:
 
 
 def iter_ask_stream(base_url: str, question: str, mode: str, api_key: str, *, connect_timeout: float,
-                    no_data_timeout: float, should_stop=None, session=None) -> AskStream:
+                    no_data_timeout: float, should_stop=None, session=None, spell_check: bool = True) -> AskStream:
     """POST /ask/stream and iterate validated v1.3 lines. Bounds: connect_timeout and per-read no_data_timeout only
     (no total timeout). Raises StreamNeverConnected / StreamLost; neither carries the key, host or exception text."""
     return AskStream(base_url, question, mode, api_key, connect_timeout=connect_timeout,
-                     no_data_timeout=no_data_timeout, should_stop=should_stop, session=session)
+                     no_data_timeout=no_data_timeout, should_stop=should_stop, session=session, spell_check=spell_check)
 
 
 class _Gone:

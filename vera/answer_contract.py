@@ -145,6 +145,8 @@ def outcome_for(result_kind: str, fallback, n_candidates: int) -> str:
         return "decline"
     if result_kind == "self_description":  # SELFREF-1028: fixed public self-description, not evidence
         return "self_description"
+    if result_kind == "clarification":  # SELFQ-RELEVANCE-1108: an unknown word paused the request (nothing searched)
+        return "clarification"
     if fallback:
         return "corpus_unusable" if fallback == _CORPUS_UNUSABLE_TOKEN else "insufficient_evidence"
     if result_kind == "reading_list":

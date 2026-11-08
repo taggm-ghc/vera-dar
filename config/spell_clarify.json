@@ -1,0 +1,26 @@
+{
+  "_note": "SELFQ-RELEVANCE-1108 (owner 2026-11-08: typos such as 'vrea vrrea vra rvea vare' should trigger a clarification round). Before routing, help scoring or any search, the first question content word known to neither the stored-document vocabulary, the help vocabulary nor the A-P1 lay-term vocabulary gets up to max_suggestions nearest known words by Damerau-Levenshtein (optimal string alignment, transposition = 1). Never a silent correction. No suggestion within the bound = no pause. The vocabulary is derived from the corpora already loaded from the database and from the help data, never a word list. enabled=false: no pause ever.",
+  "enabled": true,
+  "max_suggestions": 3,
+  "_max_suggestions_note": "Owner-set (2026-11-08: 'offer 1-3 nearest known words').",
+  "edit_bounds": [
+    {
+      "max_len": 3,
+      "max_edits": 0
+    },
+    {
+      "max_len": 7,
+      "max_edits": 1
+    },
+    {
+      "max_len": null,
+      "max_edits": 2
+    }
+  ],
+  "_edit_bounds_calibration_note": "PROVISIONAL (orchestrator 2026-11-08, from work/CALIB-ANALYZE-1108/report.md section 3, a simulation over the real vocabulary, not live traffic): words of 3 letters or fewer never pause (ties 82.5% at 3 letters; every 4-letter word has a neighbour within two edits, p90 156); 4-7 letters allow 1 edit; 8 or more allow 2 (79.5% of 8-letter words have a neighbour within two edits, p90 7). Simulated one-edit typos were 0% wrong at both bounds. Consequences: 'vra' (3 letters) and two-edit typos of 4-7-letter words ('rvea', 'vrrea') get no pause and are searched as typed. Calibration path: the request trace records counts only (clarify offered, suggestion count); review 2 weeks of live traces for pauses on correctly spelled words and missed typos, then tighten or widen per length.",
+  "refresh_s": 600,
+  "_refresh_s_note": "PROVISIONAL operating bound, not a decision threshold: the vocabulary is rebuilt in a background thread at most this often (and when a different corpus object is loaded). Chosen as 10x the acquired-corpus probe (serve.refresh_ttl_s 60) because building tokenizes every stored document. Change when build time is measured on the live corpus.",
+  "text": "I don't recognise '{word}'. Did you mean:",
+  "search_as_typed": "search as typed",
+  "log_token": "spell_clarify"
+}

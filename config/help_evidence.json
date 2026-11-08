@@ -1,0 +1,22 @@
+{
+  "_note": "SELFQ-RELEVANCE-1108 (owner 2026-11-08: no hard-coded self-question routing). VERA-DAR's published help (config/ui_help_pages.json plus the About disclosure from vera.disclosure) is scored as ordinary evidence by vera.fulldoc_admission's relevance code with config/fulldoc_answer.json admission values (min_relevance, min_matched_stems, adaptive floor, tokenizer). No threshold of its own. enabled=false: help is never consulted and the normal path runs.",
+  "enabled": true,
+  "max_passages": 3,
+  "_max_passages_note": "PROVISIONAL display cap (how many help passages are quoted), not a decision threshold: it does not change WHETHER help answers. 3 keeps the reply short; the full pages are linked by pages_pointer. Change when live replies are reviewed.",
+  "addressee": {
+    "_note": "The person addressed ('Who are you?', 'What is your name?') is VERA-DAR: when an addressee word appears, the subject below joins the question before scoring. Other content words still need help to be the best evidence: 'can you find papers on X' is compared with the stored collection on the same question, and the collection wins when it scores at least as high. Pronouns are grammar, not name variants; subject is the one published name.",
+    "terms": [
+      "you",
+      "your",
+      "yours",
+      "yourself"
+    ],
+    "subject": "VERA-DAR"
+  },
+  "intro": "From VERA-DAR's help pages:",
+  "no_information": "The help pages have no information on {terms}.",
+  "pages_pointer": "The About page explains what VERA-DAR is and where its answers come from; the How to use page explains how to ask a question and read the results; the Terms page says who runs VERA-DAR.",
+  "log_token": "help_evidence",
+  "help_specific_ratio": 100,
+  "_help_specific_ratio_calibration_note": "PROVISIONAL, not calibrated on the live corpus (agents have no DB access; observed spread: none recorded). A matched word is help-specific (the question is about VERA-DAR, not a topic sharing words with the help) when its share of the help's words exceeds this many times its share of the stored documents' words. 100 because a product name ('vera', 'dar') is about 1% of the help's 610 words while a stored paper that cites an author named Vera puts it far below 0.01% of millions of corpus words, and ordinary help words ('research', 'question', 'answer') are at most tens of times more frequent in the help than in scholarly text. Calibration path: log (counts only) the ratio band of each matched word on live asks, or compute the ratios once over the live corpus (owner-run), then set the value between the product-name and ordinary-word bands. Absent or <= 0: no word is help-specific (help needs the collection comparison)."
+}

@@ -334,3 +334,16 @@ def _acquired_pins_mode_off_for_unrelated_tests(monkeypatch):
     ap._CACHE.clear()
     yield
     ap._CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_spell_vocabulary_for_unrelated_tests(request, monkeypatch):
+    """SELFQ-RELEVANCE-1108: the clarification round's vocabulary is built from the loaded corpora in a background
+    thread and kept process-wide; a tiny fixture corpus would make ordinary test questions pause. Each test starts with
+    no vocabulary source (= no pause, today's path); tests/test_selfq_relevance_1108.py injects its own vocabulary."""
+    from vera import spell_clarify
+    spell_clarify.reset_for_tests()
+    if request.module.__name__.rsplit(".", 1)[-1] != "test_selfq_relevance_1108":
+        monkeypatch.setattr(spell_clarify, "_corpora", lambda: ())
+    yield
+    spell_clarify.reset_for_tests()

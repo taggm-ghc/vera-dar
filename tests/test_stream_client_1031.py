@@ -125,5 +125,7 @@ def test_should_stop_closes_stream():
 
 def test_legacy_clients_unchanged():
     import inspect
-    assert list(inspect.signature(pm.post_ask).parameters) == ["base_url", "question", "mode", "api_key", "timeout"]
+    # SELFQ-RELEVANCE-1108: one optional per-request spell_check (default on; the body is unchanged when on)
+    assert list(inspect.signature(pm.post_ask).parameters) == ["base_url", "question", "mode", "api_key", "timeout",
+                                                              "spell_check"]
     assert "rid" in inspect.signature(pm.post_ask_tracked).parameters

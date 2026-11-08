@@ -242,12 +242,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _INLINE_OUT.set(None)
     _QUESTION.set(question)  # PORT-P2: the discovery recorder hashes it (text never stored)
     from vera import scope_router as _sr_self
-    if _sr_self.self_reflective(question) and not _sr_self.injection_unstripped(original):  # SELFREF-1028: fixed public text; no LLM, search, storage or memory
-        _txt = _sr_self.self_reflective_text()
-        if _txt:
-            logging.getLogger("vera").info("scope basis=none layer=layer1 class=self_reflective rid=%s", _rid())
-            _rt_event("outcome", "self_description")
-            return AskResult(answer=_txt, tokens_used=0, cost_usd=0.0, accepted=False, result_kind="self_description")
+    if not _sr_self.injection_unstripped(original):  # SELFQ-RELEVANCE-1108: before routing, help scoring or any search
+        _pre = _clarify_or_help(question)
+        if _pre is not None:
+            return _pre
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     if _stream_ctx.active() and budget.deadline != float("inf"):
         budget.deadline = float("inf")  # STREAM-1031: whichever budget was passed, the streamed path has no deadline
@@ -280,6 +278,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         _rt_event("outcome", "decline", detail={"category": _rt_token(decision.category)})
         return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
                          result_kind="decline")
+    if not _sr_self.injection_unstripped(original):  # SELFQ-RELEVANCE-1108: a routed, accepted question about VERA-DAR
+        _h = _help_answer(question, covered_only=False, tokens=decision.tokens_used, cost=decision.cost_usd)
+        if _h is not None:
+            return _h
     from vera import answer_contract as contract
 
     used_in: dict = {}
@@ -335,6 +337,66 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
 _NOT_CONFIGURED_TEXT = ("VERA-DAR could not write an answer to this question. The sources below may still help; read them "
                         "yourself.")
 
+
+
+def _clarify_or_help(question: str):
+    """SELFQ-RELEVANCE-1108 (owner 2026-11-08: no hard-coded self-question routing), BEFORE routing. Only for a question
+    layer 1 does not decline and that holds no classifier marker: (1) a content word known to neither the stored
+    documents, the help nor the lay-term vocabulary pauses the request with a clarification round (vera.spell_clarify);
+    (2) a question whose every content word the published help covers, and which is about VERA-DAR by the shared
+    relevance code (vera.help_evidence), is answered by quoting the help. A question with words the help does not cover
+    goes to the scope classifier first (_help_after_route). No LLM, search, storage or memory. None = carry on."""
+    from vera import scope_router as _sr, spell_clarify
+    try:
+        if _sr.has_marker(question) or _sr.layer1(question, _sr.load_config())[0] == _sr.DECLINE:
+            return None
+    except Exception:  # noqa: BLE001  fail closed: the normal route judges it
+        return None
+    from vera import answer_contract as contract
+    c = spell_clarify.check(question)
+    if c is not None:
+        logging.getLogger("vera").info("scope basis=none layer=layer1 class=spell_clarify rid=%s", _rid())
+        _rt_event("outcome", "clarification", counts={"suggestions": len(c["suggestions"])})
+        return AskResult(answer=spell_clarify.reply_text(c), tokens_used=0, cost_usd=0.0, accepted=False,
+                         result_kind="clarification", contract={"layers": contract.layers(), "fallback": None,
+                                                                "clarification": c})
+    return _help_answer(question, covered_only=True)
+
+
+def _help_answer(question: str, covered_only: bool, tokens: int = 0, cost: float = 0.0):
+    """The help reply when help is the best evidence (vera.help_evidence), else None."""
+    from vera import help_evidence, spell_clarify
+    ev = help_evidence.evaluate(question, corpus_best=_corpus_best_relevance,
+                                known_to_corpus=spell_clarify.known_to_corpus, covered_only=covered_only)
+    if ev is None:
+        return None
+    logging.getLogger("vera").info("scope basis=none layer=%s class=help_evidence rid=%s",
+                                   "layer1" if covered_only else "routed", _rid())
+    _rt_event("outcome", "self_description", counts={"passages": len(ev["passages"]), "uncovered": len(ev["uncovered"])})
+    return AskResult(answer=help_evidence.reply_text(ev), tokens_used=tokens, cost_usd=cost, accepted=False,
+                     result_kind="self_description")
+
+
+def _corpus_best_relevance(question: str):
+    """SELFQ-RELEVANCE-1108: the relevance of the best passage the stored collection (base, then stored acquired)
+    admits for the question, by the same admission code as the normal path; 0.0 when none is admitted, None when
+    the collection is off, still warming or unreadable. Local and deterministic (no LLM, search or storage)."""
+    try:
+        from vera import fulldoc_corpus
+        from vera.fulldoc_admission import admit
+        cfg = fulldoc_corpus.load_config()
+        if not fulldoc_corpus.flag_enabled(cfg) or _base_warming():
+            return None
+        corpora = [c for c in (fulldoc_corpus.get_corpus(cfg), fulldoc_corpus.get_acquired_corpus(cfg)) if c is not None]
+        if not corpora:
+            return None
+        best = 0.0
+        for c in corpora:
+            for a in getattr(admit(question, c, cfg), "admitted", ()) or ():
+                best = max(best, float(a.get("relevance") or 0.0))
+        return best
+    except Exception:  # noqa: BLE001
+        return None
 
 def _with_off_note(res, acq):
     """SCOPE-GATE-1104 S2-T2: with automatic acquisition effectively off, a non-answer is the corpus attempt plus the
