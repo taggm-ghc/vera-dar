@@ -86,6 +86,15 @@ def _toks(s: str) -> list:
     return re.sub(r"[^a-z0-9]+", " ", str(s or "").lower().replace("'", "").replace("’", "")).split()
 
 
+def _bounds(raw: str) -> set:
+    """Token indices (into _toks(raw)) that begin a new sentence or clause (after . ; : ! ? or a dash)."""
+    out, n = set(), 0
+    for part in re.split(r"[.;:!?\u2013\u2014]|\s-+\s", str(raw or "")):
+        out.add(n)
+        n += len(_toks(part))
+    return out
+
+
 def _spans(toks: list, terms) -> list:
     """(start, end) token spans of every term (multi-word, exact token match)."""
     out = []
@@ -121,8 +130,25 @@ def _evid(channel: str, verbatim: str) -> str:
     return hashlib.sha256(f"{channel}\n{verbatim}".encode("utf-8", "replace")).hexdigest()[:16]
 
 
+_REDACT = (
+    (re.compile(r"[\w.+-]+\s*(?:@|\(at\)|\[at\])\s*[\w-]+(?:\s*(?:\.|\(dot\)|\[dot\])\s*[\w-]+)+", re.I), "[email]"),
+    (re.compile(r"\b(?:mailto|tel|sms|callto):\S*", re.I), "[contact]"),
+    (re.compile(r"(?<![\w@])@[\w.-]{2,}"), "[handle]"),
+    (re.compile(r"(?<!\w)\+?\(?\d[\d\s().-]{6,}\d"), "[phone]"),
+)
+
+
+def redact(text: str) -> str:
+    """N1: strip email addresses, phone numbers, URLs, @handles and mailto/tel links (personal contact details a
+    site could put in a robots.txt comment) before the text is stored anywhere."""
+    s = str(text or "")
+    for rx, sub in _REDACT:
+        s = rx.sub(sub, s)
+    return s
+
+
 def _verbatim(cfg, text: str) -> str:
-    s = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or "")).strip()
+    s = re.sub(r"[\x00-\x1f\x7f]", " ", redact(text)).strip()
     return s[: int(cfg["limits"].get("verbatim_chars", 300))]
 
 
@@ -133,10 +159,43 @@ def _conditions(cfg, toks, purposes) -> tuple:
     return tuple(sorted(conds))
 
 
+_CLAUSE_SPLIT = re.compile(r"\s[-\u2013\u2014]+\s|[\u2013\u2014;]")
+
+
 def classify_line(text: str, channel: str, cfg: dict | None = None) -> Grant | None:
     """One free-text statement (a robots.txt comment) -> a Grant, or None when it states no purpose permission or
-    negation (a bare mention such as "our research department" is None)."""
+    negation (a bare mention such as "our research department" is None).
+
+    F3 (narrow): a line that reads as negated as a whole becomes a carve-out only when it splits on a dash or
+    semicolon into clauses, an earlier clause restricts AI/bots, and a LATER clause on its own is a plain grant
+    ("ai bots blocked - research ok"). No clause may itself be negated or ambiguous. Without a separator nothing
+    changes, so "Disallow research bots but allow everyone else" and "AI crawlers are not blocked for research" stay
+    negated."""
     cfg = cfg if cfg is not None else load_config()
+    g = _classify(text, channel, cfg)
+    if g is None or g.kind != "negated":
+        return g
+    try:
+        raw = str(text or "")[: int(cfg["limits"].get("max_line_chars", 500))]
+        parts = [p for p in _CLAUSE_SPLIT.split(raw) if p.strip()]
+        if len(parts) < 2:
+            return g
+        sub = [_classify(p, channel, cfg) for p in parts]
+        if any(x is not None and x.kind not in ("grant",) for x in sub):
+            return g
+        for i, x in enumerate(sub):
+            if x is None or x.kind != "grant":
+                continue
+            earlier = _toks(" ".join(parts[:i]))
+            if i and _spans(earlier, cfg["negation_terms"]) and _spans(earlier, cfg["ai_terms"]):
+                return Grant(channel, "carveout", g.purposes, g.conditions, g.ai_scoped, g.tdm_scoped, g.verbatim,
+                             g.evidence_id)
+    except Exception:  # noqa: BLE001
+        pass
+    return g
+
+
+def _classify(text: str, channel: str, cfg: dict) -> Grant | None:
     lim = cfg["limits"]
     raw = str(text or "")[: int(lim.get("max_line_chars", 500))]
     toks = _toks(raw)
@@ -149,6 +208,7 @@ def classify_line(text: str, channel: str, cfg: dict | None = None) -> Grant | N
     negs = [n for n in _spans(toks, cfg["negation_terms"]) if not _overlaps(n, pspans) and not _overlaps(n, cspans_cond)]
     perms = [p for p in _spans(toks, cfg["permit_terms"]) if not _overlaps(p, pspans)]
     carves = _spans(toks, cfg["carveout_terms"])
+    bounds = _bounds(raw)
     w, cw = int(cfg.get("window", 5)), int(cfg.get("carveout_window", 4))
 
     def neg_of_perm(p):  # "not permitted", "may not", "never allowed"
@@ -163,6 +223,12 @@ def classify_line(text: str, channel: str, cfg: dict | None = None) -> Grant | N
             kinds.add("ambiguous" if after_neg else "carveout")
             continue
         near_p = [p for p in perms if _dist(ps, p) <= w]
+        # F1: a restriction verb right before the purpose ("Disallow research bots ...", "block research") makes
+        # the purpose the OBJECT of the restriction; a later permit ("... but allow everyone else") grants nothing.
+        if any(n[1] <= ps[0] and ps[0] - n[1] <= 2 and not any(n[1] <= p[0] < ps[0] for p in perms)
+               and not any(n[1] <= b <= ps[0] for b in bounds) for n in negs):
+            kinds.add("negated")
+            continue
         clean = [p for p in near_p if not neg_of_perm(p)
                  and not any(min(ps[1], p[1]) <= n[0] and n[1] <= max(ps[0], p[0]) for n in negs)]
         negated_p = [p for p in near_p if neg_of_perm(p)]

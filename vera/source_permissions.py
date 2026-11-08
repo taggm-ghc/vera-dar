@@ -283,7 +283,7 @@ def _purpose_shadow(url, lower_headers, robots_txt_entries, restrictions) -> Non
         if isinstance(robots_txt_entries, str) or isinstance(robots_txt_entries, (list, tuple)):
             g = g + purpose_grants.scan_robots("\n".join(_robots_lines(robots_txt_entries)))
         if g:
-            purpose_grants.shadow(restrictions, g, url)
+            purpose_grants.shadow(restrictions() if callable(restrictions) else restrictions, g, url)
     except Exception:  # noqa: BLE001
         pass
 
@@ -338,7 +338,7 @@ def evaluate(url: str, *, licence=None, headers=None, html_head: str | None = No
     else:
         use_c = "use_ok_nd_news" if nd_news else "use_ok"
     if use_c in ("use_tdm_reserved", "use_no_ai_signal"):  # PURPOSE-GRANTS-1108: shadow record only
-        _purpose_shadow(url, h, robots_txt_entries, [c for c, on in (
+        _purpose_shadow(url, h, robots_txt_entries, lambda: [c for c, on in (  # built inside the hook's try (N2)
             (read_c, read_c != "read_ok"), ("use_tdm_reserved", tdm), ("use_nd_licence", nd and not nd_news),
             ("use_no_ai_signal", no_ai), ("use_registry_forbid", _verdict(row, "derivative_verdict") == "forbid"))
             if on])

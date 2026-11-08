@@ -277,3 +277,84 @@ def test_config_has_no_per_site_list_and_h13_stays_binding():
     assert not (set(CFG["overridable"]) & set(CFG["never_overridable"]))
     assert "robots_ai_agent_block" in CFG["never_overridable"]
     assert CFG["mode"] in pg.MODES
+
+
+# ------------------------------------------------------------------------------------------------ PURPOSE-GRANTS-FIX-1108
+# The verifier's 30 probe strings (kind, decision against robots_ai_statement); F1/F2/F3 outcomes as fixed.
+PROBES = [
+    ("AI crawlers are blocked, except for research", "carveout", "would_admit"),
+    ("AI crawlers are blocked except for research purposes", "carveout", "would_admit"),
+    ("Not for research use", "negated", "negated"),
+    ("Research use is not permitted", "negated", "negated"),
+    ("Research purposes only", None, None),
+    ("Research crawlers are welcome", "grant", "would_admit"),
+    ("Our research department is located in Building 4", None, None),
+    ("Educational use permitted", "grant", "review"),
+    ("Educational use is not allowed", "negated", "negated"),
+    ("Commercial use prohibited; research is allowed", "grant", "review"),
+    ("All bots are prohibited. Research is not an exception", "negated", "negated"),
+    ("No AI training. Exception: none, not even for research", "negated", "negated"),
+    ("AI scraping is banned, but researchers may crawl", "carveout", "would_admit"),
+    ("Researchers may not crawl", "negated", "negated"),
+    ("do not crawl for research", "negated", "negated"),
+    ("We block AI bots unless you are doing academic research", "carveout", "would_admit"),
+    ("AI bots are welcome, no research allowed", "negated", "negated"),
+    ("Allowed: non-commercial research. Contact us first", "grant", "review"),
+    ("AI training is not permitted, even for educational purposes", "negated", "negated"),
+    ("AI crawlers blocked. Research and teaching are exempt", "grant", "would_admit"),
+    ("for research purposes only, no AI", "negated", "negated"),
+    ("Disallow research bots but allow everyone else", "negated", "negated"),  # F1
+    ("Nothing is allowed for research or education", "negated", "negated"),  # F2
+    ("Permission is not granted for research", "negated", "negated"),
+    ("Research use is allowed only with prior permission from the owner", "grant", "review"),
+    ("AI crawlers are not blocked for research", "negated", "negated"),  # no separator: stays safe
+    ("Do not use this for AI except where research is concerned", "carveout", "would_admit"),
+    ("ai bots blocked - research ok", "carveout", "would_admit"),  # F3: dash-separated later clause
+    ("may not be used for research", "negated", "negated"),
+    ("Sponsored by the Institute for Research Allowed Inc", "grant", "review"),
+]
+
+
+@pytest.mark.parametrize("text,kind,decision", PROBES)
+def test_verifier_probe_strings(text, kind, decision):
+    g = cl(text)
+    assert (g.kind if g else None) == kind, g
+    a = pg.assess("robots_ai_statement", [g], CFG) if g else None
+    assert (a["decision"] if a else None) == decision, a
+
+
+@pytest.mark.parametrize("text", [
+    "Disallow research bots but allow everyone else",
+    "Block research crawlers, allow all others",
+    "Nobody is permitted to use this for research",
+    "None allowed for research",
+    "ai bots blocked - research bots disallowed",  # the later clause is itself a restriction
+    "ai bots blocked - research not ok",
+    "Disallow research bots - allow everyone else",  # a dash does not turn a restriction object into a grant
+])
+def test_restriction_objects_and_new_negations_never_admit(text):
+    g = cl(text)
+    a = pg.assess("robots_ai_statement", [g], CFG) if g else None
+    assert a is None or a["decision"] != "would_admit", (g, a)
+
+
+@pytest.mark.parametrize("text,secret", [
+    ("Research ok, mail jane.doe@example.org", "jane.doe"),
+    ("Research ok, mail jane dot doe at example dot org: jane (at) example.org", "example.org"),
+    ("Research allowed; call +1 (555) 123-4567", "555"),
+    ("Research allowed, ask https://jane@example.org/contact", "jane"),
+    ("Research allowed, tel:+441234567890 or @jane_doe", "jane_doe"),
+])
+def test_contact_details_redacted_before_storage(text, secret):
+    g = cl(text)
+    assert g is not None and secret not in g.verbatim and secret not in repr(pg.redact(text)), g.verbatim
+    pg.shadow("robots_ai_statement", [g], "https://a.example/p")
+    for e in pg.shadow_evidence():
+        assert secret not in json.dumps(e, default=str)
+
+
+def test_restriction_list_is_built_inside_the_hook_try(monkeypatch):
+    def boom():
+        raise RuntimeError("restriction list failed")
+    sp._purpose_shadow("https://a.example/p", {"content-signal": "research=yes"}, None, boom)  # must not raise
+    assert sp._purpose_shadow("https://a.example/p", {}, None, lambda: ["use_no_ai_signal"]) is None
