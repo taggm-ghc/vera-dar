@@ -46,8 +46,7 @@ def test_technical_question_still_gets_practitioner_terms():
     assert not qv.is_news_route(TECH_Q)
     out = query_variants6.variants(TECH_Q, tried=["multi-agent supervisor worker"])
     seeds = tuple(_cfg()["practitioner_terms"])
-    for s in ("best practices", "patterns", "architecture", "guide", "reference", "documentation",
-              "design patterns", "framework"):
+    for s in ("introduction", "overview", "review"):  # QUERY-SHAPE-1108: topic-neutral seeds
         assert s in seeds
         assert any(v.endswith(s) and "multi-agent" in v for v in out), s
     assert not any(v.endswith(n) for v in out for n in NEWS_SEEDS)

@@ -26,8 +26,7 @@ from pathlib import Path
 from vera import search_query
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "acq_variants.json"
-FALLBACK_SEEDS = ("best practices", "patterns", "architecture", "guide", "reference", "documentation",
-                  "design patterns", "framework")
+FALLBACK_SEEDS = ("introduction", "overview", "review")  # QUERY-SHAPE-1108: topic-neutral
 FALLBACK_NEWS_SEEDS = ("results", "analysis", "aftermath", "outcome", "reaction")
 FALLBACK_MAX_TERMS = 4
 _WH = frozenset({"where", "when", "which", "while", "what", "whose", "whom", "how", "why"})  # not in the shipped stopwords
@@ -123,6 +122,7 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
         return []
     raw = norm(clean)
     seen = {norm(t) for t in tried}
+    seen.add(norm(_q(base)))  # QUERY-SHAPE-1108: the first search (all base terms) is never repeated as a variant
     out: list[str] = []
 
     drop_bare = len(base) > 1 and _drop_bare_flag()

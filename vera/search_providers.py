@@ -391,6 +391,8 @@ OPENALEX_PROFILE: contextvars.ContextVar = contextvars.ContextVar("openalex_sear
 # licence/OA pre-filter in vera.auto_acquire.rank_candidates. Set ONLY by acquisition_search; /ask never sets it, so the
 # /ask select and candidate dicts are unchanged. Separate from OPENALEX_PROFILE so the OR retry (profile None) keeps it.
 OPENALEX_OA_FIELDS: contextvars.ContextVar = contextvars.ContextVar("openalex_oa_fields", default=False)
+# QUERY-SHAPE-1108: per-call discovery shape set by acquisition_search: {"recency": bool, "review": bool}; None = unchanged.
+OPENALEX_SHAPE: contextvars.ContextVar = contextvars.ContextVar("openalex_query_shape", default=None)
 OPENALEX_OA_SELECT_EXTRA = "open_access,best_oa_location,locations,ids"
 OPENALEX_PMC_SOURCE_ID = "S2764455111"  # PubMed Central (where Europe PMC full text comes from)
 
@@ -474,12 +476,25 @@ class OpenAlexProvider:
         search, mode = build_openalex_search(query, self.query_terms, relaxed=self.relaxed, profile=profile)
         self.last_query = {"query": search, "mode": mode, **({"relaxed": True} if self.relaxed else {})}
         self._spend()  # every HTTP attempt counts, retries included
+        shp = OPENALEX_SHAPE.get() or {}
         flt = (f"from_publication_date:{self.s['from_publication_date']},"
                f"to_publication_date:{self.s['to_publication_date']}")
+        if shp.get("recency") is False:  # QUERY-SHAPE-1108: definitional question, no date filter
+            flt = ""
         if profile and profile.get("filter"):
-            flt += "," + str(profile["filter"])
+            flt = (flt + "," if flt else "") + str(profile["filter"])
+        sort = None
+        if shp.get("review"):  # QUERY-SHAPE-1108: the one review-filtered call per question
+            from vera import query_shape
+            qc = query_shape.load_config()
+            flt = (flt + "," if flt else "") + str(qc.get("review_filter") or "type:review")
+            sort = str(qc.get("review_sort") or "cited_by_count:desc")
         select = OPENALEX_SELECT + ("," + OPENALEX_OA_SELECT_EXTRA if OPENALEX_OA_FIELDS.get() else "")
-        params = {"search": search, "filter": flt, "per_page": n, "select": select}
+        params = {"search": search, "per_page": n, "select": select}
+        if flt:
+            params["filter"] = flt
+        if sort:
+            params["sort"] = sort
         tx = self._transport or openalex_default_transport
         key = openalex_api_key(self.s)
         if not key:
@@ -1570,6 +1585,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         # WIKI-REDESIGN-1107: article pages only (robots-checked in the portal); pinned GET, never a redirect
         wiki_get = rate_limit.limited("wikipedia", selective_fetch.pinned_get)
 
+    shape_state = {"recency": True, "review": False, "pending": False}  # QUERY-SHAPE-1108: set in round 0, review spent by the next round
+
     def search(question, n, timeout_s):
         import concurrent.futures as cf
         t_end = clock() + float(timeout_s)
@@ -1629,6 +1646,17 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 if multi:
                     base = _search_parts(base_search, parts, B, question, n, t_end, clock, arx_hand)
                 else:
+                    from vera import query_shape
+                    use_review = False
+                    if not SCHOLARLY_ONLY.get():  # round 0: the question itself decides the shape for this question
+                        shape_state.update(query_shape.shape(question))
+                        shape_state["pending"] = bool(shape_state["review"])
+                    elif shape_state["pending"]:
+                        # QUERY-SHAPE-1108: the first variant round (scholarly-only) carries the review filter, in the
+                        # slot of the duplicate first variant the generator no longer emits: the OpenAlex call total
+                        # per question is unchanged. Variant rounds receive the variant string, not the question.
+                        use_review, shape_state["pending"] = True, False
+                    shape_tok = OPENALEX_SHAPE.set({"recency": shape_state["recency"], "review": use_review})
                     atok = ARXIV_ALLOWED.set(use_arxiv)  # make_search calls arXiv only when the budget left a slot
                     stok = ARXIV_STATUS.set(arx_hand)  # make_search reports the arXiv call here: [status, n]
                     try:
@@ -1636,6 +1664,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                     finally:
                         ARXIV_ALLOWED.reset(atok)
                         ARXIV_STATUS.reset(stok)
+                        OPENALEX_SHAPE.reset(shape_tok)
             except Exception as e:  # noqa: BLE001
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"

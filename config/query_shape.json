@@ -1,0 +1,13 @@
+{
+  "_status": "QUERY-SHAPE-1108 (QUARKS-RCA-1108 fix 4). Grammar data for the acquisition query shape. Config, not code.",
+  "_calibration_note": "PROVISIONAL, uncalibrated (no live data): the patterns are grammar frames chosen from general knowledge, not measured. Calibrate by replaying recorded definitional and news questions and counting on-topic full texts reached with and without the recency filter. A question that fires the temporality detector or news intent always keeps the recency filter, whatever these patterns say.",
+  "definitional_patterns": [
+    "^\\s*(?:please\\s+)?(?:what|who)\\s+(?:is|are|was|were)\\s+(?:an?\\s+|the\\s+)?[^?]*\\??\\s*$",
+    "^\\s*(?:please\\s+)?(?:explain|define|describe)\\b",
+    "^\\s*what\\s+(?:does|do)\\s+.+\\s+mean\\b",
+    "^\\s*(?:tell\\s+me\\s+about|give\\s+me\\s+an?\\s+(?:overview|introduction)\\s+(?:of|to))\\b"
+  ],
+  "review_filter": "type:review",
+  "review_sort": "cited_by_count:desc",
+  "_review_note": "PROVISIONAL. One review-filtered OpenAlex call per definitional question. It takes the slot of the first variant round (which the old generator spent on a duplicate of the first query), so the OpenAlex call total per question does not increase. The profile filter (PMC) still applies, and no date filter."
+}

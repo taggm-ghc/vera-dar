@@ -103,7 +103,10 @@ def test_n1_stream_always_progressing_stops_at_variant_exhaustion(monkeypatch):
     a["bounds"]["acq_round_target_new_docs"] = 1000
     o = h.run(a, stream=True)
     assert v and len(h.searches) == len(v) + 1  # round 0 + every variant, then variants_exhausted
-    assert h.t - 1000.0 > 45.0 * 5  # the streamed path has no wall-clock bound (OD-1031-NODEADLINE)
+    # The bound scales with the variant count: elapsed = search_cost * (rounds), so derive it from len(v) instead of a
+    # fixed multiple of the deadline (QUERY-SHAPE-1108: the neutral, de-duplicated variant list is shorter than the old
+    # 12+). The point is that the streamed path runs past the 45 s deadline (OD-1031-NODEADLINE).
+    assert h.t - 1000.0 == 20.0 * (len(v) + 1) and h.t - 1000.0 > 45.0
     assert o.acquisition["stop"] == "variants_exhausted" and o.acquisition["rounds"] == len(v) + 1
     assert o.acquisition["status"] != "met"
 

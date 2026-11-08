@@ -60,8 +60,7 @@ def test_stage_order_drop_then_lexicon_then_entity_then_seeds_then_or():
 def test_reported_question_gets_practitioner_variants():
     out = qv.variants(Q, tried=[FIRST])
     seeds = json.loads(qv.CONFIG_PATH.read_text())["practitioner_terms"]
-    for s in ("best practices", "patterns", "architecture", "guide", "reference", "documentation", "design patterns",
-              "framework"):
+    for s in ("introduction", "overview", "review"):  # QUERY-SHAPE-1108: topic-neutral seeds
         assert s in seeds
         assert any(v.endswith(s) and "multi-agent" in v for v in out), s
 
