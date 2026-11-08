@@ -1389,11 +1389,37 @@ def _is_rate_skip(e: Exception) -> bool:
     return isinstance(e, rate_limit.RateLimited) or "not an attempt" in str(e).lower()
 
 
+_NOT_ATTEMPT = re.compile(r"rate_limited \((\w+); not an attempt\)")
+_OWN_CAP = re.compile(r"daily (?:query cap|search budget).{0,40}\bspent\b")
+
+
+def _own_decision(e: Exception):
+    """OUTCOME-LABELS-1108: which of VERA-DAR's OWN decisions (not a provider failure) ended a call, else None:
+    "paced" (our limiter's pacing, concurrency or deadline skip), "own_cap" (our daily allowance for the service was
+    used up) or "robots" (our robots gate refused). The skip reaches here as a RateLimited or, through the search
+    chain, as the note "rate_limited (<reason>; not an attempt)" or "provider unavailable: ... spent ...". A skip
+    caused by the provider (cooldown, open breaker) is None: it follows a real refusal."""
+    from vera import rate_limit
+    t = str(e)
+    tl = t.lower()
+    if "r-acq-robots" in tl:
+        return "robots"
+    if isinstance(e, rate_limit.RateLimited):
+        reason = e.reason
+    else:
+        m = _NOT_ATTEMPT.search(t)
+        reason = m.group(1) if m else None
+    if reason == "daily_cap":
+        return "own_cap"
+    if reason is not None:
+        return None if reason in rate_limit.PROVIDER_BUSY_REASONS else "paced"
+    return "own_cap" if _OWN_CAP.search(tl) else None
+
+
 def _own_pacing(e: Exception) -> bool:
     """F4a: a skip by VERA-DAR's own limiter (pacing, concurrency, deadline), not a provider refusal or cooldown
     after one. Reasons that rate_limit reports as the provider being busy are excluded; nothing was sent either way."""
-    from vera import rate_limit
-    return isinstance(e, rate_limit.RateLimited) and e.reason not in rate_limit.PROVIDER_BUSY_REASONS
+    return _own_decision(e) == "paced"
 
 
 def _is_quota_error(e: Exception) -> bool:
@@ -1675,7 +1701,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             except Exception as e:  # noqa: BLE001
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"
-                if _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
+                own = _own_decision(e)
+                if own in ("own_cap", "robots"):  # OUTCOME-LABELS-1108: our own decision, never "a search service failed"
+                    st_oa = own
+                elif _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1
                     st_oa = "paced" if _own_pacing(e) else "skipped_quota"
                 elif _is_quota_error(e):
@@ -1696,9 +1725,12 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 st_f[k] = "completed"
             except Exception as e:  # noqa: BLE001  (timeout, transport or parse error: the other sources stand)
                 got[k] = []
-                if _own_pacing(e):  # F4a: our own limiter skipped the call; the provider refused nothing
+                own = _own_decision(e)
+                if own == "paced":  # F4a: our own limiter skipped the call; the provider refused nothing
                     counts[f"{k}_paced"] = 1
                     st_f[k] = "paced"
+                elif own:  # OUTCOME-LABELS-1108: own_cap (our daily allowance) | robots (our compliance gate)
+                    st_f[k] = own
                 elif _is_quota_error(e):
                     counts[f"{k}_429"] = 1
                     st_f[k] = "quota"

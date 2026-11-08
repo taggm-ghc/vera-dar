@@ -524,7 +524,7 @@ def test_g_ddg_failure_variants(world, spy, variant):
     world.store()
     body = ask(world)
     obs(f"g-{variant}", body, world, spy)
-    exp = {"timeout": "timeout", "quota": "quota", "challenge": "error"}[variant]
+    exp = {"timeout": "timeout", "quota": "skipped", "challenge": "error"}[variant]  # OUTCOME-LABELS-1108: our own daily cap is a skip, not a provider quota
     ports = _ro(body)["portals"]
     assert canon(ports[0]["portal"]) == "ddg" and ports[0]["status"] == exp and world.p.log[0] == DDG
     assert ap.grounded_failures(200, body) == []  # Europe PMC carried the request
