@@ -1,0 +1,16 @@
+{
+ "_comment": "TAXO-HIER-1108 hierarchical taxonomy matcher flag. mode: off (shipped; no extra work) | shadow (the Corpus page, when it already reads chunks, also runs the matcher and logs one aggregate count line; display, cache and DB unchanged) | active (REFUSED by the loader until calibration_status is CALIBRATED with a calibration_note naming the owner-run evaluation output). If user-facing text is ever enabled, it must call the groupings automatic and approximate.",
+ "mode": "off",
+ "calibration_status": "UNCALIBRATED",
+ "calibration_note": "Values in params are starting values only, to be chosen by the owner-run kit work/TAXO-HIER-1108/kit/run_hier_eval.sh (not yet run).",
+ "params": {
+  "fit_quantile": 0.95,
+  "min_top_share": 0.25,
+  "min_agree": 0.5,
+  "null_replicates": 3,
+  "null_chunks": 2000,
+  "min_token_len": 3,
+  "seed": 1108,
+  "semantic_weight": 0.5
+ }
+}

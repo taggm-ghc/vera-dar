@@ -1158,6 +1158,8 @@ def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_
     from vera import chunk_topics
     idx = chunk_topics.ChunkIndex(reg.entries, chunk_topics.load_rules())  # raises on a bad rules file: fail closed
     votes = chunk_primary(reg, chunks, threshold, _bounded((scfg or {}).get("min_chunk_votes"), 1, 1, 50), idx) if chunks else {}
+    if chunks:
+        _shadow_hier(reg, chunks)
     out = {}
     for r in rows:
         d = int(r[0])
@@ -1167,6 +1169,23 @@ def document_primary_topics(engine, reg, mt_cfg: dict, scan_max: int, statement_
                  else assign_topic(reg, r[1], r[2], r[3], threshold, window, idx))
         out[d] = v
     return out
+
+
+def _shadow_hier(reg, chunks: dict) -> None:
+    """TAXO-HIER-1108 shadow seam: only when config/taxo_hier.json mode is "shadow", classify the already-read chunks with the
+    hierarchical matcher and log ONE aggregate line (counts only). Never changes the result, display or cache; no SQL. Mode off
+    (shipped) does no work beyond the config read. Any failure is logged by exception class only."""
+    try:
+        from vera import taxo_hier
+        cfg = taxo_hier.load_config()
+        if cfg.get("mode") != "shadow":
+            return
+        m = taxo_hier.Model(reg.entries, [c for cs in chunks.values() for c in cs], cfg["params"],
+                            stopwords=taxo_hier.load_stopwords())
+        summ = taxo_hier.summarize([m.classify(cs) for cs in chunks.values()])
+        logger.info("corpus subject areas: taxo_hier shadow %s", json.dumps(summ, sort_keys=True))
+    except Exception as exc:  # noqa: BLE001 - class only; the page is unaffected
+        logger.warning("corpus subject areas: taxo_hier shadow skipped (%s)", type(exc).__name__)
 
 
 def _bounded(v, default: int, lo: int, hi: int) -> int:
