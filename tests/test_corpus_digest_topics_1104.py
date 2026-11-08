@@ -498,3 +498,10 @@ def test_coverage_gate_shows_the_no_topics_line(monkeypatch):
     llm = table_llm()
     out = describer(eng).current(llm)
     assert out["topics"] == [] and out["coverage"] == cd.NO_TABLE_TOPICS_LINE and llm.calls == []
+
+
+@pytest.fixture(autouse=True)
+def _api_subjects_on(monkeypatch):
+    """CORPUS-INTERIM-1108: the API default is off (fail safe); these tests pin the old view, so they switch it on."""
+    from vera import corpus_description as _cd
+    monkeypatch.setitem(_cd.SUBJECT_DEFAULTS, "enabled", True)

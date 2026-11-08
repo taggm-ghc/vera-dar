@@ -1079,7 +1079,8 @@ def run_table_digest(overview: dict, profile: dict, table: dict, llm, cfg: dict,
 # follow-up: measure the matched share and spot-check assignments on real vera_vjay.sources rows.
 # connect_timeout_s / statement_timeout_ms: PROVISIONAL safety bounds (not decision thresholds; uncalibrated) so a slow DB
 # cannot hold a page view; on timeout the page shows the "not available right now" line.
-SUBJECT_DEFAULTS = {"enabled": True, "display_domains": 8, "display_topics": 3, "display_subtopics": 2,
+SUBJECT_DEFAULTS = {"enabled": False,  # CORPUS-INTERIM-1108: fail safe, a missing key hides per-subject output
+                    "display_domains": 8, "display_topics": 3, "display_subtopics": 2,
                     "scan_max": 2000, "cache_s": 300.0, "connect_timeout_s": 5, "statement_timeout_ms": 5000,
                     "chunk_votes": False, "chunks_per_doc": 16, "chunk_chars": 1200, "min_chunk_votes": 1}
 # TAXO-INDUCE-1107 (owner 2026-11-07: "each chunk should be re-analyzed"): with subject_areas.chunk_votes true, each document's
@@ -1499,10 +1500,31 @@ class CorpusDescriber:
     def current(self, llm) -> dict:
         out = self._current_digest(llm)
         if out.get("source_count"):
-            sa = self._subjects(out)
-            if sa:
-                out = {**out, "subject_areas": sa}
+            if subject_cfg(self.cfg).get("enabled") is True:
+                sa = self._subjects(out)
+                if sa:
+                    out = {**out, "subject_areas": sa}
+            else:  # CORPUS-INTERIM-1108: no classifier output; year range and frequent subject phrases instead
+                out = {**out, "subject_areas": None, "topic_shares": None, "topics": [], **self._interim(out)}
         return out
+
+    def _interim(self, overview: dict) -> dict:
+        """CORPUS-INTERIM-1108: {"published_years", "frequent_subjects"}, cached like the subject areas; never raises ({} on a problem)."""
+        key = (overview.get("source_count"), overview.get("corpus_updated_at"))
+        now, ttl = self.clock(), float(subject_cfg(self.cfg)["cache_s"])
+        ic = getattr(self, "_interim_cache", None)
+        if ic is not None and ic[1] == key and now - ic[0] < ttl:
+            return ic[2]
+        try:
+            from vera import corpus_interim
+            engine = self._engine_or_none()
+            val = {} if engine is None else corpus_interim.read_interim(engine, corpus_interim.load_cfg(
+                getattr(self, "interim_cfg_path", None), getattr(self, "interim_rules_path", None)))
+        except Exception as exc:  # noqa: BLE001  the page never breaks; the digest still renders
+            logger.warning("corpus interim description unavailable (%s)", type(exc).__name__)
+            val = {}
+        self._interim_cache = (now, key, val)
+        return val
 
     def _current_digest(self, llm) -> dict:
         engine = self._engine_or_none()

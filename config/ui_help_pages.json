@@ -10,7 +10,7 @@
       "**-MAGOPS: Multi-Agent Operations**: VERA-DAR-MAGOPS is a proposed multi-agent operations control plane for VERA-DAR (planned; not part of this service)."
     ],
     "intro": "This page explains what VERA-DAR is and how it answers. Other pages show a one-line notice that links here.",
-    "corpus_link": "Corpus Description: what VERA-DAR's collection covers, by subject area",
+    "corpus_link": "Corpus Description: what VERA-DAR's collection covers",
     "after_disclosure": [
       {
         "heading": "News reports",
@@ -36,9 +36,10 @@
   "corpus_page": {
     "title": "Corpus Description",
     "paragraphs": [
-      "This page describes VERA-DAR's collection of stored sources. It first gives the number of sources and the date of the newest source.",
-      "It then shows the subject areas the collection covers, with each area's share of the documents and its main topics and subtopics. The subject areas, topics and subtopics come from VERA-DAR's subject list. Each document is listed once, under the closest subject on that list. No language model is used, so this part is shown even when no written description is available. Documents that match no listed subject are counted as not matched. The matching is approximate, so treat the shares as a rough guide.",
-      "When a checked description is available, the page also shows a short description of the collection, its main topics with each topic's share of a sample of the sources, and its current coverage. That description was written by a language model. The page says so, gives the date it was written, and the description may be imperfect. When no checked description is available, the page shows the publication years instead.",
+      "This page describes VERA-DAR's collection of stored sources. It first gives the number of sources, the date of the newest source and the range of publication years.",
+      "It then describes what the collection covers. When a checked description is available, the page shows a short description of the collection and its current coverage. That description was written by a language model. The page says so, gives the date it was written, and the description may be imperfect.",
+      "When no checked description is available, the page lists the subjects that occur most often in the titles of the stored sources. This list is built by a program from those titles, without a language model, and it is a rough guide to what the collection covers, not a complete list.",
+      "The page does not yet show how many sources belong to each subject, because VERA-DAR's way of assigning sources to subjects has not been validated.",
       "The page never names an individual source."
     ]
   },

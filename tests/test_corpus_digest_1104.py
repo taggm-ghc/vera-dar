@@ -396,3 +396,10 @@ def test_boundary_sentences_are_dropped_when_the_checker_follows_its_prompt(bad)
 def test_coverage_is_empty_when_no_label_is_approved():
     out = run(FakeLLM(CLUSTERS, [GOOD], supported={1}))
     assert out["coverage"] == "" and out["topics"] == []
+
+
+@pytest.fixture(autouse=True)
+def _api_subjects_on(monkeypatch):
+    """CORPUS-INTERIM-1108: the API default is off (fail safe); these tests pin the old view, so they switch it on."""
+    from vera import corpus_description as _cd
+    monkeypatch.setitem(_cd.SUBJECT_DEFAULTS, "enabled", True)

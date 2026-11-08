@@ -307,3 +307,16 @@ def test_subjects_single_flight_never_waits_and_keeps_the_previous_value():
         assert d._subjects(ov) == first and calls == [1]  # concurrent miss: previous value, no stampede
     finally:
         d._subject_lock.release()
+
+
+@pytest.fixture(autouse=True)
+def _subjects_switch_on(monkeypatch):
+    """CORPUS-INTERIM-1108: these tests pin the old view, which returns when subject_areas.enabled is true."""
+    monkeypatch.setattr(sb, "subjects_enabled", lambda: True)
+
+
+@pytest.fixture(autouse=True)
+def _api_subjects_on(monkeypatch):
+    """CORPUS-INTERIM-1108: the API default is off (fail safe); these tests pin the old view, so they switch it on."""
+    from vera import corpus_description as _cd
+    monkeypatch.setitem(_cd.SUBJECT_DEFAULTS, "enabled", True)

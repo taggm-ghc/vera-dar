@@ -105,3 +105,10 @@ def test_missing_fulldoc_enabled_key_is_disabled(monkeypatch, tmp_path):
     assert fulldoc_corpus.get_corpus({**base, "fulldoc": {"enabled": True}}, env) is sentinel
     fulldoc_corpus.reset_for_tests()
     assert fulldoc_corpus.get_corpus({**base, "fulldoc": {"enabled": "true"}}, env) is sentinel
+
+
+@pytest.fixture(autouse=True)
+def _api_subjects_on(monkeypatch):
+    """CORPUS-INTERIM-1108: the API default is off (fail safe); these tests pin the old view, so they switch it on."""
+    from vera import corpus_description as _cd
+    monkeypatch.setitem(_cd.SUBJECT_DEFAULTS, "enabled", True)

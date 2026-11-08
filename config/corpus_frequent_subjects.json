@@ -1,0 +1,10 @@
+{
+  "_note": "CORPUS-INTERIM-1108: deterministic corpus description used by the Corpus Description page and sidebar when no checked written description exists and subject_areas.enabled is false. vera/corpus_interim.py takes the stored titles, splits each title at stopwords and generic terms (the lists in config/chunk_topic_terms.json plus extra_generic_terms here), keeps runs of consecutive remaining words, counts each phrase of min_words..max_words words once per distinct title, and shows the max_phrases most frequent phrases found in at least min_docs distinct titles. A phrase is shown as plain text with no number. No individual source is shown, and a phrase that equals a whole title is dropped. title_limit is a work bound (titles read).",
+  "_calibration_note": "PROVISIONAL, 2026-11-08 (CORPUS-INTERIM-1108; the implementer had NO database read). max_phrases, min_docs, min_words and max_words are uncalibrated priors. Check on real titles with a read-only spot check before relying on them: raise min_docs if one-off phrases appear, lower it only if fewer than a handful of phrases pass. Values were tested only on synthetic titles.",
+  "max_phrases": 8,
+  "min_docs": 3,
+  "min_words": 2,
+  "max_words": 3,
+  "title_limit": 2000,
+  "extra_generic_terms": ["using", "based", "via", "toward", "towards", "new", "novel", "case", "approach", "approaches", "analysis", "evidence", "review", "effects", "effect"]
+}

@@ -406,6 +406,8 @@ class CorpusDescription(BaseModel):
     coverage: str | None = None  # CORPUS-DIGEST-1104: generated description of current coverage (not a limit)
     topic_shares: dict | None = None  # CORPUS-DIGEST-1104: topics making up 80% of sampled documents (code-computed)
     subject_areas: dict | None = None  # CORPUS-DESC-1107: domain > topic > subtopic shares of documents (code-computed, no titles)
+    published_years: list[str] | None = None  # CORPUS-INTERIM-1108: [first, last] publication year
+    frequent_subjects: list[str] | None = None  # CORPUS-INTERIM-1108: frequent multi-word subject phrases from titles (no counts, no titles)
     summary_source: str
     summary_generated_at: str | None = None
     summary_model: str | None = None

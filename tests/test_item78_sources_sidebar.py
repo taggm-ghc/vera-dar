@@ -276,7 +276,7 @@ def test_description_line_ignores_summary_model_and_unknown_fields():
     joined = " ".join(cap)
     assert "written by a language model on 2026" in joined and "groq" not in joined and SENT_MODEL not in joined
     assert sb.CORPUS_FIELDS == {"summary_source", "source_count", "corpus_updated_at", "summary", "topics",
-                                "summary_generated_at", "coverage", "topic_shares", "subject_areas"}
+                                "summary_generated_at", "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects"}
 
 
 def test_model_written_description_naming_a_backend_is_replaced():
@@ -659,3 +659,9 @@ def test_checked_marker_shows_model_text_and_matches_the_pipeline():
     sb.render_corpus(st, {**_AGENTIC, "summary": "Model summary text."})
     joined = " ".join(cap)
     assert sb.plain("Model summary text.") in joined and "Main topics" in joined and "Description written by a language model" in joined
+
+
+@pytest.fixture(autouse=True)
+def _subjects_switch_on(monkeypatch):
+    """CORPUS-INTERIM-1108: these tests pin the old view, which returns when subject_areas.enabled is true."""
+    monkeypatch.setattr(sb, "subjects_enabled", lambda: True)

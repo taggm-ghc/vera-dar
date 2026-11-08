@@ -17,7 +17,6 @@ logger = logging.getLogger("vera")
 ROOT = Path(__file__).resolve().parent.parent
 CHAIN_PATH = ROOT / "config" / "ask-provider-chain.json"
 SELECTION_PATH = ROOT / "config" / "model-selection.json"
-DISCLOSURE_PATH = ROOT / "config" / "corpus_disclosure.json"  # CORPUS-DISCLOSE-1108: interim note; remove once validated
 SNAPSHOT_PATH = ROOT / "eval_results" / "trace_eval_v1.json"
 SNAPSHOT_FIELDS = frozenset({"count", "years", "questions", "captured"})  # aggregate only; never per-source
 _ARXIV_ID = re.compile(r"arxiv\.org/(?:abs|pdf)/(\d{2})(\d{2})\.\d{4,5}")
@@ -65,7 +64,7 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
-                           "coverage", "topic_shares", "subject_areas"})
+                           "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects"})
 # D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
 # many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
 # topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
@@ -262,14 +261,26 @@ def _subject_lines(sa) -> list[str]:
         return []
 
 
-def provisional_note(path: Path = DISCLOSURE_PATH) -> str | None:
-    """CORPUS-DISCLOSE-1108: config-driven note that subject shares are unvalidated. None when disabled, missing,
-    malformed, or if the text contains a digit (the note never shows a number)."""
-    n = (_read(path) or {}).get("provisional_note")
-    if not isinstance(n, dict) or n.get("enabled") is not True or not isinstance(n.get("text"), str):
+def subjects_enabled(path: Path = CHAIN_PATH) -> bool:
+    """CORPUS-INTERIM-1108: the switch corpus_description.subject_areas.enabled in config/ask-provider-chain.json (the API
+    reads the same value). Only an explicit true shows per-subject counts, shares and the subject list; a missing, malformed
+    or false value hides them (deny by default). Set true again only once a validated matcher ships."""
+    sa = (((_read(path) or {}).get("corpus_description") or {}).get("subject_areas")) or {}
+    return sa.get("enabled") is True
+
+
+def _years_text(years) -> str:
+    if isinstance(years, list) and len(years) == 2 and all(isinstance(y, str) and re.fullmatch(r"\d{4}", y) for y in years):
+        return f"publication years {years[0]} to {years[1]}" if years[0] != years[1] else f"publication year {years[0]}"
+    return ""
+
+
+def _frequent_line(phrases) -> str | None:
+    """CORPUS-INTERIM-1108: 'Frequent subjects include: a; b; c.' from code-built title phrases; no numbers, no sources."""
+    if not isinstance(phrases, list):
         return None
-    t = n["text"].strip()
-    return plain(t) if t and not re.search(r"\d", t) and _model_text_ok(t) else None
+    ok = [plain(p) for p in phrases if isinstance(p, str) and p.strip() and not re.search(r"\d", p) and _model_text_ok(p)]
+    return f"Frequent subjects include: {'; '.join(ok)}." if ok else None
 
 
 NO_SUBJECTS = "A description by subject area is not available right now."
@@ -283,17 +294,22 @@ def render_corpus(st, data: dict | None) -> None:
         st.caption(f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
         return
     data = {k: v for k, v in data.items() if k in CORPUS_FIELDS}
+    interim = not subjects_enabled()  # CORPUS-INTERIM-1108: no per-subject numbers, assignments or subject list
+    if interim:
+        data = {**data, "subject_areas": None, "topic_shares": None, "topics": []}
     when = f", newest source {plain(data['corpus_updated_at'][:10])}" if data.get("corpus_updated_at") else ""
-    st.caption(f"**VERA-DAR's corpus:** {int(data.get('source_count') or 0)} sources{when}.")
+    yrs = f", {_years_text(data.get('published_years'))}" if interim and _years_text(data.get("published_years")) else ""
+    st.caption(f"**VERA-DAR's corpus:** {int(data.get('source_count') or 0)} sources{when}{yrs}.")
     checked = data.get("summary_source") == CHECKED
-    if data.get("summary") and data.get("summary_source") in CODE_ONLY_SOURCES:
+    if data.get("summary") and data.get("summary_source") in CODE_ONLY_SOURCES and not interim:
         st.caption(plain(data["summary"]))  # code-built text
     subjects = _subject_lines(data.get("subject_areas"))
     if not checked:  # default deny: no model-written field without the checker-pass marker
+        if interim:
+            st.caption(_frequent_line(data.get("frequent_subjects")) or NO_SUBJECTS)
+            return
         for line in subjects or [NO_SUBJECTS]:
             st.caption(line)
-        if subjects and provisional_note():
-            st.caption(provisional_note())
         return
     if data.get("summary"):
         st.caption(plain(data["summary"]) if _model_text_ok(data["summary"]) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
@@ -306,8 +322,6 @@ def render_corpus(st, data: dict | None) -> None:
     elif data.get("topics"):
         line = "Topics: " + ", ".join(data["topics"])
         st.caption(plain(line) if _model_text_ok(line) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
-    if (subjects or shares) and provisional_note():
-        st.caption(provisional_note())
     if checked:
         st.caption(f"Description written by a language model on {plain((data.get('summary_generated_at') or '')[:10])}; "
                    "refreshed when the corpus changes.")

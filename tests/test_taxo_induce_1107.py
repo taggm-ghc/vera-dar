@@ -465,3 +465,10 @@ def test_page_ignores_bad_chunk_settings():
     sa = cd.subject_areas_for(_Eng(corpus=corpus), {"subject_areas": {"chunk_votes": True, "min_chunk_votes": "x",
                                                                     "chunks_per_doc": -1}}, {}, registry_reader=lambda: (True, ROWS))
     assert sa["unmatched_share"] == 0.0
+
+
+@pytest.fixture(autouse=True)
+def _api_subjects_on(monkeypatch):
+    """CORPUS-INTERIM-1108: the API default is off (fail safe); these tests pin the old view, so they switch it on."""
+    from vera import corpus_description as _cd
+    monkeypatch.setitem(_cd.SUBJECT_DEFAULTS, "enabled", True)

@@ -164,8 +164,8 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     _, cfg = _howto_text()
     t = " ".join(cfg["corpus_page"]["paragraphs"])  # CORPUS-DESC-1107: the corpus description has its own page
     assert "never names an individual document" not in t.lower() and "totals only" not in t
-    for shown in ("number of sources", "newest source", "subject areas", "subtopics", "language model", "current coverage",
-                  "topics", "publication years", "never names an individual source"):
+    for shown in ("number of sources", "newest source", "subjects that occur most often", "language model", "current coverage",
+                  "publication years", "never names an individual source"):
         assert shown in t, shown
     # SIDEBAR-RC-1107: the corpus description is About-only since 35f21fb (HOTFIX-BLURB-1104); About must not
     # describe a sidebar entry or a link that no longer renders.
@@ -327,3 +327,10 @@ def test_terms_release_gate_no_placeholders_left():
     """Release gate: fails while any owner placeholder remains in the shipped config (expected to fail until filled)."""
     raw = (ROOT / "config" / "ui_help_pages.json").read_text()
     assert "[[" not in raw, sorted(set(re.findall(r"\[\[([A-Z]+-[A-Z0-9]+)", raw)))
+
+
+@pytest.fixture(autouse=True)
+def _subjects_switch_on(monkeypatch):
+    from vera import sources_sidebar as sb
+    """CORPUS-INTERIM-1108: these tests pin the old view, which returns when subject_areas.enabled is true."""
+    monkeypatch.setattr(sb, "subjects_enabled", lambda: True)
