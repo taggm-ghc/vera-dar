@@ -184,6 +184,21 @@ def unsupported_matching_text(cfg, n_selected) -> str | None:
     return _match_text(cfg, "unsupported_matched_text", n_selected)
 
 
+PREMISE_TEXT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "premise_text.json"
+
+
+def premise_unverified_text() -> str:
+    """Distinct no-answer reason for a flagged but unverifiable question premise (OD-1104-TRACE reopened behind
+    config/premise_text.json `enabled`, shipped false). Returns "" unless enabled is exactly True and text is a non-empty
+    string without placeholders; any read or parse error returns "" (old behaviour). Never asserts the premise is false."""
+    try:
+        c = json.loads(PREMISE_TEXT_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    t = c.get("text") if isinstance(c, dict) and c.get("enabled") is True else None
+    return t.strip() if isinstance(t, str) and t.strip() and "{" not in t else ""
+
+
 def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_selected: int = 0, n_fetched: int = 0,
                   n_matched: int | None = None) -> str:
     """Visitor sentence for a contract.fallback token (None/unknown -> generic). Never returns the token.
@@ -192,6 +207,10 @@ def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_select
         return GENERIC_FALLBACK
     if token not in _TOKEN_DEFAULT:
         return GENERIC_FALLBACK
+    if token == "premise_unverified":  # PROCFIX-RELKIT-1108 (OD-1108-HITL item 1): honest reason, flag OFF by default
+        why = premise_unverified_text()
+        if why:
+            return why
     cfg = _cfg() if cfg is None else cfg
     key = _TOKEN_TEXT.get(token)
     alt = (insufficient_matching_text(cfg, n_matched, n_fetched) if key == "insufficient_text"

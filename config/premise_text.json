@@ -1,0 +1,5 @@
+{
+  "_note": "PROCFIX-RELKIT-1108 / OD-1108-HITL item 1: reopens OD-1104-TRACE for premise_unverified only. enabled=false (shipped OFF; UNCALIBRATED: calibrate on the golden false-premise and midterm questions before enabling, to guard against OD-1104-TRACE false positives). When true, a flagged but unverifiable premise shows this text instead of the plain insufficient-evidence text, in both the page headline and the server text. Wording does not assert that the premise is false.",
+  "enabled": false,
+  "text": "VERA-DAR could not confirm an assumption in this question from the documents it checked, so it has not answered it as asked."
+}

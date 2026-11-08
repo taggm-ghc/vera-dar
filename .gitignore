@@ -113,3 +113,7 @@ scratchpad/
 *.bak-*
 *.orig
 *.rej
+
+# Owner 2026-11-08: agent scratch/worktrees and dunder caches never belong in repo/
+/scratch/
+/__*
