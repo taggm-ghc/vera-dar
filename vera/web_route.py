@@ -81,6 +81,36 @@ def is_web_candidate(c) -> bool:
     return not any(h == d or h.endswith("." + d) for d in _NON_WEB_HOSTS)
 
 
+def _topic_cfg(cfg) -> dict:
+    t = cfg.get("topic_order") if isinstance(cfg, dict) else None
+    return t if isinstance(t, dict) and t.get("enabled") is True else {}
+
+
+def topic_order(question, candidates, cfg=None) -> list:
+    """SELFQ-RCA-1107 D4 r2 (config/web_route.json topic_order): on-topic web results first (title + snippet name >= 1
+    non-generic key concept of the question), zero-overlap results after them in their original order; zero-overlap
+    results are hidden only when NO result overlaps. Never raises; off, no concepts or any error: the input order."""
+    cands = list(candidates or ())
+    tc = _topic_cfg(cfg if cfg is not None else load_config())
+    if not tc or not cands:
+        return cands
+    try:
+        from vera import search_query
+        kc = search_query.key_concepts(str(question or ""))
+        generic = {str(g).casefold() for g in tc.get("generic_concepts") or ()}
+        keep = tuple(c for c in (kc[0] if kc else ()) if c.casefold() not in generic)
+        if not keep:
+            return cands
+        kc2 = (keep, {c: (kc[1] or {}).get(c, 1) for c in keep})
+        on, off = [], []
+        for c in cands:
+            text = f"{c.get('title') or ''} {c.get('snippet') or ''}" if isinstance(c, dict) else ""
+            (on if search_query.matched_concepts(kc2, text) else off).append(c)
+        return on + off if on else []
+    except Exception:  # noqa: BLE001  (ordering must never break the web lane)
+        return cands
+
+
 def _clip(s, n: int) -> str:
     s = " ".join(str(s or "").split())
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -246,9 +276,13 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
 
     def hop_gate(hop: str, start: str):
         return make_hop_gate(start, registry=registry, deny_list=deny_list, cfg=cfg, hosts=hosts)(hop)
-    for c in candidates or ():
-        if not is_web_candidate(c):
-            continue
+    pool = [c for c in candidates or () if is_web_candidate(c)]
+    candidates = topic_order(question, pool, cfg)  # SELFQ-RCA-1107 D4 r2
+    kept_ids = {id(c) for c in candidates}
+    for c in pool:  # F2: every result the topic gate hides leaves an auditable dev/trace entry (no URL, host or title)
+        if id(c) not in kept_ids:
+            out.dev.append({"gate": {"read": "topic_hidden"}, "fetched": False, "ingest": False})
+    for c in candidates:
         url = str(c.get("url") or c.get("discovered_url"))
         host = _host(url)
         title = _clip(c.get("title"), qmax) or url
