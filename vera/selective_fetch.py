@@ -29,7 +29,7 @@ import requests.adapters
 from vera import api_permissions
 from vera.cost_ledger import CostLedger
 
-USER_AGENT = "VERA-research-fetcher/0.1 (+bounded research; contact via repo owner)"
+USER_AGENT = "VERA-research-fetcher/0.1 (+https://github.com/taggm-ghc/vera-dar; bounded research)"
 MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 3
 TEXT_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "text/markdown", "application/json", "application/xml", "text/xml")
@@ -504,8 +504,15 @@ def robots_content_signal(url, user_agent=None) -> str:
     ("" when none or not cached). Never fetches, never raises."""
     try:
         parts = urlsplit(url)
+        k = (parts.scheme, (parts.hostname or "").lower(), user_agent or USER_AGENT)
         with _ROBOTS_LOCK:
-            return _ROBOTS_SIGNAL.get((parts.scheme, (parts.hostname or "").lower(), user_agent or USER_AGENT), "")
+            sig, hit = _ROBOTS_SIGNAL.get(k, ""), _ROBOTS.get(k)
+        try:  # A1: per-path ai-train=no from the __usage_ai-training group; informational, never blocks
+            from vera import robots_ai as _ra
+            use = _ra.usage_signals(hit[1], url) if hit is not None else ""
+        except Exception:  # noqa: BLE001
+            use = ""
+        return ", ".join(v for v in (sig, use) if v)
     except Exception:  # noqa: BLE001
         return ""
 

@@ -482,6 +482,7 @@ def _ai_ok(rp, ua, url) -> bool:
 
 
 _SIGNAL_HEADERS = (("x-robots-tag", "X-Robots-Tag"), ("content-signal", "Content-Signal"),
+                    ("content-usage", "Content-Usage"),
                     ("tdm-reservation", "TDM-Reservation"))
 _META_TAG = re.compile(r"<meta\b[^>]*>", re.I)
 _META_ATTR = re.compile(r"([a-zA-Z\-:]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
@@ -617,7 +618,14 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
     sig = meta.get("headers", {})  # WP6-P2: only the two signal values, normalised; never the raw header dict
     fp = urlsplit(final)
     robots_sig = cache.get(("content_signal", (fp.hostname or "").lower().rstrip("."), fp.port or 443), "")
-    cs = ", ".join(v for v in (str(sig.get("content-signal") or "").strip(), robots_sig) if v)  # header + robots.txt
+    from vera import robots_ai as _ra, source_permissions as _sp2  # A1 / A2
+    rp_final = cache.get(((fp.hostname or "").lower().rstrip("."), fp.port or 443))
+    try:
+        usage = _ra.usage_signals(rp_final, final) if rp_final is not None else ""  # A1: informational, never blocks
+    except Exception:  # noqa: BLE001
+        usage = ""
+    cs = ", ".join(v for v in (str(sig.get("content-signal") or "").strip(), _sp2.content_usage_signal(sig.get("content-usage", "")),
+                               robots_sig, usage) if v)  # header + robots.txt
     html = decoded if ctype != "text/plain" else ""
     tdm = "1" if (str(sig.get("tdm-reservation") or "").strip() == "1" or _tdm_meta(html)) else ""
     if tdm_check and not tdm:  # H19 A9: opt-in per caller (reporting lane, Wikipedia-citation reads); fail closed

@@ -154,6 +154,23 @@ def _content_signal_no_ai(value: str) -> bool:
     return False
 
 
+def content_usage_signal(value: str) -> str:
+    """A2: Content-Usage (IETF AIPREF) value -> "ai-input=no" when ai-use is n/no (equivalent to Content-Signal
+    ai-input=no); "" when it parses without barring; "info:content-usage-unparsed" when nothing parses (recorded, no bar)."""
+    v0 = re.sub(r"\s*=\s*", "=", str(value or "").lower()).replace('"', "")  # lenient: spaces around '=', quoted values
+    parts = [p for p in re.split(r"[,;\s]+", v0) if p]
+    if not parts:
+        return ""
+    ok = False
+    for part in parts:
+        k, sep, v = part.partition("=")
+        if sep and k.strip() and v.strip():
+            ok = True
+            if k.strip() == "ai-use" and v.strip() in ("n", "no"):
+                return "ai-input=no"
+    return "" if ok else "info:content-usage-unparsed"
+
+
 def _robots_lines(robots_txt_entries) -> list[str]:
     if not robots_txt_entries:
         return []
@@ -168,6 +185,8 @@ def _robots_no_ai(robots_txt_entries) -> bool:
         k, _, v = ln.partition(":")
         if k.strip().lower() == "content-signal" and _content_signal_no_ai(v):
             return True
+        if k.strip().lower() == "content-usage" and content_usage_signal(v) == "ai-input=no":  # A2: raw robots.txt lines
+            return True
     return False
 
 
@@ -179,6 +198,8 @@ def robots_content_signal(robots_txt: str) -> str:
         k, _, v = ln.split("#", 1)[0].strip().partition(":")
         if k.strip().lower() == "content-signal" and v.strip():
             vals.append(v.strip())
+        elif k.strip().lower() == "content-usage" and content_usage_signal(v):  # A2, any group counts
+            vals.append(content_usage_signal(v))
     return ", ".join(vals)
 
 
@@ -285,6 +306,7 @@ def evaluate(url: str, *, licence=None, headers=None, html_head: str | None = No
     lid, lurl = _lic(licence)
     nd = licence_gate.reject_reason(lid, lurl) == "ND (no derivatives)"
     no_ai = (bool({"noai", "noimageai"} & (xrt | meta)) or _content_signal_no_ai(h.get("content-signal", ""))
+             or _content_signal_no_ai(content_usage_signal(h.get("content-usage", "")))
              or _robots_no_ai(robots_txt_entries))
     nd_news = nd and licence_gate.nd_news_permitted(
         {"url": url, "licence": {"content": {"id": lid, "url": lurl}}})  # H19: looked up from the URL host; flag off = False

@@ -3,6 +3,7 @@
 A parsed robots.txt (urllib.robotparser) is annotated once with (a) whether a comment states that AI crawlers or
 assistants are blocked and (b) which configured AI agent tokens have a group of their own. block_reason() then says
 whether a URL is blocked by an AI group (any one disallowing the path blocks) or by the statement (whole host).
+ROBOTS-TIGHTEN-1108: a group naming any of our own product tokens (own_tokens) binds every route.
 Tokens and phrases come from config/robots_ai.json. Any error loading config or evaluating raises; callers fail closed.
 """
 from __future__ import annotations
@@ -26,6 +27,10 @@ def load_config(path: Path | None = None) -> dict:
     c = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(c, dict) or not isinstance(c.get("ai_agent_tokens"), list) \
             or not isinstance(c.get("ai_statement_phrases"), list):
+        raise ValueError("robots_ai config malformed")
+    ot, ut = c.get("own_tokens"), c.get("usage_tokens")  # ROBOTS-TIGHTEN-1108 S1b / A1; missing or malformed fails closed
+    if not isinstance(ot, list) or not ot or not all(isinstance(t, str) and t.strip() for t in ot) \
+            or not isinstance(ut, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in ut.items()):
         raise ValueError("robots_ai config malformed")
     if path == CONFIG_PATH:
         _CFG = c
@@ -155,7 +160,26 @@ def allowed(rp, ua: str, url: str) -> bool:
         return True
     if rp is False:
         return False
-    return _decide(_applies(rp.vera_groups, (), ua), url)
+    toks = {_base(str(t)) for t in load_config()["own_tokens"]} | {_base(ua)}
+    toks.discard("")
+    hit = [t for t in sorted(toks) if any(t in g["agents"] for g in rp.vera_groups)]
+    if not hit:  # no group names any own token: the * groups
+        return _decide(_applies(rp.vera_groups, (), None), url)
+    return all(_decide(_applies(rp.vera_groups, {t}, None), url) for t in hit)  # S1b: every matched own group must allow
+
+
+def usage_signals(rp, url: str) -> str:
+    """A1: "ai-train=no" (config usage_tokens value) when a group naming a usage token exactly disallows url, else "".
+    Informational only: never consulted for access, never falls back to *."""
+    if rp in (None, True, False):
+        return ""
+    out = []
+    for tok, val in load_config()["usage_tokens"].items():
+        b = _base(tok)
+        gs = [g for g in rp.vera_groups if b in g["agents"]]
+        if gs and not _decide([r for g in gs for r in g["rules"]], url) and val not in out:
+            out.append(val)
+    return ", ".join(out)
 
 
 def statement_in(text: str, cfg: dict | None = None) -> bool:

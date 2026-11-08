@@ -59,7 +59,7 @@ ARXIV_HOST = "arxiv.org"
 # is config search.arxiv.max_response_bytes; this is only the validator's absolute ceiling).
 MAX_RESPONSE_BYTES_CEILING = 8 * 1024 * 1024
 # Why: no contact e-mail is sent to any API (R1 has not approved one), so the identifier names only the tool.
-USER_AGENT = "VERA-research-pipeline/1.0 (offline-reviewed; no contact address configured)"
+USER_AGENT = "VERA-research-pipeline/1.0 (+https://github.com/taggm-ghc/vera-dar; offline-reviewed)"
 # Why: the frozen question is prose; arXiv searches terms. These words carry no topic signal, so they are
 # dropped before the term query is built. Deliberately small and plain: the effect on recall is UNMEASURED
 # (plan L1 measures it).

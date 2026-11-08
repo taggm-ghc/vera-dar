@@ -1,6 +1,6 @@
 {
   "_note": "Guarded public-any fetch mode (NONASK-1103 S6). deny_hosts is owner-curated: exact host or any subdomain.",
-  "user_agent": "VERA-research-fetcher/0.1 (+bounded research; contact via repo owner)",
+  "user_agent": "VERA-research-fetcher/0.1 (+https://github.com/taggm-ghc/vera-dar; bounded research)",
   "deny_hosts": [],
   "max_redirects": 2,
   "max_compressed_bytes": 2000000,
