@@ -232,6 +232,21 @@ def decide(url: str, purpose: str | None = None, policy: Policy | None = None) -
     return Decision(True, None, eid, "permitted", e.get("conditions") or {})
 
 
+def attribution_for(url: str, policy: Policy | None = None) -> dict | None:
+    """OA5-ALLOW-1108: the attribution/licence fields the matching entry's conditions require, read from
+    config/api_permissions.json only (no strings in code). None when no entry matches, the call is not permitted,
+    or the entry names no attribution. Keys: attribution, placement (or None), licence (or None), no_branding."""
+    d = decide(url, None, policy)
+    if not d.allowed:
+        return None
+    c = d.conditions or {}
+    text = c.get("attribution")
+    if not isinstance(text, str) or not text:
+        return None
+    return {"attribution": text, "placement": c.get("attribution_placement"), "licence": c.get("licence"),
+            "no_branding": bool(c.get("no_branding"))}
+
+
 def require(url: str, purpose: str | None = None, policy: Policy | None = None) -> Decision:
     """decide(); a refusal is logged (fixed code + entry id) and raised as ApiDenied. Nothing is sent."""
     d = decide(url, purpose, policy)

@@ -6,7 +6,8 @@
   "version": 1,
   "default": "deny",
   "api_hosts": ["api.openalex.org", "api.crossref.org", "export.arxiv.org", "api.semanticscholar.org",
-                "api.gdeltproject.org", "hn.algolia.com", "api.unpaywall.org"],
+                "api.gdeltproject.org", "hn.algolia.com", "api.unpaywall.org",
+                "api.plos.org", "api.openaire.eu"],
   "entries": {
     "openalex": {
       "host": "api.openalex.org", "path_prefix": "/",
@@ -66,11 +67,40 @@
     },
     "doaj_api": {
       "host": "doaj.org", "path_prefix": "/api/",
-      "verdict": "UNRESOLVED", "owner_switch": "deny", "owner_decision": "OD-1108-HITL (denied until its terms check)",
-      "conditions": {"rate_portal": "doaj", "max_rate_per_s": 2.0, "max_concurrency": 1, "respect_429": true, "content_scope": ["metadata"],
-                     "_note": "no API terms or licence found (11-07)."},
-      "evidence": [{"url": "https://doaj.org/api/v4/docs", "read_level": "summarizer", "read": "2026-11-07", "provenance": "11-07 research read (brief): no terms or licence found"}],
-      "read_level": "summarizer", "read": "2026-11-07", "review_by": "2026-12-07"
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "permit", "owner_decision": "OD-1108-HITL",
+      "conditions": {"rate_portal": "doaj", "max_rate_per_s": 1.0, "max_concurrency": 1, "respect_429": true, "content_scope": ["metadata"],
+                     "licence": "CC0 (article-level metadata)", "attribution": "Metadata from DOAJ (CC0 waiver)",
+                     "no_site_prose": true,
+                     "_note": "OA5-ALLOW-1108, OD-1108-HITL item 9 D2 (after the C4-RAW-1108 terms check): article-level metadata under the CC0 waiver; never reproduce DOAJ site prose (terms: reproduction of DOAJ content on the website is prohibited without permission). No Crawl-delay stated, so a conservative 1 req/s (half the documented 2 req/s), concurrency 1."},
+      "evidence": [{"url": "https://doaj.org/terms/", "read_level": "verbatim", "read": "2026-11-08", "provenance": "work/OA-TERMS-1108/d4-verdicts.md Raw verification (C4-RAW-1108); robots.txt read first"},
+                   {"url": "https://doaj.org/api/v4/docs", "read_level": "summarizer", "read": "2026-11-07", "provenance": "2 req/s statement, carried"}],
+      "read_level": "verbatim", "read": "2026-11-08", "review_by": "2026-12-08"
+    },
+    "plos_api": {
+      "host": "api.plos.org", "path_prefix": "/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "permit", "owner_decision": "OD-1108-HITL",
+      "conditions": {"rate_portal": "plos", "max_rate_per_s": 0.033334, "max_concurrency": 1, "respect_429": true, "user_agent": null,
+                     "send_email": false, "content_scope": ["metadata"], "crawl_delay_s": 30,
+                     "licence": "CC BY 4.0 (per article; cite author and original source)",
+                     "attribution": "Data Provided by PLOS",
+                     "attribution_placement": "within close proximity of any displayed API-derived data, clearly legible",
+                     "no_branding": true,
+                     "_note": "OA5-ALLOW-1108, OD-1108-HITL item 9 D1 (after the C4-RAW-1108 display-policy check, https://api.plos.org/api-display-policy/): label 'Data Provided by PLOS' next to API data; no PLOS logo or branding (needs PLOS approval); CC BY 4.0 citation; excerpts allowed with citation. Crawl-delay 30 is from journals.plos.org robots (api.plos.org robots 404) and is applied to the API host as the stricter bound: 1 request per 30 s, concurrency 1. Tighter than the D1 ceiling of 10/min."},
+      "evidence": [{"url": "https://api.plos.org/api-display-policy/", "read_level": "verbatim", "read": "2026-11-08", "provenance": "work/OA-TERMS-1108/d4-verdicts.md Raw verification (C4-RAW-1108)"},
+                   {"url": "https://journals.plos.org/plosone/s/licenses-and-copyright", "read_level": "verbatim", "read": "2026-11-08", "provenance": "CC BY 4.0 citation requirement"},
+                   {"url": "https://plos.org/text-and-data-mining/", "read_level": "verbatim", "read": "2026-11-08", "provenance": "TDM statement"}],
+      "read_level": "verbatim", "read": "2026-11-08", "review_by": "2026-12-08"
+    },
+    "openaire_api": {
+      "host": "api.openaire.eu", "path_prefix": "/",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "permit", "owner_decision": "OD-1108-HITL",
+      "conditions": {"rate_portal": "openaire", "max_rate_per_s": 0.016667, "max_concurrency": 1, "respect_429": true, "user_agent": null,
+                     "send_email": false, "content_scope": ["metadata"], "key_env": null,
+                     "licence": "CC BY (OpenAIRE Graph records)",
+                     "attribution": "Data from OpenAIRE",
+                     "_note": "OA5-ALLOW-1108, OD-1108-HITL item 9 D2 (after the C4-RAW-1108 AUP check, https://graph.openaire.eu/docs/apis/terms/): metadata only; OpenAIRE acknowledged as the data source; anonymous limit 60 requests/hour (1 per 60 s); we hold no key, so no authenticated 7200/h tier is used. The API host api.openaire.eu was not itself robots-read (only graph.openaire.eu); re-confirm at review."},
+      "evidence": [{"url": "https://graph.openaire.eu/docs/apis/terms/", "read_level": "verbatim", "read": "2026-11-08", "provenance": "work/OA-TERMS-1108/d4-verdicts.md Raw verification (C4-RAW-1108); robots.txt of graph.openaire.eu read first"}],
+      "read_level": "verbatim", "read": "2026-11-08", "review_by": "2026-12-08"
     },
     "unpaywall": {
       "host": "api.unpaywall.org", "path_prefix": "/",

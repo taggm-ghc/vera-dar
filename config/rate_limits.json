@@ -111,7 +111,7 @@
     },
     "doaj": {
       "hosts": ["doaj.org"],
-      "rate_per_s": 1.666667,
+      "rate_per_s": 1.0,
       "burst": 1,
       "max_concurrency": 1,
       "daily_cap": null,
@@ -121,7 +121,35 @@
         {"url": "https://doaj.org/api/v4/docs", "read": "2026-10-21", "inspection": "fetch failed (HTTP 502 twice, Retry-After 60); value carried from the item #71 plan as recorded in vera/search_providers.py (DOAJ section comment)",
          "claims": "two requests per second (prior record, not re-read today)"}
       ],
-      "_note": "rate = the existing search.doaj.min_interval_s 0.6 s, under the recorded 2 req/s."
+      "_note": "OA5-ALLOW-1108: rate lowered to 1.0/s (conservative; DOAJ states no Crawl-delay; documented ceiling 2 req/s), burst 1, concurrency 1."
+    },
+    "plos": {
+      "hosts": ["api.plos.org"],
+      "rate_per_s": 0.033333,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://api.plos.org/api-display-policy/", "read": "2026-11-08", "inspection": "raw fetch, text extracted (C4-RAW-1108); journals.plos.org robots Crawl-delay 30, api.plos.org robots 404",
+         "claims": "Crawl-delay 30 (journals.plos.org) applied to the API host; owner D1 ceiling 10/min, 300/h, 7200/day, 5 concurrent (stricter bound used)"}
+      ],
+      "_note": "OA5-ALLOW-1108: 1 request per 30 s, burst 1, concurrency 1 (Crawl-delay 30, stricter than the D1 ceiling)."
+    },
+    "openaire": {
+      "hosts": ["api.openaire.eu"],
+      "rate_per_s": 0.016666,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://graph.openaire.eu/docs/apis/terms/", "read": "2026-11-08", "inspection": "raw fetch, text extracted (C4-RAW-1108)",
+         "claims": "unauthenticated requests up to 60 per hour; authenticated up to 7200 per hour (we hold no key)"}
+      ],
+      "_note": "OA5-ALLOW-1108: anonymous limit 60/hour = 1 request per 60 s, burst 1, concurrency 1."
     },
     "semantic_scholar": {
       "hosts": ["api.semanticscholar.org"],

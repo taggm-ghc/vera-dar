@@ -51,7 +51,7 @@ def test_shipped_permitted_entries(url):
 
 
 @pytest.mark.parametrize("url,entry", [
-    ("https://doaj.org/api/v4/search/articles/x", "doaj_api"), ("https://export.arxiv.org/api/query?x", "arxiv_export_api"),
+    ("https://export.arxiv.org/api/query?x", "arxiv_export_api"),
     ("https://arxiv.org/api/query", "arxiv_web_api"), ("https://api.unpaywall.org/v2/10.1/x", "unpaywall"),
     ("https://api.semanticscholar.org/graph/v1/paper/DOI:10.1/x", "semantic_scholar"),
     ("https://hn.algolia.com/api/v1/search?query=x", "hn_algolia")])
@@ -92,15 +92,15 @@ def test_denied_search_transport_sends_nothing_and_logs_code(monkeypatch, caplog
     fake = _Counter()
     monkeypatch.setattr(requests, "get", fake)
     with caplog.at_level(logging.WARNING, logger="vera"):
-        for tx in (search_providers.europepmc_default_transport, search_providers.doaj_default_transport,
+        for tx in (search_providers.europepmc_default_transport,
                    search_providers.arxiv_default_transport):
-            url = {"europepmc_default_transport": EPMC_SEARCH, "doaj_default_transport": "https://doaj.org/api/v4/x",
+            url = {"europepmc_default_transport": EPMC_SEARCH,
                    "arxiv_default_transport": "https://export.arxiv.org/api/query"}[tx.__name__]
             with pytest.raises(AP.ApiDenied) as e:
                 tx(url, {"query": "x"}, {"User-Agent": "t"}, 1.0)
             assert e.value.code == AP.DENIED
     assert fake.calls == []
-    assert sum("R-API-DENIED" in r.getMessage() for r in caplog.records) == 3
+    assert sum("R-API-DENIED" in r.getMessage() for r in caplog.records) == 2
     assert not any("query" in r.getMessage() or "ebi.ac.uk" in r.getMessage() for r in caplog.records)
 
 
@@ -416,7 +416,7 @@ def test_r3_host_table_one_row_per_host():
     rows = {"https://api.openalex.org/works": ("openalex", True), "https://api.crossref.org/works/10.1/x": ("crossref_rest", True),
             EPMC_SEARCH + "?query=x": ("europepmc_rest", True), GDELT: ("gdelt_doc", True),
             S2: ("semantic_scholar", False), HN: ("hn_algolia", False),
-            "https://doaj.org/api/v4/search/articles/x": ("doaj_api", False),
+            "https://doaj.org/api/v4/search/articles/x": ("doaj_api", True),
             "https://api.unpaywall.org/v2/10.1/x": ("unpaywall", False),
             "https://export.arxiv.org/api/query?x": ("arxiv_export_api", False), "https://arxiv.org/api/query": ("arxiv_web_api", False)}
     for url, (entry, ok) in rows.items():
@@ -424,7 +424,7 @@ def test_r3_host_table_one_row_per_host():
         assert (d.entry, d.allowed) == (entry, ok), (url, d)
 
 
-@pytest.mark.parametrize("url", [S2, HN, "https://api.unpaywall.org/v2/10.1/x", "https://doaj.org/api/v4/x",
+@pytest.mark.parametrize("url", [S2, HN, "https://api.unpaywall.org/v2/10.1/x",
                                  "https://export.arxiv.org/api/query?x"])
 def test_r3_denied_hosts_send_nothing(url):
     fake = _Counter()
@@ -513,3 +513,57 @@ def test_r3_permitted_hosts_are_metadata_only():
 def test_r3_arxiv_api_search_stays_off_even_with_a_permit_missing_decision():
     for u in ("https://export.arxiv.org/api/query?x", "https://arxiv.org/api/query"):
         assert AP.decide(u, "metadata").why == "owner_deny"
+
+
+# ------------------------------------------------------------------------------------------------ OA5-ALLOW-1108
+# OD-1108-HITL item 9 (D1 PLOS, D2 DOAJ + OpenAIRE metadata), after the C4-RAW-1108 terms checks.
+PLOS = "https://api.plos.org/search?q=x"
+OAIRE = "https://api.openaire.eu/graph/v1/researchProducts?search=x"
+DOAJ_U = "https://doaj.org/api/v4/search/articles/x"
+
+
+@pytest.mark.parametrize("eid,url", [("plos_api", PLOS), ("openaire_api", OAIRE), ("doaj_api", DOAJ_U)])
+def test_oa5_entries_permitted_metadata_only_with_the_owner_decision_id(eid, url):
+    e = _raw()["entries"][eid]
+    assert e["owner_switch"] == "permit" and e["owner_decision"] == "OD-1108-HITL"
+    assert AP.OWNER_DECISION_RE.fullmatch(e["owner_decision"])
+    d = AP.decide(url, "metadata")
+    assert d.allowed and d.entry == eid
+    assert AP.decide(url, "fulltext").code == AP.SCOPE  # metadata and link discovery only
+
+
+def test_oa5_rates_are_at_or_below_the_documented_ceilings():
+    from vera import rate_limit
+    reg = rate_limit.get_registry()
+    plos, oa, doaj = (reg.portal(k).c for k in ("plos", "openaire", "doaj"))
+    assert float(plos["rate_per_s"]) <= 1 / 30 and int(plos["max_concurrency"]) == 1  # Crawl-delay 30
+    assert float(oa["rate_per_s"]) <= 60 / 3600 and int(oa["max_concurrency"]) == 1   # anonymous 60/hour
+    assert float(doaj["rate_per_s"]) <= 1.0 and int(doaj["max_concurrency"]) == 1     # conservative, no Crawl-delay
+    c = _raw()["entries"]["plos_api"]["conditions"]
+    assert c["crawl_delay_s"] == 30
+
+
+def test_oa5_attribution_is_config_driven():
+    a = AP.attribution_for(PLOS)
+    assert a["attribution"] == "Data Provided by PLOS" and a["no_branding"] is True and "CC BY" in a["licence"]
+    assert a["placement"] and "proximity" in a["placement"]
+    assert "OpenAIRE" in AP.attribution_for(OAIRE)["attribution"]
+    assert "DOAJ" in AP.attribution_for(DOAJ_U)["attribution"] and "CC0" in AP.attribution_for(DOAJ_U)["licence"]
+    assert _raw()["entries"]["doaj_api"]["conditions"]["no_site_prose"] is True
+    assert AP.attribution_for("https://api.semanticscholar.org/graph/v1/x") is None  # denied -> none
+    assert AP.attribution_for("https://example.invalid/x") is None
+
+
+def test_oa5_hosts_are_api_hosts_and_other_paths_stay_denied():
+    assert AP.is_api_url("https://api.plos.org/anything") and AP.is_api_url("https://api.openaire.eu/anything")
+    assert AP.decide("https://doaj.org/about/", "metadata").code == AP.DENIED  # site prose: not an API path
+    assert AP.decide("https://journals.plos.org/plosone/article?id=x", "metadata").code == AP.DENIED
+
+
+@pytest.mark.parametrize("eid,url,field,value", [("plos_api", PLOS, "rate_per_s", 1.0), ("openaire_api", OAIRE, "rate_per_s", 1.0),
+                                                 ("doaj_api", DOAJ_U, "max_concurrency", 3)])
+def test_oa5_entries_are_conditional_on_the_rate_limits(monkeypatch, eid, url, field, value):
+    from vera import rate_limit
+    portal = _raw()["entries"][eid]["conditions"]["rate_portal"]
+    monkeypatch.setitem(rate_limit.get_registry().portal(portal).c, field, value)
+    assert AP.decide(url, "metadata").code == AP.COND
