@@ -153,7 +153,7 @@ def _reference(src) -> str | None:
 
 def project(evidence, claim_records=None, citations=None, adequacy=None, inline=None, public: bool = True, *,
             sources=None, labels=None, quote_cap: int = QUOTE_CAP, total_cap: int = QUOTE_TOTAL_CAP,
-            labels_path=None) -> dict | None:
+            labels_path=None, refusal=None) -> dict | None:
     lab = labels if labels is not None else load_labels(labels_path)
     if lab is None:
         return None
@@ -196,7 +196,11 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
             row["reason"] = None
         else:
             removed = any(r.get("verdict") in ("unsupported", "partial") for r in mine)
-            row["reason"] = lab["not_cited"]["removed_by_check" if removed else "unused"]
+            by_refusal = None
+            if refusal and not removed:  # F3: fixed label per code; an unknown code gets the neutral one, never the code
+                br = lab.get("by_refusal") or {}
+                by_refusal = br.get(str(refusal)) or lab.get("refusal_other")
+            row["reason"] = by_refusal or lab["not_cited"]["removed_by_check" if removed else "unused"]
             row["supports"], row["verdict"], row["excerpt"] = [], None, None
         if dev:
             ref = _reference(src)  # NONASK-1103 C6: dev record carries the APA 7 reference (public rows stay URL-free: E allowlist)
@@ -204,7 +208,8 @@ def project(evidence, claim_records=None, citations=None, adequacy=None, inline=
                 row["reference"] = ref
             row.update(span_id=a.get("span_id"), relevance=a.get("relevance"), document_id=a.get("document_id"),
                        span=src.get("span"), quote_span=next((c.get("quote_span") for c in cites if c.get("n") == n), None),
-                       not_cited_kind=None if cited else ("removed_by_check" if row["reason"] == lab["not_cited"]["removed_by_check"] else "unused"))
+                       not_cited_kind=None if cited else ("removed_by_check" if row["reason"] == lab["not_cited"]["removed_by_check"]
+                                                                  else (str(refusal) if by_refusal else "unused")))
         rows.append(row)
     _budget_excerpts(rows, total_cap)
 

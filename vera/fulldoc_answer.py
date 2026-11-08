@@ -36,12 +36,12 @@ class FullDocOutcome:
     trace: dict | None = None  # NONASK-1103 E4: public evidence trace (also on non-answers, where result is None)
 
 
-def _trace(ev, records=None, citations=None, adequacy=None, sources=None):
+def _trace(ev, records=None, citations=None, adequacy=None, sources=None, refusal=None):
     """NONASK-1103 E4: the PUBLIC evidence trace (the only view /ask carries). None on any failure or when labels are off."""
     try:
         from vera import evidence_trace
 
-        return evidence_trace.project(ev, records, citations, adequacy, None, True, sources=sources)
+        return evidence_trace.project(ev, records, citations, adequacy, None, True, sources=sources, refusal=refusal)
     except Exception:  # noqa: BLE001  (fail closed: no trace, never an error in the answer path)
         return None
 
@@ -751,7 +751,8 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
 
     def fall(token, records=None):
         rt.event("writer", "fall", counts={"records": len(records or [])}, detail={"fallback": str(token)})
-        tr = _trace(ev, records, None, None, sources_from(ev) if getattr(ev, "admitted", None) else None)
+        tr = _trace(ev, records, None, None, sources_from(ev) if getattr(ev, "admitted", None) else None,
+                    refusal=token)  # F3: the reason reaches the per-passage label
         return FullDocOutcome(None, token, tokens, round(cost, 6), None, tr)
 
     if not ev.grounded:

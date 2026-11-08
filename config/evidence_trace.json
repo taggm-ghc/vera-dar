@@ -24,6 +24,16 @@
     "removed_by_check": "the sentence that used it did not pass the citation check",
     "unused": "not used by the answer; no reason recorded"
   },
+  "by_refusal": {
+    "model_insufficient": "selected, but judged not to answer the question",
+    "nonresponsive": "selected, but the claims drawn from it did not answer the question",
+    "claim_check_insufficient": "selected, but its claims did not pass the citation check",
+    "no_valid_citations": "selected, but no citation to it could be confirmed",
+    "insufficient_full_document_evidence": "selected, but the evidence as a whole was not enough to answer",
+    "checker_unavailable": "selected, but the citation check could not be completed",
+    "claim_check_disabled": "selected, but the citation check was not available"
+  },
+  "refusal_other": "selected, but no answer could be written from it",
   "epistemic": {"reported": "reported by the source, not independently verified"},
   "verdicts": {"supported": "supported", "partial": "partly supported"}
 }

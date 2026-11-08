@@ -14,11 +14,11 @@ from vera import research_outcome as ro
 
 TRIGGER_INSUFFICIENT, TRIGGER_STALE, TRIGGER_UNKNOWN = "insufficient", "stale", "freshness_unknown"
 _BUDGET_STATUSES = frozenset({"rate", "daily_cap", "deadline", "budget_unknown", "busy"})
-_PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota",
+_PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "paced",
                   "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped",
                   "not_attempted": "skipped"}
 # ROUTE-R3: public statuses (contract completed|timeout|quota|error|skipped|not_attempted)
-_PUBLIC_STATUS = {**_PORTAL_STATUS, "skipped_budget": "not_attempted", "not_attempted": "not_attempted"}
+_PUBLIC_STATUS = {**_PORTAL_STATUS, "paced": "skipped", "skipped_budget": "not_attempted", "not_attempted": "not_attempted"}
 
 
 ANSWER_BASES = ("generated_new_evidence", "generated_existing_only", "abstained", "not_attempted")

@@ -1389,6 +1389,13 @@ def _is_rate_skip(e: Exception) -> bool:
     return isinstance(e, rate_limit.RateLimited) or "not an attempt" in str(e).lower()
 
 
+def _own_pacing(e: Exception) -> bool:
+    """F4a: a skip by VERA-DAR's own limiter (pacing, concurrency, deadline), not a provider refusal or cooldown
+    after one. Reasons that rate_limit reports as the provider being busy are excluded; nothing was sent either way."""
+    from vera import rate_limit
+    return isinstance(e, rate_limit.RateLimited) and e.reason not in rate_limit.PROVIDER_BUSY_REASONS
+
+
 def _is_quota_error(e: Exception) -> bool:
     t = str(e).lower()
     return bool(re.search(r"\b429\b", t)) or "rate limit" in t or "budget" in t or "quota" in t
@@ -1670,7 +1677,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 st_oa = "timeout" if _is_timeout(e) else "failed"
                 if _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1
-                    st_oa = "skipped_quota"
+                    st_oa = "paced" if _own_pacing(e) else "skipped_quota"
                 elif _is_quota_error(e):
                     counts["openalex_429"] = 1
                     st_oa = "quota"
@@ -1689,7 +1696,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 st_f[k] = "completed"
             except Exception as e:  # noqa: BLE001  (timeout, transport or parse error: the other sources stand)
                 got[k] = []
-                if _is_quota_error(e):
+                if _own_pacing(e):  # F4a: our own limiter skipped the call; the provider refused nothing
+                    counts[f"{k}_paced"] = 1
+                    st_f[k] = "paced"
+                elif _is_quota_error(e):
                     counts[f"{k}_429"] = 1
                     st_f[k] = "quota"
                 elif _is_timeout(e):  # DDGFIX-1023 DF-5: requests ReadTimeout/ConnectTimeout too

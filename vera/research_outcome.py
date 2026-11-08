@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped")
+PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped", "paced")
 TERMINAL_REASONS = (
     "no_route", "fetch_failed", "extraction_failed", "licence_rejected",
     "provenance_rejected", "injection_rejected", "relevance_rejected",
@@ -231,6 +231,7 @@ class ResearchOutcome:
 _CAUSE_TEXT = {
     "timeout": "a search service timed out",
     "quota": "a search service's request limit was reached",
+    "paced": "VERA-DAR paced its requests to a source to respect that source's limits",  # F4a: our own limiter, not the source's
     "error": "a search service had a failure",
     "budget": "the search budget ran out",
     "awaiting_route": "some sources found have no identifier VERA-DAR can fetch automatically yet",  # CONT-1023: URL-only, queued to follow
@@ -262,7 +263,7 @@ def _awaiting_route(candidates) -> bool:
 def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable: bool = False) -> list[str]:
     out: list[str] = []
     for a in attempts:
-        if a.status in ("timeout", "quota", "error") and a.status not in out:
+        if a.status in ("timeout", "quota", "paced", "error") and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")

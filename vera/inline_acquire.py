@@ -1595,7 +1595,7 @@ def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, co
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
     if skips is not None:
-        why = acq_config.reason(acq, "doc_budget" if len(got) >= budget else "defer_cap")
+        why = acq_config.reason(acq, "doc_budget" if len(got) >= budget else "stopped")  # F4b: never reached, not cut by a cap
         skips.update({i: why for i in range(len(ranked)) if i not in (per or {})})
     for d in durs:
         for k in ("fetch", "verify"):
