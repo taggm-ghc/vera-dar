@@ -12,9 +12,12 @@ Eligibility of a page (all must hold; default deny), config/reference_portals.js
   2. registry row for the exact host with status "active" and terms "permit"; https, port 443, no userinfo, no query,
      path full-matching paths_allow; rate_portal naming a config/rate_limits.json portal that lists the host;
      a host with no usable row is NOT fetched and is counted host_unchecked (the terms-reading queue);
-  3. robots.txt allows the URL for our user agent, * and every AI-agent group, and states no AI block
-     (vera.selective_fetch.robots_allowed: fail closed);
-  4. no Content-Signal ai-input=no (an ai-train=no only host stays usable: D-P1, provisional);
+  3. robots.txt allows the URL for our own-family group (else *), and states no AI block
+     (vera.selective_fetch.robots_allowed: fail closed); hyperscaler-only groups are advisory (OD-1108 H13);
+  4. no Content-Signal ai-input=no and no Content-Usage ai-use=n. AI-training-only signals (Content-Signal
+     ai-train=no, Content-Usage train-ai=n, a User-Agent: __usage_ai-training group) never exclude a portal:
+     owner H7, "Sites restricting AI training alone may be link-only discovery portals, provided other applicable
+     restrictions permit it." (D-P1 confirmed; there is no config switch for it);
   5. no TDM reservation: /.well-known/tdmrep.json rule (unreadable = reserved), TDM-Reservation header, or the
      tdm-reservation meta tag of the page itself (then the page's links are discarded).
 Requests: public-address check, no redirect followed, text/html only, byte cap, one overall deadline, robots
@@ -82,6 +85,8 @@ def validate(c) -> dict:
     sig = c["exclusion_signals"]
     if not isinstance(sig, dict) or any(sig.get(k) is not True for k in MUST_EXCLUDE):
         raise PortalConfigError("exclusion_signals")  # a loosened exclusion signal fails closed
+    if "ai_train_no_only" in sig:
+        raise PortalConfigError("exclusion_signals.ai_train_no_only")  # H7: owner-settled, not a config switch
     ex = c["exclusions"]
     if not isinstance(ex, dict) or not isinstance(ex.get("hosts"), list) or not ex["hosts"]:
         raise PortalConfigError("exclusions")
@@ -383,8 +388,7 @@ class Deps:
     http_get: Callable | None = None
     url_check: Callable | None = None
     robots_ok: Callable | None = None       # (url, ua) -> bool
-    no_ai_input: Callable | None = None     # (url, ua) -> bool   (Content-Signal ai-input=no of the host)
-    ai_train_no: Callable | None = None     # (url, ua) -> bool   (Content-Signal ai-train=no; used only if configured)
+    no_ai_input: Callable | None = None     # (url, ua) -> bool   (robots ai-input=no / ai-use=n of the host)
     tdmrep_ok: Callable | None = None       # (url, rate_portal) -> bool (False = reserved or unreadable)
     crawl_ok: Callable | None = None        # (url, ua) -> bool
     limited: Callable | None = None         # (rate_portal, fn) -> fn
@@ -402,8 +406,6 @@ def _default_deps(cfg: Mapping, d: Deps | None) -> Deps:
         robots_ok=d.robots_ok or (lambda u, ua: sf.robots_allowed(u, http_get=http_get, url_check=url_check,
                                                                   user_agent=ua)),
         no_ai_input=d.no_ai_input or (lambda u, ua: not _robots_cached(u, ua) or sf.robots_no_ai(u, ua)),
-        ai_train_no=d.ai_train_no or (lambda u, ua: not _robots_cached(u, ua) or _signal_says(sf.robots_content_signal(u, ua),
-                                                                                         "ai-train", "no")),
         tdmrep_ok=d.tdmrep_ok or (lambda u, portal: _tdmrep_ok(u, cfg, http_get, url_check, limited=lim,
                                                                  rate_portal=portal)),
         crawl_ok=d.crawl_ok or (lambda u, ua: _robots_cached(u, ua)
@@ -419,14 +421,6 @@ def _robots_cached(url: str, ua: str) -> bool:
     sp_ = urlsplit(url)
     with sf._ROBOTS_LOCK:
         return (sp_.scheme, (sp_.hostname or "").lower(), ua) in sf._ROBOTS
-
-
-def _signal_says(signal: str, key: str, value: str) -> bool:
-    for part in re.split(r"[,\s]+", str(signal or "").lower()):
-        k, _, v = part.partition("=")
-        if k.strip() == key and v.strip() == value:
-            return True
-    return False
 
 
 _TDM: dict = {}
@@ -502,13 +496,7 @@ def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable
         no_ai = True
     if no_ai:
         raise Skip("ai_input_no")
-    if cfg["exclusion_signals"].get("ai_train_no_only") is True:  # D-P1 (provisional): false = ai-train=no allowed
-        try:
-            train_no = bool(deps.ai_train_no(url, ua))
-        except Exception:  # noqa: BLE001
-            train_no = True
-        if train_no:
-            raise Skip("ai_train_no")
+    # H7 (owner, D-P1 confirmed): an AI-training-only signal (ai-train=no, __usage_ai-training) is not checked here.
     try:
         tdm_ok = bool(deps.tdmrep_ok(url, row["rate_portal"]))
     except Exception:  # noqa: BLE001

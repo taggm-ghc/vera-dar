@@ -1,8 +1,8 @@
 {
-  "_doc": "OD-1106-ROBOTS-AI: VERA-DAR is an AI assistant. A site is blocked when robots.txt disallows the path for any agent token below (robots_ai_agent_block) or states in a comment that AI crawlers/assistants are blocked (robots_ai_statement). ROBOTS-TIGHTEN-1108: a group naming ANY own_tokens product token binds every VERA+ route (all matching groups must allow). usage_tokens map a usage-purpose token to an informational signal (never blocks, no * fallback). Applies in addition to VERA-DAR's own group and *. Fails closed.",
-  "own_tokens": ["vera-dar", "vera-research-fetcher", "vera-research-pipeline", "vera-dar-wiki-ref-portal", "vera-research-prototype"],
+  "_doc": "OD-1108-DISPOSITIONS-2 H13 (owner 2026-11-08, supersedes OD-1106-ROBOTS-AI): hyperscaler-specific robots blocks are advisory for independently identified VERA-DAR agents. Binding: a group naming ANY own_tokens product token (RFC 9309, all matching own groups must allow), else the * group; and a comment stating that AI crawlers/assistants are blocked (robots_ai_statement). advisory_agent_tokens: a group naming only these tokens NEVER denies (robots_ai.advisory records it); their Crawl-delay still applies as polite pacing. usage_tokens map a usage-purpose token to an informational signal (never blocks, no * fallback). Use signals (Content-Signal ai-input, Content-Usage ai-use, TDM) and terms are enforced elsewhere. Fails closed.",
+  "own_tokens": ["vera-dar", "vera-research-fetcher", "vera-research-pipeline", "vera-dar-wiki-ref-portal", "vera-research-prototype", "vera-dar-reference-portal"],
   "usage_tokens": {"__usage_ai-training": "ai-train=no"},
-  "ai_agent_tokens": [
+  "advisory_agent_tokens": [
     "GPTBot",
     "ChatGPT-User",
     "OAI-SearchBot",
@@ -42,7 +42,6 @@
     "ai scrapers are not welcome"
   ],
   "reasons": {
-    "agent": "robots_ai_agent_block",
     "statement": "robots_ai_statement"
   }
 }

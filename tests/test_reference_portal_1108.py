@@ -124,8 +124,8 @@ def test_shipped_config_is_valid_off_and_strict():
     c = rp.load_config()
     assert c["mode"] == "off"  # ROUTES-1108-OFF: deny by default; shadow/on need an explicit owner config change
     assert all(c["exclusion_signals"][k] is True for k in rp.MUST_EXCLUDE)
-    assert c["exclusion_signals"]["ai_train_no_only"] is False  # D-P1 (provisional): ai-train=no alone stays usable
-    assert "provisional" in c["_dp1_note"].lower() and "owner review" in c["_dp1_note"].lower()
+    assert "ai_train_no_only" not in c["exclusion_signals"]  # H7: D-P1 owner-confirmed, no switch
+    assert "confirmed" in c["_dp1_note"].lower() and "h7" in c["_dp1_note"].lower()
     assert "@" not in c["user_agent"]
     for h in ("openstax.org", "oapen.org", "doabooks.org", "cds.cern.ch", "biorxiv.org", "medrxiv.org"):
         assert h in c["exclusions"]["hosts"]
@@ -503,18 +503,19 @@ def test_portal_candidates_rank_like_wikipedia_portal_refs():
     assert sp.acq_rank_tier({"acq_source": rp.SOURCE, "ref_id_kind": "arxiv"}, arxiv_route=False) == 2
 
 
-def test_ai_train_switch_is_real_config():
-    on = cfg()
-    on["exclusion_signals"]["ai_train_no_only"] = True
-    net = Net({WIKI: Resp(200, PAGE)})
-    cands, counts = rp.collect(Q, cfg=on, deps=net.deps(ai_train_no=lambda u, ua: True), hosts=hosts(),
-                               clock=lambda: 0.0)
-    assert cands == [] and counts["ai_train_no"] == 1 and net.calls == []
-    cands, counts = rp.collect(Q, cfg=cfg(), deps=Net({WIKI: Resp(200, PAGE)}).deps(ai_train_no=lambda u, ua: True),
-                               hosts=hosts(), clock=lambda: 0.0)
-    assert cands and "ai_train_no" not in counts  # shipped false: ai-train=no alone stays a portal (D-P1)
-    assert rp._signal_says("search=yes, ai-train=no", "ai-train", "no") is True
-    assert rp._signal_says("ai-train=yes", "ai-train", "no") is False
+def test_ai_train_switch_removed_h7():
+    # OD-1108-DISPOSITIONS-2 H7: an AI-training-only signal never excludes a portal; config cannot re-enable it.
+    for v in (True, False):
+        bad = cfg()
+        bad["exclusion_signals"]["ai_train_no_only"] = v
+        with pytest.raises(rp.PortalConfigError):
+            rp.validate(bad)
+    assert "ai_train_no" not in {f.name for f in __import__("dataclasses").fields(rp.Deps)}
+    assert "ai_train_no" not in inspect.getsource(rp.fetch_page).replace("H7", "")
+    for sig in ("ai-input=no", "ai-use=n"):  # ai-input / ai-use stay exclusions (robots_no_ai drives no_ai_input)
+        from vera import source_permissions as spm
+        cu = sig if sig.startswith("ai-input") else spm.content_usage_signal(sig)
+        assert spm.robots_no_ai(spm.robots_entries(cu)) is True
 
 
 def test_unknown_adapters_in_config_are_ignored_and_disabled_inspire_never_imported(monkeypatch):
@@ -609,3 +610,53 @@ def test_secrev_recheck_missing_inspire_module_does_not_drop_other_adapters(monk
     monkeypatch.setattr(rp, "inspire_permitted", lambda: True)  # the guard passes; only the import fails
     cands, counts, _ = run(c)
     assert cands and counts["inspire_error"] in ("ImportError", "ModuleNotFoundError") and counts["pages_read"] == 1
+
+
+# ------------------------------------------------------------------------------------------------ ROBOTS-POLICY-1108
+ROBOTS_URL = "https://en.wikipedia.org/robots.txt"
+
+
+def _real_wire(robots: str, page=None):
+    """The REAL robots / Content-Signal / Content-Usage / tdmrep deps (vera.selective_fetch), fake HTTP only."""
+    from vera import selective_fetch as sf
+    sf.robots_cache_clear()
+    net = Net({WIKI: page or Resp(200, PAGE), ROBOTS_URL: Resp(200, robots, {"Content-Type": "text/plain"})})
+    d = rp.Deps(http_get=net.get, url_check=lambda u: (True, ""), crawl_ok=lambda u, ua: True,
+                limited=lambda portal, fn: fn, openalex_lookup=lambda s, n, t: [])
+    try:
+        cands, counts = rp.collect(Q, cfg=cfg(), deps=d, hosts=hosts(), clock=lambda: 0.0)
+    finally:
+        sf.robots_cache_clear()
+    return cands, counts, net
+
+
+@pytest.mark.parametrize("robots", [
+    "User-Agent: __usage_ai-training\nDisallow: /\n\nUser-agent: *\nAllow: /\n",
+    "User-agent: *\nAllow: /\nContent-Signal: search=yes, ai-train=no\n",
+    "User-agent: *\nAllow: /\nContent-Usage: train-ai=n\n",
+    "User-agent: GPTBot\nDisallow: /\n\nUser-agent: ClaudeBot\nDisallow: /\n\nUser-agent: *\nAllow: /\n",  # H13
+])
+def test_h7_h13_training_only_or_hyperscaler_only_host_is_a_portal(robots):
+    cands, counts, net = _real_wire(robots)
+    assert cands and counts["pages_read"] == 1 and WIKI in net.calls
+
+
+@pytest.mark.parametrize("robots,code", [
+    ("User-agent: *\nAllow: /\nContent-Signal: ai-train=no, ai-input=no\n", "ai_input_no"),
+    ("User-Agent: __usage_ai-training\nDisallow: /\n\nUser-agent: *\nAllow: /\nContent-Usage: ai-use=n\n",
+     "ai_input_no"),
+    ("User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nDisallow: /wiki/\n", "robots_block"),
+    ("User-agent: VERA-DAR-reference-portal\nDisallow: /\n\nUser-agent: *\nAllow: /\n", "robots_block"),
+    ("User-agent: VERA-DAR\nDisallow: /\n\nUser-agent: *\nAllow: /\n", "robots_block"),
+    ("# AI crawlers are blocked\nUser-agent: *\nAllow: /\n", "robots_block"),
+])
+def test_h7_other_restrictions_still_exclude_the_portal(robots, code):
+    cands, counts, net = _real_wire(robots)
+    assert cands == [] and counts[code] == 1 and WIKI not in net.calls
+
+
+def test_h11_ai_grounding_does_not_exclude_a_link_only_portal():
+    page = Resp(200, PAGE.replace("<head>", '<head><meta name="Bingbot" content="ai-grounding:disallowextended">'),
+                {"X-Robots-Tag": "bingbot: ai-grounding:disallow"})
+    cands, counts, _ = _real_wire("User-agent: *\nAllow: /\n", page)
+    assert cands and counts["pages_read"] == 1

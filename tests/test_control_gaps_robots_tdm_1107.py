@@ -52,9 +52,17 @@ def test_europepmc_fulltext_refused_when_robots_disallows_and_document_never_req
     assert A.doc_urls(web.urls) == []  # the JATS URL itself was never requested
 
 
-def test_europepmc_refused_when_an_ai_agent_group_disallows():  # OD-1106-ROBOTS-AI through the same robots module
+def test_europepmc_robots_module_binds_statement_and_own_family_not_hyperscaler_groups():
+    # OD-1108-DISPOSITIONS-2 H13 through the same robots module: a hyperscaler-only group is advisory; the AI
+    # statement and an own-family group still refuse.
+    for robots in ("# AI crawlers are blocked\nUser-agent: *\nAllow: /\n",
+                   "User-agent: GPTBot\nAllow: /\n\nUser-agent: VERA-DAR\nDisallow: /\n\nUser-agent: *\nAllow: /\n"):
+        acq_discovered.reset_for_tests()
+        assert _code(_xml_web({ROBOTS: _txt(robots)})) == "R-ACQ-ROBOTS"
+    acq_discovered.reset_for_tests()
     web = _xml_web({ROBOTS: _txt("User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /\n")})
-    assert _code(web) == "R-ACQ-ROBOTS"
+    _gg(web)  # no refusal: the document is fetched
+    assert A.doc_urls(web.urls) != []
 
 
 @pytest.mark.parametrize("resp", [_txt("", 500), _txt("", 502), ConnectionError("down")])

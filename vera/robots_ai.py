@@ -1,9 +1,15 @@
-"""OD-1106-ROBOTS-AI: VERA-DAR is an AI assistant, so a robots.txt that bars well-known AI agents bars it too.
+"""robots.txt verdicts for VERA+ (RFC 9309), with AI-specific additions.
 
-A parsed robots.txt (urllib.robotparser) is annotated once with (a) whether a comment states that AI crawlers or
-assistants are blocked and (b) which configured AI agent tokens have a group of their own. block_reason() then says
-whether a URL is blocked by an AI group (any one disallowing the path blocks) or by the statement (whole host).
-ROBOTS-TIGHTEN-1108: a group naming any of our own product tokens (own_tokens) binds every route.
+OD-1108-DISPOSITIONS-2 H13 (owner, 2026-11-08): "Hyperscaler-specific robots blocks are advisory for independently
+identified VERA-DAR agents. Continue enforcing applicable wildcard, VERA-specific, AI-use, TDM, and terms
+restrictions." (Supersedes OD-1106-ROBOTS-AI, under which hyperscaler groups bound VERA-DAR.)
+
+Binding: the group(s) naming any of our own product tokens (own_tokens; RFC 9309, all five as one agent; every
+matching own group must allow), else the * groups (allowed()); and a full-line comment stating that AI crawlers or
+assistants are blocked (block_reason(), whole host). Advisory only: a group naming only a hyperscaler token
+(advisory_agent_tokens) never denies; advisory() names the tokens whose group disallows a URL, for recording. Their
+Crawl-delays still count, as polite pacing (crawl_delay()). Use signals (Content-Signal, Content-Usage, TDM) and
+terms are enforced elsewhere (source_permissions, public_fetch, selective_fetch, acq_discovered).
 Tokens and phrases come from config/robots_ai.json. Any error loading config or evaluating raises; callers fail closed.
 """
 from __future__ import annotations
@@ -15,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "robots_ai.json"
 _CFG: dict | None = None
-_DEFAULT_REASONS = {"agent": "robots_ai_agent_block", "statement": "robots_ai_statement"}
+_DEFAULT_REASONS = {"statement": "robots_ai_statement"}
 
 
 def load_config(path: Path | None = None) -> dict:
@@ -25,7 +31,7 @@ def load_config(path: Path | None = None) -> dict:
     if path == CONFIG_PATH and _CFG is not None:
         return _CFG
     c = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(c, dict) or not isinstance(c.get("ai_agent_tokens"), list) \
+    if not isinstance(c, dict) or not isinstance(c.get("advisory_agent_tokens"), list) \
             or not isinstance(c.get("ai_statement_phrases"), list):
         raise ValueError("robots_ai config malformed")
     ot, ut = c.get("own_tokens"), c.get("usage_tokens")  # ROBOTS-TIGHTEN-1108 S1b / A1; missing or malformed fails closed
@@ -218,7 +224,7 @@ def annotate(rp, text: str):
     names = {a for g in groups for a in g["agents"]}
     rp.vera_groups = groups
     rp.vera_ai_statement = statement_in(text, cfg)
-    rp.vera_ai_tokens = tuple(t for t in cfg["ai_agent_tokens"] if _base(str(t)) in names)
+    rp.vera_advisory_tokens = tuple(t for t in cfg["advisory_agent_tokens"] if _base(str(t)) in names)
     rp.vera_purpose_grants = _purpose_grants(text)  # PURPOSE-GRANTS-1108: shadow only, never consulted for access
     return rp
 
@@ -243,25 +249,29 @@ def _shadow(kind: str, rp, url: str) -> None:
 
 
 def block_reason(rp, url: str) -> str | None:
-    """None when no AI rule blocks url; else robots_ai_statement / robots_ai_agent_block. A bare True/False marker
-    gives None; an un-annotated parser raises (callers fail closed)."""
+    """None when no AI statement blocks url; else robots_ai_statement. Hyperscaler-only groups never block (H13; see
+    advisory()). A bare True/False marker gives None; an un-annotated parser raises (callers fail closed)."""
     if rp in (None, True, False):
         return None
     if rp.vera_ai_statement:
         _shadow("statement", rp, url)
         return reason_code("statement")
-    for tok in rp.vera_ai_tokens:
-        if not _decide(_applies(rp.vera_groups, {_base(tok)}, None), url):
-            _shadow("agent", rp, url)  # hyperscaler-only group: never overridable (pending H13); recorded only
-            return reason_code("agent")
     return None
 
 
+def advisory(rp, url: str) -> tuple:
+    """H13: the advisory (hyperscaler) tokens whose own group disallows url, for recording only. NEVER used to deny."""
+    if rp in (None, True, False):
+        return ()
+    return tuple(t for t in getattr(rp, "vera_advisory_tokens", ())
+                 if not _decide(_applies(rp.vera_groups, {_base(t)}, None), url))
+
+
 def crawl_delay(rp, ua: str) -> float | None:
-    """Largest Crawl-delay among the groups that apply: this UA (else *) and the AI agent groups of the file.
-    None when none declares one."""
+    """Largest Crawl-delay among the groups that apply: this UA (else *) and the advisory (hyperscaler) groups of the
+    file, kept as polite pacing (H13). None when none declares one."""
     if rp in (None, True, False):
         return None
-    ds = [rp.crawl_delay(ua)] + [rp.crawl_delay(t) for t in getattr(rp, "vera_ai_tokens", ())]
+    ds = [rp.crawl_delay(ua)] + [rp.crawl_delay(t) for t in getattr(rp, "vera_advisory_tokens", ())]
     ds = [float(d) for d in ds if d is not None]
     return max(ds) if ds else None

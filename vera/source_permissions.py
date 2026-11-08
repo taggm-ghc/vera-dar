@@ -4,7 +4,8 @@ Three independent gates, each with a dev-trace reason code and a plain public ph
   READ            unknown = allowed. Restricted: robots disallow, registry access_verdict forbid, owner deny-list host,
                   login/paywall page, explicit no-crawl signal. A read-restricted source is never fetched.
   USE_FOR_ANSWER  unknown = allowed. Barred: ND licence, no-AI signal (noai/noimageai in robots meta or X-Robots-Tag,
-                  Content-Signal ai-input=no in header or robots), registry derivative_verdict forbid.
+                  Content-Signal ai-input=no in header or robots, Content-Usage ai-use=n, Bing ai-grounding
+                  Disallow/DisallowExtended in a Bingbot meta or X-Robots-Tag, H11), registry derivative_verdict forbid.
   INGEST          only when the licence explicitly permits storage (vera.licence_gate) AND registry ingest_verdict is
                   not forbid AND the source is readable and usable; otherwise answer-only.
 read_gate() is for BEFORE the fetch; evaluate() is for AFTER it. Both return a frozen PermissionRecord.
@@ -137,9 +138,29 @@ def _meta_robots(html_head: str | None) -> str:
     out = []
     for m in _META.findall(html_head or ""):
         a = {k.lower(): (v1 or v2 or v3) for k, v1, v2, v3 in _ATTR.findall(m)}
-        if a.get("name", "").lower() in ("robots", "googlebot", "vera-dar", "ai"):
+        name = a.get("name", "").lower()
+        if name in ("robots", "googlebot", "vera-dar", "ai"):
             out.append(a.get("content", "").lower())
+        elif name == "bingbot":  # H11: only the ai-grounding directive is read from a Bingbot meta
+            out.extend(ai_grounding_tokens(a.get("content", "")))
     return ",".join(out)
+
+
+_AI_GROUNDING = re.compile(r"ai-grounding\s*:\s*[\"']?\s*(allow|disallowextended|disallow)\b", re.I)
+
+
+def ai_grounding_tokens(value: str) -> list[str]:
+    """OD-1108-DISPOSITIONS-2 H11: Bing's page-level ai-grounding directive (<meta name="Bingbot"
+    content="ai-grounding:disallow">, or an X-Robots-Tag value, with or without a "bingbot:" prefix) as normalised
+    tokens "ai-grounding:allow|disallow|disallowextended". Evidence for the syntax is secondary only
+    (work/AIPREF-VERIFY-1108/findings.md claim (e))."""
+    return [f"ai-grounding:{m.lower()}" for m in _AI_GROUNDING.findall(str(value or ""))]
+
+
+def ai_grounding_disallow(value: str) -> bool:
+    """H11: True when value carries ai-grounding Disallow or DisallowExtended; both bind answer-evidence use (the
+    same effect as Content-Signal ai-input=no). Allow or absent: False."""
+    return any(t != "ai-grounding:allow" for t in ai_grounding_tokens(value))
 
 
 def _tokens(s: str) -> set[str]:
@@ -323,6 +344,8 @@ def evaluate(url: str, *, licence=None, headers=None, html_head: str | None = No
     nd = licence_gate.reject_reason(lid, lurl) == "ND (no derivatives)"
     no_ai = (bool({"noai", "noimageai"} & (xrt | meta)) or _content_signal_no_ai(h.get("content-signal", ""))
              or _content_signal_no_ai(content_usage_signal(h.get("content-usage", "")))
+             or ai_grounding_disallow(h.get("x-robots-tag", ""))  # H11: Bing ai-grounding, header form
+             or ai_grounding_disallow(_meta_robots(html_head))  # H11: <meta name="Bingbot"> form
              or _robots_no_ai(robots_txt_entries))
     nd_news = nd and licence_gate.nd_news_permitted(
         {"url": url, "licence": {"content": {"id": lid, "url": lurl}}})  # H19: looked up from the URL host; flag off = False

@@ -403,9 +403,9 @@ def parse_crawl_delay(text: str, user_agent=None) -> float | None:
     pick = next((g for g in groups if any(a != "*" and a and a in token for a in g["agents"])), None) \
         or next((g for g in groups if "*" in g["agents"]), None)
     delays = list(pick["delays"]) if pick else []
-    try:  # OD-1106-ROBOTS-AI: the largest Crawl-delay among the groups that apply, AI agent groups included
+    try:  # the largest Crawl-delay among the groups that apply; advisory (hyperscaler) groups kept as pacing (H13)
         from vera import robots_ai as _ra
-        ai = {str(t).lower() for t in _ra.load_config()["ai_agent_tokens"]}
+        ai = {str(t).lower() for t in _ra.load_config()["advisory_agent_tokens"]}
         for g in groups:
             if any(a in ai for a in g["agents"]):
                 delays += g["delays"]
@@ -480,15 +480,15 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
     if rp is False:
         return False
     try:
-        from vera import robots_ai as _ra  # OD-1106-ROBOTS-AI: RFC 9309 matcher for own UA, * and AI groups
+        from vera import robots_ai as _ra  # RFC 9309 matcher for the own family, else *, plus the AI statement (H13)
         return _ra.allowed(rp, ua, url) and _ra.block_reason(rp, url) is None
     except Exception:  # noqa: BLE001  fail closed
         return False
 
 
 def robots_ai_reason(url, user_agent=None) -> str | None:
-    """OD-1106-ROBOTS-AI: robots_ai_agent_block / robots_ai_statement when the cached robots.txt of url's host blocks
-    it through an AI rule, else None. Never fetches, never raises."""
+    """robots_ai_statement when the cached robots.txt of url's host states that AI crawlers/assistants are blocked,
+    else None (hyperscaler-only groups are advisory, H13). Never fetches, never raises."""
     try:
         from vera import robots_ai as _ra
         parts = urlsplit(url)

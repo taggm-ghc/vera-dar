@@ -190,11 +190,14 @@ def test_robots_block_unchanged_and_evidence_recorded():
     assert len(pg.shadow_evidence()) == 1  # deduplicated
 
 
-def test_hyperscaler_group_block_recorded_as_not_overridable():
+def test_hyperscaler_group_never_blocks_so_no_shadow_record():
+    # ROBOTS-POLICY-1108 (H13, OD-1108-DISPOSITIONS-2): a hyperscaler-only group is advisory and never blocks, so
+    # there is no restriction for a purpose grant to shadow; it is recorded by robots_ai.advisory() instead.
     txt = "# research use welcome\nUser-agent: GPTBot\nDisallow: /\nUser-agent: *\nAllow: /\n"
     rp = _rp(txt)
-    assert robots_ai.block_reason(rp, "https://a.example/x") == "robots_ai_agent_block"
-    assert pg.shadow_evidence()[0]["decision"] == "not_overridable"
+    assert robots_ai.block_reason(rp, "https://a.example/x") is None
+    assert robots_ai.advisory(rp, "https://a.example/x") == ("GPTBot",)
+    assert pg.shadow_evidence() == []
 
 
 def test_shadow_writes_codes_only_trace_event():

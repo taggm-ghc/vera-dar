@@ -476,7 +476,7 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
 
 
 def _ai_ok(rp, ua, url) -> bool:
-    """Own group / * allow AND no AI agent group or AI statement blocks (OD-1106-ROBOTS-AI)."""
+    """Own-family group (else *) allows AND no AI statement blocks; hyperscaler-only groups are advisory (H13)."""
     from vera import robots_ai as _ra
     return _ra.allowed(rp, ua, url) and _ra.block_reason(rp, url) is None
 
@@ -490,12 +490,17 @@ _META_NAMES = ("robots", "googlebot", "vera-dar", "ai")
 
 
 def _meta_robots(html: str) -> list:
-    """content values (lower-cased) of <meta name=robots|googlebot|vera-dar|ai> in the first 200 kB. Signals only."""
+    """content values (lower-cased) of <meta name=robots|googlebot|vera-dar|ai> in the first 200 kB, plus only the
+    ai-grounding directive of <meta name=bingbot> (H11, normalised "ai-grounding:<value>"). Signals only."""
+    from vera import source_permissions as _sp
     out = []
     for m in _META_TAG.findall(html[:200000]):
         a = {k.lower(): (v1 or v2 or v3) for k, v1, v2, v3 in _META_ATTR.findall(m)}
-        if a.get("name", "").lower() in _META_NAMES and a.get("content"):
+        name = a.get("name", "").lower()
+        if name in _META_NAMES and a.get("content"):
             out.append(a["content"].lower())
+        elif name == "bingbot" and a.get("content"):
+            out.extend(_sp.ai_grounding_tokens(a["content"]))
     return out
 
 

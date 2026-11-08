@@ -11,7 +11,8 @@ from vera.search_providers import USER_AGENT as SEARCH_UA
 
 ROOT = Path(__file__).resolve().parent.parent
 U = "https://a.example/p/1"
-OWN = ["VERA-DAR", "VERA-research-fetcher", "VERA-research-pipeline", "VERA-DAR-wiki-ref-portal", "VERA-research-prototype"]
+OWN = ["VERA-DAR", "VERA-research-fetcher", "VERA-research-pipeline", "VERA-DAR-wiki-ref-portal", "VERA-research-prototype",
+       "VERA-DAR-reference-portal"]  # ROBOTS-POLICY-1108: the ROUTES-1108 reference-portal UA joins the family
 UAS = {"VERA-research-fetcher": sf.USER_AGENT, "VERA-DAR-wiki-ref-portal/0.2": "VERA-DAR-wiki-ref-portal/0.2 (x)",
        "VERA-research-prototype": "VERA-research-prototype/0.1 (x)", "VERA-DAR": "VERA-DAR/1.0 (x)"}
 
@@ -70,7 +71,8 @@ def test_family_path_scoped_and_exact_token():
 
 def test_star_still_applies_and_hyperscaler_group_unchanged():
     assert fetch_ok("User-agent: *\nDisallow: /p\n") is False
-    assert fetch_ok("User-agent: GPTBot\nDisallow: /\n") is False  # S1a not implemented: still denied
+    assert fetch_ok("User-agent: GPTBot\nDisallow: /\n") is True  # H13 (S1a): hyperscaler-only group is advisory
+    assert fetch_ok("User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nDisallow: /p\n") is False  # * still binds
 
 
 def test_own_tokens_missing_fails_closed(tmp_path):
@@ -167,12 +169,13 @@ def test_content_usage_mixed_with_signal():
 # ---- S4
 def test_no_ua_claims_hyperscaler_or_browser():
     cfg = json.loads((ROOT / "config" / "robots_ai.json").read_text())
-    bad = [str(t).lower() for t in cfg["ai_agent_tokens"]] + ["mozilla", "compatible;", "chrome", "safari",
+    bad = [str(t).lower() for t in cfg["advisory_agent_tokens"]] + ["mozilla", "compatible;", "chrome", "safari",
                                                               "applewebkit", "googlebot", "bingbot"]
     uas = [sf.USER_AGENT, SEARCH_UA,
            json.loads((ROOT / "config" / "public_fetch.json").read_text())["user_agent"],
            json.loads((ROOT / "config" / "reporting_lane.json").read_text())["user_agent"],
            json.loads((ROOT / "config" / "wiki_ref_portal.json").read_text())["user_agent"],
+           json.loads((ROOT / "config" / "reference_portals.json").read_text())["user_agent"],
            json.loads((ROOT / "config" / "vera_eval_run.json").read_text())["search"]["duckduckgo_lite"]["user_agent"]]
     own = {t.lower() for t in robots_ai.load_config()["own_tokens"]}
     for ua in uas:

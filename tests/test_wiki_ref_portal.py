@@ -130,12 +130,18 @@ def test_robots_deny_means_no_article_fetch():
     assert [u for u, _ in http.calls] == ["https://en.wikipedia.org/robots.txt"]
 
 
-@pytest.mark.parametrize("robots", ["User-agent: ClaudeBot\nDisallow: /\n",
-                                    "# AI crawlers are blocked\nUser-agent: *\nAllow: /\n"])
-def test_robots_ai_agent_group_or_statement_denies(robots):
+@pytest.mark.parametrize("robots", ["# AI crawlers are blocked\nUser-agent: *\nAllow: /\n",
+                                    "User-agent: ClaudeBot\nDisallow: /\n\nUser-agent: *\nDisallow: /wiki/\n",
+                                    "User-agent: ClaudeBot\nAllow: /\n\nUser-agent: VERA-DAR\nDisallow: /\n"])
+def test_robots_ai_statement_star_or_own_family_denies(robots):
     (cands, _l, counts), http = run(HTTP(robots=robots))
     assert cands == [] and counts["robots_denied"] == 1
     assert all(u.endswith("/robots.txt") for u, _ in http.calls)
+
+
+def test_robots_hyperscaler_only_group_is_advisory():  # OD-1108-DISPOSITIONS-2 H13 (was a denial)
+    (_c, _l, counts), _http = run(HTTP(robots="User-agent: ClaudeBot\nDisallow: /\n"))
+    assert counts.get("robots_denied", 0) == 0 and counts["articles"] >= 1
 
 
 def test_unreadable_robots_fails_closed():
