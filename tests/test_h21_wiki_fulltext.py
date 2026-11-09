@@ -65,11 +65,17 @@ def test_citation_to_open_page_is_used_after_a11_filter_with_licence():
     assert att["licence"] == "CC BY 4.0" and att["licence_url"].endswith("/by/4.0/") and "A. Writer" in att["creator"]
 
 
+@pytest.mark.parametrize("extra", [  # re-verify F1/F2: A8 and the generic A10 rule are scoped to ND-outlet rows
+    {"text": BODY + " This article was originally published by Another Outlet."},
+    {"canonical_url": "https://syndicator.example.com/zorblats"},
+    {"licence_href": "https://creativecommons.org/licenses/by/4.0/", "text": BODY + " All Rights Reserved."},
+])
+def test_citation_to_non_nd_page_is_not_blocked_by_nd_only_rules(extra):
+    out = _read(OPEN_URL, Fetch(**extra))
+    assert len(out.pages) == 1
+
+
 @pytest.mark.parametrize("extra,token", [
-    ({"text": BODY + " This article was originally published by Another Outlet."}, "use_acc_republished"),
-    ({"canonical_url": "https://syndicator.example.com/zorblats"}, "use_acc_republished"),
-    ({"licence_href": "https://creativecommons.org/licenses/by/4.0/", "text": BODY + " All Rights Reserved."},
-     "use_acc_item_excluded"),
     ({"licence_href": "https://creativecommons.org/licenses/by-nc-nd/4.0/"}, "use_nd_licence"),
     ({"text": "NEW YORK (AP) — " + BODY}, "use_acc_third_party_page"),
 ])

@@ -6,11 +6,13 @@ check(url, page) -> {"ok", "reasons", "text", "a11_dropped", "licence"}:
   A7  the page's own rel=license link: a no-derivatives, no-educational-use or fee-only licence -> page_licence_reject;
       for an outlet row with an ND `access` block, a link whose CC family differs from the row -> acc_page_licence_mismatch
       (vera.news_access._page_licence_checks, which also runs that row's A8/A10 markers).
-  A8  republication or syndication: a configured republication cue in the text, the row's republished_markers, or a
-      <link rel=canonical> on another site -> acc_republished.
-  A10 item exclusion: the row's exclude_item_markers -> acc_item_excluded; an "All Rights Reserved" notice on a page
-      whose open licence is claimed (row licence or the page's CC link) -> acc_item_excluded (the item's licence
-      cannot be established). Without an open-licence claim the notice only sets the shown licence.
+  A8  republication or syndication: the row's own republished_markers (any row) -> acc_republished; for ND-outlet rows
+      only, also a configured republication cue or a <link rel=canonical> on another site (re-verify F2: a non-ND page,
+      e.g. an open-access paper with "originally published in" or a canonical DOI/PMC link, is not affected).
+  A10 item exclusion: the row's exclude_item_markers -> acc_item_excluded; for ND-outlet rows only, an "All Rights
+      Reserved" notice with no explicit page licence link -> acc_item_excluded (re-verify F1: an explicit page licence
+      link takes precedence over a generic footer). Elsewhere the notice only sets the shown licence when no licence
+      link or row licence exists.
   A11 third-party material (AD-2), detected mechanically, never from topic lists: a page-level wire cue (wire dateline,
       wire byline, wire copyright line, "contributed to this report") -> acc_third_party_page; paragraphs that hold
       third-party markup (public_fetch `third_party_text`: blockquote, q, cite, figure, figcaption, media) are dropped,
@@ -176,19 +178,25 @@ def check(url: str, page: dict, *, row: dict | None = None, cfg: dict | None = N
                 reasons.append("acc_licence_unset")
         elif href and licence_gate.reject_reason(None, href):
             reasons.append("page_licence_reject")
-        # A8
-        markers = list(pc["republished_markers"]) + [m for m in (row or {}).get("republished_markers") or []
-                                                     if isinstance(m, str) and m]
+        nd_row = isinstance(acc, dict)
+        # A8 (re-verify F2): the generic republication cues and the off-site canonical rule apply to ND-outlet rows
+        # only (their licence covers the outlet's own items); any other row is checked only against its own explicit
+        # republished_markers. A non-ND page (an open-access paper reached by original-host following, a CC BY or
+        # public-domain page) is never link-only for "originally published in" or a canonical DOI/PMC/repository link.
+        markers = [m for m in (row or {}).get("republished_markers") or [] if isinstance(m, str) and m]
+        if nd_row:
+            markers += list(pc["republished_markers"])
         canon, here = _host(page.get("canonical_url") or ""), _host(page.get("url") or url)
-        if (any(_norm(m) in low for m in markers)
-                or (canon and here and canon != here and not canon.endswith("." + here)
-                    and not here.endswith("." + canon))):
+        off_site = bool(canon and here and canon != here and not canon.endswith("." + here)
+                        and not here.endswith("." + canon))
+        if any(_norm(m) in low for m in markers) or (nd_row and off_site):
             reasons.append("acc_republished")
-        # A10
+        # A10 (re-verify F1): a row's explicit exclude_item_markers always apply. The generic "All Rights Reserved"
+        # rule applies to ND-outlet rows only, and an explicit page licence link takes precedence over such a footer
+        # (the link is then checked by A7). On any other page the notice only sets the shown licence.
         arr = any(_norm(m) in low for m in pc["arr_markers"])
-        open_claim = bool(row_lic or (page_lic and page_lic.get("id")) or (row or {}).get("licence_note"))
         if any(isinstance(m, str) and m and _norm(m) in low for m in (row or {}).get("exclude_item_markers") or []) \
-                or (arr and open_claim):
+                or (arr and nd_row and not page_lic):
             reasons.append("acc_item_excluded")
         # A11
         wire = _compile(pc["page_wire_patterns"])

@@ -190,8 +190,23 @@ def test_non_nd_outlet_pages_get_the_same_page_checks(monkeypatch):
     bad = le.collect(Q, reporting=Rep(GV_URL), fetch=Fetch(
         "", licence_href="https://creativecommons.org/licenses/by-nd/4.0/"))
     assert bad.pages == [] and bad.checks["acc_exc_first"] == "page_licence_reject"
+    # re-verify F2: generic republication cues and the canonical rule are scoped to ND-outlet rows
     rep = le.collect(Q, reporting=Rep(GV_URL), fetch=Fetch("Republished from another site with permission."))
-    assert rep.pages == [] and rep.checks["acc_exc_first"] == "acc_republished"
+    assert rep.pages and "acc_exc" not in rep.checks
+    can = le.collect(Q, reporting=Rep(GV_URL), fetch=Fetch(canonical_url="https://doi.org/10.1000/xyz"))
+    assert can.pages
+    # re-verify F1: an All Rights Reserved footer alone never excludes a non-ND page
+    arr = le.collect(Q, reporting=Rep(GV_URL), fetch=Fetch("All rights reserved."))
+    assert arr.pages
+
+
+def test_nd_row_explicit_page_licence_link_takes_precedence_over_arr_footer(nd_on):
+    res = le.collect(Q, reporting=Rep(), fetch=Fetch(
+        "All rights reserved.", licence_href="https://creativecommons.org/licenses/by-nc-nd/4.0/"))
+    assert res.pages and le.attribution_for(res.pages[0])["licence"] == "CC BY-NC-ND 4.0"
+    bad = le.collect(Q, reporting=Rep(), fetch=Fetch(
+        "All rights reserved.", licence_href="https://creativecommons.org/licenses/by-sa/4.0/"))
+    assert bad.pages == []  # the link itself must still match the row (A7)
 
 
 # ----------------------------------------------------------------------------------- answer path (T8a 2 to 11)

@@ -71,11 +71,18 @@ def test_blockquote_and_figcaption_removed_before_use():
     assert "Quoted words" not in t and "Photo credit" not in t and "Zorblats are synthetic" in t
 
 
+@pytest.mark.parametrize("head,body", [  # re-verify F1/F2: not blocked on a non-ND original host
+    ('<link rel="canonical" href="https://other-site.example.com/zorb">', PARA),
+    ("", PARA + "<p>This story was originally published by Another Outlet.</p>"),
+    ('<link rel="license" href="https://creativecommons.org/licenses/by/4.0/">', PARA + "<p>All Rights Reserved.</p>"),
+])
+def test_origin_page_not_blocked_by_nd_only_rules(head, body):
+    out = read(head, body)
+    assert len(out.pages) == 1
+
+
 @pytest.mark.parametrize("head,body,token", [
-    ('<link rel="canonical" href="https://other-site.example.com/zorb">', PARA, "use_acc_republished"),
-    ("", PARA + "<p>This story was originally published by Another Outlet.</p>", "use_acc_republished"),
-    ('<link rel="license" href="https://creativecommons.org/licenses/by/4.0/">', PARA + "<p>All Rights Reserved.</p>",
-     "use_acc_item_excluded"),
+    ('<link rel="license" href="https://creativecommons.org/licenses/by-nd/4.0/">', PARA, "use_licence_reject"),
     ("", "<p>BERLIN (Reuters) - " + "Zorblats are synthetic test organisms. " * 12 + "</p>", "use_acc_third_party_page"),
     ("", "<blockquote><p>" + "Entirely quoted. " * 10 + "</p></blockquote>", "use_acc_third_party_all"),
 ])
