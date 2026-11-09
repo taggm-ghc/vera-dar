@@ -125,12 +125,15 @@ def _resp_token(fb: dict, summary: dict | None, default: str) -> str:
     return default
 
 
-def _user_payload(question: str, sources: list[dict]) -> str:
-    """Untrusted passage text, titles and URLs travel only as JSON data in the user message (as claim_check does)."""
+def _user_payload(question: str, sources: list[dict], scfg: dict | None = None) -> str:
+    """Untrusted passage text, titles and URLs travel only as JSON data in the user message (as claim_check does).
+    ANSWER-SCOPE-1109 (b): with answer.scope_check on, a passage may carry "title_terms_not_in_question" (a hint)."""
+    from vera.answer_scope import payload_hint
     passages = [{"n": s["n"], "title": s.get("title"), "url": s.get("url"), "published": s.get("published") or "unknown",
                  "text": s["snippet"], **({"lane": s["epistemic"]} if s.get("answer_only") is True and s.get("epistemic")
                                           else {}),
-                 **({"licence": "ND"} if s.get("licence_class") == "nd" else {})} for s in sources]
+                 **({"licence": "ND"} if s.get("licence_class") == "nd" else {}),
+                 **payload_hint(question, s, scfg)} for s in sources]
     return json.dumps({"question": question, "passages": passages}, ensure_ascii=False)
 
 
@@ -154,8 +157,12 @@ def messages_for(question: str, sources: list[dict], cfg: dict) -> list[dict]:
                                                                          "the insufficient-evidence reply"))
     from vera.claim_check import current_utc_date
     system += DATE_INSTRUCTION.replace("{date}", current_utc_date())  # OD-1104-TRACE F3
+    from vera.answer_scope import scope_cfg
+    scfg = scope_cfg(cfg)
+    if scfg is not None and sources:  # ANSWER-SCOPE-1109 (b): answer the question asked, not a paper's own system
+        system += str(scfg.get("prompt_sentence") or "")
     return [{"role": "system", "content": system + _UNTRUSTED},
-            {"role": "user", "content": _user_payload(question, sources)}]
+            {"role": "user", "content": _user_payload(question, sources, scfg)}]
 
 
 # DAR-PREMISE-1022: "sometimes no answer is right because the question itself is wrong". The model may open its reply
@@ -516,6 +523,23 @@ def _clip(t: str, n: int = 160) -> str:
     return t if len(t) <= n else t[: n - 1].rstrip() + "\u2026"
 
 
+def _scope_cfg(cfg):
+    from vera.answer_scope import scope_cfg
+    return scope_cfg(cfg)
+
+
+def _with_scope_note(question, shown, sources, cfg, notes, summary) -> dict:
+    """ANSWER-SCOPE-1109 (b)/(c): when every shown claim describes one particular system (checker "scope" verdicts
+    first, the mechanical title signal only without them), prepend the scope note and label the answer partial, so
+    vera.research_record.sufficient asks for more evidence. Monotone: only adds a note / down-labels."""
+    from vera.answer_scope import scope_note
+    t = scope_note(question, shown, sources, _scope_cfg(cfg))
+    if not t:
+        return summary
+    notes.insert(0, ("partial", t))  # an existing limitation kind (answer_contract.LIMITATION_KINDS)
+    return dict(summary, answer_completeness="partial", scope_specific_only=True, scope_note=t)
+
+
 def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call, reference_texts, fall, totals,
                   add_cost=lambda rows: None, reference_corpus=None):
     """D8 = A: per-part answering. A part is answered only with >= 1 kept `supported` claim; every other part is
@@ -549,7 +573,8 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         return fall(fb["no_valid_citations"])
     draft = "\n".join(fixed[k] for k in sorted(fixed))
     rcfg = responsiveness_cfg(cfg)
-    cc_cfg = dict(cc, partial_marker=a["partial_marker"], removed_note=a["removed_note"], responsiveness=rcfg)
+    cc_cfg = dict(cc, partial_marker=a["partial_marker"], removed_note=a["removed_note"], responsiveness=rcfg,
+                  scope=_scope_cfg(cfg))
     records: list = []
     usage: list = []
     tok, utok = RECORDS.set(records), USAGE.set(usage)
@@ -657,7 +682,15 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
         else:
             text += "\n\n" + cite_note
     complete = not unanswered and not resp_partial and not partial_only
+    _sn: list = []
+    if _with_scope_note(question, shown, sources, cfg, _sn, {}).get("scope_specific_only"):  # ANSWER-SCOPE-1109
+        complete = False
+        if sep:
+            notes.insert(0, _sn[0])
+        else:
+            text = _sn[0][1] + "\n\n" + text
     summary = dict(summary, verbatim_dropped=dropped, answer_completeness="complete" if complete else "partial",
+                   **({"scope_specific_only": True} if _sn else {}),
                    parts={"total": len(parts), "answered": [k for k, _ in blocks], "unanswered": unanswered})
     total = a.get("max_total_quote_chars")
     total = int(total) if total is not None else (700 if checker is not None else None)
@@ -797,7 +830,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
 
     rcfg = responsiveness_cfg(cfg)
     cc_cfg = dict(cc, partial_marker=cfg["answer"]["partial_marker"], removed_note=cfg["answer"]["removed_note"],
-                  responsiveness=rcfg)
+                  responsiveness=rcfg, scope=_scope_cfg(cfg))
     records: list = []
     usage: list = []
     tok, utok = RECORDS.set(records), USAGE.set(usage)
@@ -846,6 +879,11 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
         else:
             checked = (statement + "\n\n" + checked) if statement else checked
         summary = dict(summary, answer_completeness="partial")
+    summary = _with_scope_note(question, kept, sources, cfg, notes, summary)  # ANSWER-SCOPE-1109 (b)/(c)
+    _st = summary.pop("scope_note", None) if isinstance(summary, dict) else None
+    if _st and not _separate():  # notes-separate off: the note leads the answer text
+        notes.remove(("partial", _st))
+        checked = _st + "\n\n" + checked
     total = cfg["answer"].get("max_total_quote_chars")
     total = int(total) if total is not None else (700 if checker is not None else None)
     profiles = [profs[r["id"]] for r in kept] if checker is not None else None

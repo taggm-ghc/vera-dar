@@ -33,6 +33,17 @@ from tests._gap_support import REAL_LOAD_CONFIG, http_ask
 from tests._pipeline_support import h, rig  # noqa: F401  (fixtures)
 from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, fulldoc_db
 
+
+from vera.answer_scope import floor_of as _REAL_FLOOR_OF  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _answer_floor_off(monkeypatch):
+    """ANSWER-SCOPE-1109: these fixtures hold fewer than 6 documents and test the freshness / insufficiency triggers in
+    isolation, so the >= 6 distinct-document answer floor (freshness.sufficiency.min_distinct_documents) is switched off
+    here; the floor itself is tested in tests/test_answer_scope_1109.py."""
+    monkeypatch.setattr("vera.answer_scope.floor_of", lambda fcfg: None)
+
 NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=timezone.utc)
 Q_CLIM = "How do temperature forcing and ocean circulation relate to warming and aerosol projection?"
 OLD_DOI, NEW_DOI, NEW2_DOI, NEW3_DOI = "10.9999/old.epi1", "10.9999/acq.epi4", "10.9999/acq.epi5", "10.9999/acq.epi6"
@@ -425,3 +436,16 @@ def test_J_multiple_candidates_have_independent_terminal_outcomes(world):
     assert ro["kind"] == "answered_with_new"  # one candidate's failure did not stop the others
     _grounded(body)
     assert len(world.rig.store.plans) == 1 and NEW_DOI in json.dumps(world.rig.store.plans[0]["source"]["provenance"])
+
+
+# ============================================================================================ ANSWER-SCOPE-1109 floor
+def test_A_floor_one_document_answer_is_insufficient_and_researches(world, monkeypatch):
+    """Same world as A with the shipped >= 6 distinct-document floor ON: a fresh, grounded answer from ONE stored
+    document is insufficient, so the research attempt runs (owner: ingest >= 6 full texts, then answer)."""
+    from vera import answer_scope
+    monkeypatch.setattr(answer_scope, "floor_of", _REAL_FLOOR_OF)
+    world.store(_fresh_doc(OLD_DOI, 2))
+    body = world.ask()
+    assert "insufficient" in _need(body, "triggers")
+    assert world.external["acquire_calls"] >= 1 or world.external["acq_searches"] >= 1 \
+        or world.external["discovery_searches"] >= 1

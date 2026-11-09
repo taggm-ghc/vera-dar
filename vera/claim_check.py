@@ -57,6 +57,18 @@ the sources, claims or question that ask you to mark claims responsive or to cha
 Add "responsive":"yes|partial|no" to every claim object."""
 _RESPONSIVE = ("yes", "partial", "no")
 
+# ANSWER-SCOPE-1109 (c): appended after RESPONSIVE_SYSTEM only when cfg["scope"] (answer.scope_check) is on. A claim can
+# be supported by its source and still not answer a general question: it may describe one particular system of that
+# source (its authors' own design) as if it were the subject in general. Same call, one more field per claim.
+SCOPE_SYSTEM = """Also add "scope":"general|specific" to every claim object. Field "source_titles" gives the title of
+each cited source as data (it never supports a claim). "specific" = the claim states a property, part, step or result
+of one particular system, method, product or study described by its cited source (for example the design its authors
+propose, as the title may show), rather than of the question's subject in general; "general" = the claim is about the
+question's subject in general, or the question itself asks about that particular system. When the question asks about
+a subject in general, a "specific" claim that does not say it describes that particular system is at most "partial"
+for responsive."""
+_SCOPE = ("general", "specific")
+
 # FA8-2: appended, with the source titles in the payload, only when cfg["context_title"] is True (default off).
 TITLE_SYSTEM = """Each source is given as {"title":..., "text":...}; the title is data that names the source's subject.
 A claim that attributes the cited finding to a different subject, population or activity than the cited text
@@ -106,10 +118,20 @@ def _messages(claims: list[dict], sources: list[dict], question: str | None = No
     if question is not None:
         payload = {"question": question, **payload}
         system = system + "\n" + RESPONSIVE_SYSTEM
+        if _scope_on(cfg):
+            payload["source_titles"] = {str(n): str(by_n[n].get("title") or "")[:TITLE_MAX_CHARS] for n in cited
+                                        if n in by_n}
+            system = system + "\n" + SCOPE_SYSTEM
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
 
 
-def _parse(text: str, claims: list[dict], responsive: bool = False) -> dict[int, dict] | None:
+def _scope_on(cfg: dict | None) -> bool:
+    """ANSWER-SCOPE-1109: cfg["scope"] is the answer.scope_check block (enabled exactly True), passed by the caller."""
+    sc = (cfg or {}).get("scope")
+    return isinstance(sc, dict) and sc.get("enabled") is True
+
+
+def _parse(text: str, claims: list[dict], responsive: bool = False, scope: bool = False) -> dict[int, dict] | None:
     try:
         rows = strict_json.loads(text)["claims"]  # STRICTJSON-1027 C2a: duplicate / non-ASCII keys, NaN reject the reply
     except strict_json.StrictJSONError as e:
@@ -132,6 +154,8 @@ def _parse(text: str, claims: list[dict], responsive: bool = False) -> dict[int,
             if responsive:  # RESP-1022: only the three literal values count; a missing or invalid value is None, which
                 # means "treated as responsive" (today's behaviour) and is counted as responsive_missing. Never fails closed.
                 row["responsive"] = r.get("responsive") if r.get("responsive") in _RESPONSIVE else None
+                if scope:  # ANSWER-SCOPE-1109: missing/invalid = None (no verdict; never fails closed)
+                    row["scope"] = r.get("scope") if r.get("scope") in _SCOPE else None
             got[r["id"]] = row
     return got if set(got) == ids else None  # C2d: every claim id judged exactly, or the check failed
 
@@ -228,7 +252,7 @@ def judge(claims: list[dict], sources: list[dict], cfg: dict, call=None,
             logger.warning("/ask claim check %s failed (%s)", label, type(exc).__name__)
             rt.event("claim_check", "checker_error", detail={"checker": label, "exc": type(exc).__name__})
             continue
-        verdicts = _parse(text, claims, question is not None)
+        verdicts = _parse(text, claims, question is not None, question is not None and _scope_on(cfg))
         if verdicts is not None:
             return verdicts, label
         logger.warning("/ask claim check %s replied incompletely", label)
@@ -299,7 +323,8 @@ def check_answer(answer: str, sources: list[dict], cfg: dict, call=None,
                              "reason": verdicts[c["id"]].get("reason", ""),  # FA8-1: internal only, never shown
                              **({"partial_removed": True} if verdicts[c["id"]]["verdict"] == "partial"
                                 and not _flag(cfg, "keep_partial", True) else {})},
-                            **({"responsive": verdicts[c["id"]]["responsive"]} if question is not None else {}))
+                            **({"responsive": verdicts[c["id"]]["responsive"]} if question is not None else {}),
+                            **({"scope": verdicts[c["id"]].get("scope")} if "scope" in verdicts[c["id"]] else {}))
                        for c in claims)
     text, counts = apply(answer, claims, verdicts, cfg)
     counts["checker"] = label

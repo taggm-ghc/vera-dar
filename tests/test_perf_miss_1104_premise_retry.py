@@ -114,7 +114,11 @@ def test_writer_and_checker_get_the_injected_utc_date_and_own_knowledge_rule(rep
     assert "never judge whether an event" in msgs[0]["content"] and "own knowledge" in msgs[0]["content"]
 
 
-def test_cited_verified_false_premise_correction_is_still_shown(replay):
+def test_cited_verified_false_premise_correction_is_still_shown(replay, monkeypatch):
+    # ANSWER-SCOPE-1109: the one-document fixture is below the >= 6 distinct-document answer floor, which (by design)
+    # starts research; this test isolates the premise-retry rule, so the floor is off here (tested in
+    # tests/test_answer_scope_1109.py and tests/test_fresh_acceptance_c4.py::test_A_floor_*).
+    monkeypatch.setattr("vera.answer_scope.floor_of", lambda fcfg: None)
     replay.reply = "PREMISE: false - The passage says the rumours concerned the 2022 midterm elections [1]."
     replay.verdict = "supported"
     r = ask_service.answer_in_scope(QB, "m", e2e.PRICING, grounding=(None, GCFG))

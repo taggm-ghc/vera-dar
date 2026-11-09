@@ -164,6 +164,9 @@ def sufficient(result, cfg: dict) -> bool:
     if (cfg.get("sufficiency") or {}).get("partial_is_insufficient") is True and isinstance(cc, dict) \
             and cc.get("answer_completeness") == "partial":
         return False
+    from vera import answer_scope  # ANSWER-SCOPE-1109 (a): the owner's >= 6 full-text aim applies to answering too
+    if answer_scope.below_floor(result, cfg) is not None:  # fewer distinct documents than the floor: search more
+        return False
     return True
 
 

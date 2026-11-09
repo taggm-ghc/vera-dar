@@ -95,7 +95,7 @@
     "freshness_future_skew_seconds": 300,
     "source_authored_partial_dates_trusted": true,
     "rank_prefer_recent": true,
-    "sufficiency": {"partial_is_insufficient": true},
+    "sufficiency": {"partial_is_insufficient": true, "min_distinct_documents": 6, "count_lane_pages": true, "_min_distinct_documents_note": "ANSWER-SCOPE-1109 (a): OWNER-SET, not calibrated (project_ingest_six_then_answer, owner 2026-11-03/11-08: at least 6 full texts, then answer). A grounded answer whose admitted passages come from fewer distinct full documents than this is treated as insufficient, so the existing research attempt (one inline acquisition per request, its rounds bounded by bounds.acq_round_target_new_docs and the ~30 soft ceiling) runs before the answer is final; if the final answer still draws on fewer, vera.ask_service adds answer.scope_check.limited_evidence_text. Keep equal to bounds.acq_round_target_new_docs (test_answer_scope_1109 checks it). Lane pages count for answering (count_lane_pages). Remove the key (or set null) to switch the floor off."},
     "texts": {
       "fresh_new": "Freshness: {n_new} cited document(s) were found by a new search for this question; cited documents published within the last 24 hours: {n_fresh}; published earlier: {n_stale}; publication time not precise enough to tell: {n_unknown}. Documents are dated by publication, not by when VERA-DAR added them to its collection.",
       "mixed_ages": "Older and newly found sources are both cited and labelled by publication date; where they differ, the more recent publication is not automatically correct, and an older publication is not current because VERA-DAR obtained it today.",

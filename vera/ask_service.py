@@ -290,8 +290,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         fcfg = _fresh_cfg(acq)  # FRESH-1023: a retrieved, grounded answer is not by itself a reason to stop researching
         if fcfg is None or fd.evidence is None:
             return fd
-        return _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in,
-                                   budget)
+        return _with_floor_note(_freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg,
+                                                    fd, used_in, budget), fcfg)  # ANSWER-SCOPE-1109 (a)
     not_configured = fd is None  # the full-document path is not configured (or its base corpus is not loaded)
     if not_configured:
         ev, token, tokens, cost, text = None, None, decision.tokens_used, decision.cost_usd, _NOT_CONFIGURED_TEXT
@@ -307,9 +307,10 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         res_inl = _acquire_rounds(question, model, pricing, decision, chained, grounding, acq, budget, used_in, token,
                                   not_configured)
         if isinstance(res_inl, AskResult):
-            return _research_on_insufficient(res_inl, ev, acq, (res_inl.contract or {}).get("inline_acquisition"),
-                                             answered=True,
-                                             held_ev=used_in.get("ev_acq"))
+            return _with_floor_note(_research_on_insufficient(res_inl, ev, acq,
+                                                              (res_inl.contract or {}).get("inline_acquisition"),
+                                                              answered=True, held_ev=used_in.get("ev_acq")),
+                                    _fresh_cfg(acq))  # ANSWER-SCOPE-1109 (a)
         inline_note, ia = res_inl
     _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
@@ -332,6 +333,31 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _rt_event("outcome", "no_answer", detail={"cause": _rt_token(cause), "fallback": _rt_token(token),
                                               "inline_status": _rt_token((ia or {}).get("status"))})
     return _with_off_note(_with_cause(out, cause, text), acq)
+
+
+def _with_floor_note(res, fcfg):
+    """ANSWER-SCOPE-1109 (a): a written answer whose admitted passages still come from fewer distinct full documents
+    than freshness.sufficiency.min_distinct_documents (after the research attempt that the same floor triggered) says
+    so plainly (answer.scope_check.limited_evidence_text, kind "coverage"). Never raises; non-answers unchanged."""
+    try:
+        if not isinstance(res, AskResult) or res.result_kind != "answer":
+            return res
+        from vera import answer_contract as contract
+        from vera import answer_scope, fulldoc_corpus
+        low = answer_scope.below_floor(res, fcfg)
+        scfg = answer_scope.scope_cfg(fulldoc_corpus.load_config())
+        t = str((scfg or {}).get("limited_evidence_text") or "")
+        if low is None or not t:
+            return res
+        n, m = low
+        text = t.format(n=n, m=m, s="" if n == 1 else "s")
+        if any(isinstance(x, dict) and x.get("text") == text for x in res.notes or ()) or text in (res.answer or ""):
+            return res
+        _a, _n = contract.add_note(res.answer, res.notes, "coverage", text)
+        return replace(res, answer=_a, notes=_n)
+    except Exception:  # noqa: BLE001  (a missing note never breaks an answer)
+        logging.getLogger("vera").warning("limited-evidence note skipped")
+        return res
 
 
 _NOT_CONFIGURED_TEXT = ("VERA-DAR could not write an answer to this question. The sources below may still help; read them "
