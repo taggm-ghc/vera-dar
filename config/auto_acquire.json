@@ -1,7 +1,7 @@
 {
   "_doc": "WED-ACQ2 / P1.7 automatic corpus expansion (records/wed-acq2-auto-corpus-expansion-plan.md). Read by vera/acq_config.py. The feature is OFF unless `enabled` is exactly true AND the kill-switch env var is not true-like AND both DB env vars are set. Env var NAMES only; values are never read except to build engines and never logged.",
   "_calibration_note": "Capacity and cost bounds below are planner priors (not decision thresholds). The only decision gate (relevance) reuses config/fulldoc_answer.json admission thresholds unchanged. Calibrate from the first live job log lines (reason-code counts and stage durations only) - plan DV-2.",
-  "_constraint": {"kind": "temporary", "what": "acquired documents are served without per-document pins (vera/fulldoc_db.py _load_acquired strips pins)", "origin": "WED-ACQ2 r2 design (V2 unpinned cfg)", "conflicts_with": ["CTL-PIN"], "review_by": "2026-11-21", "owner": "orchestrator", "exit": "signed or admin-written pins for acquired documents, or an owner-accepted risk decision"},
+  "_constraint": {"kind": "temporary", "what": "acquired documents are served without per-document pins (vera/fulldoc_db.py _load_acquired strips pins)", "origin": "WED-ACQ2 r2 design (V2 unpinned cfg)", "conflicts_with": ["CTL-PIN"], "review_by": "2026-11-30", "condition": "owner-run pin export before 2026-11-21, otherwise the extension lapses on 2026-11-21", "extended_by": "OD-1109-HD1 (2026-11-09; the export does not close the vulnerability; H1(b) batch promotion retained)", "owner": "orchestrator", "exit": "signed or admin-written pins for acquired documents, or an owner-accepted risk decision"},
   "enabled": true,
   "kill_switch_env": "VERA_AUTOACQ_DISABLED",
   "db_url_env_wo": "VERA_DB_URL_WO",
