@@ -18,6 +18,12 @@ unknown licences are link-only ("defer", never stored). Entries in any status ot
 rows written by scripts/licence_research.py) are never used. Plain NC stays accepted (R1); the three reject classes
 stay rejected. Every decision carries a reason code (licence_reason_code) that the /ask path writes to
 licence_observations, so unknown licence strings are counted there (reason_code 'licence_unknown').
+
+FAIR-USE SHORT-QUOTE TIER (FAIRUSE-TIER-1108, owner decision OD-1108-FAIRUSE, option O2; vera/fair_use.py, config
+fair_use.json, ships OFF): when enabled, a governing licence that matches an ACTIVE non-storable entry listed in
+eligible_licence_ids (all rights reserved, the arXiv default licence) is "allow" with reason code
+'licence_fair_use_quote', but only with the acquisition route's recorded access check (robots allowed, no TDM
+reservation, no login). The reject markers run first; unknown, missing and conflicting licences are never covered.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ RC_MISSING, RC_UNKNOWN, RC_NOT_STORABLE = "licence_missing", "licence_unknown", 
 RC_CONFLICT, RC_HOST = "licence_id_url_conflict", "licence_host_unnormalisable"
 RC_ND_NEWS = "licence_nd_news_answer_only"  # H19 (OD-1106-NEWS): ND news with a satisfied access verdict; never stored
 RC_US_FED_PD = "licence_us_federal_pd"  # GOV-PD-1108: no declared licence; US federal work (17 U.S.C. 105), mode on only
+RC_FAIR_USE = "licence_fair_use_quote"  # FAIRUSE-TIER-1108 (OD-1108-FAIRUSE, O2): short-quote evidence tier, flag-gated
 
 # Why: arXiv's terms forbid storing/serving e-prints without permission; only /abs/ pages may be stored.
 ARXIV_HOSTS = ("arxiv.org", "www.arxiv.org", "export.arxiv.org")
@@ -100,7 +107,10 @@ def _arxiv_html_cc_ok(c: dict, sp) -> bool:
         if not isinstance(fams, list):
             return False
         m = _CC_LICENCE_URL.fullmatch(curl)
-        return bool(m) and m.group(1) in {str(x).lower() for x in fams}
+        if not m:  # FAIRUSE-TIER-1108: the arXiv default licence, only while the fair-use tier is enabled
+            from vera import fair_use
+            return fair_use.arxiv_default_url_ok(curl)
+        return m.group(1) in {str(x).lower() for x in fams}
     except Exception:  # noqa: BLE001  fail closed: any error keeps the arXiv refusal
         return False
 
@@ -260,6 +270,15 @@ def _us_federal_pd(c: dict) -> dict | None:
         return None
 
 
+def _fair_use(entry: dict, c: dict) -> bool:
+    """FAIRUSE-TIER-1108 (OD-1108-FAIRUSE, O2): vera.fair_use.admits. Any error = False (link-only stands)."""
+    try:
+        from vera import fair_use
+        return fair_use.admits(entry, c)
+    except Exception:  # noqa: BLE001  fail closed
+        return False
+
+
 def licence_status(c: dict) -> tuple[str, str, str]:
     """(decision, rationale, reason_code). decision is 'allow', 'defer' (link-only / held) or 'reject'."""
     try:
@@ -303,6 +322,10 @@ def licence_status(c: dict) -> tuple[str, str, str]:
     if entry.get("reject") is True:  # a recognised licence in an R1 reject class (e.g. a no-derivatives term)
         return "reject", f"licence {governing['id']} ({entry['id']}) is rejected: {entry.get('reason')}", RC_REJECT
     if entry.get("storable") is not True:
+        if _fair_use(entry, c):  # FAIRUSE-TIER-1108: flag on, eligible licence, route-recorded access check
+            from vera.fair_use import BASIS
+            return ("allow", f"licence {governing['id']} ({entry['id']}): {BASIS}: short quotes with attribution only",
+                    RC_FAIR_USE)
         return ("defer", f"licence {governing['id']} ({entry['id']}) is not storable: link-only (deny-all)",
                 RC_NOT_STORABLE)
     return "allow", f"licence {governing['id']}", RC_ALLOW  # rationale text unchanged (downstream contract)

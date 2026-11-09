@@ -41,7 +41,10 @@ def _trace(ev, records=None, citations=None, adequacy=None, sources=None, refusa
     try:
         from vera import evidence_trace
 
-        return evidence_trace.project(ev, records, citations, adequacy, None, True, sources=sources, refusal=refusal)
+        tr = evidence_trace.project(ev, records, citations, adequacy, None, True, sources=sources, refusal=refusal)
+        from vera import fair_use  # FAIRUSE-TIER-1108: a fair-use passage shows only its capped citation quote
+        fair_use.limit_trace(tr, citations or (), sources or ())
+        return tr
     except Exception:  # noqa: BLE001  (fail closed: no trace, never an error in the answer path)
         return None
 
@@ -446,6 +449,15 @@ def _nd_quotes(citations, sources, cfg) -> None:
         nd_guard.limit_quotes(citations, sources, cfg)
 
 
+def _fair_use_quotes(citations, sources, ev) -> None:
+    """FAIRUSE-TIER-1108 (OD-1108-FAIRUSE): per-source quote caps for fair-use-tier sources (vera.fair_use)."""
+    from vera import fair_use
+
+    chars = {str(d.get("document_id")): d.get("chars") for d in (getattr(ev, "examined_full_documents", None) or ())
+             if isinstance(d, dict) and isinstance(d.get("chars"), int) and not isinstance(d.get("chars"), bool)}
+    fair_use.limit_citations(citations, sources, chars)
+
+
 def _separate() -> bool:
     from vera import answer_contract
     return answer_contract.notes_separate()
@@ -707,6 +719,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
     final = [r for r in kept if r["part"] in {k for k, _ in blocks}]
     citations = build_citations(final, sources, int(a["quote_max_chars"]), total, profiles=profiles)
     _nd_quotes(citations, sources, cfg)  # H19 G6
+    _fair_use_quotes(citations, sources, ev)  # FAIRUSE-TIER-1108
     part_of = {r["id"]: r["part"] for r in records}
     for c in citations:
         c["part"] = part_of.get(c["claim_id"])
@@ -898,6 +911,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
     profiles = [profs[r["id"]] for r in kept] if checker is not None else None
     citations = build_citations(kept, sources, int(cfg["answer"]["quote_max_chars"]), total, profiles=profiles)
     _nd_quotes(citations, sources, cfg)  # H19 G6
+    _fair_use_quotes(citations, sources, ev)  # FAIRUSE-TIER-1108
     if checker is not None:
         from vera.fulldoc_verbatim import combined_total
 

@@ -160,8 +160,9 @@ def by(body, key, val):
 def test_00_owner_gate_files_and_flags():
     lg = hashlib.sha256((ROOT / "vera" / "licence_gate.py").read_bytes()).hexdigest()
     lr = hashlib.sha256((ROOT / "config" / "licence_rules.json").read_bytes()).hexdigest()
-    assert lg.startswith("322adcd7") and lr.startswith("ecf93457"), (lg, lr)
+    assert lg.startswith("d2a7cbb5") and lr.startswith("ecf93457"), (lg, lr)
     # GOV-PD-1108: licence_gate.py re-pinned for the us-federal-public-domain branch (mode-gated, ships off; owner-visible)
+    # FAIRUSE-TIER-1108 (stacked on GOV-PD-1108): re-pinned again for the fair-use short-quote tier (flag-gated, ships off)
     # H19 review F4: the ND decision path is delegated to vera/news_access.py and the reporting_lane.json access blocks plus
     # nc_basis; pin them so a change is visible to the owner. nc_basis must stay UNCONFIRMED until NC-BASIS-1 (T0n).
     na_sha = hashlib.sha256((ROOT / "vera" / "news_access.py").read_bytes()).hexdigest()

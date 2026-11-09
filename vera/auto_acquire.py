@@ -783,6 +783,9 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
 
 def _family(licence_or_url: str) -> str | None:
     s = str(licence_or_url or "").strip().lower()
+    m = re.fullmatch(r"licenseref-arxiv-([a-z\-]+?)-\d\.\d", s)  # FAIRUSE-TIER-1108: the arXiv route's declared id
+    if m:
+        return m.group(1)
     m = re.search(r"licenses/([a-z\-]+)/", s)
     if m:
         return m.group(1)

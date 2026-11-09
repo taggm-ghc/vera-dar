@@ -203,6 +203,11 @@ def licence_of(urls: list, acq: dict, icfg: dict) -> tuple[str, str, str]:
         raise aa._Stop(acq_config.reason(acq, "licence_mismatch"))
     fam = next(iter(fams))
     allowed = allowed_families(acq)
+    if fam.startswith("arxiv:"):  # FAIRUSE-TIER-1108 (OD-1108-FAIRUSE, O2): the fair-use short-quote tier, flag-gated
+        from vera import fair_use
+        fu = fair_use.arxiv_family(fam.split(":", 1)[1])
+        if fu is not None and "https://" + norm[0].split("://", 1)[1] == fu["licence_url"]:
+            return fu["licence_id"], fu["licence_url"], fam
     if fam.startswith("arxiv:") or fam == "unknown" or fam not in FAMILY_LICENCE or fam not in allowed:
         # arXiv's non-exclusive distribution licence grants arXiv the right to distribute, not reuse; a CC licence
         # not listed in arxiv_route.licence_families (e.g. CC0 as an article licence) is not admitted: hold
@@ -492,6 +497,10 @@ def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.mon
             "authors": authors, "published_year": (published[:4] if re.match(r"\d{4}", published) else ""),
             "fetched_at": now_iso, "attribution": attribution, "verifier_status": icfg["verified_status"],
             "read_status": "VERBATIM"}
+    if fam.startswith("arxiv:"):  # FAIRUSE-TIER-1108: every request above passed robots.txt + TDM checks, anonymously
+        from vera import fair_use
+        item["access_check"] = fair_use.access_record(
+            "arxiv_fulltext: robots.txt, tdmrep.json, TDM-Reservation header and meta (auto_acquire._guarded_get)", now_iso)
     aa.licence_elements_decision(meta["jats_licences"], lic, icfg)
     try:
         # ARX-SECREV-1023 R1: the version-bound licence evidence is built HERE only (from the fetched abs page of this

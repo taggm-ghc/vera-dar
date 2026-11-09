@@ -1,0 +1,24 @@
+{
+  "_doc": "FAIRUSE-TIER-1108, owner decision OD-1108-FAIRUSE (option O2, 2026-11-08; analysis work/FAIRUSE-1108/analysis.md section 5). VERA-DAR quotes, cites and lists source references in discussion; it does not republish or redistribute works. This tier lets a document whose licence is the arXiv default non-exclusive distribution licence or an explicit all-rights-reserved notice be stored privately and used as SHORT-QUOTE evidence on a US fair-use rationale. It changes LICENCE status only: the reject list (ND, no-educational-use, fee-only) is applied before it, and every access rule (robots.txt read first, TDM reservations and machine-readable opt-outs, site terms, rate limits, the API allowlist) is applied by the acquisition routes before the licence gate runs; the gate admits this tier only with the route's recorded access check (access_check: robots allowed, no TDM reservation, no login). An unknown, missing or conflicting licence is NOT covered (unchanged: held, recorded as licence_unknown / licence_missing in licence_observations). Output caps below are enforced in code (vera/fair_use.py) at the citation builder and the public evidence trace. enabled=false restores the previous behaviour exactly (these licences are link-only) and also makes stored fair-use rows unusable at read time (kill switch). The output caps apply to any source whose licence is in eligible_licence_ids, whatever the flag.",
+  "enabled": false,
+  "_basis_note": "basis and use statement are fixed in vera/fair_use.py (BASIS, USE) because they are stored on each source's provenance (licence.fair_use) and re-derived at read: basis 'fair-use-quote (O2, OD-1108-FAIRUSE)', use 'quoted, cited and listed as a source reference in discussion; not republished or redistributed'.",
+  "eligible_licence_ids": [
+    "LicenseRef-all-rights-reserved",
+    "LicenseRef-arxiv-nonexclusive-distrib-1.0",
+    "LicenseRef-arxiv-assumed-1991-2003"
+  ],
+  "arxiv_families": {
+    "nonexclusive-distrib": {
+      "licence_id": "LicenseRef-arxiv-nonexclusive-distrib-1.0",
+      "licence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/"
+    }
+  },
+  "_arxiv_families_note": "arXiv route only. assumed-1991-2003 is eligible at the gate but the route does not map it (its licence URL family contains digits, which the route's element check does not parse); such papers stay held until a follow-up.",
+  "caps": {
+    "quote_max_chars": 200,
+    "max_quotes_per_source": 2,
+    "max_quote_chars_per_source": 400,
+    "max_share_of_document": 0.05
+  },
+  "_calibration_note": "Measured offline 2026-11-08 (work/FAIRUSE-TIER-1108/calibrate_quotes.py over every saved /ask response under work/; output work/FAIRUSE-TIER-1108/calibration-work.json): 6 distinct responses, 9 quotes, quote length min 99 / median 104 / max 199 chars; quotes per document per answer: 1 in 7 cases, 2 in 1 (max 2); quote characters per document per answer median 104, max 398; quoted share of the document median 1.1%, max 1.2% (5 documents with a known length). The sample is SMALL: values are therefore set from the existing short-quote rule, not fitted. quote_max_chars 200 = answer.quote_max_chars (owner short-quote rule 2026-10-01; observed max 199). max_quotes_per_source 2 and max_quote_chars_per_source 400 = the existing per-source rule for no-derivatives news (answer.nd_guard quote_total_chars 400 = 2 x 200) and equal the observed maximum (2 quotes, 398 chars), so no observed answer would have lost a quote. max_share_of_document 0.05: about 4x the observed maximum share (1.2%); with 400 chars per source it binds only for documents under 8,000 characters (short documents, analysis section 3(b): risk grows with many quotes from one short work). What would change them: a larger sample of live answers citing fair-use sources (re-run the script), an owner or counsel ruling on amounts, or a takedown request. All sampled answers cited CC-licensed sources only (no fair-use source has been cited yet), so the sample shows today's quoting behaviour, not fair-use answers. Scope of the caps: citation quotes and trace excerpts (a fair-use passage's trace excerpt is replaced by its surviving citation quote). NOT covered per source: verbatim runs inside the generated answer sentences, which are limited only per sentence (200 chars) and per answer (combined budget 1200, all sources); review FAIRUSE-TIER-1108 finding 1 is a blocker for enabling the tier until a per-source verbatim budget exists."
+}

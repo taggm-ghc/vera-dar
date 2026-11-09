@@ -140,8 +140,11 @@ class RoMemoryReader:
              "q": q, "terms": terms, "minterms": int(self.cfg["min_matched_terms"]), "floor": float(self.cfg["min_rank"]), "hl": float(self.cfg["half_life_days"]), "k": int(self.cfg["recall_k"])})
         self._log_missing_licence(q_params={"qt": self.cfg["question_text"], "live": self.cfg["status_live"],
                                             "ttl": int(self.cfg["ttl_days"])})
+        from vera import fair_use  # FAIRUSE-TIER-1108 takedown: no recall of a finding whose source was withdrawn
+        wk = fair_use.withdrawn_keys()
         return [{"claim_text": r[0], "source_title": r[2] or "", "source_url": r[3] or "",
-                 "saved_at": r[1].isoformat() if r[1] else ""} for r in rows]
+                 "saved_at": r[1].isoformat() if r[1] else ""} for r in rows
+                if not (wk and fair_use.is_withdrawn({"url": r[3] or ""}, wk))]
 
     def _log_missing_licence(self, q_params: dict) -> None:
         """CONTROL-GAPS S45 r2: numbers only. Live, in-TTL claims of this store whose source has NO licence_decision

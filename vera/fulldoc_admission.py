@@ -471,6 +471,10 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     cfg = cfg if isinstance(cfg, dict) else {}
     acquired = list(getattr(corpus, "acquired", None) or []) if corpus is not None else []
     acquired = [d for d in acquired if isinstance(d, dict) and d.get("document_id") is not None]
+    from vera import fair_use  # FAIRUSE-TIER-1108 takedown: a withdrawn source is never retrieved or cited
+    wk = fair_use.withdrawn_keys()
+    if wk:
+        acquired = [d for d in acquired if not fair_use.is_withdrawn(d, wk)]
     unusable = _unusable(question, corpus) if corpus is not None else ()
     src = getattr(corpus, "source_kind", None)
     src = src if src in ("db", "bundle") else None

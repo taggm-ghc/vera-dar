@@ -318,7 +318,7 @@ def test_terms_page_renders_moved_sections_and_hides_placeholders():
     # owner decisions 2026-11-05: operator, governing law, no email (repository issues), effective date
     assert "Tagg Maiwald" in t and "State of Nevada, USA" in t and "github.com/taggm-ghc/vera-dar/issues" in t
     assert "@" not in t
-    assert "Effective date: 2026-10-20" in [c.value for c in at.caption]
+    assert "Effective date: 2026-11-08" in [c.value for c in at.caption]
     assert "_streamlit_xsrf" in t
     assert disclosure.short_notice_text() not in [c.value for c in at.caption]  # owner 2026-11-05: notice on Ask only
 

@@ -97,7 +97,7 @@
   },
   "terms": {
     "title": "Terms of Access, Browsing, and Use",
-    "effective_date": "2026-10-20",
+    "effective_date": "2026-11-08",
     "intro": "These terms apply when you access, browse or use VERA-DAR, including its API. By using VERA-DAR you agree to them; if you do not agree, please do not use it. This page also holds VERA-DAR's privacy notice.",
     "sections": [
       {
@@ -128,6 +128,7 @@
         "heading": "Third-party sources and licences",
         "paragraphs": [
           "Documents that VERA-DAR cites or lists belong to their authors and publishers and keep their own licences; follow each source's licence when you reuse it. Links lead to sites with their own terms.",
+          "VERA-DAR quotes, cites and lists source references in discussion; it does not republish or redistribute the works it cites. To ask for a document to be removed, open an issue titled \"Removal request\" on {repo_issues}, with the document's link or DOI.",
           "VERA-DAR finds sources through the services listed below. Wikipedia is used only to find original sources.",
           "Thank you to arXiv for use of its open access interoperability.",
           "Some bibliographic data and abstracts come from Semantic Scholar (semanticscholar.org), through the Semantic Scholar Academic Graph API."

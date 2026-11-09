@@ -277,8 +277,17 @@ def check_licence(item: dict, meta: dict, cfg: dict, *, arxiv_evidence: dict | N
         lic["arxiv_evidence"] = dict(arxiv_evidence)
     cand = {"url": item["fulltext_url"], "licence": lic, "stored_text_kind": cfg["stored_text_kind"],
             "gate_a_decision": None, "gate_a_rationale": "", "doi": item.get("doi")}
+    if arxiv_evidence is not None and isinstance(item.get("access_check"), dict):
+        # FAIRUSE-TIER-1108 (review F2): an access check counts only together with route evidence built by the arXiv
+        # route itself (write path) or re-verified against its acquisition record (read path); a manifest or other item
+        # cannot assert one. No other route records an access check yet.
+        cand["access_check"] = dict(item["access_check"])
     apply_licence_gate([cand])
     d = cand["licence_decision"]
+    from vera.licence_gate import RC_FAIR_USE
+    if d == "allow" and cand.get("licence_reason_code") == RC_FAIR_USE:  # basis + access check on the provenance
+        from vera import fair_use
+        lic["fair_use"] = fair_use.provenance_record(cand["access_check"])
     for u in (item.get("landing_url"),):
         d2, why2 = licence_decision({"url": u, "licence": lic, "stored_text_kind": cfg["stored_text_kind"]})
         if d2 == "reject":

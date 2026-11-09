@@ -1,0 +1,4 @@
+{
+  "_doc": "FAIRUSE-TIER-1108 takedown path (OD-1108-FAIRUSE). Owner-only: a source listed here is withdrawn, so it is excluded from retrieval, answers and memory recall (vera/fair_use.py is_withdrawn, applied in fulldoc_admission.admit and memory recall). Entries match on any of document_id, doi, url (scheme, 'www.', query, fragment and trailing '/' ignored) or arxiv_id (version ignored). A database table for withdrawals (migration 023, owner-run kit, not applied) and its reader are a later batch; until then this file is the mechanism. Only the owner adds entries (a removal request is raised as a public issue; see the Terms page). Stored rows are never deleted by this mechanism (sources are immutable); deletion needs the owner's own DB approval.",
+  "entries": []
+}
