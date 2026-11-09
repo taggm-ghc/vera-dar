@@ -536,6 +536,9 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     seed = adm.get("seed_per_doc_spans") is True and getattr(corpus, "seed_per_doc", False) is True and len(acquired) > 1
     if seed:
         k = k * len(acquired)
+    from vera import hybrid_retrieval as _hr
+    if _hr.enabled():
+        _hr.clear_status()  # HYBRID-1109: the status read below is this admission's own retrieval's
     try:
         rq = question  # ANSWER-SCOPE-1109: candidate retrieval also searches the acronym groups' learned forms
         if tg is not None:
@@ -555,6 +558,13 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         cands = list(_call_retrieve(corpus, rq, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
     except Exception:
         cands = []
+    # HYBRID-1109 (OD-1109-HYBRID, flag config/hybrid_retrieval.json): None when off => nothing below changes.
+    hy, hcfg = None, None
+    if _hr.enabled():
+        hcfg = _hr.config()
+        st = _hr.last_status() or {"status": "not_called", "vectors": 0}
+        hy = dict(st, vector_candidates=sum(1 for c in cands if isinstance(c, dict) and c.get("vec_sim") is not None),
+                  floor_by_vector=0, fused=False)
     try:
         inspected = corpus.inspection() or {}
     except Exception:
@@ -622,8 +632,16 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         # weighted signal keeps its fixed MIN_MATCHED_STEMS_FLOOR).
         need = max(1, min(min_hits, q_n)) if (adaptive and not weighted) else min_hits
         if rel < min_rel or hits < need or q_n == 0:
-            rej("low_relevance")
-            continue
+            # HYBRID-1109 vector stem-floor rule: a passage whose stored partition is close to the question
+            # (cosine >= stem_floor_sim; null = rule off) passes the two lexical floors if it still matches at least
+            # stem_floor_min_hits question content stems. Every other rule below still applies.
+            vs = c.get("vec_sim") if hy is not None else None
+            fs = hcfg.get("stem_floor_sim") if hcfg is not None else None
+            if not (isinstance(vs, (int, float)) and isinstance(fs, (int, float)) and q_n > 0 and vs >= fs
+                    and hits >= int(hcfg.get("stem_floor_min_hits", 1))):
+                rej("low_relevance")
+                continue
+            hy["floor_by_vector"] += 1
         if anchors and not (anchors & _stems(text, icfg, stem_n, tg)):  # WP-G1 topic anchor
             rej("low_relevance")
             continue
@@ -663,6 +681,12 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         k_r = str(t[3]["document_id"])
         n_rel[k_r] = n_rel.get(k_r, 0) + 1
     scored.sort(key=lambda t: t[:3])
+    if hy is not None and any(t[3].get("vec_sim") is not None for t in scored):
+        # HYBRID-1109: admission order = RRF of the lexical order and the vector order (rank only); the tuples are
+        # re-keyed by fused position so every later sort on t[:3] keeps it.
+        fused = _hr.fuse_order(scored, lambda t: t[:3], lambda t: t[3].get("vec_sim"), int(hcfg["rrf_k"]))
+        scored = [(i, 0.0, t[2], t[3], t[4], t[5]) for i, t in enumerate(fused)]
+        hy["fused"] = True
     extra_trace: dict = {}
     tfc = adm.get("topical_fit") if isinstance(adm.get("topical_fit"), dict) else {}
     if tfc.get("order") is True and scored:
@@ -844,4 +868,4 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
                **({"merged": n_merged} if n_merged else {}),
                **({"signal": "idf_weighted", "selector_documents": sorted(selector_docs), "et_al": et_al,
                    "non_selector_stems": len(q_ns)} if weighted else {}),
-               **extra_trace})
+               **extra_trace, **({"hybrid": hy} if hy is not None else {})})

@@ -1,0 +1,23 @@
+{
+  "_note": "HYBRID-1109 (OD-1109-HYBRID, owner 2026-11-09: \"Yes, hybrid search\"). Stored-passage retrieval adds embedding similarity to word matching. FLAG OFF by default: enabled=false => no embedding call, no vector load, no new candidate or trace key; retrieval and admission are byte-identical to before. When true it also needs the chunk-taxonomy job to have stored vectors (vera_vjay.tax_chunk_vectors, migration 024) for the served chunks, and a usable embedder (config/chunk_taxo.json: same Cloudflare account, token and model as the taxonomy job). Each question is embedded once (one HTTPS call, timeout_s, one attempt); any failure, quota or budget stop falls back to word-only search and is traced as a code (never the question text). Design and measurements: vera/hybrid_retrieval.py docstring.",
+  "enabled": false,
+  "timeout_s": 3.0,
+  "rrf_k": 60,
+  "_rrf_k_note": "Reciprocal rank fusion constant for both fusions (BM25 + vector candidates in vera.dar_corpus.retrieve; lexical + vector admission order in vera.fulldoc_admission). 60 is the standard RRF constant and equals config/domain_routing.json rrf_k; rank-only, so it compares no scores across signals. Not a decision threshold.",
+  "vector_k": null,
+  "_vector_k_note": "Size of the vector candidate list; null = the BM25 branch size (config/domain_routing.json corpus.branch_k, 20).",
+  "chunks_per_partition": 2,
+  "_chunks_per_partition_note": "Stored vectors are per stored partition (evidence_spans row, about 4000 characters); retrieval chunks are 400 characters. The vector list takes at most this many chunks from one partition (its best BM25 chunks first, then by position), so the list spans several partitions. Structural prior, not a decision threshold.",
+  "stem_floor_sim": null,
+  "_stem_floor_sim_note": "Vector stem-floor rule (vera.fulldoc_admission): a candidate whose partition cosine similarity to the question is >= stem_floor_sim passes the two lexical floors (min_relevance and the matched-stem floor) provided it still matches at least stem_floor_min_hits question content stems; every other admission rule (licence, attribution, body section, topic anchor, pointer filter, one-stem rule, question coverage, caps) is unchanged. null = the rule is OFF. PENDING CAL: no real vectors exist yet (no network for agents). Calibrate on the first real tax_chunk_vectors rows: the cosine spread of bge-m3 question-vs-partition similarity for labelled on-topic and off-topic partitions over the scope_set questions; set the value below the lowest on-topic and above the off-topic bulk, record the spread here, and only then set a number (records/memory/feedback_threshold_calibration_rule.md).",
+  "stem_floor_min_hits": 1,
+  "cooldown_s": 60,
+  "_cooldown_note": "After an embedding error or timeout no question is embedded for cooldown_s (word-only search meanwhile), so a Cloudflare outage adds at most one timeout per cooldown window. A quota or budget stop waits until 00:00 UTC.",
+  "query_cache_max": 32,
+  "query_cache_ttl_s": 120,
+  "_query_cache_note": "Question vectors are cached in process memory only, keyed by the sha256 of the question text (never the text), so the base and acquired corpora and repeat retrievals of one question share one embedding call.",
+  "index_refresh_s": 3600,
+  "max_index_mb": 96,
+  "_max_index_note": "Refuses to build a vector index larger than this (float32 rows x dim x 4 bytes). Measured offline (synthetic, 5,500 x 1024): matrix 21.5 MB, resident +27.5 MB after build, peak +28.4 MB, chunk map +0.9 MB (work/HYBRID-1109/measurements.md, not in the repo). Not a decision threshold: a memory guard under the 512 MB service limit.",
+  "page_ids": 256
+}

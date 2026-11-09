@@ -38,7 +38,8 @@ MODELS = {
 }
 DEFAULTS = {"model": "bge-m3", "send_allowed": True, "daily_neuron_budget": 8000, "chars_per_token": 3.0, "max_attempts": 4,
             "backoff_base_s": 1.0, "max_wait_s": 60.0, "timeout_s": 30,
-            "max_response_bytes": 8_000_000}  # 8 MB: ~64 vectors x 1024 floats is ~1 MB of JSON; generous but bounded
+            "max_response_bytes": 8_000_000,
+            "reserve_neurons": 0}  # HYBRID-1109: the job stops at daily_neuron_budget - reserve_neurons (ask-time share)  # 8 MB: ~64 vectors x 1024 floats is ~1 MB of JSON; generous but bounded
 _REGISTRY: dict[str, Callable[[dict], object]] = {}
 _BUDGET = {"day": None, "neurons": 0.0, "requests": 0}  # per UTC day, process-wide (a new adapter instance keeps the day's count)
 _BLOCK = threading.Lock()
@@ -140,7 +141,7 @@ class CloudflareEmbedder:
         with _BLOCK:
             if _BUDGET["day"] != self._day():
                 _BUDGET.update(day=self._day(), neurons=0.0, requests=0)
-            if max(_BUDGET["neurons"], self._day_used) + est > float(self.cfg["daily_neuron_budget"]):
+            if max(_BUDGET["neurons"], self._day_used) + est > float(self.cfg["daily_neuron_budget"]) - float(self.cfg["reserve_neurons"]):
                 self.stats_run["deferred"] += 1
                 raise Deferred("budget_reached", seconds_to_utc_midnight(self.clock()))
 

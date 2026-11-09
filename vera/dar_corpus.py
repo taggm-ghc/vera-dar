@@ -906,7 +906,7 @@ class DarCorpus:
                 "domains": sorted(x.domain_id for x in self.registry.domains_for_chunk(c["span_id"])),
                 "branches": list(branches), "status": "proposed"}
 
-    def retrieve(self, question: str, k: int | None = None, max_per_doc: int | None = None) -> dict:
+    def retrieve(self, question: str, k: int | None = None, max_per_doc: int | None = None, vector_fn=None) -> dict:
         trace = {"routing": "off", "question_domains": [], "branch_counts": {}, "reserved": 0, "fallback_only": 0,
                  "limitation": LIMITATION}
         if not self._enabled():
@@ -938,6 +938,20 @@ class DarCorpus:
         reserved = base[: domain_routing._reserve_count(self.cfg, len(branches[0][1]), k)] if len(branches) > 1 else []
         rid = {id(g) for g in reserved}
         rest = sorted((g for g in groups if id(g) not in rid), key=lambda g: (-g["score"], g["best"]))
+        trace["reserved"] = len(reserved)
+        if vector_fn is not None:
+            # HYBRID-1109 (flag-gated by the caller): the word-matching order above (BM25 + domain branches, unchanged)
+            # and the vector list are fused as two peers by rank-only RRF; ties keep the word-matching item first.
+            vitems = list(vector_fn(self, scores) or ())
+            trace["branch_counts"]["vector"] = len(vitems)
+            lex = [g["rep"] for g in reserved + rest]
+            names = {g["key"]: g["branches"] for g in groups}
+            fused, _ = domain_routing._rrf([("lexical", lex), ("vector", vitems)], int(self.cfg["rrf_k"]),
+                                           key_fn=lambda c: c["span_id"])
+            fused.sort(key=lambda g: (-g["score"], g["best"]))
+            for g in fused:
+                g["branches"] = list(names.get(g["key"], [])) + (["vector"] if "vector" in g["branches"] else [])
+            reserved, rest = [], fused
         per_doc, picked = Counter(), []
         cap = int(self.ccfg["max_chunks_per_doc"]) if max_per_doc is None else max(int(max_per_doc), 1)
         for g in reserved + rest:  # a document may fill at most max_chunks_per_doc slots, so one long document cannot
@@ -946,7 +960,6 @@ class DarCorpus:
                 per_doc[sk] += 1
                 picked.append(g)
         out = [self._candidate(g["rep"], g["branches"]) for g in picked[:k]]
-        trace["reserved"] = len(reserved)
         trace["fallback_only"] = sum(1 for g in groups if g["branches"] == [fb])
         return {"candidates": out, "trace": trace}
 

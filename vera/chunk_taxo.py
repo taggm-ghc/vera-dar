@@ -127,7 +127,7 @@ def _validate_params(p):
 
 # Job-side sections (CHUNK-TAXO-INT-1109): validated here, consumed by vera/chunk_taxo_job.py and chunk_taxo_embed.py.
 _CF_NUM = {"daily_neuron_budget": (0, 10**9), "chars_per_token": (0.5, 100), "backoff_base_s": (0, 600), "max_wait_s": (0, 3600),
-           "timeout_s": (1, 600)}
+           "timeout_s": (1, 600), "reserve_neurons": (0, 10**9)}
 _CF_INT = {"max_attempts": (1, 10), "max_batch": (1, 1000)}
 _JOB_NUM = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay_s": (0, 3600), "page_size": (1, 5000),
             "tick_row_cap": (1, 100000), "statement_timeout_ms": (100, 600000), "lock_timeout_ms": (100, 600000),

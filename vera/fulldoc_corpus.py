@@ -147,7 +147,14 @@ class FullDocCorpus:
         mpd = rcfg.get("max_chunks_per_doc")  # WED-P16-RET: absent = the routing config's value (unchanged behaviour)
         dar = self._evidence_dar() if evidence_only else self._dar
         out = []
-        for c in dar.retrieve(str(question or ""), k, max_per_doc=None if mpd is None else int(mpd))["candidates"]:
+        vfn = sim_of = None
+        from vera import hybrid_retrieval  # HYBRID-1109: flag off => no further hybrid code runs, output unchanged
+        if hybrid_retrieval.enabled():
+            vfn, sim_of = hybrid_retrieval.vector_fn(self, str(question or ""))
+        else:
+            hybrid_retrieval.clear_status()
+        kw = {"vector_fn": vfn} if vfn is not None else {}
+        for c in dar.retrieve(str(question or ""), k, max_per_doc=None if mpd is None else int(mpd), **kw)["candidates"]:
             did = self._key_to_doc.get(c["source_key"])
             if did is None:
                 continue
@@ -157,6 +164,9 @@ class FullDocCorpus:
             out.append({"span_id": f"{did}:{s}-{e}", "document_id": did, "start": s, "end": e, "text": span,
                         "score": round(self._dar.relevance(question, span), 6),
                         "in_evidence": self._in_evidence(did, s, e)})
+            if sim_of is not None:  # HYBRID-1109: the passage's partition cosine (None = no stored vector)
+                ch = dar._by_span.get(c["span_id"])
+                out[-1]["vec_sim"] = None if ch is None or sim_of(ch.idx) is None else round(sim_of(ch.idx), 6)
         return out
 
     def evidence_chunk_texts(self) -> list:
