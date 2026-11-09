@@ -62,7 +62,7 @@ def model(cfg, data):
 
 def test_config_default_off_and_validation(tmp_path):
     c = ct.load_cfg()
-    assert c["enabled"] is False and "params" in c and "display_gate" in c
+    assert c["enabled"] is True and "params" in c and "display_gate" in c  # FLAGON-TAXO-1109: shipped on
     bad = tmp_path / "b.json"
     bad.write_text(json.dumps({"params": {"nope": 1}}))
     with pytest.raises(ValueError):

@@ -206,7 +206,7 @@ def factory_for(db):
 
 def cfg_real(**jobkw):
     c = core.load_cfg()
-    assert c["enabled"] is False and c["embedder"] == "cloudflare" and c["cloudflare"]["send_allowed"] is True
+    assert c["enabled"] is True and c["embedder"] == "cloudflare" and c["cloudflare"]["send_allowed"] is True
     c = dict(c, enabled=True, job=dict(c["job"], page_size=100, tick_row_cap=1000, embed_batch=40, **jobkw))
     return c
 

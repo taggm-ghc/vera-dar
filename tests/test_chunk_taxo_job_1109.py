@@ -272,9 +272,10 @@ def test_start_never_raises(monkeypatch):
     job.reset_for_tests()
     def bad(*a, **k):
         raise ValueError("bad")
-    monkeypatch.setitem(sys.modules, "vera.chunk_taxo", SimpleNamespace(load_cfg=bad))
+    from vera import chunk_taxo as real_core  # FLAGON-TAXO-1109: the shipped config is on, so patch the module attribute that start() reads
+    monkeypatch.setattr(real_core, "load_cfg", bad)
     assert job.start() is False
-    monkeypatch.setitem(sys.modules, "vera.chunk_taxo", SimpleNamespace(load_cfg=lambda: {"enabled": False}))
+    monkeypatch.setattr(real_core, "load_cfg", lambda: {"enabled": False})
     assert job.start() is False and job._THREAD is None
 
 
