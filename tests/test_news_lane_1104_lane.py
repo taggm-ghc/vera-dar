@@ -43,7 +43,8 @@ def test_shipped_config_enabled_gdelt_only_and_allowlist():
     assert c["emit_link_only"] is True and c["outlet_query"] == "all" and c["unlisted_verdict"] == "links_only"
     for o in c["outlets"]:
         assert o["terms_verdict"] in rl.VERDICTS and o["terms_evidence"].startswith("work/")
-    assert set(rl.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com"}  # voanews: OD-1106-HITL H5, VOA-original only
+    assert set(rl.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com", "commondreams.org", "democracynow.org", "votebeat.org",
+                                  "chalkbeat.org", "kffhealthnews.org"}  # RETRIEVAL-1109: ND rows answer-only after H-1; voanews: OD-1106-HITL H5, VOA-original only
 
 
 def test_outlet_verdicts_exact_subdomain_lookalike_unlisted():
@@ -114,7 +115,9 @@ def test_crawl_delay_across_requests():
 def test_min_interval_skips_never_sleeps():
     t, sl = [100.0], []
     f = Fake((200, {}, ARTS), (200, {}, ARTS))
-    L = rl.ReportingLane(shipped(), http_get=f, sleep=sl.append, clock=lambda: t[0])
+    c = shipped()
+    c["allow_query"] = {"enabled": False}  # RETRIEVAL-1109: the extra allow query (own slot, waits) is tested separately
+    L = rl.ReportingLane(c, http_get=f, sleep=sl.append, clock=lambda: t[0])
     L.search("midterm elections")
     t[0] += 2.0
     assert L.search("midterm elections")["items"] == [] and len(f.urls) == 1  # inside 6 s: skipped

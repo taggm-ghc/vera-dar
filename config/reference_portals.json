@@ -2,7 +2,7 @@
   "_doc": "ROUTES-1108 slice 1 (plan work/ROUTES-PLAN-1108/plan.md section 3). Generic REFERENCE PORTAL: owner 2026-11-08, \"most sites should be treated as portals if through those sites we find links to orginal sources\". Read only by vera/reference_portal.py. A portal page yields ONLY identifiers and approved outbound links (DOI, PMCID, PMID, arXiv id, handle, approved publisher landing URL); its prose is never read, stored, scored, logged or shown (the parser has no text handler). Every extracted candidate goes through the unchanged acquisition gates (route, API allowlist, robots/TDM per hop, rate and Crawl-delay, licence, injection, relevance, admission) and is acquired only as full text through a permitted route. A host is usable as a portal only when its row in config/portal_hosts.json is status active with terms permit (default deny: an unknown host is never fetched, only counted as host_unchecked) AND robots.txt allows the page for our own-family group, else * (hyperscaler-only groups are advisory, H13), and states no AI block (vera.selective_fetch.robots_allowed, fail closed) AND none of the exclusion signals below holds AND the host is not in exclusions.hosts. The portal page's own licence is not checked: its text is never evidence. mode: off (nothing runs, no request) | shadow (runs in a background thread with its own deadline, logs counts only, hands NOTHING to acquisition, never delays the caller) | on (synchronous within the acquisition search deadline; candidates merged after every other provider). Ships off (orchestrator 2026-11-08, ROUTES-1108-OFF: shadow would fetch en.wikipedia.org live per question; deny by default). No key, no secret, no env read, no email in any User-Agent.",
   "_dp1_note": "D-P1 ruling, CONFIRMED by the owner 2026-11-08 (OD-1108-DISPOSITIONS-2 H7, verbatim: \"Sites restricting AI training alone may be link-only discovery portals, provided other applicable restrictions permit it.\"; this includes User-Agent: __usage_ai-training). A host whose signals restrict only AI training IS allowed as a portal, because extracting links is not training. A host is EXCLUDED as a portal when it has Content-Signal ai-input=no or Content-Usage ai-use=n, a TDM reservation (TDM-Reservation: 1 header, <meta name=\"tdm-reservation\" content=\"1\">, or a /.well-known/tdmrep.json rule reserving the path; an unreadable tdmrep.json counts as reserved), a robots block on our agents (an own-family group, else *, or an AI-block statement; hyperscaler-only groups are advisory, H13), or terms forbidding automated or AI access (portal_hosts.json terms deny). A Bing ai-grounding Disallow binds answer-evidence use only (H11) and does not exclude a portal. Each is a key in exclusion_signals and has a test.",
   "_calibration_note": "Every number here is a PLANNER PRIOR or a SAFETY bound, not a decision threshold: the decision gates are the unchanged acquisition gates. max_pages_per_question 4, max_pages_per_host 1, max_links_per_page 50 and max_candidates_per_question 30 (below auto_acquire inline.discovered_max 31) bound work per question; timeout_s 5 and max_page_bytes 4000000 are safety limits (two Wikipedia article pages read 2026-11-07 were 389 kB and 1.51 MB, work/WIKI-REDESIGN-1107/calibration.txt). shadow_deadline_s 30 bounds a background shadow run. relevance.* is copied from config/wiki_ref_portal.json (its calibration note applies: provisional, measured on 2 reference lists and 7 questions on 2026-11-07) and is used only to ORDER COinS references (never to admit). What would change them: the 'autoacq refportal' shadow counts (pages, links, candidates, host_unchecked, excluded_*) and, once on, the downstream relevance-gate pass rate and full-text yield of portal candidates over live questions.",
-  "mode": "off",
+  "mode": "on",
   "user_agent": "VERA-DAR-reference-portal/0.1 (non-commercial educational research assistant; reference-link discovery only; https://github.com/taggm-ghc/vera-dar)",
   "host_registry": "config/portal_hosts.json",
   "caps": {
@@ -55,7 +55,8 @@
   },
   "adapters": {
     "openalex_rw": {
-      "enabled": true,
+      "enabled": false,
+      "_enabled_doc": "RETRIEVAL-1109 H-3: off. The owner approved only the Wikipedia title route (D-W1); OD-1108-SRC item 4 keeps keyless OpenAlex for search, not this cited_by reference adapter.",
       "max_seeds": 3,
       "max_calls_per_question": 1,
       "or_seeds": true,
@@ -72,7 +73,8 @@
       "_note": "No on-wiki search (robots disallows /w/ and /api/ for *). Page URLs are built directly from the question's content terms: https://en.wikipedia.org/wiki/<Title> as-is, then a naive singular (max_title_tries pages). They go through the same generic page path (registry row en.wikipedia.org, paths /wiki/<Title> only, 1 req/s rate portal wikipedia, robots, signals). OpenAlex-topic Wikipedia links are NOT used in slice 1 (field shape unverified)."
     },
     "generic_page": {
-      "enabled": true,
+      "enabled": false,
+      "_enabled_doc": "RETRIEVAL-1109 H-3: off. Reading arbitrary DDG/OpenAlex result pages as portals was not part of the owner's approval (only the Wikipedia title route).",
       "sources": ["ddg", "openalex_landing"],
       "_note": "Result pages already returned by DuckDuckGo (raw results) and OpenAlex landing URLs. A result that is not usable evidence can still be read as a portal when its host passes eligibility."
     },

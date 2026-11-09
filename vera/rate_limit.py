@@ -12,7 +12,8 @@ cap, a daily request cap, and a circuit breaker with half-open probing. It adapt
 
 Deadline-aware and non-blocking by design: acquire() waits at most min(max_wait_s, deadline - now - min_call_s). A
 portal that is cooling down, open, over its daily cap, or that would need a longer wait returns a Skip at once, so the
-caller moves on to other providers. Nothing here sleeps for long inside a request.
+caller moves on to other providers. Nothing here sleeps for long inside a request. RETRIEVAL-1109 A2: inside
+stream_wait_scope() (the streamed path) the per-wait cap is max_wait_stream_s (config; absent = max_wait_s).
 
 Accounting (AGENTS.md 7a; owner rule feedback_rate_limit_not_an_attempt): every request SENT is counted in
 `requests` (telemetry, portal accounting), throttled ones included. Outcome.counts_as_attempt is False for
@@ -56,6 +57,16 @@ DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar("vera_ra
 # pacing limit queues for a slot until DEADLINE (its remaining per-fetch budget) instead of being skipped after
 # max_wait_s. Cooldown, breaker and daily-cap skips are unchanged (immediate). Default False: unchanged behaviour.
 QUEUE: contextvars.ContextVar[bool] = contextvars.ContextVar("vera_rate_queue", default=False)
+# RETRIEVAL-1109 A2 (NOANSWER-ROOT-1109 plan A2, owner H-T): True on the streamed path (stream_wait_scope()). There a
+# caller that would wait longer than max_wait_s for its next token or concurrency slot waits up to max_wait_stream_s
+# instead of being skipped ("pacing"). It never sends faster than rate_per_s/burst/max_concurrency (the wait IS the
+# pacing) and cooldown, breaker and daily-cap skips stay immediate. A caller deadline still bounds every wait.
+STREAM_WAIT: contextvars.ContextVar[bool] = contextvars.ContextVar("vera_rate_stream_wait", default=False)
+# RETRIEVAL-1109: per-request limiter accounting (request_scope()). The adapters' politeness state (tokens, cooldowns,
+# breaker, daily cap) is process-wide on purpose; what ONE request waited for or was skipped by is recorded here, so a
+# request's outcome never reports another request's skips. None = no request scope (nothing recorded).
+REQUEST_LEDGER: contextvars.ContextVar["RequestLedger | None"] = contextvars.ContextVar("vera_rate_request_ledger",
+                                                                                         default=None)
 # Skip reasons that mean the provider (or this deployment's daily cap) is really unavailable, as opposed to this
 # process's own concurrency/pacing limiter or a caller deadline. Only these may be reported to a user as "busy".
 PROVIDER_BUSY_REASONS = frozenset({"cooldown", "breaker_open", "half_open_busy", "daily_cap"})
@@ -104,6 +115,8 @@ _DEFAULT_KEYS = {  # key: (type, lo, hi). Every value comes from the JSON file; 
     "min_call_s": (float, 0.0, 60.0), "retry_after_max_s": (float, 1.0, 86400.0), "base_cooldown_s": (float, 0.0, 86400.0),
     "max_cooldown_s": (float, 0.0, 86400.0), "poll_s": (float, 0.001, 5.0),
 }
+# RETRIEVAL-1109 A2: optional (absent = max_wait_s, i.e. the streamed path behaves exactly as before).
+_OPTIONAL_DEFAULT_KEYS = {"max_wait_stream_s": (float, 0.0, 600.0)}
 _PORTAL_KEYS = {"rate_per_s": (float, 1e-6, 1000.0), "burst": (float, 1.0, 1000.0), "max_concurrency": (int, 1, 64)}
 
 
@@ -162,6 +175,8 @@ def parse_config(raw, env: Mapping | None = None) -> dict:
     if not isinstance(raw, dict) or not isinstance(raw.get("defaults"), dict) or not isinstance(raw.get("portals"), dict):
         raise RateLimitConfigError("rate limit config: need objects 'defaults' and 'portals'")
     d = {k: _num(f"defaults.{k}", raw["defaults"].get(k), *spec) for k, spec in _DEFAULT_KEYS.items()}
+    for k, spec in _OPTIONAL_DEFAULT_KEYS.items():
+        d[k] = _num(f"defaults.{k}", raw["defaults"][k], *spec) if k in raw["defaults"] else d["max_wait_s"]
     portals = {}
     for name, p in raw["portals"].items():
         if name.startswith("_"):
@@ -173,8 +188,10 @@ def parse_config(raw, env: Mapping | None = None) -> dict:
         if not isinstance(p.get("sources"), list) or not p["sources"]:
             raise RateLimitConfigError(f"portals.{name}.sources: every default needs its source (url, date)")
         c = {k: _num(f"portals.{name}.{k}", p.get(k), *spec) for k, spec in _PORTAL_KEYS.items()}
-        for k, spec in _DEFAULT_KEYS.items():  # per-portal override of any default
+        for k, spec in {**_DEFAULT_KEYS, **_OPTIONAL_DEFAULT_KEYS}.items():  # per-portal override of any default
             c[k] = _num(f"portals.{name}.{k}", p[k], *spec) if k in p else d[k]
+        if "max_wait_stream_s" not in p and "max_wait_stream_s" not in raw["defaults"]:
+            c["max_wait_stream_s"] = c["max_wait_s"]  # absent everywhere: the portal's own max_wait_s (unchanged)
         cap = p.get("daily_cap")
         c["daily_cap"] = None if cap is None else _num(f"portals.{name}.daily_cap", cap, int, 1, 10**7)
         c["enabled"] = p.get("enabled", True)
@@ -358,12 +375,17 @@ class PortalAdapter:
 
     def _skip(self, reason: str, retry_in: float = 0.0) -> Skip:
         self.skips[reason] = self.skips.get(reason, 0) + 1
+        led = REQUEST_LEDGER.get()
+        if led is not None:
+            led.skip(self.name, reason)
         return Skip(self.name, reason, retry_in)
 
     def _budget(self, now: float, deadline: float | None) -> float:
         if deadline is not None and QUEUE.get():  # F1: queue for a slot within the caller's remaining budget
             return deadline - now - float(self.c["min_call_s"])
         b = float(self.c["max_wait_s"])
+        if STREAM_WAIT.get():  # RETRIEVAL-1109 A2: streamed path waits (up to the cap) instead of skipping
+            b = max(b, float(self.c.get("max_wait_stream_s", b)))
         if deadline is not None:
             b = min(b, deadline - now - float(self.c["min_call_s"]))
         return b
@@ -397,7 +419,10 @@ class PortalAdapter:
         self._refill(now)
         wait = 0.0 if self.tokens >= 1.0 else (1.0 - self.tokens) / max(self.rate, _RATE_EPS)
         if wait > budget:
-            return self._skip("deadline" if budget < float(self.c["max_wait_s"]) or QUEUE.get() else "pacing", wait)
+            cap = float(self.c["max_wait_s"])
+            if STREAM_WAIT.get():  # RETRIEVAL-1109: a deadline that cut the streamed cap is a deadline skip
+                cap = max(cap, float(self.c.get("max_wait_stream_s", cap)))
+            return self._skip("deadline" if budget < cap or QUEUE.get() else "pacing", wait)
         self.tokens -= 1.0  # reserved now (may go negative): later callers queue behind this one
         self.inflight += 1
         self.probes += 1 if probe else 0
@@ -415,8 +440,10 @@ class PortalAdapter:
             return bool(self.c["enabled"]) and self._clock() < self.cooldown_until
 
     def acquire(self, deadline: float | None = None):
-        """Permit or Skip. Blocks at most min(max_wait_s, deadline - now - min_call_s); never longer."""
+        """Permit or Skip. Blocks at most min(max_wait_s, deadline - now - min_call_s) (max_wait_stream_s instead of
+        max_wait_s inside stream_wait_scope(), when larger); never longer."""
         deadline = DEADLINE.get() if deadline is None else deadline
+        t_in = self._clock()
         with self._cond:
             now = self._clock()
             budget = self._budget(now, deadline)
@@ -436,12 +463,16 @@ class PortalAdapter:
             from vera import progress as _prog  # NOISY-UI: a rate-limit wait is visible on the stream path
             with _prog.waiting(_prog.ACT_RATE, res.waited_s):
                 self._sleep(res.waited_s)
+        if isinstance(res, Permit):
+            led = REQUEST_LEDGER.get()
+            if led is not None:
+                led.sent(self.name, max(0.0, self._clock() - t_in))
         return res
 
     async def acquire_async(self, deadline: float | None = None):
         """asyncio twin of acquire(): never blocks the event loop."""
         deadline = DEADLINE.get() if deadline is None else deadline
-        now = self._clock()
+        now = t_in = self._clock()
         budget = self._budget(now, deadline)
         steps = self._concurrency_wait_steps(budget)
         while True:
@@ -457,6 +488,10 @@ class PortalAdapter:
                 res = self._skip("concurrency", float(self.c["poll_s"]))
         if isinstance(res, Permit) and res.waited_s > 0:
             await asyncio.sleep(res.waited_s)
+        if isinstance(res, Permit):
+            led = REQUEST_LEDGER.get()
+            if led is not None:
+                led.sent(self.name, max(0.0, self._clock() - t_in))
         return res
 
     def _release(self, permit: Permit) -> None:
@@ -638,6 +673,55 @@ def queue_scope(deadline: float):
     finally:
         QUEUE.reset(t2)
         DEADLINE.reset(t1)
+
+
+@contextlib.contextmanager
+def stream_wait_scope(on: bool = True):
+    """RETRIEVAL-1109 A2: every acquire() in this context (the streamed path) may wait up to max_wait_stream_s for a
+    token or concurrency slot instead of being skipped after max_wait_s. Rates are unchanged; a deadline still bounds."""
+    tok = STREAM_WAIT.set(bool(on))
+    try:
+        yield
+    finally:
+        STREAM_WAIT.reset(tok)
+
+
+class RequestLedger:
+    """RETRIEVAL-1109: what ONE request's acquire() calls did: permits sent, seconds waited (token, concurrency) and
+    skips by portal and reason. Thread-safe (worker threads of the request share it through copied contexts).
+    Portal names and counts only: never hosts, URLs or keys."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.waited_s = 0.0
+        self.permits: dict[str, int] = {}
+        self.skips: dict[str, dict[str, int]] = {}
+
+    def sent(self, portal: str, waited: float) -> None:
+        with self._lock:
+            self.permits[portal] = self.permits.get(portal, 0) + 1
+            self.waited_s += float(waited)
+
+    def skip(self, portal: str, reason: str) -> None:
+        with self._lock:
+            d = self.skips.setdefault(portal, {})
+            d[reason] = d.get(reason, 0) + 1
+
+    def summary(self) -> dict:
+        with self._lock:
+            return {"waited_s": round(self.waited_s, 3), "permits": dict(sorted(self.permits.items())),
+                    "skips": {p: dict(sorted(r.items())) for p, r in sorted(self.skips.items())}}
+
+
+@contextlib.contextmanager
+def request_scope():
+    """RETRIEVAL-1109: a fresh RequestLedger for this request (nested scopes get their own); yields it."""
+    led = RequestLedger()
+    tok = REQUEST_LEDGER.set(led)
+    try:
+        yield led
+    finally:
+        REQUEST_LEDGER.reset(tok)
 
 
 def contact_params(portal: str, env: Mapping | None = None, registry: Registry | None = None) -> dict:

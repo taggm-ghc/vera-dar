@@ -30,9 +30,10 @@ def on(**kw):
 
 
 # ---- shipped config ---------------------------------------------------------------------------------
-def test_shipped_flags_off():
-    assert ol.load_config()["enabled"] is False
-    assert ol.lane_enabled() is False
+def test_shipped_flags_h2_on_for_fec_and_census_only():
+    assert ol.load_config()["enabled"] is True  # RETRIEVAL-1109 H-2 (owner OD-1109-RETRIEVAL)
+    assert ol.lane_enabled() is True
+    assert ol.load_config()["fetch_entities"] == ["FEC", "Census Bureau"] and ol.load_config()["site_search"] is False
     # NEWS-LANE-1104 (owner 2026-11-04 "enable"): the reporting lane ships ON; every outlet row carries a verdict
     # and evidence (tests/test_news_lane_1104_lane.py covers the policy).
     assert reporting_lane.load_config(ROOT / "config" / "reporting_lane.json")["enabled"] is True
@@ -75,8 +76,9 @@ def test_verdict_rules():
 def test_flags_off_collect_empty_no_fetch(monkeypatch):
     # NEWS-LANE-1104: the reporting lane now ships ON; its rollback (flag off) is simulated here
     monkeypatch.setattr(reporting_lane, "lane_enabled", lambda cfg=None: False)
+    monkeypatch.setattr(ol, "load_config", lambda path=None: {"enabled": False})  # H-2: official now ships on; roll back
     f = Stub()
-    res = lane_evidence.collect(QUESTION, fetch=f)  # official ships off; reporting rolled back
+    res = lane_evidence.collect(QUESTION, fetch=f)  # official and reporting rolled back
     assert res.links == [] and res.pages == [] and f.calls == []
     assert lane_evidence.any_enabled() is False
 

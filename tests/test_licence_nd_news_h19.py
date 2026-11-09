@@ -30,15 +30,25 @@ def flag_on_only(monkeypatch):
     monkeypatch.setattr(lg, "nd_news_enabled", lambda *a, **k: True)
 
 
-def test_shipped_flag_is_off():
-    assert lg.nd_news_enabled() is False
+def test_flag_off_state_rejects(monkeypatch):
+    # RETRIEVAL-1109: the shipped flag is now ON (test_shipped_flag_is_on); this asserts the OFF state explicitly.
+    monkeypatch.setattr(lg, "nd_news_enabled", lambda *a, **k: False)
     d, _why, code = lg.licence_status(cand())
     assert (d, code) == ("reject", lg.RC_REJECT)
     assert sp.evaluate(URL, licence=ND3).use_reason == "use_nd_licence"
 
 
-def test_flag_on_nc_basis_unconfirmed_still_rejects(flag_on_only):
-    # shipped config: nc_basis UNCONFIRMED -> news_access link_only -> no exception
+def test_shipped_flag_is_on():
+    # RETRIEVAL-1109 / OD-1109-RETRIEVAL: nd_news.enabled true and nc_basis SATISFIED ship ON.
+    assert lg.nd_news_enabled() is True
+    assert rl.load_config()["nc_basis"]["status"] == "SATISFIED"
+
+
+def test_flag_on_nc_basis_unconfirmed_still_rejects(monkeypatch, flag_on_only):
+    # nc_basis UNCONFIRMED (patched; the shipped value is SATISFIED) -> news_access link_only -> no exception
+    c = copy.deepcopy(rl.load_config())
+    c["nc_basis"] = {"status": "UNCONFIRMED"}
+    monkeypatch.setattr(rl, "load_config", lambda *a, **k: c)
     assert lg.licence_status(cand())[2] == lg.RC_REJECT
 
 
@@ -119,6 +129,8 @@ def test_phrases_and_codes_present():
 def test_outlet_verdict_gates_access_rows_until_flag_and_basis(monkeypatch):
     c = copy.deepcopy(rl.load_config())
     u = "https://commondreams.org/a"
+    monkeypatch.setattr(lg, "nd_news_enabled", lambda *a, **k: False)
+    c["nc_basis"] = {"status": "UNCONFIRMED"}  # RETRIEVAL-1109: shipped state is ON; start from OFF explicitly
     assert rl.outlet_verdict(u, c) == "links_only"                       # flag off
     assert rl._raw_outlet_verdict(u, c) == "allow"
     monkeypatch.setattr(lg, "nd_news_enabled", lambda *a, **k: True)

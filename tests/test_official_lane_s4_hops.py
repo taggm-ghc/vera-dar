@@ -278,12 +278,12 @@ def test_flag_off_does_nothing():
     assert lane.run(["Kafka", "Slack"]) == {"links": [], "pages": []} and net.sent == []
 
 
-def test_shipped_flag_stays_off():
+def test_shipped_flag_on_for_fec_census_site_search_off():
     p = _BASE / "config" / "subquery.json"
     if not p.exists():  # staged layout: the shipped file is the repo's
         p = _BASE.parents[2] / "repo" / "config" / "subquery.json"
     cfg = json.loads(p.read_text(encoding="utf-8"))
-    assert cfg["official_lane"]["enabled"] is False and cfg["official_lane"]["site_search"] is False
+    assert cfg["official_lane"]["enabled"] is True and cfg["official_lane"]["site_search"] is False  # H-2
 
 
 if __name__ == "__main__":

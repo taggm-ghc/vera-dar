@@ -16,9 +16,12 @@ def _rows():
     return {r["entity"]: r for r in REG if r.get("state") == "active"}
 
 
-def test_official_lane_flag_stays_off_pending_checklist():
+def test_official_lane_flag_on_fec_census_only_site_search_off():
+    # RETRIEVAL-1109 H-2 (owner OD-1109-RETRIEVAL, relayed 2026-11-09): the lane ships ON for FEC and Census only
+    # (fetch_entities); site_search stays off (gate C7).
     cfg = json.loads((ROOT / "config" / "subquery.json").read_text(encoding="utf-8"))["official_lane"]
-    assert cfg["enabled"] is False and cfg["site_search"] is False
+    assert cfg["enabled"] is True and cfg["site_search"] is False
+    assert sorted(cfg["fetch_entities"]) == ["Census Bureau", "FEC"]
 
 
 def test_fec_census_rows_allow_listed_static_paths_only():

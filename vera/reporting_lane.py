@@ -41,6 +41,7 @@ GDELT_ATTRIBUTION = {"text": "News index: GDELT Project", "url": "https://www.gd
 _DEFAULTS = {"enabled": False, "fallback_order": ["gdelt", "hn"], "user_agent": "VERA-DAR/1.0",
              "backoff_s": [60, 120, 240], "jitter_frac": 0.2, "max_retries": 3, "circuit_open_s": 900,
              "outlets": [], "unlisted_verdict": "links_only", "emit_link_only": False, "outlet_query": "all",
+             "allow_query": {"enabled": False, "wait_for_slot": True, "max_wait_s": 6},
              "min_interval_s": 6,
              "gdelt": {"maxrecords": 50, "timespan": "3months", "connect_timeout_s": 5, "read_timeout_s": 20},
              "hn": {"hitsPerPage": 20, "window_days": 90, "connect_timeout_s": 5, "read_timeout_s": 10}}
@@ -440,12 +441,40 @@ class ReportingLane:
             self._open_until[portal] = self._clock() + max(0.0, min(wait, cap))
         return None
 
-    def gdelt(self, terms: list[str], query: str | None = None) -> list[dict] | None:
+    def _wait_for_slot(self, portal: str) -> None:
+        """RETRIEVAL-1109 A5: wait out the rest of min_interval_s (once, at most allow_query.max_wait_s) so the extra
+        allow-outlet query gets its own spacing slot instead of being skipped. The shared _space() check still runs
+        in _call, so the interval is never shortened."""
+        aq = self.cfg.get("allow_query") or {}
+        if aq.get("wait_for_slot") is not True:
+            return
+        try:  # off the streamed path the lane result is joined by /ask: never sleep (SEC B1); _call then skips on spacing
+            from vera import stream_ctx
+            if not stream_ctx.active():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        gap = float(self.cfg.get("min_interval_s") or 0)
+        with self._lock:
+            last = self._last_call.get(portal)
+            rest = 0.0 if last is None else gap - (self._clock() - last)
+        rest = min(rest, float(aq.get("max_wait_s") or 0))
+        if rest > 0:
+            self._sleep(rest)
+
+    def gdelt(self, terms: list[str], query: str | None = None, allow_only: bool = False) -> list[dict] | None:
         c = self.cfg["gdelt"]
         q = query or build_query(terms)
         if not q:
             return None
-        if self.cfg.get("outlet_query") == "allowlist":
+        if allow_only:
+            hosts = allow_hosts(self.cfg)
+            if not hosts:
+                return []
+            dq = " OR ".join("domain:" + h for h in hosts)
+            q = f"{q} ({dq})" if len(hosts) > 1 else f"{q} {dq}"
+            self._wait_for_slot("gdelt")
+        elif self.cfg.get("outlet_query") == "allowlist":
             hosts = allow_hosts(self.cfg)
             if not hosts:
                 return []
@@ -521,12 +550,29 @@ class ReportingLane:
                                     "reason": why, "items": 0, "attempts": attempts,
                                     **({"throttle_source": src} if src else {})})
                 continue
+            aq_diag = None
+            aq = self.cfg.get("allow_query") or {}
+            if (portal == "gdelt" and aq.get("enabled") is True and self.cfg.get("outlet_query") == "all"
+                    and self.available(portal)):
+                # RETRIEVAL-1109 A5: ONE extra GDELT query restricted to the readable outlets, in its own spacing
+                # slot (same limiter, backoff and circuit); deduped against the all results.
+                used_q = (qs[1] if (attempts == 2 or was_deferred) else qs[0]) if qs else None
+                self.last_why = None
+                extra = self.gdelt(terms, used_q, allow_only=True)
+                if extra is None:
+                    aq_diag = {"status": "skipped", "reason": self.last_why or "no_query", "items": 0}
+                else:
+                    have = {it.get("url") for it in items}
+                    new = [it for it in extra if it.get("url") not in have]
+                    items = list(items) + new
+                    aq_diag = {"status": "called", "reason": "ok", "items": len(new), "raw_items": len(extra)}
             raw_n = len(items)
             res["items"] = self._apply_outlet_policy(sort_items(items))
             res["diag"].append({"portal": portal, "status": "called",
                                 "reason": "ok" if res["items"] else ("no_items" if raw_n == 0 else "outlet_policy"),
                                 "items": len(res["items"]), "raw_items": raw_n, "attempts": attempts,
-                                **({"retry_deferred": True} if deferred else {})})
+                                **({"retry_deferred": True} if deferred else {}),
+                                **({"allow_query": aq_diag} if aq_diag else {})})
             if portal == "gdelt":
                 res["attribution"] = gdelt_attribution()
             return res

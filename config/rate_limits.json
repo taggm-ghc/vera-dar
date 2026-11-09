@@ -12,6 +12,8 @@
     "half_open_max": 1,
     "jitter_frac": 0.2,
     "max_wait_s": 2.0,
+    "max_wait_stream_s": 30.0,
+    "_max_wait_stream_note": "RETRIEVAL-1109 A2 / owner H-T (OD-1109-RETRIEVAL, approved 2026-11-09 as relayed by the coordinator). STREAMED path only (vera.rate_limit.stream_wait_scope, set by vera.inline_acquire._run when stream_ctx is active): a call that would need a token or concurrency wait longer than max_wait_s waits up to this many seconds instead of being skipped as 'pacing'. Rates are unchanged: the wait is the pacing (tokens reserved in order, max_concurrency kept), and cooldown, breaker and daily-cap skips stay immediate. Switch: set equal to max_wait_s (2.0) or delete the key for the old skip behaviour. Calibration note for 30: the slowest paced acquisition portal hit inline is Europe PMC at rate_per_s 0.1 with robots Crawl-delay 10 (10 s per request; a full text is about 3 requests, NOANSWER-ROOT-1109 e3), so a queued caller can need up to 2-3 slots (20-30 s); 30 covers that and stays far below the 300 s stream stall rule. Not measured on live waits; what would change it: the per-request 'autoacq ratelimit_request' waited_ms and skip lines over live streamed asks. Portals slower than 1 per 30 s (plos 1/30 s, openaire 1/60 s) still skip a second call within one interval.",
     "min_call_s": 1.0,
     "retry_after_max_s": 3600.0,
     "base_cooldown_s": 30.0,

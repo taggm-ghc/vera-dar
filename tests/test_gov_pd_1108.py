@@ -49,9 +49,9 @@ def cand(url, text=None, **kw):
 
 
 # ---------------------------------------------------------------- shipped state and data provenance
-def test_ships_shadow_and_licence_is_existing_allowlist_entry():
+def test_ships_on_and_licence_is_existing_allowlist_entry():
     c = json.loads(g.CONFIG_PATH.read_text(encoding="utf-8"))
-    assert c["mode"] == "shadow"  # orchestrator 2026-11-08: shadow first; 'on' only after the shadow counts are reviewed
+    assert c["mode"] == "on"  # RETRIEVAL-1109 H-2 (owner OD-1109-RETRIEVAL); shipped shadow 2026-11-08, no read-out recorded
     entry, how = lg.match_entry(c["licence_id"])
     assert how == "id" and entry["status"] == "active" and entry["storable"] is True
 

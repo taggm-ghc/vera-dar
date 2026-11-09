@@ -120,9 +120,10 @@ def run(c=None, net=None, base=None, ddg=None, q=Q):
 
 # ------------------------------------------------------------------------------------------------ shipped config
 @pytest.mark.reference_portal
-def test_shipped_config_is_valid_off_and_strict():
+def test_shipped_config_is_valid_on_wikipedia_only_and_strict():
     c = rp.load_config()
-    assert c["mode"] == "off"  # ROUTES-1108-OFF: deny by default; shadow/on need an explicit owner config change
+    assert c["mode"] == "on"  # RETRIEVAL-1109 H-3 (owner): on, wikipedia_title only
+    assert [k for k, v in c["adapters"].items() if v.get("enabled") is True] == ["wikipedia_title"]
     assert all(c["exclusion_signals"][k] is True for k in rp.MUST_EXCLUDE)
     assert "ai_train_no_only" not in c["exclusion_signals"]  # H7: D-P1 owner-confirmed, no switch
     assert "confirmed" in c["_dp1_note"].lower() and "h7" in c["_dp1_note"].lower()
@@ -377,9 +378,8 @@ def test_shadow_mode_hands_nothing_on(monkeypatch):
     assert out is merged and net.calls == [WIKI]  # it ran (counts logged) but returned the input unchanged
 
 
-def test_shipped_off_mode_makes_zero_fetches():
-    c = rp.load_config()
-    assert c["mode"] == "off"
+def test_off_mode_makes_zero_fetches():
+    c = {**rp.load_config(), "mode": "off"}
     net = Net({WIKI: Resp(200, PAGE)})
     merged = [{"doi": "10.1/a"}]
     for bg in (False, True):

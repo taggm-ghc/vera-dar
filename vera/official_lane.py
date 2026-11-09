@@ -70,6 +70,16 @@ def lane_enabled(cfg: dict | None = None) -> bool:
         return False
 
 
+def fetch_allowed(ent: str, cfg: dict | None) -> bool:
+    """RETRIEVAL-1109 H-2: optional `fetch_entities` (list of registry entity names) narrows READING to those rows; every
+    other row gives links only. Key absent = no narrowing (previous behaviour). A present but odd value reads nothing
+    (fail closed)."""
+    if not isinstance(cfg, dict) or "fetch_entities" not in cfg:
+        return True
+    fe = cfg.get("fetch_entities")
+    return isinstance(fe, list) and ent in fe
+
+
 def verdict(row: dict) -> str:
     """allow | links_only. Deny All (owner standard 2026-11-04, audit D3; replaces the R-050 "unknown means read" rule
     for this lane): "allow" ONLY on an explicit, verified access verdict (source_permissions.access_verdict == "allow",
@@ -280,7 +290,8 @@ class OfficialLane:
                 continue
             urls = [(u, f"{ent} documentation") for u in row.get("docs_entry_urls") or []]
             # R-050: site: only for readable rows; an access-restricted row (verdict links_only) gets links only below
-            if verdict(row) == "allow" and _gate((row.get("docs_entry_urls") or [""])[0], row).read:
+            readable = verdict(row) == "allow" and fetch_allowed(ent, self.cfg)  # H-2: only the approved entities
+            if readable and _gate((row.get("docs_entry_urls") or [""])[0], row).read:
                 urls += self._site_urls(row, terms)
             for url, title in urls:
                 if url in seen or not host_ok(url, row):
@@ -290,7 +301,7 @@ class OfficialLane:
                         "url": url, "read": False}
                 perm = _gate(url, row)  # vera.source_permissions (I-A6, R-049/R-050): access + use_for_answer
                 stop = _stop_code(should_stop)
-                if verdict(row) != "allow":
+                if not readable:
                     link["reason"] = perm.read_reason if not perm.read else "read_registry_not_allowed"  # D3: link only
                 elif not perm.read:
                     link["reason"] = perm.read_reason  # never fetched: link only

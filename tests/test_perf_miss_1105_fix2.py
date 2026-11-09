@@ -234,6 +234,9 @@ def test_f1_guarded_get_carries_the_skip_reason():
 
 # ------------------------------------------------------------------------------------------------ F5
 def test_f5_news_round_is_not_scholarly_only_and_web_results_use_the_gated_route(monkeypatch):
+    # RETRIEVAL-1109 A3: this test is about the scholarly/web routing; the variant-round reporting-lane pass is off here
+    # (it would call GDELT on the streamed path; covered by its own tests).
+    monkeypatch.setattr(ia, "variant_lane_on", lambda acq: False)
     reg = _registry()
     web = {"title": "Midterm coverage", "url": "https://news.example.org/midterms-2026"}
     h = Harness(monkeypatch, [[scholarly(0)], [scholarly(1), dict(web)], []], reg)
@@ -307,7 +310,8 @@ def lane_env(monkeypatch):
 def test_owner_news_decision_shipped_config():
     c = reporting_lane.load_config()
     assert c["emit_link_only"] is True and c["outlet_query"] == "all" and c["unlisted_verdict"] == "links_only"
-    assert set(reporting_lane.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com"}  # H5
+    assert set(reporting_lane.allow_hosts(c)) == {"globalvoices.org", "en.wikinews.org", "voanews.com", "commondreams.org", "democracynow.org",
+                                  "votebeat.org", "chalkbeat.org", "kffhealthnews.org"}  # H5; ND rows answer-only: OD-1109-RETRIEVAL (relayed 2026-11-09)
 
 
 def test_owner_news_decision_link_only_never_fetched_allow_read_excluded_absent_credit(lane_env):

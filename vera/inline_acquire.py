@@ -106,6 +106,14 @@ class Outcome:
     # OD-1031-P1 item 4: {"status": met|resource_limited|incomplete_deadline, "stored": n, "target": n}; counts only
     # (no titles, hosts, URLs or provider names). None = no search ran. Observational: changes no cap or gate.
     acquisition: dict | None = None
+    # RETRIEVAL-1109 (additive; None = not run): THIS run's rate-limiter accounting {"waited_s", "permits": {portal: n},
+    # "skips": {portal: {reason: n}}} (rate_limit.request_scope); portal names and counts only. The limiter's
+    # politeness state is process-wide; this record is per run, so it never carries another request's skips.
+    limiter: dict | None = None
+    # RETRIEVAL-1109 A3: reporting-lane results of variant rounds (news questions), a list of lane_evidence.LaneResult.
+    # Request-local like the round-0 lane pass: never public, cached (no_cache is set when it holds a page), stored,
+    # queued or logged; with_web merges it into the request's lane result.
+    lanes_extra: list | None = None
     # NONASK-1103 A6 D1 (S5): True when answer-only documents (variant-round or lane pages) are in the corpus; such an
     # outcome is never put in the result TTL cache (request-local). Not public.
     no_cache: bool = False
@@ -530,13 +538,24 @@ def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     # STREAM-1031 / OD-1031-NODEADLINE: on the streamed path there is no inline deadline (per-wait max_wait_s still applies)
-    scope = None if stream_ctx.active() else time.monotonic() + float(_b(acq, "deadline_s", 45))
-    with rate_limit.deadline_scope(scope):
-        return _run_body(question, acq, env, clock, deps_factory, served,
-                         **({"disc": disc} if disc is not None else {}),
-                         **({"prefer_recent": True} if prefer_recent else {}),
-                         **({"topic_key": topic_key} if topic_key else {}),
-                         **({"persist": True} if persist else {}))
+    # RETRIEVAL-1109 A2 (owner H-T): on the streamed path a limiter wait up to rate_limits.json max_wait_stream_s is
+    # waited out instead of skipped (stream_wait_scope); rates, Crawl-delay slots and cooldowns are unchanged.
+    # request_scope: this run's own limiter accounting (waits, skips), reported on this Outcome only.
+    streamed = stream_ctx.active()
+    scope = None if streamed else time.monotonic() + float(_b(acq, "deadline_s", 45))
+    with rate_limit.deadline_scope(scope), rate_limit.stream_wait_scope(streamed), rate_limit.request_scope() as led:
+        o = _run_body(question, acq, env, clock, deps_factory, served,
+                      **({"disc": disc} if disc is not None else {}),
+                      **({"prefer_recent": True} if prefer_recent else {}),
+                      **({"topic_key": topic_key} if topic_key else {}),
+                      **({"persist": True} if persist else {}))
+    try:
+        o.limiter = led.summary()
+        logger.info("autoacq ratelimit_request waited_ms=%d skips=%s", int(o.limiter["waited_s"] * 1000),
+                    ",".join(f"{p}:{r}={n}" for p, rs in o.limiter["skips"].items() for r, n in rs.items()) or "-")
+    except Exception:  # noqa: BLE001  telemetry never breaks the run
+        pass
+    return o
 
 
 QUEUED = "queued_background"  # CONT-1023: candidate outcome = handed to the background acquisition queue
@@ -653,6 +672,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     st: dict = {"portals": None, "recs": [], "cands": []}  # FRESH-1023 C3: portal attempts + per-candidate records
 
     def done(o: Outcome) -> Outcome:
+        if st.get("lanes_extra"):  # RETRIEVAL-1109 A3: variant-round lane results, request-local (never cached)
+            o.lanes_extra = list(st["lanes_extra"])
+            if any(getattr(lr, "pages", None) for lr in o.lanes_extra):
+                o.no_cache = True
         if st.get("web") is not None:  # A6-W: request-local; an outcome holding page text is never cached (R-037)
             o.web = st["web"]
             if o.web.pages:
@@ -693,7 +716,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             tgt = acq_rounds.target_of(acq)
             stop = _stop_reason(ctx, st) if ctx is not None else None
             fb = st.get("fresh_budget")  # the pass's fresh-document budget (None if never reserved)
-            if (o.admitted + o.reused + int(st.get("n_web", 0)) >= tgt) if rounds_on else (o.stored >= tgt):  # A6 D1: answer-eligible incl. answer-only
+            if (o.admitted + o.reused + _n_ao(st) >= tgt) if rounds_on else (o.stored >= tgt):  # A6 D1: answer-eligible incl. answer-only
                 aq_status = "met"
             elif ctx is not None and stop == stream_ctx.DISCONNECTED:  # STREAM-1031
                 aq_status = "incomplete_disconnected"
@@ -1055,12 +1078,71 @@ def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadli
         logger.warning("autoacq web route failed (%s)", type(e).__name__)
 
 
+def _n_ao(st: dict) -> int:
+    """Answer-only request-local pages counted toward the round target: web route pages (A6-W) and, RETRIEVAL-1109 A3,
+    variant-round reporting-lane pages."""
+    return int(st.get("n_web", 0) or 0) + int(st.get("n_lane", 0) or 0)
+
+
+def _merge_lanes(lanes, extra):
+    """RETRIEVAL-1109 A3: the round-0 lane result plus the variant rounds' lane results (links deduplicated by URL,
+    pages by final URL, attributions once). `lanes` unchanged when there is nothing extra."""
+    extra = [x for x in (extra or ()) if x is not None and (getattr(x, "links", None) or getattr(x, "pages", None))]
+    if not extra:
+        return lanes
+    from vera import lane_evidence
+    base = lanes if lanes is not None else lane_evidence.LaneResult()
+    links, pages = list(base.links), list(base.pages)
+    attrs, diag = list(base.attributions), list(getattr(base, "diag", None) or [])
+    seen_l = {str(lk.get("url")) for lk in links if isinstance(lk, dict)}
+    seen_p = {str(getattr(pg, "url", "")) for pg in pages}
+    for x in extra:
+        for lk in x.links:
+            if isinstance(lk, dict) and str(lk.get("url")) not in seen_l:
+                seen_l.add(str(lk.get("url")))
+                links.append(lk)
+        for pg in x.pages:
+            if str(getattr(pg, "url", "")) not in seen_p:
+                seen_p.add(str(getattr(pg, "url", "")))
+                pages.append(pg)
+        attrs += [a for a in x.attributions if a not in attrs]
+        diag += list(getattr(x, "diag", None) or [])
+    return lane_evidence.LaneResult(links=links, pages=pages, attributions=attrs, diag=diag)
+
+
+def variant_lane_on(acq: dict) -> bool:
+    """RETRIEVAL-1109 A3 switch: config/auto_acquire.json inline.variant_lane_enabled, exactly true."""
+    return icfg_of(acq).get("variant_lane_enabled") is True
+
+
+def _variant_lane(question: str, q: str, acq: dict, st: dict, collect=None) -> int:
+    """RETRIEVAL-1109 A3 (NOANSWER-ROOT-1109 plan A3): one reporting-lane pass for a news question's variant round,
+    with the VARIANT text as the lane query (the original question still decides news intent). Every lane rule is
+    unchanged: GDELT spacing/backoff/circuit/daily cap (vera.reporting_lane), outlet verdicts, ND link-only unless the
+    nc_basis + nd_news gates allow answer-only, robots and page signals. Pages are answer-only and request-local.
+    Returns the number of pages read; never raises."""
+    try:
+        from vera import lane_evidence, reporting_lane, subquery
+        if not variant_lane_on(acq) or not reporting_lane.lane_enabled():
+            return 0
+        plan = subquery.SubQueryPlan(original=str(question), parts=(subquery.SubPart("V", str(q)),), rule="single")
+        res = (collect or lane_evidence.collect)(str(question), plan=plan)
+        if res is None:
+            return 0
+        st.setdefault("lanes_extra", []).append(res)
+        return len(res.pages)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("variant lane failed (%s)", type(e).__name__)
+        return 0
+
+
 def with_web(o, lanes, question=None):
     """A6-W: the request's lane result with the web route's pages and reading-list links appended (a new LaneResult;
     None when neither exists). Request-local only, like lane_pass."""
     web = getattr(o, "web", None) if o is not None else None
     from vera import lane_evidence
     from vera import lane_router
+    lanes = _merge_lanes(lanes, getattr(o, "lanes_extra", None) if o is not None else None)  # RETRIEVAL-1109 A3
     if question and lane_router.reporting_cue(str(question), str(question)):  # NT-3, LINKS-RC-1107: news-intent only
         lanes = lane_evidence.merge_wiki_links(lanes, question)
     if web is None or not (web.pages or web.listed):
@@ -1129,7 +1211,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     passes = 0
     while pending and passes <= len(pend_ids):  # each pass takes at least one candidate off `pending`; the cap is a guard
         passes += 1
-        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
         remaining = fresh_budget - len(plans) - len(extra)
         if eligible >= tgt:
             stop_pre = "met"
@@ -1201,7 +1283,8 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     if stop_pre:
         stop = stop_pre
     for q in ([] if stop_pre else variants):
-        cur = len(extra) + len(reused[0])  # usable = answer-eligible documents gained (fresh or reused)
+        cur = len(extra) + len(reused[0]) + int(st.get("n_lane", 0) or 0)  # usable = answer-eligible documents gained
+        # (fresh or reused; RETRIEVAL-1109 A3: variant-round reporting-lane pages too)
         if last is not None:
             idle = idle + 1 if cur == last else 0
             if idle >= NO_PROGRESS_ROUNDS:  # checked BEFORE the next reservation: no job is spent on a third round
@@ -1210,7 +1293,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                     break
                 r6["heuristic_overridden"] = 1  # WP8: keep-searching overrides the heuristic (telemetry only)
         last = cur
-        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
         remaining = fresh_budget - len(plans) - len(extra)
         if eligible >= tgt:
             stop = "met"
@@ -1258,6 +1341,13 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         st["portals"].extend(pl)
         if ctx is not None:
             ctx.touch()
+        # RETRIEVAL-1109 A3: news rounds also query the reporting lane (variant text). Streamed path only: the lane's
+        # own connect/read timeouts and GDELT spacing are not bounded by the non-streamed 45 s deadline.
+        if news and ctx is not None and variant_lane_on(acq):
+            n_lane = _variant_lane(question, q, acq, st)
+            st["n_lane"] = int(st.get("n_lane", 0) or 0) + n_lane  # answer-only pages count toward the round target
+            r6["lane_pages"] = int(r6.get("lane_pages", 0)) + n_lane
+            r6["lane_calls"] = int(r6.get("lane_calls", 0)) + 1
         fresh = [c for c in cands if isinstance(c, dict) and not (_ckeys(c) & tried)]
         for c in cands:
             if isinstance(c, dict):
@@ -1295,7 +1385,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         extra += _evaluate_parallel(question, left, acq, deps, icfg, fdcfg, clock, deadline, need, count, ms,
                                     per={}, skips={}, **({"ctx": ctx, "st": st} if ctx is not None else {}))
     else:
-        eligible = len(plans) + len(extra) + len(reused[0]) + int(st.get("n_web", 0))
+        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
         stop = stop_pre or ("met" if eligible >= tgt else "variants_exhausted")
     r6["stop"] = stop
     for c in pending:  # still unevaluated: label by the real stop (WP7 b), not by the cut

@@ -451,6 +451,23 @@ def _round_acq(acq: dict, seconds: float) -> dict:
     return {**acq, "inline": inl}
 
 
+def persist_acq(acq: dict, persist: bool) -> dict:
+    """RETRIEVAL-1109 H-4 (owner OD-1109-RETRIEVAL; switch config/auto_acquire.json inline.persist_extends_deadline,
+    exactly true = on): a keep-searching request's inline deadline_s becomes inline.persist_deadline_max_s (never
+    lower than the configured deadline_s). Still bounded by the request budget (_acquire_rounds: the remaining request
+    time minus the post-inline tail), the job caps, the finite variant list and ~31 documents. Off, not persist, or an
+    unreadable value: `acq` unchanged (the same object). The streamed path has no inline deadline, so it is unaffected."""
+    inl = (acq or {}).get("inline") or {}
+    if not persist or inl.get("persist_extends_deadline") is not True:
+        return acq
+    mx = inl.get("persist_deadline_max_s")
+    if isinstance(mx, bool) or not isinstance(mx, (int, float)) or not mx > 0:
+        return acq
+    from vera import inline_acquire
+    dl = float(inline_acquire._b(acq, "deadline_s", 45))
+    return {**acq, "inline": {**inl, "deadline_s": max(dl, float(mx))}}
+
+
 def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq, budget, used_in, token,
                     not_configured):
     """INTEGRATE-1104 step 2 (owner: ingest >= 6 full texts, then answer; acquisition until the target is met or the
@@ -471,6 +488,7 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
     ledger is kept across rounds (same dedup), and the round target is met on its counted sources."""
     from vera import acq_rounds, inline_acquire
     ia: dict = {}
+    acq = persist_acq(acq, bool(_REQUEST_PERSIST.get()))  # RETRIEVAL-1109 H-4 (switch; bounded below by the budget)
     if inline_acquire.icfg_of(acq).get("in_scope") is not True or not _retry_tokens(question, token, not_configured):
         return None, ia
     if budget.inline_used:

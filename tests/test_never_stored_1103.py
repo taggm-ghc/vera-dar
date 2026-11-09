@@ -86,6 +86,7 @@ def sinks(monkeypatch):
 
 def _enable(mp, official=True, reporting=True):
     mp.setattr(official_lane, "lane_enabled", lambda cfg=None: official)
+    mp.setattr(official_lane, "load_config", lambda path=None: {"enabled": official})  # H-2: no fetch_entities narrowing
     mp.setattr(reporting_lane, "lane_enabled", lambda cfg=None: reporting)
 
 

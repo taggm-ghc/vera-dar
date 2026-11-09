@@ -213,5 +213,5 @@ def test_inspire_called_only_when_mode_on_and_enabled_and_owner_permit(monkeypat
 
 def test_shipped_inspire_is_off_and_denied():
     c = json.loads((ROOT / "config" / "reference_portals.json").read_text(encoding="utf-8"))
-    assert c["mode"] == "off" and c["adapters"]["inspire_refs"]["enabled"] is False
+    assert c["mode"] == "on" and c["adapters"]["inspire_refs"]["enabled"] is False  # H-3: portal on, inspire adapter off
     assert rp.inspire_permitted() is False
