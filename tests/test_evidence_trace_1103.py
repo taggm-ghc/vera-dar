@@ -52,7 +52,7 @@ def test_public_allowlist_and_no_internals(monkeypatch):
 
 def test_selected_not_cited_unused_has_no_invented_cause():
     t = et.project(ev(), [], [], public=True, sources=SOURCES)
-    assert all(r["reason"] == "not used by the answer; no reason recorded" for r in t["passages"])
+    assert all(r["reason"] == "the answer did not use this passage" for r in t["passages"])
 
 
 def test_caveat_gates_public_counts():
@@ -83,7 +83,7 @@ def test_no_answer_outcome_still_gives_decisions_and_reasons(monkeypatch):
     inline = {"candidates": [{"url": "u", "outcome": "rejected", "reason": "licence_rejected"}],
               "discovered": [{"gate_a": {"decision": "defer"}, "outcome": "held"}]}
     t = et.project(ev(), None, None, inline=inline, public=True, sources=SOURCES)
-    assert [r["reason"] for r in t["passages"]] == ["not used by the answer; no reason recorded"] * 2
+    assert [r["reason"] for r in t["passages"]] == ["the answer did not use this passage"] * 2
     assert "claims" not in t  # no caveat -> counts dev-only
     d = et.project(ev(), None, None, inline=inline, public=False, sources=SOURCES)
     assert d["view"] == "dev" and len(d["gate_a"]) == 2 and len(d["gate_b"]) == 3 and d["claims"]["supported"] == 0

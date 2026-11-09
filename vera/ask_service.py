@@ -1571,13 +1571,30 @@ def _acq_held_ids() -> set:
         return set()
 
 
-def _new_doc_ids(admitted, *held_evs, held_keys=()) -> set:
+def _reused_keys(pub) -> set:
+    """NOANSWER-1109: identity keys of the documents this request's inline round REUSED from the collection (held
+    before the request). The cached acquired-corpus snapshot can lag a document stored for an earlier question, which
+    made a reused document count as "newly found" beside the note that said it was already held."""
+    try:
+        from vera import evidence_ledger as el
+        recs = (pub or {}).get("candidates") if isinstance(pub, dict) else None
+        return {k for r in (recs or ()) if isinstance(r, dict) and r.get("outcome") == "reused"
+                for k in el.keys_of(el._cand_ids(r))}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _new_doc_ids(admitted, *held_evs, held_keys=(), reused_keys=()) -> set:
     """Documents among the final admitted passages that were not held before this request. A new passage of an
     already-held document, a de-duplicated passage, a held document re-acquired under a new id and a reused stored
     acquired document are not new. Returns document ids."""
     held = _held_doc_ids(*held_evs) | {str(k) for k in held_keys}
+    reused = set(reused_keys)
+    if reused:
+        from vera import evidence_ledger as el
     return {str(a.get("document_id")) for a in (admitted or ())
-            if _doc_key(a) not in held and str(a.get("document_id")) not in held}
+            if _doc_key(a) not in held and str(a.get("document_id")) not in held
+            and not (reused and el.keys_of({k: a.get(k) for k in ("doi", "url", "canonical_url", "canonical_source_id", "pmcid")}) & reused)}
 
 
 def _fresh_line(texts: dict, fr2: dict, n_new: int) -> str:
@@ -1687,7 +1704,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     lanes = None  # page text is dropped with the request (R-037)
     if new_res is not None:
         new_ids = _new_doc_ids([a for a in new_res.evidence.admitted if not (isinstance(a, dict) and a.get("answer_only"))],
-                               fd.evidence, held_keys=_acq_held_ids())  # lane pages are read, not found or held
+                               fd.evidence, held_keys=_acq_held_ids(), reused_keys=_reused_keys(pub))  # lane pages are read, not found or held
         fr2 = rr.assess(new_res.evidence.admitted, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         found = bool(new_ids)  # newly found = a cited passage from a document not held before this request
@@ -1862,7 +1879,7 @@ def _research_on_insufficient(res, ev, acq, inline_pub, answered: bool, extra_ev
     bf = _backfill(fcfg, at, acq, fr)
     if answered:
         adm = res.evidence.admitted if res.evidence is not None else ()
-        new_ids = _new_doc_ids(adm, ev, extra_ev, held_ev, held_keys=_acq_held_ids())
+        new_ids = _new_doc_ids(adm, ev, extra_ev, held_ev, held_keys=_acq_held_ids(), reused_keys=_reused_keys(inline_pub))
         fr2 = rr.assess(adm, fcfg, at, new_ids=new_ids)
         bf = _merge_bf(bf, _backfill(fcfg, at, acq, fr2))
         found = bool(new_ids)  # newly found = a cited passage from a document not held before this request

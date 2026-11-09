@@ -43,11 +43,15 @@ def render_trace(st, trace, public=None, redact=None) -> bool:
         if collapse:
             st.caption(f"{len(unc_p)} passages were selected and none answered the question." if next(iter(reasons)).startswith("selected, but judged not")
                        or not next(iter(reasons)) else f"{len(unc_p)} passages were selected, not cited: {next(iter(reasons))}")
+        cited_seen: set = set()
         for p in passages:
             n = s(p.get("n"))
             if collapse and not p.get("cited"):
                 continue
             if p.get("cited"):
+                if n in cited_seen:  # NOANSWER-1109: a passage cited twice is listed once
+                    continue
+                cited_seen.add(n)
                 sup = [x for x in p.get("supports") or () if not _BACKEND_WORDS.search(str(x))]
                 line = f"[{n}] " + (s(p.get("verdict")) if p.get("verdict") else "used")
                 if sup:

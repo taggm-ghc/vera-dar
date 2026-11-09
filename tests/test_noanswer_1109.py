@@ -121,3 +121,60 @@ def test_a4_no_failing_call_shows_no_failure_and_paced_is_worded_accurately():
     c = ro.summarize_outcome([ro.PortalAttempt("a", "own_cap")], [], budget_exhausted=False,
                              older_evidence_available=False, new_evidence_admitted=False).user_text
     assert "earlier searches" in c
+
+
+# ---- answered page (live 731863f, "What are components of RAG?") ------------------------------------------------
+def _answered_cites():
+    at = {"creator": "A. Author", "title": "RAG survey", "source": "https://example.org/rag", "licence": "CC BY 4.0",
+          "licence_url": "https://creativecommons.org/licenses/by/4.0/"}
+    base = {"verdict": "supported", "quote": "retriever and generator", "quote_span": "chars=1-20",
+            "canonical_source_id": "doc-3", "attribution": at}
+    return [dict(base, n=3, claim_id="c1"), dict(base, n=3, claim_id="c2"),  # same passage cited by two claims
+            dict(base, n=4, claim_id="c3", quote="index", quote_span="chars=30-40")]  # same document, other passage
+
+
+def test_answered_citation_lines_not_repeated_one_attribution_per_document():
+    cap = Cap()
+    u.render_citations(cap, {"citations": _answered_cites()})
+    text = "\n".join(cap.lines)
+    assert text.count("[3] supported") == 1 and text.count("[4] supported") == 1
+    attrs = [x for x in cap.lines if "RAG survey" in x]
+    assert len(attrs) == 1, attrs
+
+
+def test_answered_trace_lists_a_twice_cited_passage_once_and_gives_a_reason():
+    tr = {"view": "public", "passages": [
+        {"n": 3, "cited": True, "verdict": "supported", "supports": ["S."], "excerpt": None},
+        {"n": 3, "cited": True, "verdict": "supported", "supports": ["S."], "excerpt": None},
+        {"n": 2, "cited": False, "reason": "the answer did not use this passage"}]}
+    cap = Cap()
+    etu.render_trace(cap, tr, public=True)
+    assert sum(1 for x in cap.lines if x.startswith("[3] supported")) == 1
+    assert "no reason recorded" not in "\n".join(cap.lines)
+    from vera import evidence_trace
+    assert "no reason recorded" not in evidence_trace.load_labels()["not_cited"]["unused"]
+
+
+def test_reused_document_is_not_newly_found_even_when_the_held_snapshot_lags():
+    from vera import ask_service as a
+    adm = [{"document_id": "d9", "canonical_source_id": "https://doi.org/10.1234/abc"}]
+    pub = {"candidates": [{"outcome": "reused", "doi": "10.1234/abc"}]}
+    assert a._new_doc_ids(adm, held_keys=()) == {"d9"}  # the stale snapshot alone says new
+    assert a._new_doc_ids(adm, held_keys=(), reused_keys=a._reused_keys(pub)) == set()
+    other = [{"document_id": "d8", "canonical_source_id": "https://doi.org/10.1234/zzz"}]
+    assert a._new_doc_ids(other, held_keys=(), reused_keys=a._reused_keys(pub)) == {"d8"}
+
+
+def test_answered_page_counts_and_freshness_agree_for_a_reused_document():
+    d = {"citations": [], "contract": {"inline_acquisition": {"counts": {"stored": 1, "fetched": 0}}}}
+    assert u.inline_counts_line(d) == "Sources used for this answer: 1 stored, 0 fetched for this request only."
+    r = ro.summarize_outcome([ro.PortalAttempt("a", "completed", 2)], [], budget_exhausted=False,
+                             older_evidence_available=True, new_evidence_admitted=False)
+    assert "newly found" not in r.user_text
+
+
+def test_coverage_causes_are_separate_sentences():
+    r = ro.summarize_outcome([ro.PortalAttempt("a", "error"), ro.PortalAttempt("b", "quota")], [],
+                             budget_exhausted=False, older_evidence_available=False, new_evidence_admitted=True)
+    assert r.user_text.startswith("This answer uses newly found sources. Coverage was incomplete. A search service had a failure. ")
+    assert " because " not in r.user_text

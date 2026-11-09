@@ -22,7 +22,7 @@
   "other": {"text": "other reason"},
   "not_cited": {
     "removed_by_check": "the sentence that used it did not pass the citation check",
-    "unused": "not used by the answer; no reason recorded"
+    "unused": "the answer did not use this passage"
   },
   "by_refusal": {
     "model_insufficient": "selected, but judged not to answer the question",

@@ -538,6 +538,7 @@ def render_citations(st, data) -> None:
         return
     st.markdown("**Cited passages** (short excerpts)")
     shown: set = set()
+    lines_seen: set = set()  # NOANSWER-1109: the same passage line is never repeated; one attribution per document
     intext = {n: s["in_text"] for n, s in _src_by_n(data).items() if isinstance(s.get("in_text"), str) and s["in_text"].strip()}
     for c in cites:
         n = c.get("n") if isinstance(c.get("n"), int) and not isinstance(c.get("n"), bool) else "?"
@@ -545,6 +546,12 @@ def render_citations(st, data) -> None:
         span = _clean(c.get("quote_span") or c.get("span") or "", 80)
         where = f" (passage {plain(span)})" if span else ""
         quote = _clean(c.get("quote"), _quote_cap()) if isinstance(c.get("quote"), str) else ""
+        lk = (n, verdict, span, quote)
+        at0 = c.get("attribution") if isinstance(c.get("attribution"), dict) else {}
+        dk = c.get("canonical_source_id") or at0.get("source") or at0.get("title") or n
+        if lk in lines_seen:
+            continue
+        lines_seen.add(lk)
         it = safe_markdown(intext[n]) + " " if n in intext else ""  # NONASK-1103 C4: APA in-text citation after "[n] "
         if quote:
             st.markdown(f"[{n}] {it}{verdict}: “{plain(quote)}”{where}")
@@ -552,8 +559,8 @@ def render_citations(st, data) -> None:
             ref = _clean(c.get("span") or "", 80)
             st.markdown(f"[{n}] {it}{verdict}: excerpt not shown{f' (passage {plain(ref)})' if ref else ''}")
         at = c.get("attribution")
-        if isinstance(at, dict) and n not in shown:
-            shown.add(n)
+        if isinstance(at, dict) and dk not in shown:
+            shown.add(dk)
             parts = [plain(at["creator"]) if at.get("creator") else None,
                      _link(at.get("title") or "source", at.get("source")) if at.get("title") or at.get("source") else None,
                      (_link(at["licence"], at.get("licence_url")) if at.get("licence") else None)]

@@ -115,7 +115,7 @@ def _live(trace_n=6, fetched=2, kind="db"):
                          "inline_acquisition": {"status": "insufficient", "reused": 0, "n_persisted": 0,
                                                 "documents": [{"persisted": False, "reason": "below_persist_min"}] * fetched},
                          "trace": {"view": "public", "passages": [{"n": i + 1, "cited": False,
-                                                                   "reason": "not used by the answer; no reason recorded"}
+                                                                   "reason": "the answer did not use this passage"}
                                                                   for i in range(trace_n)]}}}
 
 

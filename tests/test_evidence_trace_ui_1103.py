@@ -29,7 +29,7 @@ def trace(**kw):
          "passages": [{"n": 1, "cited": True, "supports": ["Beta *varies* across sites [1]."], "verdict": "supported",
                        "excerpt": "Beta systems vary widely.", "reason": None},
                       {"n": 2, "cited": False, "supports": [], "verdict": None, "excerpt": None,
-                       "reason": "not used by the answer; no reason recorded"}],
+                       "reason": "the answer did not use this passage"}],
          "parts": [{"label": "Second part", "covered": False}],
          "adequacy": {"verdict": "qualify", "all_declared_parts_supported": False},
          "claims": {"supported": 1, "partial": 0, "unsupported": 1}, "not_used": {"source not usable": 2}}

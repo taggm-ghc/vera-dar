@@ -144,7 +144,7 @@ def _trace():
     return {"version": 1, "view": "public", "parts": [{"label": "see host leak.example.net", "covered": False}],
             "passages": [{"n": 1, "cited": True, "supports": ["Beta doubles [1]."], "verdict": "supported",
                           "excerpt": "Beta caching doubles throughput.", "reason": None},
-                         {"n": 2, "cited": False, "reason": "not used by the answer; no reason recorded"}],
+                         {"n": 2, "cited": False, "reason": "the answer did not use this passage"}],
             "adequacy": {"verdict": "qualify", "all_declared_parts_supported": False}}
 
 
