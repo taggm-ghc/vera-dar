@@ -1203,6 +1203,13 @@ def with_web(o, lanes, question=None):
 NO_PROGRESS_ROUNDS = 2
 
 
+# MULTIQ-1109 F3: set by ask_service._answer_parts around ONE question of a multi-question prompt. ROUND_CAP = the most
+# searches (round 0 + variant rounds) that question may run; ROUND_CUT collects True when the cap ended its search early.
+# None (the default, and every single-question request) = unchanged behaviour.
+ROUND_CAP: contextvars.ContextVar = contextvars.ContextVar("multiq_round_cap", default=None)
+ROUND_CUT: contextvars.ContextVar = contextvars.ContextVar("multiq_round_cut", default=None)
+
+
 def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip, plans, reused,
                   fresh_budget, route, persist=False):
     """NONASK-1103 A6 D1 (A6-2, A6-5): rounds 2 and later. While fewer than the target (acq_rounds, 6) answer-eligible
@@ -1343,6 +1350,14 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         if ctx is None and deadline - clock() - per_doc < 1.0:  # N5: the search must end a fetch reserve before it
             count(acq_config.reason(acq, "deadline"))
             stop = "deadline"
+            break
+        _cap = ROUND_CAP.get()
+        if isinstance(_cap, int) and not isinstance(_cap, bool) and rounds >= _cap:  # MULTIQ-1109 F3: fair share of searches
+            stop = "round_cap"
+            _cut = ROUND_CUT.get()
+            if _cut is not None:
+                _cut.append(True)
+            rt.event("acquire", "round_cap", counts={"rounds": rounds})
             break
         # OD-1109-QUOTA: with bounds.acq_rounds_one_job exactly true, a question's variant rounds share the ONE job its
         # round 0 reserved (normal use must not exhaust jobs_per_hour); per-source rate limits, robots and Crawl-delay

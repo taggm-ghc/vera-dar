@@ -383,11 +383,12 @@ def test_more_questions_than_the_floor_allows_are_listed_not_answered(ask, monke
 
 
 def test_stream_rounds_cap_is_set_only_without_a_deadline_and_cut_is_announced(ask, monkeypatch):
+    from vera import inline_acquire
     seen = []
 
     def fulldoc(question, *a, **k):
-        seen.append(ask_service._MQ_ROUNDS.get())
-        ask_service._MQ_CUT.get().append(True)  # as _acquire_rounds does when the bound ends a search early
+        seen.append(inline_acquire.ROUND_CAP.get())
+        inline_acquire.ROUND_CUT.get().append(True)  # as inline_acquire._extra_rounds does when the cap ends a search
         return _answer(question, len(seen))
     monkeypatch.setattr(ask_service, "_fulldoc", fulldoc)
     q = "What is CRISPR? Is it used in agriculture?"
@@ -397,3 +398,38 @@ def test_stream_rounds_cap_is_set_only_without_a_deadline_and_cut_is_announced(a
     r = ask_service.answer_in_scope(q, "m", PRICING, budget=ask_service.RequestBudget(float("inf")))
     assert seen == [SHIPPED["stream_rounds_per_question"]] * 2
     assert all(SHIPPED["cut_text"].replace("{n}", str(p["index"])) in p["answer"] for p in r.contract["parts"])
+    assert inline_acquire.ROUND_CAP.get() is None and inline_acquire.ROUND_CUT.get() is None  # restored after the prompt
+
+
+# ---- through the real inline_acquire round loop (fakes only for search / fetch) ------------------------------------------
+def _real_loop(monkeypatch, cap):
+    from tests.test_acq6_rounds_1103 import H, cand, cfg
+    from vera import inline_acquire as ia, query_variants6, stream_ctx  # noqa: F401
+    v = query_variants6.variants("What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?")
+    h = H(monkeypatch, [[cand(f"s{i}")] for i in range(len(v) + 1)], search_cost=20.0)
+    a = cfg(deadline_s=45)
+    a["bounds"]["acq_round_target_new_docs"] = 1000  # out of reach: only the cap (or the variant list) can stop it
+    cut: list = []
+    t1, t2 = ia.ROUND_CAP.set(cap), ia.ROUND_CUT.set(cut)
+    try:
+        o = h.run(a, stream=True)
+    finally:
+        ia.ROUND_CAP.reset(t1)
+        ia.ROUND_CUT.reset(t2)
+    return h, o, cut, len(v)
+
+
+def test_real_loop_streamed_multiquestion_stops_at_the_cap_with_a_cut_flag(monkeypatch):
+    h, o, cut, nv = _real_loop(monkeypatch, 2)
+    assert nv > 2 and len(h.searches) == 2  # round 0 + one variant round, not the whole variant list
+    assert o.acquisition["stop"] == "round_cap" and o.acquisition["rounds"] == 2 and cut == [True]
+
+
+def test_real_loop_single_question_is_unchanged(monkeypatch):
+    h, o, cut, nv = _real_loop(monkeypatch, None)
+    assert len(h.searches) == nv + 1 and o.acquisition["stop"] == "variants_exhausted" and cut == []
+
+
+def test_real_loop_cap_not_reached_sets_no_cut_flag(monkeypatch):
+    h, o, cut, nv = _real_loop(monkeypatch, 1000)
+    assert len(h.searches) == nv + 1 and cut == []  # the cut flag is set only when the cap actually cut work
