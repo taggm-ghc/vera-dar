@@ -164,8 +164,8 @@ def test_about_sidebar_text_matches_what_the_sidebar_shows():
     _, cfg = _howto_text()
     t = " ".join(cfg["corpus_page"]["paragraphs"])  # CORPUS-DESC-1107: the corpus description has its own page
     assert "never names an individual document" not in t.lower() and "totals only" not in t
-    for shown in ("number of sources", "newest source", "subject areas", "descending order", "Other / mixed", "automatic and approximate", "language model",
-                  "current coverage", "never names an individual source"):
+    for shown in ("number of sources", "newest source", "subjects that occur most often", "language model", "current coverage",
+                  "publication years", "never names an individual source"):
         assert shown in t, shown
     # SIDEBAR-RC-1107: the corpus description is About-only since 35f21fb (HOTFIX-BLURB-1104); About must not
     # describe a sidebar entry or a link that no longer renders.

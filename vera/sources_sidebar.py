@@ -232,12 +232,10 @@ def _subject_lines(sa) -> list[str]:
         n = int(sa["basis_documents"])
         if n <= 0:
             return []
-        lines = [f"**Subject areas** (automatic and approximate; share of {n} documents; each document counts once, under the "
-                 "nearest subject in VERA-DAR's subject list. The subject list is incomplete and still growing; new subject "
-                 "areas are added after owner review):"]  # OD-1108-HITL item 8: never present the listed areas as the complete set
-        doms = sorted(sa.get("domains") or [], key=lambda d: -float(d["share"]))  # descending by share (stable for ties)
-        shown = 0
-        for d in doms:
+        lines = [f"**Subject areas** (provisional; share of {n} documents; each document counts once, under the nearest subject "
+                 "in VERA-DAR's subject list. The subject list is incomplete and still growing; new subject areas are added "
+                 "after owner review):"]  # OD-1108-HITL item 8: never present the listed areas as the complete set
+        for d in sa.get("domains") or []:
             label = plain(str(d["label"])[:1].upper() + str(d["label"])[1:])
             parts = []
             for t in d.get("topics") or []:
@@ -247,14 +245,17 @@ def _subject_lines(sa) -> list[str]:
             if more:
                 parts.append(f"{more} more topic{'s' if more != 1 else ''}")
             lines.append(f"{label}: {_pct(d['share'])}" + (f". Topics: {'; '.join(parts)}." if parts else "."))
-            shown += int(round(float(d["share"]) * 100))
-        # CORPUS-PCT-B-1108 (owner): everything not listed above (smaller areas and unmatched documents) is one
-        # last line, so the percentages add up to 100; no "not matched" headline or sentence.
-        rest = 100 - shown
-        if rest > 0:
-            lines.append(f"Other / mixed: {rest}%")
-        elif 1 - sum(float(d["share"]) for d in doms) > 0.0001:  # a real remainder that rounds to 0%
-            lines.append("Other / mixed: under 1%")
+        o = sa.get("other_domains") or {}
+        if int(o.get("count") or 0) > 0:
+            k = int(o["count"])
+            lines.append(f"Other subject areas: {_pct(o.get('share') or 0)} across {k} more area{'s' if k != 1 else ''}.")
+        if not sa.get("domains"):
+            lines.append("No document matched a listed subject area yet.")
+        else:  # TAXO-MATCH-FIX-1108: exact count, not only a rounded share
+            u = sa.get("unmatched_count")
+            u = int(u) if isinstance(u, int) and not isinstance(u, bool) else int(round(float(sa.get("unmatched_share") or 0) * n))
+            if 0 < u <= n:
+                lines.append(f"Not yet matched to a listed subject area: {u} of {n} documents ({_pct(u / n)}).")
         return lines if all(_model_text_ok(ln) for ln in lines) else []  # defence in depth: all or nothing
     except (KeyError, TypeError, ValueError):
         return []
