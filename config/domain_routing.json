@@ -120,6 +120,8 @@
   "min_chunk_chars": 40,
   "bm25_k1": 1.5,
   "bm25_b": 0.75,
+  "bm25_stem": true,
+  "query_drop_generic": true,
   "branch_k": 20,
   "result_k": 12,
   "asserted_by": "dar_identify",

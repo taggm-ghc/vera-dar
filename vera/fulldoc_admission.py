@@ -542,6 +542,16 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             from vera import acronym_match as _am
             extra = _am.retrieval_terms([g for g in tg.groups if getattr(g, "upper", "")])
             rq = f"{question} {extra}" if extra else question
+        if adm.get("retrieval_drop_generic") is True and icfg:  # RETR-MECH-1109: same filler _q_stems drops (idioms + words)
+            try:
+                from vera.search_query import drop_generic
+                gset = {g[:stem_n] for g in tokenize(" ".join(str(x) for x in (icfg.get("question_generic_terms") or [])), icfg)}
+                kept = [w for w in drop_generic(question).split() if not tokenize(w, icfg)
+                        or all(t[:stem_n] not in gset for t in tokenize(w, icfg))]
+                if any(tokenize(w, icfg) for w in kept):
+                    rq = " ".join(kept) + rq[len(question):]
+            except Exception:
+                pass
         cands = list(_call_retrieve(corpus, rq, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
     except Exception:
         cands = []

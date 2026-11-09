@@ -66,14 +66,40 @@ _IDX_LIMIT = 1 << (32 - _CNT_BITS)
 _CHUNK_KEYS = ("span_id", "source_key", "start", "end", "text", "tf", "len")
 
 
+def light_stem(t: str) -> str:
+    """RETR-MECH-1109: light deterministic suffix stemmer for BM25 terms ("agents"/"agent", "forecasting"/"forecast").
+    Plural (-ies, -sses, -s) and -ing/-ed only; the stem keeps at least 4 characters; short tokens, digits and
+    -ss/-us/-is endings are unchanged. Generic: no word lists."""
+    n = len(t)
+    if n < 5 and not (n == 4 and t.endswith("s")):
+        return t
+    if not t.isalpha():
+        return t
+    if t.endswith("ies") and n >= 6:
+        return t[:-3] + "y"
+    if t.endswith("sses"):
+        return t[:-2]
+    if t.endswith("s") and not t.endswith(("ss", "us", "is")) and n >= 4:
+        return t[:-1]
+    for suf in ("ing", "ed"):
+        if t.endswith(suf) and n - len(suf) >= 4:
+            return t[:-len(suf)]
+    return t
+
+
+def _stem_tokens(toks: list[str], on: bool) -> list[str]:
+    return [light_stem(t) for t in toks] if on else toks
+
+
 class _Chunk(Mapping):
     """Read-only chunk record with the former dict's keys. "text" is the document slice text[start:end] (the same
     string the former record copied) and "tf" is Counter(tokenize(text)) recomputed on demand (same counts, same
     first-occurrence key order). Immutable and shared between corpus versions."""
-    __slots__ = ("doc", "start", "end", "len", "idx", "_icfg")
+    __slots__ = ("doc", "start", "end", "len", "idx", "_icfg", "_stem")
 
-    def __init__(self, doc: dict, start: int, end: int, n_tokens: int, idx: int, icfg: dict):
+    def __init__(self, doc: dict, start: int, end: int, n_tokens: int, idx: int, icfg: dict, stem: bool = False):
         self.doc, self.start, self.end, self.len, self.idx, self._icfg = doc, start, end, n_tokens, idx, icfg
+        self._stem = stem
 
     @property
     def source_key(self) -> str:
@@ -101,7 +127,7 @@ class _Chunk(Mapping):
         if k == "text":
             return self.text
         if k == "tf":
-            return Counter(tokenize(self.text, self._icfg))
+            return Counter(_stem_tokens(tokenize(self.text, self._icfg), self._stem))
         raise KeyError(k)
 
     def __iter__(self):
@@ -278,14 +304,34 @@ class DarCorpus:
             spans[-1] = (spans[-1][0], last[1])
         return [(s, e) for s, e in spans if text[s:e].strip()]
 
+    def _stem_on(self) -> bool:
+        return self.ccfg.get("bm25_stem") is True  # RETR-MECH-1109 (default ON in config/domain_routing.json)
+
+    def _query_terms(self, question: str) -> list[str]:
+        """BM25 query terms: generic idioms dropped (vera.search_query.drop_generic, as admission does; generic words are
+        dropped by the caller, fulldoc_admission), then stemmed.
+        Falls back to all terms when nothing would remain."""
+        q = question
+        toks = tokenize(q, self._icfg)
+        if self.ccfg.get("query_drop_generic") is True:
+            try:
+                from vera.search_query import drop_generic
+                q2 = drop_generic(q)
+                t2 = tokenize(q2, self._icfg)
+                if t2:
+                    toks = t2
+            except Exception:
+                pass
+        return sorted(set(_stem_tokens(toks, self._stem_on())))
+
     def _index_chunk(self, doc: dict, start: int, end: int):
         text = doc["text"][start:end]
-        toks = tokenize(text, self._icfg)
+        toks = _stem_tokens(tokenize(text, self._icfg), self._stem_on())
         tf = Counter(toks)
         idx = len(self._chunks)
         if idx >= _IDX_LIMIT or self._mask is not None:
             raise RuntimeError("compact index: chunk index out of range or ingest into an evidence view")
-        rec = _Chunk(doc, start, end, len(toks), idx, self._icfg)
+        rec = _Chunk(doc, start, end, len(toks), idx, self._icfg, self._stem_on())
         post, big = self._post, self._post_big
         for t, f in tf.items():  # postings first: a failure leaves the chunk list unchanged
             a = post.get(t)
@@ -872,7 +918,7 @@ class DarCorpus:
         bk = int(self.ccfg["branch_k"])
         if not self._chunks:
             return {"candidates": [], "trace": trace}
-        q_terms = sorted(set(tokenize(question, self._icfg)))
+        q_terms = self._query_terms(question)
         fb = domain_routing.FALLBACK
         scores = self._scores(q_terms)  # NOCAP-1109: scored once; each branch takes its pool's top chunks
         branches = [(fb, self._bm25(q_terms, self._chunks, bk, scores))]

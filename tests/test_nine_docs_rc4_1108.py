@@ -75,7 +75,9 @@ def _response(question):
 
 def test_function_word_question_has_raw_candidates_everywhere_but_no_relevant_document():
     ev, rows, head, scope = _response("from where did vera come?")
-    assert len(rows) == 9 and all(r["candidate_spans"] > 0 for r in rows)  # the old count: 9, always
+    # RETR-MECH-1109: the candidate query now drops the generic words ("did", "come") that admission drops, so function
+    # words no longer pull raw candidates (was: > 0 in every document, the old count 9, always)
+    assert len(rows) == 9 and all(r["candidate_spans"] == 0 for r in rows)
     assert all(r["relevant_spans"] == 0 for r in rows)
     assert u.matched_for({"examined_full_documents": rows}) == 0
     assert head.startswith("No stored full document was relevant to this question")

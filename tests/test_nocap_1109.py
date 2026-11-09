@@ -241,7 +241,7 @@ def test_full_rebuild_releases_the_serving_corpus_first(monkeypatch):
 def test_compact_chunk_records_hold_no_text_or_term_map():
     c = fulldoc_db.load_acquired_db(_db(plans100()[:3]), 1, fulldoc_corpus.load_config(), A.cfg())
     ch = c._dar._chunks[0]
-    assert not hasattr(ch, "__dict__") and set(ch.__slots__) == {"doc", "start", "end", "len", "idx", "_icfg"}
+    assert not hasattr(ch, "__dict__") and set(ch.__slots__) == {"doc", "start", "end", "len", "idx", "_icfg", "_stem"}  # RETR-MECH-1109: + _stem (1 pointer per chunk)
     assert ch["text"] == c._dar._docs[ch["source_key"]]["text"][ch["start"]:ch["end"]]
     assert c._dar._by_span[ch["span_id"]] is ch and ch["span_id"] in c._dar._by_span
     assert c._dar._by_span.get(ch["span_id"] + "0") is None and c._dar._by_span.get("x:1-2") is None
