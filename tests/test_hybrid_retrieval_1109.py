@@ -128,9 +128,11 @@ CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct_test", "CLOUDFLARE_AI_TOKEN": "tok-secr
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     hr.reset_for_tests()
+    hr.set_config_for_tests({"enabled": False})  # FLAGON-HYBRID-1109: the shipped file is on; default for tests is off
     emb.reset_budget_for_tests()
     yield
     hr.reset_for_tests()
+    hr.set_config_for_tests({"enabled": False})
     emb.unregister("fakehybrid")
     emb.reset_budget_for_tests()
 
@@ -158,7 +160,7 @@ def test_flag_off_no_new_keys_no_calls_and_same_candidates(monkeypatch):
     called = []
     monkeypatch.setattr(hr, "vector_fn", lambda *a, **k: called.append(1) or (None, None))
     monkeypatch.setattr(hr, "query_vector", lambda *a, **k: called.append(2))
-    assert hr.enabled() is False  # shipped config: OFF
+    assert hr.enabled() is False  # flag off (the suite default; the shipped file is on, FLAGON-HYBRID-1109)
     cands = c.retrieve(Q, 16, True)
     direct = c._evidence_dar().retrieve(Q, 16, max_per_doc=8)
     assert [x["span_id"] for x in cands] == [f"{c._key_to_doc[d['source_key']]}:{d['start']}-{d['end']}" for d in direct["candidates"]]
@@ -401,7 +403,7 @@ def _rr_corpus(monkeypatch, fake=None, **rr):
 
 def test_rerank_off_by_default_and_stage1_unchanged(monkeypatch):
     assert hr._clean({})["rerank"]["enabled"] is False
-    assert json.loads(hr.CONFIG_PATH.read_text())["rerank"]["enabled"] is False
+    assert json.loads(hr.CONFIG_PATH.read_text())["rerank"]["enabled"] is True  # FLAGON-HYBRID-1109: shipped on (clean({}) default stays off)
     c, table = _corpus(spans_b=[(0, len(_texts()[1]))])
     setup_hybrid(monkeypatch, c, table, chunks_per_partition=1)
     out = c.retrieve(Q, 16, True)
