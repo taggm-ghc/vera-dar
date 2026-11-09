@@ -511,7 +511,7 @@ def test_fetch_returns_noai_header_and_meta_robots_signals_only():
     assert out["x_robots_tag"] == "noai" and out["content_signal"] == "ai-input=no"
     assert out["meta_robots"] == "noai, noindex, noimageai"
     assert set(out) == {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href",
-                        "meta_author", "tdm_reservation", "canonical_url", "canonical_signals",
+                        "meta_author", "tdm_reservation", "canonical_url", "canonical_signals", "outbound_links",
                         "third_party_text"}  # H19-T3a; H19-FIX-1109 A8/A11; H19-FIX2-1109
     assert "hello" in out["text"] and "a=b" not in repr(out) and "headers" not in out
 

@@ -35,7 +35,7 @@ import re
 from urllib.parse import urlsplit
 
 DEFAULTS = {
-    "republished_markers": ["originally published by", "originally published in", "originally published on",
+    "republished_markers": ["originally published by", "originally published in", "originally published on", "originally published at", "originally appeared in", "originally appeared on", "originally appeared at",
                             "republished from", "republished with permission", "this story was originally published",
                             "this article was originally published", "this article first appeared",
                             "this story first appeared", "reprinted with permission", "syndicated from"],
@@ -50,14 +50,23 @@ DEFAULTS = {
                              r"\bap photo\b", r"\bgetty images\b", r"\bused with permission\b", r"\bcourtesy of\b"],
     # H19-FIX2-1109 G-b/G-d: credit and attribution lines; each regex ends where the credited name begins. Only a
     # restricted outlet named right after the cue (an optional "the" skipped) makes the page link-only.
-    "attribution_cue_patterns": [r"\bprovided\s+by\b", r"(?<![a-z0-9])sources?\s*:", r"\bcourtesy(?:\s+of)?\b",
-                                 r"\bvia\b", r"\b(?:co-?)?produced\s+by\b",
+    "attribution_cue_patterns": [r"\bprovided\s+by\b", r"\bcourtesy(?:\s+of)?\b", r"\b(?:co-?)?produced\s+by\b",
                                  r"\bin\s+(?:partnership|collaboration|association)\s+with\b",
                                  r"\b(?:reprinted|republished|reproduced|adapted|excerpted)\s+(?:from|by)\b",
                                  r"\b(?:reprinted|republished|reproduced)\s+(?:with|by)\s+(?:the\s+)?(?:kind\s+)?"
                                  r"permission\s+(?:of|from)\b",
-                                 r"\b(?:distributed|published|syndicated)\s+by\b", r"\bcredit\s*:", r"(?m)^\s*by\b",
+                                 r"\b(?:distributed|published|syndicated)\s+by\b",
                                  r"(?:\bcopyright\b|©)\s*(?:©\s*)?(?:\d{4}(?:\s*[-–]\s*\d{4})?\s*,?\s*)?"],
+    # H19-FIX3-1109: cues that are weak for a non-ND restricted outlet ("via BBC Sounds", "By NPR standards",
+    # "Source: Reuters analysis of ...") apply to ND-outlet names only; for other restricted names the end patterns
+    # apply and the name must END the credit (end of line, or , ; . | ( dash after it).
+    "attribution_cue_nd_patterns": [r"(?<![a-z0-9])sources?\s*:", r"\bcredit\s*:", r"\bvia\b", r"(?m)^\s*by\b"],
+    "attribution_cue_end_patterns": [r"(?<![a-z0-9])sources?\s*:", r"\bcredit\s*:"],
+    # H19-FIX3-1109 L1: an outbound link to a restricted outlet whose anchor text or the text just before it reads as
+    # a pointer to the original ("Read the original story", "Originally published at <link>").
+    "outbound_origin_patterns": [r"\b(?:original|full)\s+(?:story|article|post|piece|report|version|text)\b",
+                                 r"\b(?:read|view|see|continue\s+reading)\b.{0,30}\b(?:original|full|rest|more)\b",
+                                 r"\boriginal(?:ly)?\b", r"\bcontinue\s+reading\b"],
     # H19-FIX2-1109 G-e: a no-derivatives licence stated in the page text (no rel=license link needed) -> treated like
     # an ND licence link (page_licence_reject) on rows without an access block.
     "nd_licence_text_patterns": [r"\bcc[\s-]+by(?:[\s-]+nc)?(?:[\s-]+sa)?[\s-]+nd\b", r"\bby-nc-nd\b",
@@ -84,6 +93,11 @@ def _cfg(cfg: dict | None) -> dict:
             if isinstance(v, list) and all(isinstance(x, str) and x for x in v) and v:
                 out[k] = v
     return out
+
+
+def reporting_lane_outlet_row(url, rcfg):
+    from vera import reporting_lane
+    return reporting_lane.outlet_row(url, rcfg)
 
 
 def _host(url: str) -> str:
@@ -142,12 +156,14 @@ def _restricted_row(row) -> bool:
     return isinstance(row, dict) and (isinstance(row.get("access"), dict) or row.get("terms_verdict") != "allow")
 
 
-def _restricted_labels(rcfg: dict) -> set:
+def _restricted_labels(rcfg: dict, nd: bool | None = None) -> set:
     """Outlet names derived mechanically from the restricted rows' hosts ('votebeat.org' -> 'votebeat',
     'kffhealthnews.org' -> 'kffhealthnews'), plus each row's documented `aliases` (H19-FIX2-1109 G-c: 'Kaiser Health
     News' -> 'kaiserhealthnews'); matched against words joined without spaces ("KFF Health News")."""
     out = set()
     for o in (rcfg or {}).get("outlets") or []:
+        if nd is not None and isinstance(o, dict) and isinstance(o.get("access"), dict) != nd:
+            continue  # H19-FIX3-1109: nd=True ND-outlet rows (access block) only, nd=False the other restricted rows
         if _restricted_row(o):
             for a in (o["aliases"] if isinstance(o.get("aliases"), list) else []):
                 lab = "".join(re.findall(r"[a-z0-9]+", str(a).lower())) if isinstance(a, str) else ""
@@ -166,26 +182,57 @@ def _restricted_labels(rcfg: dict) -> set:
 _MAXW = 6  # longest outlet name, in words, matched by joining words ("The New York Times" -> 4)
 
 
-def _names_restricted(window: str, labels: set, *, at_start: bool = False) -> bool:
+_END = re.compile(r"\s*(?:$|[.,;|)\]\u2013\u2014\n-])")
+
+
+def _names_restricted(window: str, labels: set, *, at_start: bool = False, ends: bool = False) -> bool:
     """True when the window names a restricted outlet; with at_start, only a name that begins the window (after an
-    optional "the") counts (credit lines: "Provided by Votebeat", "Source: Common Dreams")."""
-    words = re.findall(r"[a-z0-9]+", window.lower())
+    optional "the") counts (credit lines: "Provided by Votebeat", "Source: Common Dreams"); with ends, the name must
+    also end the credit (end of line or , ; . | ( dash next), so "Source: Reuters analysis of FEC data" is no credit."""
+    spans = [(m.group(), m.end()) for m in re.finditer(r"[a-z0-9]+", window.lower())]
+    words = [w for w, _e in spans]
     starts = ([0, 1] if words[:1] == ["the"] else [0]) if at_start else range(len(words))
     for i in starts:
         for n in range(1, _MAXW + 1):
-            if "".join(words[i:i + n]) in labels:
-                return True
+            if i + n <= len(words) and "".join(words[i:i + n]) in labels:
+                if not ends or _END.match(window, spans[i + n - 1][1]):
+                    return True
     return False
 
 
-def _credit_names_restricted(text: str, pats, labels: set) -> bool:
+def _credit_names_restricted(text: str, pats, labels: set, *, ends: bool = False) -> bool:
     """H19-FIX2-1109 G-b/G-d: an attribution or credit cue (regex) immediately followed by a restricted outlet name."""
     for p in pats:
         if p is None:
             continue
         for m in p.finditer(text):
-            if _names_restricted(text[m.end(): m.end() + 80].lstrip(" \t:-–—,"), labels, at_start=True):
+            if _names_restricted(text[m.end(): m.end() + 80].lstrip(" \t:-–—,"), labels, at_start=True, ends=ends):
                 return True
+    return False
+
+
+def _outbound_restricted(links, here: str, own_row, rcfg: dict, labels: set, origin_pats) -> bool:
+    """H19-FIX3-1109 L1/L2: a link to another site's restricted outlet row that (a) has anchor text or text just before
+    it that points to the original, or (b) is a credit link: the anchor is only the outlet's name and sits in a footer
+    or aside or stands alone as its own line. A plain in-sentence mention link stays usable."""
+    for ln in links:
+        if not isinstance(ln, dict):
+            continue
+        u = str(ln.get("url") or "")
+        h = _host(u)
+        if not h or not here or h == here or h.endswith("." + here) or here.endswith("." + h):
+            continue
+        crow = reporting_lane_outlet_row(u, rcfg)
+        if crow is None or crow is own_row or not _restricted_row(crow):
+            continue
+        text, before = str(ln.get("text") or ""), str(ln.get("before") or "")
+        if any(p is not None and (p.search(text) or p.search(before[-40:])) for p in origin_pats):
+            return True
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        w = words[1:] if words[:1] == ["the"] else words
+        named = bool(words) and ("".join(words) in labels or "".join(w) in labels)
+        if named and (ln.get("footer") or ln.get("alone")):
+            return True
     return False
 
 
@@ -298,11 +345,19 @@ def check(url: str, page: dict, *, row: dict | None = None, cfg: dict | None = N
                 restricted_canon = True
                 break
         labels = _restricted_labels(rcfg)
+        nd_labels = _restricted_labels(rcfg, True)
         named = _cue_names_restricted(low, pc["republished_markers"], labels)
-        credit = _compile(pc["attribution_cue_patterns"])
-        if any(p is None for p in credit):
+        cues = {k: _compile(pc[k]) for k in ("attribution_cue_patterns", "attribution_cue_nd_patterns",
+                                            "attribution_cue_end_patterns", "outbound_origin_patterns")}
+        if any(p is None for v in cues.values() for p in v):
             reasons.append("acc_third_party_config")
-        named = named or _credit_names_restricted(text, credit, labels)
+        # H19-FIX3-1109: every restricted name with the general cues; ND-outlet names also with the weak cues (via,
+        # By line, Source:); the other restricted names with "Source:/Credit:" only when the name ends the credit.
+        named = (named or _credit_names_restricted(text, cues["attribution_cue_patterns"], labels)
+                 or _credit_names_restricted(text, cues["attribution_cue_nd_patterns"], nd_labels)
+                 or _credit_names_restricted(text, cues["attribution_cue_end_patterns"], labels - nd_labels, ends=True)
+                 or _outbound_restricted(page.get("outbound_links") if isinstance(page.get("outbound_links"), list)
+                                         else [], here, row, rcfg, labels, cues["outbound_origin_patterns"]))
         if any(_norm(m) in low for m in markers) or (nd_row and off_site) or restricted_canon or named:
             reasons.append("acc_republished")
         # A10 (re-verify F1): a row's explicit exclude_item_markers always apply. The generic "All Rights Reserved"

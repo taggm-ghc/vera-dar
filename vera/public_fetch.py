@@ -582,6 +582,65 @@ def canonical_signals(html: str, base: str) -> list:
     return out[:10]
 
 
+_LINKBLK = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "td", "th", "section", "article", "ul", "ol",
+            "table", "footer", "header", "aside", "nav", "figcaption", "blockquote", "small"}
+
+
+class _Links(HTMLParser):
+    """H19-FIX3-1109: outbound <a href> links with anchor text, the text before the anchor in its block, whether it sits
+    in a footer/aside, and whether the anchor is the whole block ("alone"). Signal strings only; at most 60 links."""
+
+    def __init__(self, base: str):
+        super().__init__(convert_charrefs=True)
+        self.base, self.out, self.buf, self.cur, self.foot = base, [], [], None, 0
+
+    def _flush(self):
+        text = " ".join("".join(self.buf).split())
+        for item in self.out:
+            if item.get("_b") is self.buf:
+                item["alone"] = bool(item["text"]) and " ".join(text.split()) == item["text"]
+                item.pop("_b", None)
+        self.buf = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _LINKBLK:
+            self._flush()
+            if tag in ("footer", "aside"):
+                self.foot += 1
+        if tag == "a" and len(self.out) < 60:
+            href = _abs_http(self.base, dict(attrs).get("href"))
+            if href:
+                before = " ".join("".join(self.buf).split())[-80:]
+                self.cur = {"url": href, "text": "", "before": before, "footer": self.foot > 0, "alone": False,
+                            "_b": self.buf, "_s": len(self.buf)}
+                self.out.append(self.cur)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.cur is not None:
+            self.cur["text"] = " ".join("".join(self.buf[self.cur.pop("_s"):]).split())[:120]
+            self.cur = None
+        if tag in _LINKBLK:
+            self._flush()
+            if tag in ("footer", "aside") and self.foot:
+                self.foot -= 1
+
+    def handle_data(self, data):
+        self.buf.append(data)
+
+
+def outbound_links(html: str, base: str) -> list:
+    """H19-FIX3-1109 A8: [{"url","text","before","footer","alone"}] for the page's outbound links (max 60). Used by
+    vera.page_licence to see a prominent link to a restricted outlet that has no visible outlet name."""
+    p = _Links(base)
+    try:
+        p.feed(html[:400000])
+        p.close()
+    except Exception:  # noqa: BLE001
+        pass
+    p._flush()
+    return [{k: v for k, v in i.items() if not k.startswith("_")} for i in p.out if "_s" not in i]
+
+
 def _canonical_href(html: str, base: str) -> str:
     """H19-FIX-1109 A8: the first <link rel~=canonical href> as an absolute http(s) URL (signal string); when the page
     has none, the first og:url, twitter:url or JSON-LD url/mainEntityOfPage (H19-FIX2-1109 G-a), else ''."""
@@ -702,7 +761,7 @@ def _tdm_purpose_shadow(rules, url: str) -> None:
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
           robots_cache: dict | None = None, tdm_check: bool = False) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation", "canonical_url", "canonical_signals", "third_party_text"} (H19-FIX-1109: canonical_url and third_party_text feed vera.page_licence A8/A11; H19-FIX2-1109: canonical_signals lists og:url, twitter:url, JSON-LD and amphtml URLs too; H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation", "canonical_url", "canonical_signals", "outbound_links", "third_party_text"} (H19-FIX-1109: canonical_url and third_party_text feed vera.page_licence A8/A11; H19-FIX2-1109: canonical_signals lists og:url, twitter:url, JSON-LD and amphtml URLs too; H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
     `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
     `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
     one request (rules only, never page text); default a fresh dict per call."""
@@ -746,6 +805,7 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
             "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else ""),
             "licence_href": _licence_href(html, final), "meta_author": _meta_author(html), "tdm_reservation": tdm,
             "canonical_url": _canonical_href(html, final), "canonical_signals": canonical_signals(html, final),
+            "outbound_links": outbound_links(html, final) if html else [],
             "third_party_text": third_party_segments(decoded, ctype, clock, end) if html else []}
 
 
