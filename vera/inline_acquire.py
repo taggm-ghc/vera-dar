@@ -674,8 +674,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
     def done(o: Outcome) -> Outcome:
         if st.get("lanes_extra"):  # RETRIEVAL-1109 A3: variant-round lane results, request-local (never cached)
             o.lanes_extra = list(st["lanes_extra"])
-            if any(getattr(lr, "pages", None) for lr in o.lanes_extra):
-                o.no_cache = True
+            o.no_cache = True  # A8 minor 1: never cached, links-only results included (matches the field comment)
         if st.get("web") is not None:  # A6-W: request-local; an outcome holding page text is never cached (R-037)
             o.web = st["web"]
             if o.web.pages:
@@ -1124,6 +1123,10 @@ def _variant_lane(question: str, q: str, acq: dict, st: dict, collect=None) -> i
     try:
         from vera import lane_evidence, reporting_lane, subquery
         if not variant_lane_on(acq) or not reporting_lane.lane_enabled():
+            return 0
+        # A8 minor 2: lane_evidence.collect counts reads per call, so the variant rounds together stop once they have
+        # read the lane's per-request read cap (round 0 keeps its own cap): at most 2 x cap pages per request.
+        if int(st.get("n_lane", 0) or 0) >= int(lane_evidence._read_cap()):
             return 0
         plan = subquery.SubQueryPlan(original=str(question), parts=(subquery.SubPart("V", str(q)),), rule="single")
         res = (collect or lane_evidence.collect)(str(question), plan=plan)

@@ -15,14 +15,10 @@ def url(h):
     return f"https://www.{h}/a/1"
 
 
-def test_nc_basis_unconfirmed_makes_every_nd_row_link_only():
-    # OD-1109-RETRIEVAL (relayed 2026-11-09): the shipped nc_basis is now SATISFIED; the UNCONFIRMED state is patched here.
-    assert CFG["nc_basis"]["status"] == "SATISFIED" and na.nc_basis_confirmed(CFG)
-    CFG_U = copy.deepcopy(CFG)
-    CFG_U["nc_basis"] = {"status": "UNCONFIRMED"}
-    assert not na.nc_basis_confirmed(CFG_U)
+def test_nc_basis_ships_unconfirmed_and_every_nd_row_is_link_only():
+    assert CFG["nc_basis"]["status"] == "UNCONFIRMED" and not na.nc_basis_confirmed(CFG)
     for h in PERMITTED + ["truthout.org", "texastribune.org", "propublica.org"]:
-        v = na.verdict(url(h), CFG_U)
+        v = na.verdict(url(h), CFG)
         assert v["mode"] == "link_only" and "nc_basis_unconfirmed" in v["reasons"] and v["has_access"], h
 
 
@@ -68,12 +64,7 @@ def test_propublica_reconciliation_stays_exclude():
     assert ROWS["theconversation.com"]["terms_verdict"] == "exclude" and "access" not in ROWS["theconversation.com"]
 
 
-def test_no_lane_sees_allow_for_access_rows_while_flag_off(monkeypatch):
-    # OD-1109-RETRIEVAL (relayed 2026-11-09): the shipped flag is now ON (rows are allow, answer-only); flag off is patched here.
-    from vera import licence_gate
-    for h in PERMITTED:
-        assert rl.outlet_verdict(url(h), CFG) == "allow", h  # shipped: nd_news.enabled true and nc_basis SATISFIED
-    monkeypatch.setattr(licence_gate, "nd_news_enabled", lambda *a, **k: False)
+def test_no_lane_sees_allow_for_access_rows_while_flag_off():
     for h in PERMITTED:
         assert rl.outlet_verdict(url(h), CFG) == "links_only", h
     assert rl.outlet_verdict(url("globalvoices.org"), CFG) == "allow"

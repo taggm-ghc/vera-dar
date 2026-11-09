@@ -54,8 +54,9 @@ def test_shipped_defaults():
     c = shipped()
     assert c["allow_query"]["enabled"] is True and c["outlet_query"] == "all"
     assert "_calibration_note" in c["allow_query"]
-    assert c["nc_basis"]["status"] == "SATISFIED" and c["nc_basis"]["ref"] == "NC-BASIS-1"
-    assert lg.nd_news_enabled() is True
+    # A8 option (b): H-1 approved (OD-1109-RETRIEVAL) but held off pending H19 T8a/T8b and the T8c decision
+    assert c["nc_basis"]["status"] == "UNCONFIRMED" and c["nc_basis"]["ref"] == "NC-BASIS-1"
+    assert lg.nd_news_enabled() is False and "T8c" in json.loads(CFG.read_text(encoding="utf-8"))["_h1_hold_note"]
     by = {o["host"]: o["terms_verdict"] for o in c["outlets"]}
     assert by["propublica.org"] == "exclude" and by["theconversation.com"] == "exclude"  # separate H5 decision
 
@@ -109,12 +110,30 @@ def test_allow_query_failure_keeps_all_results():
     assert len(f.urls) == 2 and len(res["items"]) == 2 and res["diag"][0]["status"] == "called"
 
 
-# H-1: ND allow rows
+# H-1: ND allow rows (switch ON in these tests: the shipped state is held off, see test_shipped_defaults)
 ND_URL = "https://www.votebeat.org/2026/11/07/dup"
+_ORIG_LOAD = rl.load_config
+
+
+def _on_cfg(*a, **k):
+    c = _ORIG_LOAD(*a, **k)
+    c = json.loads(json.dumps(c))
+    c["nc_basis"]["status"] = "SATISFIED"
+    return c
+
+
+def nd_on(monkeypatch):
+    monkeypatch.setattr(rl, "load_config", _on_cfg)
+    monkeypatch.setattr(lg, "nd_news_enabled", lambda *a, **k: True)
+
+
+def test_shipped_state_nd_row_is_link_only():
+    assert rl.outlet_verdict(ND_URL, shipped()) == "links_only"
 
 
 def test_nd_row_resolves_full_text_when_on_and_link_only_when_off(monkeypatch):
-    c = shipped()
+    nd_on(monkeypatch)
+    c = rl.load_config(CFG)
     assert na.mode(ND_URL, c) == "full_text" and rl.outlet_verdict(ND_URL, c) == "allow"
     off = json.loads(json.dumps(c))
     off["nc_basis"]["status"] = "UNCONFIRMED"
@@ -123,7 +142,8 @@ def test_nd_row_resolves_full_text_when_on_and_link_only_when_off(monkeypatch):
     assert rl.outlet_verdict(ND_URL, c) == "links_only"
 
 
-def test_nd_candidate_is_defer_answer_only_never_allow_or_stored():
+def test_nd_candidate_is_defer_answer_only_never_allow_or_stored(monkeypatch):
+    nd_on(monkeypatch)
     cand = {"url": ND_URL, "licence": {"content": {"id": "CC-BY-NC-ND-4.0", "url": "https://creativecommons.org/licenses/by-nc-nd/4.0/"}}}
     d, why, code = lg.licence_status(cand)
     assert (d, code) == ("defer", lg.RC_ND_NEWS) and "not stored" in why
@@ -168,6 +188,7 @@ def _run_nd(monkeypatch):
 
 
 def test_nd_allow_row_is_read_answer_only_never_stored(monkeypatch):
+    nd_on(monkeypatch)
     res, f, stored = _run_nd(monkeypatch)
     assert ND_URL in f.calls and len(res.pages) == 1 and res.links[0]["read"] is True
     cfg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text(encoding="utf-8"))

@@ -1,8 +1,8 @@
 {
   "_doc": "R1 licence rule (2026-10-03, approved 2026-10-04; item 72 W4). Reject ONLY: ND, no-educational-use, fee-only. Plain NC is accepted. Missing/unknown licence is held (defer). Detection is by the DECLARED licence id/url and the known markers below only; text inside a page is not scanned. Matching is case-insensitive on tokens split at non-alphanumerics; multi-word markers match as contiguous token runs.",
   "arxiv_html_cc_families": ["by", "by-sa", "by-nc", "by-nc-sa"],
-  "nd_news": {"enabled": true, "families": ["cc-by-nc-nd"], "source_class": "news",
-    "_doc": "H19 (OD-1106-NEWS): ENABLED 2026-11-09 by OD-1109-RETRIEVAL (owner approved H-1, relayed by the coordinator; NC-BASIS-1 SATISFIED in reporting_lane.json). Rollback: set enabled false. When on, an ND CONTENT licence of a listed family on a host whose derived access verdict (vera/news_access.py) is full_text is answer-only (decision defer, never stored). Phase B storage is exception X-1."},
+  "nd_news": {"enabled": false, "families": ["cc-by-nc-nd"], "source_class": "news",
+    "_doc": "H19 (OD-1106-NEWS): ships OFF; flipped only by the release gate (design T9) after NC-BASIS-1 is on record and T8 passes. When on, an ND CONTENT licence of a listed family on a host whose derived access verdict (vera/news_access.py) is full_text is answer-only (decision defer, never stored). Phase B storage is exception X-1."},
   "nd_tokens": ["nd", "noderivs", "noderivatives", "noderivative"],
   "no_educational_use_markers": [
     "no educational use", "not for educational use", "educational use prohibited",

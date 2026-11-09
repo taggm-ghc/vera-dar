@@ -278,6 +278,7 @@ def _run_news(monkeypatch, spy, **inline):
 
 
 def test_a3_news_variant_rounds_each_run_one_lane_pass(monkeypatch):
+    monkeypatch.setattr(lane_evidence, "_read_cap", lambda: 1000)  # the per-request cap is tested separately
     spy = LaneSpy()
     h, o = _run_news(monkeypatch, spy)
     rounds = len(h.searches)
@@ -339,3 +340,17 @@ def test_a3_non_streamed_path_no_variant_lane(monkeypatch):
     monkeypatch.setattr(ia, "_web_read", lambda *a, **k: None)
     h.run(_h.cfg(), stream=False)
     assert len(h.searches) >= 2 and spy.calls == []
+
+
+def test_a8_links_only_lanes_extra_never_cached(monkeypatch):
+    spy = LaneSpy(page=False)
+    _h_, o = _run_news(monkeypatch, spy)
+    assert o.lanes_extra and o.no_cache is True
+
+
+def test_a8_variant_lane_reads_capped_per_request(monkeypatch):
+    monkeypatch.setattr(lane_evidence, "_read_cap", lambda: 2)
+    spy = LaneSpy()
+    h, o = _run_news(monkeypatch, spy)
+    assert len(h.searches) - 1 > 2  # more variant rounds than the cap allows lane passes
+    assert len(spy.calls) == 2 and sum(len(x.pages) for x in o.lanes_extra) == 2
