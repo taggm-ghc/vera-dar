@@ -7,6 +7,8 @@
 - Official-sources lane: built; H5 (OD-1106-HITL) added FEC, Census Bureau and EAC registry rows (status `owner_decided_unverified_paths`: robots.txt and paths not fetched) but the flag stays off until C1, C4, C5, C6, G8 and C7 are closed; `official_lane.enabled` and `official_lane.site_search` in `config/subquery.json` are **false**. The checklist below still applies before it is turned on. Registry verification work: `work/OFFICIAL-LANE-1104/` and `work/OFFICIAL-REGISTRY-VERIFY-1104/`.
 - Because the news lane is on, `vera.disclosure.lanes_disclosure_on()` is true and the lane disclosure text is shown; items for the news lane in the list below were not individually re-checked or recorded as done.
 
+- Update 2026-11-08 (docs-1108; config read at HEAD c8c1daa): flag values unchanged: `enabled` true in `config/reporting_lane.json`; `official_lane.enabled` and `official_lane.site_search` false in `config/subquery.json`. New since the notes above: outbound API calls are default-deny through `config/api_permissions.json` (`gdelt_doc` has an entry, `owner_switch` "default"; `hn_algolia` is `deny`), and generic fetchers refuse API-like URLs with no entry (`config/api_like_patterns.json`); see [vera-design.md](vera-design.md#current-state-at-c8c1daa-2026-11-08). Checklist items were not re-run.
+
 Original text (superseded for the news lane, see above): both lane flags shipped OFF: `official_lane.enabled` in `config/subquery.json` and `enabled` in `config/reporting_lane.json`
 (plus `disclosure_ok` / `state` in `config/reporting_portals.json`). Before enabling either, check and record every item:
 

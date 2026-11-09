@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md)
 
-VERA-DAR provides a FastAPI service for bounded research questions. This page describes the public behaviour of the endpoints; it is not a statement about any particular deployed release. The route list below matches the routes defined in `main.py` as of 2026-10-29; there is no `/ingest` route. `POST /ask/stream` is the streaming variant of `/ask` (newline-delimited JSON; see [Streaming request](#streaming-request-post-askstream)).
+VERA-DAR provides a FastAPI service for bounded research questions. This page describes the public behaviour of the endpoints; it is not a statement about any particular deployed release. The route list below was checked against the route decorators in `main.py` on 2026-11-08 (HEAD c8c1daa): 16 routes, all defined in `main.py` (no router modules); there is no `/ingest` route. Every route in the table exists in code and every route in code is in the table. This is a static reading; no request was made. *Superseded 2026-11-08: the earlier 2026-10-29 check omitted `GET /ask/progress/{rid}`.* `POST /ask/stream` is the streaming variant of `/ask` (newline-delimited JSON; see [Streaming request](#streaming-request-post-askstream)).
 
 ## Endpoints
 
@@ -16,8 +16,9 @@ VERA-DAR provides a FastAPI service for bounded research questions. This page de
 | `GET /trace/public` | Public TRACE evaluation view (historical aggregate, no secrets) | None |
 | `GET /trace/private` | Private TRACE evaluation view | Separate trace-viz key (`VERA_TRACE_VIZ_KEY`) |
 | `POST /ask` | Research question: grounded answer from admitted full-document passages, otherwise a reading list or decline (see [Default behaviour](#default-behaviour)) | `VERA_API_KEY` |
-| `POST /ask/stream` | Same request body as `POST /ask`; answers with newline-delimited JSON progress lines, then one result line (see below) | `VERA_API_KEY` |
-| `GET /corpus-summary` | Agentic digest of the stored corpus (CORPUS-DIGEST-1104): counts, model-written digest checked against recorded facts, subject topics with document shares (topics covering 80% of sampled documents, computed in code), and a generated description of current coverage | `VERA_API_KEY` |
+| `POST /ask/stream` | Same request body as `POST /ask`; answers with newline-delimited JSON progress lines, then one result line (see below). Gate: 404 when `stream.enabled` is false or `VERA_PROGRESS_DISABLED=1` | `VERA_API_KEY` |
+| `GET /ask/progress/{rid}` | Polling side channel: events of one Ask for the browser session that sent it (`X-VERA-Session` header, optional `after` query). Ships off (`enabled` false in `config/progress.json`); every refusal, including off, is an identical 404 | `VERA_API_KEY` |
+| `GET /corpus-summary` | Agentic digest of the stored corpus (CORPUS-DIGEST-1104): counts, model-written digest checked against recorded facts, subject topics with document shares (topics covering 80% of sampled documents, computed in code), `subject_areas` (domain, topic and subtopic shares, code-computed), `published_years` (first and last year), `frequent_subjects` (frequent multi-word phrases, no counts or titles) and a generated description of current coverage. `summary_source` is `disabled` or `unavailable` when the describer is off or fails (fields in `CorpusDescription`, `main.py`; the 2026-11-08 reading did not check which fields the shipped configuration populates) | `VERA_API_KEY` |
 | `GET /trace/request/{id}` | One request's trace: events with codes and counts, the outcome and, owner-only, the question text; 404 if expired, unknown or tracing off (see [Request trace](#endpoints)) | Owner key |
 | `GET /diag/header-shape` | Diagnostic: shapes of forwarding headers only, never values; returns 404 while `config/header_echo.json` `enabled` is false (available, off by default; added to this table 2026-11-05) | Owner key |
 | `GET /memory/pending` | Pending findings for owner review | Owner key |
@@ -28,7 +29,7 @@ Endpoints that require `VERA_API_KEY` expect it in the `X-API-Key` header.
 
 **Request trace.** When request tracing is on (`config/request_trace.json`, `enabled`; it ships on), `/ask` and `/ask/stream` responses, including error responses, carry an `X-VERA-Trace-Id` header: a server-generated 32-character hex id, never a client value. The id is for owner diagnosis only. It never appears in a response body or in the UI. The trace holds stage events with codes, counts and size-capped, scrubbed details, never page text. It is written to log lines and, with `db_sink.enabled`, to the database (migration 015, owner-applied). The question text is kept owner-only (not in host logs while `log_sink.include_question` is false) and purged after 30 days by an owner-run script. Recent traces can be read through the owner route `/trace/request/{id}` (owner key; recent in-memory window; the database view is behind `db_sink.owner_route_db_view`, which ships false). Lane trace events: one `lane` event per request, `done` or `skipped`, with counts (`items`, `pages`, `links`) and closed per-portal tokens (`called` or `skipped`, plus a reason such as `off`, `no_terms`, `circuit`, `spacing`, `throttled`, `failed` or `ok`). The reading-list fallback writes `reading_list` events (`start`, then `done` with a candidate count).
 
-The owner-only endpoints require `VERA_OWNER_KEY` in the `X-Owner-Key` header; without that configuration, the owner routes remain unavailable. The public demonstration does not expose owner actions.
+The owner-only endpoints require `VERA_OWNER_KEY` in the `X-Owner-Key` header; without that configuration (or with a weak or reused key), the owner routes remain unavailable (503, per the comment at `verify_owner_key` in `main.py`; the check itself was not re-read). The public demonstration does not expose owner actions.
 
 ## Streaming request (`POST /ask/stream`)
 
@@ -43,7 +44,7 @@ Lines (one JSON object each):
 
 There is no total deadline on the stream; a run ends when it is met, resource limited, or stalled (no progress event for 300 s, `live.stall_s` in `config/auto_acquire.json`). A heartbeat line is sent every 10 s of silence (`stream.heartbeat_s`). If the client disconnects, the server finishes the in-flight step, keeps documents already admitted, starts nothing new and writes no answer.
 
-Flags: `stream.enabled` in `config/progress.json` (ships true; when false the route answers 404). `VERA_PROGRESS_DISABLED=1` forces the route off. The polling side channel (`GET /ask/progress/{rid}`) is governed separately by `enabled` and stays off.
+Flags: `stream.enabled` in `config/progress.json` (ships true; when false the route answers 404). `VERA_PROGRESS_DISABLED=1` forces the route off. The polling side channel (`GET /ask/progress/{rid}`, in the table above) is governed separately by `enabled` and stays off (`config/progress.json`, checked 2026-11-08).
 
 ## Research request
 

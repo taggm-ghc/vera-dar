@@ -2,6 +2,8 @@
 
 [← Project overview](../README.md)
 
+*Re-checked 2026-11-08 against HEAD c8c1daa: the flag table below (values read from the config files), `deny_hosts` (empty) and the use-for-answer gate sentence (docstring of `vera/source_permissions.py`); the prose on formatting, decomposition and lane behaviour was not re-read against code in this pass, and nothing was tested live.*
+
 Status of everything on this page: **offline-tested only; live behaviour unverified.** (Updated 2026-11-05: the Current-reporting lane is enabled in config at HEAD, see "Flag state"; nothing here has been validated live.) It describes code from the second NONASK-1103 push. The search-lane section and the page-access section describe code prepared for that push. The lanes apply the separate read, use-for-answer and ingest gates (see "Page-access gates").
 
 ## APA 7 house variant: identifiers appended
@@ -81,7 +83,7 @@ The lane notes below predate these changes (offline-tested only). Wikipedia-cita
 ### Which pages are read
 
 - Both lanes use the shared permission record in `vera/source_permissions.py` (owner decisions R-049 and R-050). A page is read only when its read gate passes: robots.txt permits the fetch (checked by the shared fetch module on the same connection, failing closed), the registry `access_verdict` is not "forbid", the host is not on the owner deny-list (`config/source_permissions.json` `deny_hosts`, empty as shipped), and there is no login, paywall or no-crawl signal. Unknown means allowed.
-- A read page is used in the answer only when its use-for-answer gate passes: no No-Derivatives licence, no no-AI signal (`noai` or `Content-Signal` `ai-input=no`) and no registry `derivative_verdict` "forbid". Otherwise it is a reading-list link only.
+- A read page is used in the answer only when its use-for-answer gate passes: no No-Derivatives licence, no no-AI signal (`noai`, `Content-Signal` `ai-input=no`, or, since cf62a55 (2026-11-08), `Content-Usage` `ai-use=n`, read from the docstring only; page-level signal handling was not traced) and no registry `derivative_verdict` "forbid". Otherwise it is a reading-list link only.
 - As shipped, the registry marks AWS, Nvidia and Microsoft Azure documentation `access_verdict` "forbid" (never fetched, links only) and Google Cloud "allow"; the other seeded rows are "unknown".
 - Current-reporting lane: outlet pages linked from GDELT or Hacker News pass the same gates, with at most `admission.max_spans_total` outlet pages read per request.
 
@@ -100,8 +102,8 @@ The lane notes below predate these changes (offline-tested only). Wikipedia-cita
 | `config/subquery.json` | `model_fallback.enabled` | false |
 | `config/reporting_lane.json` | `enabled` | true at HEAD (Superseded 2026-11-05: was false) |
 | `config/reporting_lane.json` | `fallback_order` | ["gdelt"] only (Hacker News no longer in the order) |
-| `config/reporting_lane.json` | `outlets` | 18 listed hosts at HEAD (was empty) |
-| `config/reporting_lane.json` | `emit_link_only` / `outlet_query` | true / "all" in the working tree (owner decision 2026-11-05; HEAD: false / "allowlist") |
+| `config/reporting_lane.json` | `outlets` | 26 listed host entries at HEAD c8c1daa, counted 2026-11-08 (Superseded 2026-11-08: earlier text said 18; was empty before 2026-11-05) |
+| `config/reporting_lane.json` | `emit_link_only` / `outlet_query` | true / "all" at HEAD c8c1daa, file unmodified in the working tree (owner decision 2026-11-05). Superseded 2026-11-08: earlier text said the working tree differed from HEAD (false / "allowlist") |
 | `config/auto_acquire.json` | `search.subquery.enabled` | false |
 | `config/synthesis.json` (synthesis pass) | `enabled` | false |
 | `config/research_loop.json` (research loop) | `enabled` | false |

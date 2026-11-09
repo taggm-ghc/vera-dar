@@ -12,11 +12,13 @@ appear here or in the tool output.
 - (a2) and migration 015: `live_catalog_check.py` checks (table, column) pairs; whether the 015 tables are in its pair list was not checked in this pass. Migrations 007/009/013/014 stay unapplied, so any pair belonging to them blocks (a2) for as long as the code requires it.
 - The 2026-10-30 sentence that migration 007 and change C1 are "pending owner decision" is unchanged: no decision is on record in this tree.
 
+**Update 2026-11-08 (docs-1108, HEAD c8c1daa).** Nothing above is superseded; this is a re-check, read-only and offline. Verified now: `scripts/live_catalog_check.py` sha256 still equals the pin `803e46fe...` quoted below; the gate's checks in `run_offline_checks` are still (a), (a2), (b), (c1), (c2), (c3), but that function is now at `release_gate.py:702` (the `631-649` citation below is stale) and the module docstring still lists only (a)-(c) and (d); `release_preflight.py` still defines G1-G8 with G4 requiring `corpus.enabled` false and discovery layers `["L0"]`. The latest rehearsal result on file, `work/RELEASE-VERIFY-1104/result-20261108T212750Z.md` (repo HEAD c9842c0), records PASS with 11092 passed, 61 skipped, 11 xfailed, S-M contract diff PASS (158 required pairs, 0 added) and "Gate (a2) not run (owner evidence)"; it is a rehearsal, not the release gate, and also lists the offline golden evaluation as a blocking step (OD-1106-EVAL). The release gate is still not recorded as passed for `main`. Not re-checked: the `main` state of migrations 007/009/013/014, the G4 config values, and the pending-decision status of 007 and C1.
+
 <!-- TODO(DOCS-1030 D-REL): after the owner disposes the pending C1 decision, re-touch this file (gate status, the (a2) paragraph and the 007 reference) and the README gate sentence. Do not edit before that decision. -->
 
 ## The release gate: six checks (`scripts/release_gate.py`, as of 2026-10-29)
 
-Read from the code (`run_offline_checks`, `release_gate.py:631-649`); the module docstring still lists only (a)-(c) plus (d) and omits (a2), so follow this table and the code. The gate must be run isolated (`python -I`); it exits 1 with `RESULT: FAIL (gate not run isolated)` otherwise.
+Read from the code (`run_offline_checks`, `release_gate.py:631-649` as of 2026-10-29; Superseded 2026-11-08: now `release_gate.py:702`, same six checks); the module docstring still lists only (a)-(c) plus (d) and omits (a2), so follow this table and the code. The gate must be run isolated (`python -I`); it exits 1 with `RESULT: FAIL (gate not run isolated)` otherwise.
 
 | Check (key printed by the gate) | Function | What it requires |
 | --- | --- | --- |
