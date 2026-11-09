@@ -20,7 +20,6 @@ import os
 import re
 import threading
 import time
-from collections import Counter
 from pathlib import Path
 
 from vera import domain_registry, fulltext_loader
@@ -117,25 +116,25 @@ class FullDocCorpus:
             if self._ev_dar is None:
                 if self._dar is not None:
                     # ACQ-REBUILD-PERF-1021: a fresh index over the same documents, order and config reaches exactly the
-                    # main index's state, so reuse it (shallow copy: shared docs, registry and identifier, read-only at
-                    # retrieve) instead of re-running domain identification; only the chunk list and BM25 stats differ.
-                    ev = copy.copy(self._dar)
+                    # main index's state, so reuse it (shared docs, registry and identifier, read-only at retrieve)
+                    # instead of re-running domain identification; only the chunk list and BM25 stats differ.
+                    base = self._dar
                 else:
-                    ev = DarCorpus(_routing_cfg())
+                    base = DarCorpus(_routing_cfg())
                     for d in self._docs_for_dar:
-                        ev.ingest_document(d)
-                kept = []
-                for c in ev._chunks:
+                        base.ingest_document(d)
+                ranges: dict = {}
+                for a in self.acquired:  # first record per document wins, as in _in_evidence
+                    ranges.setdefault(a.get("document_id"), a.get("evidence_ranges") or ())
+
+                def keep(c):
                     did = self._key_to_doc.get(c["source_key"])
-                    if did is not None and self._in_evidence(did, int(c["start"]), int(c["end"])):
-                        kept.append(c)
-                ev._chunks = kept
-                ev._by_span = {c["span_id"]: c for c in kept}
-                ev._df = Counter()
-                for c in kept:
-                    ev._df.update(c["tf"].keys())
-                ev._total_len = sum(c["len"] for c in kept)
-                self._ev_dar = ev
+                    if did is None:
+                        return False
+                    s, e = int(c["start"]), int(c["end"])
+                    return any(r[0] <= s and e <= r[1] for r in ranges.get(did, ()))
+                # NOCAP-1109: a masked view over the shared compact index (df and length totals over the kept chunks)
+                self._ev_dar = base.evidence_view(keep)
             return self._ev_dar
 
     def retrieve(self, question: str, k: int | None = None, evidence_only: bool = False) -> list:
@@ -577,10 +576,24 @@ def _acq_setup(cfg: dict, env):
 
 
 def _rebuild_acquired(cfg, setup, sig) -> None:
+    """NOCAP-1109: a pure append (only newer rows) extends a fork of the serving corpus with just the new documents
+    (fulldoc_db.extend_acquired_db; the serving corpus keeps answering meanwhile). Anything else (first build, rows
+    removed or changed, a failed append) is a full streamed rebuild, and the serving corpus is released FIRST so two
+    full copies of the index never coexist: until the rebuild finishes get_acquired_corpus() returns None, as after a
+    restart."""
     from vera import fulldoc_db
     acfg, connect, rid = setup
     try:
-        c = fulldoc_db.load_acquired_db(connect, rid, cfg, acfg)
+        with _ACQ_LOCK:
+            old, old_sig = _ACQ["corpus"], _ACQ["sig"]
+        c = None
+        if old is not None and old_sig is not None:
+            c = fulldoc_db.extend_acquired_db(connect, rid, cfg, acfg, old, old_sig, sig)
+        if c is None:
+            with _ACQ_LOCK:
+                _ACQ["corpus"], _ACQ["sig"] = None, None
+            old = None
+            c = fulldoc_db.load_acquired_db(connect, rid, cfg, acfg)
         if c.status == STATUS_OK and c.acquired and (cfg.get("retrieval") or {}).get("evidence_only"):
             c._evidence_dar()  # pre-warm the evidence-only index here, never on the request path (measured, plan V7)
         with _ACQ_LOCK:

@@ -53,14 +53,14 @@ def test_legacy_newest_n_unchanged_when_null():
 
 def test_load_acquired_db_uses_config_switch(monkeypatch):
     seen = []
-    monkeypatch.setattr(fulldoc_db, "fetch_acquired_rows", lambda *a, **k: seen.append(k) or ([], []))
-    monkeypatch.setattr(fulldoc_db, "load_acquired_rows", lambda *a, **k: "ok")
+    monkeypatch.setattr(fulldoc_db, "acquired_ids_per_topic", lambda *a, **k: seen.append(a[4]) or [])
     base = {"marker": "m", "micro_topic": MT}
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": 3}})
-    assert seen[0] == {} and seen[1] == {}
-    assert seen[2]["per_topic_max"] == 3 and "scan_max" not in seen[2]  # OD-1109-NOCAP: no scan cap
+    for b in ({}, {"served_per_topic_max": None}):
+        log = []
+        fulldoc_db.load_acquired_db(lambda: _Conn(_rows_full(), log), 1, {}, {**base, "bounds": b})
+        assert log[0] == fulldoc_db.SQL_ACQ_INDEX  # every row listed (OD-1109-NOCAP), read by id in batches
+    fulldoc_db.load_acquired_db(lambda: _Conn(_rows_full(), []), 1, {}, {**base, "bounds": {"served_per_topic_max": 3}})
+    assert seen == [3]  # only a numeric (rollback) ceiling takes the per-topic selection; no scan cap
 
 
 def test_selection_over_2000_rows_is_fast():

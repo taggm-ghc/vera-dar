@@ -304,7 +304,7 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
     dar = None
     if docs and not build_index:
         # ACQ-REBUILD-PERF-1021 (acquired path only): verification without the throwaway per-run index. The caller
-        # (_load_acquired) indexes the kept documents once and applies the same index-refusal rule there.
+        # (_AcqBuilder.add) indexes the kept documents once and applies the same index-refusal rule there.
         return _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, None, key_to_doc, cfg, docs))
     if docs:
         dar = DarCorpus(_routing_cfg())
@@ -702,148 +702,192 @@ def fetch_acquired_rows(connect, base_run_id, marker: str, limit: int | None = N
 
 
 def load_acquired_rows(sources: list, spans: list, cfg: dict, acq_cfg: dict, ingest_cfg: dict | None = None) -> FullDocCorpus:
-    """One FullDocCorpus of the acquired documents. Never raises. Rows are processed newest first (source_id DESC).
-    A document is served only if its run verifies alone. OD-1109-NOCAP: no document-count or byte cap; every row
-    that passes the per-document checks is served."""
+    """One FullDocCorpus of the acquired documents. Never raises. Rows are processed newest first (source_id DESC),
+    in the per-micro-topic order when configured. A document is served only if its run verifies alone.
+    OD-1109-NOCAP: no document-count or byte cap; every row that passes the per-document checks is served."""
     try:
-        return _load_acquired(list(sources or ()), list(spans or ()), cfg, acq_cfg, ingest_cfg)
+        b = _AcqBuilder(cfg, acq_cfg, ingest_cfg)
+        b.add(list(sources or ()), list(spans or ()), order="legacy")
+        return b.finish()
     except Exception as e:  # noqa: BLE001  fail closed
         return _unusable_corpus(cfg, [], R_ERR, f"acquired rows could not be loaded ({type(e).__name__})")
 
 
-def _load_acquired(sources, spans, cfg, acq_cfg, ingest_cfg) -> FullDocCorpus:
-    from vera import acq_config
+def _acquired_open_cfg(cfg: dict) -> dict:
+    """The pins-free config for acquired runs (they are not part of the bundle). CTL-PIN exception site (formerly in
+    _load_acquired; moved unchanged by NOCAP-1109)."""
+    return {k: v for k, v in cfg.items() if k != "pins"}
 
-    if ingest_cfg is None:
-        ingest_cfg = acq_config.ingest_cfg(fulltext_loader.load_config(), acq_cfg)
-    open_cfg = {k: v for k, v in cfg.items() if k != "pins"}  # pins-free: acquired runs are not part of the bundle
-    # H1B-PROMOTE-1107: the base pins do not cover acquired runs; the repository manifest config/acquired_pins.json does
-    from vera import acquired_pins as ap
-    pm = ap.load()
-    pmode = pm["mode"]
-    ek = ap.EPHEMERAL_KEY
-    by_src: dict = {}
-    for sp in spans:
-        by_src.setdefault(sp.get("source_id"), []).append(sp)
-    runs: dict = {}
-    ordered = sorted(sources, key=lambda r: -int(r.get("source_id") or 0))
-    rest: list = []
-    if pmode == "on":  # pinned stored rows and in-memory inline rows are served; the rest only meet quarantine
-        pids = ap.pinned_ids(pm)
-        keep = [r for r in ordered if r.get(ek) is True or ap.row_document_id(r) in pids]
-        rest = [r for r in ordered if not (r.get(ek) is True or ap.row_document_id(r) in pids)]
-        ordered = keep
-    use_pt, ptm = _per_topic_mode(acq_cfg)
-    if use_pt:  # L9 / FLOOR6: per-micro-topic order (a numeric served_per_topic_max, rollback only, still bounds a topic)
-        first = _first_span_texts(spans)  # D1: real rows have content '' (text is in the spans)
-        pick = select_served([{"source_id": r.get("source_id"), "provenance": r.get("provenance"),
-                               "content": r.get("content") or first.get(r.get("source_id"))} for r in ordered], ptm,
-                             acq_cfg.get("micro_topic") or {})
-        rank = {sid: i for i, sid in enumerate(pick)}
-        ordered = sorted((r for r in ordered if r.get("source_id") in rank), key=lambda r: rank[r.get("source_id")])
-    for row in ordered + rest:  # H1B review: an in-memory row never shares a run group with a stored row
-        runs.setdefault((row.get(ek) is True, row.get("run_id")), []).append(row)
-    acquired, unusable, texts, key_to_doc, docs = [], [], {}, {}, []
-    seen_keys, seen_hashes = set(), set()
-    stamps: dict = {}
-    pin_candidates: dict = {}
-    report = {"mode": pmode, "pinned": 0, "unpinned": 0, "mismatch": 0, "ephemeral": 0, "manifest_error": pm["error"]}
-    for (is_eph, rid), rows in runs.items():
-        rspans = [sp for r in rows for sp in by_src.get(r.get("source_id"), [])]
-        bare = [{k: v for k, v in r.items() if k not in ("run_id", ek)} for r in rows]
-        c = load_from_rows(bare, rspans, open_cfg, ingest_cfg, extra_keys=ACQ_EXTRA_KEYS, build_index=False)
-        unusable.extend(c.unusable)
-        stamps.update(getattr(c, "stamps", None) or {})
-        provs, eph = {}, set()
-        for r in rows:
-            try:
-                p = _prov(r)
-            except Exception:  # noqa: BLE001
+
+class _AcqBuilder:
+    """Builds the acquired FullDocCorpus from batches of stored rows (NOCAP-1109). Each batch is verified (one run at a
+    time, the same checks as before) and its accepted documents are indexed at once, so a streamed build holds only
+    one batch of raw rows. Duplicates are refused against everything accepted so far. With `base`, the builder
+    continues an existing corpus (append): its state is copied and its index forked, never rebuilt."""
+
+    def __init__(self, cfg: dict, acq_cfg: dict, ingest_cfg: dict | None = None, base: FullDocCorpus | None = None):
+        from vera import acq_config
+        from vera import acquired_pins as ap
+        self.cfg, self.acq_cfg = cfg, acq_cfg
+        self.ingest_cfg = ingest_cfg if ingest_cfg is not None else acq_config.ingest_cfg(fulltext_loader.load_config(),
+                                                                                          acq_cfg)
+        self.open_cfg = _acquired_open_cfg(cfg)
+        # H1B-PROMOTE-1107: the base pins do not cover acquired runs; the manifest config/acquired_pins.json does
+        self.pm = ap.load()
+        self.pmode = self.pm["mode"]
+        st = getattr(base, "_acq_state", None) if base is not None else None
+        if st is not None:
+            self.acquired, self.unusable = list(base.acquired), list(base.unusable)
+            self.texts, self.key_to_doc, self.docs = dict(base._texts), dict(base._key_to_doc), list(base._docs_for_dar)
+            self.seen_keys, self.seen_hashes = set(st["seen_keys"]), set(st["seen_hashes"])
+            self.stamps = dict(base.stamps)
+            self.pin_candidates = dict(getattr(base, "pin_candidates", None) or {})
+            self.report = dict(st["report"])
+            self.dar = base._dar.fork() if base._dar is not None else None
+        else:
+            self.acquired, self.unusable, self.texts, self.key_to_doc, self.docs = [], [], {}, {}, []
+            self.seen_keys, self.seen_hashes = set(), set()
+            self.stamps, self.pin_candidates = {}, {}
+            self.report = {"mode": self.pmode, "pinned": 0, "unpinned": 0, "mismatch": 0, "ephemeral": 0,
+                           "manifest_error": self.pm["error"]}
+            self.dar = None
+        self.order = None
+
+    def discard(self) -> None:
+        if self.dar is not None and getattr(self.dar, "_fork_base", None) is not None:
+            self.dar.discard()
+
+    def add(self, sources: list, spans: list, order: str) -> None:
+        """order "legacy": newest first (source_id DESC), per-micro-topic order when configured (the in-memory and
+        test callers). order "oldest": source_id ascending (the stored-corpus path), so appending newer rows later
+        gives exactly the corpus a full build would."""
+        from vera import acq_config
+        from vera import acquired_pins as ap
+        self.order = order
+        acq_cfg, pm, pmode = self.acq_cfg, self.pm, self.pmode
+        ek = ap.EPHEMERAL_KEY
+        by_src: dict = {}
+        for sp in spans:
+            by_src.setdefault(sp.get("source_id"), []).append(sp)
+        sign = 1 if order == "oldest" else -1
+        ordered = sorted(sources, key=lambda r: sign * int(r.get("source_id") or 0))
+        rest: list = []
+        if pmode == "on":  # pinned stored rows and in-memory inline rows are served; the rest only meet quarantine
+            pids = ap.pinned_ids(pm)
+            keep = [r for r in ordered if r.get(ek) is True or ap.row_document_id(r) in pids]
+            rest = [r for r in ordered if not (r.get(ek) is True or ap.row_document_id(r) in pids)]
+            ordered = keep
+        use_pt, ptm = _per_topic_mode(acq_cfg)
+        if use_pt and (order == "legacy" or ptm is not None):  # L9 / FLOOR6 order; a numeric ceiling is rollback only
+            first = _first_span_texts(spans)  # D1: real rows have content '' (text is in the spans)
+            pick = select_served([{"source_id": r.get("source_id"), "provenance": r.get("provenance"),
+                                   "content": r.get("content") or first.get(r.get("source_id"))} for r in ordered], ptm,
+                                 acq_cfg.get("micro_topic") or {})
+            rank = {sid: i for i, sid in enumerate(pick)}
+            ordered = [r for r in ordered if r.get("source_id") in rank]
+            if order == "legacy":
+                ordered.sort(key=lambda r: rank[r.get("source_id")])
+        runs: dict = {}
+        for row in ordered + rest:  # H1B review: an in-memory row never shares a run group with a stored row
+            runs.setdefault((row.get(ek) is True, row.get("run_id")), []).append(row)
+        batch_docs = []
+        for (is_eph, rid), rows in runs.items():
+            rspans = [sp for r in rows for sp in by_src.get(r.get("source_id"), [])]
+            bare = [{k: v for k, v in r.items() if k not in ("run_id", ek)} for r in rows]
+            c = load_from_rows(bare, rspans, self.open_cfg, self.ingest_cfg, extra_keys=ACQ_EXTRA_KEYS, build_index=False)
+            self.unusable.extend(c.unusable)
+            self.stamps.update(getattr(c, "stamps", None) or {})
+            provs, eph = {}, set()
+            for r in rows:
+                try:
+                    p = _prov(r)
+                except Exception:  # noqa: BLE001
+                    continue
+                if (p.get("acquisition") or {}).get("marker") != acq_cfg.get("marker"):
+                    continue
+                provs[p.get("document_id")] = p
+                if is_eph:
+                    eph.add(p.get("document_id"))
+            for a in c.acquired:
+                did = a["document_id"]
+                text = c._texts[did]
+                key = a["canonical_source_id"]
+                if did not in provs:
+                    self.unusable.append(_unusable(did, R_DBROW, "acquired row carries no matching acquisition marker"))
+                    continue
+                try:  # WED-P17-VER v2: every JATS licence element, re-decided at read (filters apply to all ingest)
+                    from vera import auto_acquire
+                    lic = ((provs[did].get("licence") or {}).get("content") or {}).get("id")
+                    elements = (provs[did].get("meta") or {}).get("jats_licences")
+                    if not isinstance(elements, list):
+                        raise fulltext_loader.Refused(R_DBROW, "acquired row has no licence-element record")
+                    auto_acquire.licence_elements_decision(elements, lic, self.ingest_cfg)
+                except fulltext_loader.Refused as e:
+                    self.unusable.append(_unusable(did, e.code, e))
+                    continue
+                if acq_config.injection_refused(text, acq_cfg):  # re-applied at read (filters apply to all ingest)
+                    self.unusable.append(_unusable(did, R_ACQINJECT, "instruction-like text found by the injection scan"))
+                    continue
+                if did in eph:  # fetched within this request, verified in memory, never read back from the DB
+                    self.report["ephemeral"] += 1
+                else:
+                    got = ap.pin_entry(text, provs[did], key, a.get("licence"), a.get("licence_decision"))
+                    self.pin_candidates[did] = {**got, "acquired_on": str(
+                        (provs[did].get("acquisition") or {}).get("acquired_at") or "")[:10] or None}
+                    if pmode != "off":
+                        if pm["error"] is not None:
+                            if pmode == "on":
+                                self.unusable.append(_unusable(did, ap.R_PINCFG, "acquired pins manifest unusable"))
+                                continue
+                        else:
+                            st = ap.status(pm, did, got)
+                            self.report[st] += 1
+                            if st == "mismatch":
+                                self.unusable.append(_unusable(did, ap.R_PINMISMATCH, "stored document differs from its pin"))
+                                continue
+                            if st == "unpinned" and pmode == "on":
+                                self.unusable.append(_unusable(did, ap.R_QUARANTINE, "stored document not promoted (no pin)"))
+                                continue
+                if key in self.seen_keys or a["text_sha256"] in self.seen_hashes or did in self.texts:
+                    self.unusable.append(_unusable(did, R_DUP, "acquired document duplicated"))
+                    continue
+                self.seen_keys.add(key)
+                self.seen_hashes.add(a["text_sha256"])
+                self.texts[did] = text
+                self.key_to_doc[key] = did
+                p = provs[did]
+                if p.get("isbn"):
+                    a = {**a, "isbn": p["isbn"]}
+                self.acquired.append(a)
+                for d in c._docs_for_dar:
+                    if d["source_key"] == key:
+                        batch_docs.append({**d, **({"isbn": p["isbn"]} if p.get("isbn") else {})})
+        if not batch_docs:
+            return
+        if self.dar is None:
+            self.dar = DarCorpus(_routing_cfg())
+        for d in batch_docs:  # the index-refusal rule (ACQ-REBUILD-PERF-1021): refused => UNUSABLE
+            res = self.dar.ingest_document(d)
+            if res.get("status") != "indexed":
+                did = self.key_to_doc.pop(d["source_key"], None)
+                self.texts.pop(did, None)
+                self.acquired[:] = [a for a in self.acquired if a["document_id"] != did]
+                self.unusable.append(_unusable(did, R_ERR, f"retrieval index refused the document ({res.get('reason')})"))
                 continue
-            if (p.get("acquisition") or {}).get("marker") != acq_cfg.get("marker"):
-                continue
-            provs[p.get("document_id")] = p
-            if is_eph:
-                eph.add(p.get("document_id"))
-        for a in c.acquired:
-            did = a["document_id"]
-            text = c._texts[did]
-            key = a["canonical_source_id"]
-            if did not in provs:
-                unusable.append(_unusable(did, R_DBROW, "acquired row carries no matching acquisition marker"))
-                continue
-            try:  # WED-P17-VER v2: every JATS licence element, re-decided at read (filters apply to all ingest)
-                from vera import auto_acquire
-                lic = ((provs[did].get("licence") or {}).get("content") or {}).get("id")
-                elements = (provs[did].get("meta") or {}).get("jats_licences")
-                if not isinstance(elements, list):
-                    raise fulltext_loader.Refused(R_DBROW, "acquired row has no licence-element record")
-                auto_acquire.licence_elements_decision(elements, lic, ingest_cfg)
-            except fulltext_loader.Refused as e:
-                unusable.append(_unusable(did, e.code, e))
-                continue
-            if acq_config.injection_refused(text, acq_cfg):  # re-applied at read (filters apply to all ingest)
-                unusable.append(_unusable(did, R_ACQINJECT, "instruction-like text found by the injection scan"))
-                continue
-            if did in eph:  # fetched within this request, verified in memory, never read back from the DB
-                report["ephemeral"] += 1
-            else:
-                got = ap.pin_entry(text, provs[did], key, a.get("licence"), a.get("licence_decision"))
-                pin_candidates[did] = {**got, "acquired_on": str((provs[did].get("acquisition") or {}).get("acquired_at")
-                                                                 or "")[:10] or None}
-                if pmode != "off":
-                    if pm["error"] is not None:
-                        if pmode == "on":
-                            unusable.append(_unusable(did, ap.R_PINCFG, "acquired pins manifest unusable"))
-                            continue
-                    else:
-                        st = ap.status(pm, did, got)
-                        report[st] += 1
-                        if st == "mismatch":
-                            unusable.append(_unusable(did, ap.R_PINMISMATCH, "stored document differs from its pin"))
-                            continue
-                        if st == "unpinned" and pmode == "on":
-                            unusable.append(_unusable(did, ap.R_QUARANTINE, "stored document not promoted (no pin)"))
-                            continue
-            if key in seen_keys or a["text_sha256"] in seen_hashes or did in texts:
-                unusable.append(_unusable(did, R_DUP, "acquired document duplicated"))
-                continue
-            seen_keys.add(key)
-            seen_hashes.add(a["text_sha256"])
-            texts[did] = text
-            key_to_doc[key] = did
-            p = provs[did]
-            if p.get("isbn"):
-                a = {**a, "isbn": p["isbn"]}
-            acquired.append(a)
-            for d in c._docs_for_dar:
-                if d["source_key"] == key:
-                    docs.append({**d, **({"isbn": p["isbn"]} if p.get("isbn") else {})})
-    if not acquired:
-        out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
-                            {}, None, {}, cfg)
+            self.docs.append(d)
+
+    def finish(self) -> FullDocCorpus:
+        cfg = self.cfg
+        if not self.acquired:
+            out = FullDocCorpus(STATUS_UNUSABLE, [], self.unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
+                                {}, None, {}, cfg)
+        else:
+            out = _with_stamps(self.stamps, FullDocCorpus(STATUS_OK, self.acquired, self.unusable, self.texts, self.dar,
+                                                          self.key_to_doc, cfg, self.docs))
         out.source_kind = "db"
-        return _pin_attrs(out, pin_candidates, report)
-    dar = DarCorpus(_routing_cfg())
-    kept_docs = []
-    for d in docs:  # the index-refusal rule the per-run load applied before (ACQ-REBUILD-PERF-1021): refused => UNUSABLE
-        res = dar.ingest_document(d)
-        if res.get("status") != "indexed":
-            did = key_to_doc.pop(d["source_key"], None)
-            texts.pop(did, None)
-            acquired[:] = [a for a in acquired if a["document_id"] != did]
-            unusable.append(_unusable(did, R_ERR, f"retrieval index refused the document ({res.get('reason')})"))
-            continue
-        kept_docs.append(d)
-    docs = kept_docs
-    if not acquired:
-        out = FullDocCorpus(STATUS_UNUSABLE, [], unusable or [_unusable(None, R_DBEMPTY, "no acquired documents")],
-                            {}, None, {}, cfg)
-        out.source_kind = "db"
-        return _pin_attrs(out, pin_candidates, report)
-    out = _with_stamps(stamps, FullDocCorpus(STATUS_OK, acquired, unusable, texts, dar, key_to_doc, cfg, docs))
-    out.source_kind = "db"
-    return _pin_attrs(out, pin_candidates, report)
+        out._acq_state = {"seen_keys": self.seen_keys, "seen_hashes": self.seen_hashes, "report": self.report,
+                          "order": self.order}
+        return _pin_attrs(out, self.pin_candidates, dict(self.report))
 
 
 def _pin_attrs(out, pin_candidates: dict, report: dict):
@@ -855,29 +899,138 @@ def _pin_attrs(out, pin_candidates: dict, report: dict):
     return out
 
 
-def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocCorpus:
-    """Never raises: any DB failure => an unusable (empty) acquired corpus; the base corpus is unaffected."""
-    rid = parse_run_id(base_run_id)
-    if rid is None:
-        return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
-    try:
-        use_pt, ptm = _per_topic_mode(acq_cfg)
-        if use_pt:  # OD-1109-NOCAP: every stored acquired row is read; no document, byte or scan cap
-            extra = {} if ptm else {"topic_balanced": True}  # FLOOR6-1028: no ceiling, balanced order
-            from vera import acquired_pins
-            pm = acquired_pins.load()
-            if pm["mode"] == "on":  # H1B-PROMOTE-1107: only pinned rows are served
-                extra["allow_ids"] = acquired_pins.pinned_ids(pm)
-            sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"], per_topic_max=ptm,
-                                                 micro_cfg=acq_cfg.get("micro_topic") or {}, **extra)
-        else:
-            sources, spans = fetch_acquired_rows(connect, rid, acq_cfg["marker"])
-    except Exception as e:  # noqa: BLE001
-        return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
-    c = load_acquired_rows(sources, spans, cfg, acq_cfg)
+# NOCAP-1109: streamed reads of the stored acquired rows. The id list is read first (no content); rows and spans are then
+# read and verified ACQ_BATCH documents at a time, so raw rows never pile up. SQL_ACQ_INDEX_AFTER lists only rows newer
+# than a source_id (the append refresh).
+ACQ_BATCH = 25
+SQL_ACQ_INDEX_AFTER = (f"SELECT s.source_id, d.run_id, s.provenance {SQL_ACQ_FILTER} AND s.source_id > %(after)s "
+                       f"ORDER BY s.source_id DESC")
+
+
+def _acq_ids(conn, cur, rid: int, acq_cfg: dict, after=None) -> tuple[list, int]:
+    """(source ids to serve in ascending order, number of marked rows listed before the pins pre-selection). A
+    numeric served_per_topic_max (rollback only) selects per micro-topic over the whole set."""
+    from vera import acquired_pins
+    marker = acq_cfg["marker"]
+    use_pt, ptm = _per_topic_mode(acq_cfg)
+    pm = acquired_pins.load()
+    allow = acquired_pins.pinned_ids(pm) if pm["mode"] == "on" else None  # H1B-PROMOTE-1107: only pinned rows
+    if after is None and use_pt and ptm is not None:
+        ids = acquired_ids_per_topic(conn, cur, rid, marker, ptm, acq_cfg.get("micro_topic") or {}, allow_ids=allow)
+        return sorted(int(x) for x in ids), -1
+    params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(rid)}
+    if after is not None:
+        params["after"] = int(after)
+    rows = _select(cur, SQL_ACQ_INDEX if after is None else SQL_ACQ_INDEX_AFTER, params)
+    idx = [{"source_id": r[0], "run_id": r[1], "provenance": r[2]} for r in rows]
+    n_listed = len(idx)
+    if allow is not None:
+        idx = [i for i in idx if acquired_pins.row_document_id(i) in allow]
+    return sorted(int(i["source_id"]) for i in idx), n_listed
+
+
+def _acq_batches(conn, cur, rid: int, acq_cfg: dict, sids: list):
+    params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(acq_cfg["marker"]), "base": int(rid)}
+    for i in range(0, len(sids), ACQ_BATCH):
+        part = sids[i:i + ACQ_BATCH]
+        srows = _select_compat(conn, cur, SQL_ACQ_SOURCES_BY_ID, {**params, "sids": part})
+        sources = [{"run_id": r[0], "source_id": r[1], "canonical_url": r[2], "content": r[3], "content_hash": r[4],
+                    "provenance": r[5], **_at(r, 6)} for r in srows]
+        ids = [x["source_id"] for x in sources]
+        prow = _select_compat(conn, cur, SQL_SPANS, {"ids": ids}) if ids else []
+        spans = [{"source_id": r[0], "start_index": r[1], "end_index": r[2], "text": r[3],
+                  **({"span_id": r[4]} if len(r) > 4 else {}), **_at(r, 5)} for r in prow]
+        yield sources, spans
+
+
+def _close(conn, cur) -> None:
+    for x in (cur, conn):
+        try:
+            x.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _log_pins(c) -> None:
     rep = getattr(c, "pin_report", None)
     if rep:  # counts only (no ids, titles or URLs)
         logging.getLogger("vera").info("acquired pins: mode=%s pinned=%d unpinned=%d mismatch=%d manifest_error=%s",
                                        rep["mode"], rep["pinned"], rep["unpinned"], rep["mismatch"],
                                        "yes" if rep["manifest_error"] else "no")
+
+
+def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocCorpus:
+    """Never raises: any DB failure => an unusable (empty) acquired corpus; the base corpus is unaffected.
+    OD-1109-NOCAP: every stored acquired row is read (no document, byte or scan cap), streamed in batches, oldest
+    first, so a later append (extend_acquired_db) reaches exactly the corpus a full build would."""
+    rid = parse_run_id(base_run_id)
+    if rid is None:
+        return _unusable_corpus(cfg, [], R_DBRUN, "run id is not a positive integer")
+    try:
+        conn = connect()
+        cur = conn.cursor()
+    except Exception as e:  # noqa: BLE001
+        return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
+    try:
+        b = _AcqBuilder(cfg, acq_cfg)
+        b.order = "oldest"
+        sids, _ = _acq_ids(conn, cur, rid, acq_cfg)
+        for sources, spans in _acq_batches(conn, cur, rid, acq_cfg, sids):
+            b.add(sources, spans, order="oldest")
+    except Exception as e:  # noqa: BLE001
+        return _unusable_corpus(cfg, [], R_DBCONN, f"acquired rows could not be read ({type(e).__name__})")
+    finally:
+        _close(conn, cur)
+    try:
+        c = b.finish()
+    except Exception as e:  # noqa: BLE001  fail closed
+        return _unusable_corpus(cfg, [], R_ERR, f"acquired rows could not be loaded ({type(e).__name__})")
+    _log_pins(c)
+    return c
+
+
+def extend_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict, corpus, old_sig, new_sig):
+    """NOCAP-1109 append refresh. When the change since `old_sig` is a pure append (every marked row newer than the old
+    maximum source_id, and exactly new_count - old_count of them), verify and index ONLY those rows on a fork of
+    `corpus` (the serving corpus is never modified) and return the new corpus; otherwise None (the caller then does a
+    full rebuild). Never raises; a failure discards the fork and returns None."""
+    rid = parse_run_id(base_run_id)
+    st = getattr(corpus, "_acq_state", None)
+    if rid is None or st is None or st.get("order") != "oldest" or corpus.status != STATUS_OK or corpus._dar is None:
+        return None
+    try:
+        old_max, old_n = old_sig
+        new_max, new_n = new_sig
+        if old_max is None or new_max is None or new_max <= old_max or new_n <= old_n:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    use_pt, ptm = _per_topic_mode(acq_cfg)
+    if ptm is not None:  # a numeric per-topic ceiling selects over the whole set: not appendable
+        return None
+    b = None
+    try:
+        conn = connect()
+        cur = conn.cursor()
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        sids, n_listed = _acq_ids(conn, cur, rid, acq_cfg, after=old_max)
+        if n_listed != new_n - old_n:
+            return None  # rows were also removed or changed: not a pure append
+        b = _AcqBuilder(cfg, acq_cfg, base=corpus)
+        b.order = "oldest"
+        for sources, spans in _acq_batches(conn, cur, rid, acq_cfg, sids):
+            b.add(sources, spans, order="oldest")
+        c = b.finish()
+    except Exception:  # noqa: BLE001
+        if b is not None:
+            b.discard()
+        return None
+    finally:
+        _close(conn, cur)
+    if c.status != STATUS_OK:
+        b.discard()
+        return None
+    _log_pins(c)
     return c

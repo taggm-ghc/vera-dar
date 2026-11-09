@@ -12,7 +12,7 @@
       "must_cover": ["E1", "E2"],
       "covered": ["E1"],
       "exceptions": [
-        {"path": "E2", "reason": "acquired documents are served without pins (WED-ACQ2 V2)", "accepted_by": "owner 2026-11-07 (H1: accept the documented risk through 2026-11-21; select H1(b))", "review_by": "2026-11-30", "condition": "owner-run pin export before 2026-11-21, otherwise the extension lapses on 2026-11-21", "extended_by": "OD-1109-HD1 (2026-11-09; the export does not close the vulnerability; H1(b) batch promotion retained)", "owner": "orchestrator", "site": "vera/fulldoc_db.py:_load_acquired", "exit": "repository-pinned manifest config/acquired_pins.json in mode on after the first promotion batch (H1B-PROMOTE-1107)"}
+        {"path": "E2", "reason": "acquired documents are served without pins (WED-ACQ2 V2)", "accepted_by": "owner 2026-11-07 (H1: accept the documented risk through 2026-11-21; select H1(b))", "review_by": "2026-11-30", "condition": "owner-run pin export before 2026-11-21, otherwise the extension lapses on 2026-11-21", "extended_by": "OD-1109-HD1 (2026-11-09; the export does not close the vulnerability; H1(b) batch promotion retained)", "owner": "orchestrator", "site": "vera/fulldoc_db.py:_acquired_open_cfg", "exit": "repository-pinned manifest config/acquired_pins.json in mode on after the first promotion batch (H1B-PROMOTE-1107)"}
       ],
       "owner": "orchestrator",
       "test": "tests/test_evidence_controls.py::test_acquired_loader_tamper_matches_register"

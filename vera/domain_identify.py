@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import math
 import re
-from sys import intern as _intern
+from array import array
 from collections import Counter
+from collections.abc import Mapping
+from sys import intern as _intern
 
 from vera.domain_registry import normalize_domain_name
 
@@ -39,6 +41,53 @@ def _tf(tokens: list[str]) -> dict[str, float]:
     if not n:
         return {}
     return {t: c / n for t, c in Counter(tokens).items()}
+
+
+class CompactTF(Mapping):
+    """NOCAP-1109: memory-compact, read-only form of _tf(tokens) for the per-document term map kept in
+    DomainIdentifier._doc_tf. Holds the distinct (interned) terms in first-occurrence order and their integer counts;
+    a value is computed as count / n on access, the same expression _tf evaluates, so every value, the key order and
+    therefore every float sum over it are identical to the dict _tf returns."""
+    __slots__ = ("_keys", "_counts", "_n")
+
+    def __init__(self, tokens: list[str]):
+        c = Counter(tokens)
+        self._keys = tuple(c)
+        self._counts = array("I", c.values())
+        self._n = len(tokens)
+
+    def __getitem__(self, t):
+        try:
+            i = self._keys.index(t)
+        except ValueError:
+            raise KeyError(t) from None
+        return self._counts[i] / self._n
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __contains__(self, t):
+        return t in self._keys
+
+    def items(self):
+        n = self._n
+        return [(t, c / n) for t, c in zip(self._keys, self._counts)]
+
+    def values(self):
+        n = self._n
+        return [c / n for c in self._counts]
+
+    def keys(self):
+        return list(self._keys)
+
+    def __deepcopy__(self, memo):  # immutable: shared between corpus versions (DarCorpus.fork)
+        return self
+
+    def __copy__(self):
+        return self
 
 
 class DomainIdentifier:
@@ -313,7 +362,7 @@ class DomainIdentifier:
         if len(toks) < int(self.icfg["min_doc_terms"]):
             return  # live add_document neither counts nor profiles such a document
         tf = _tf(toks)
-        self._doc_tf[doc_key] = tf
+        self._doc_tf[doc_key] = CompactTF(toks)  # NOCAP-1109: compact; reads equal tf exactly
         self._count_stats(tf)
         self._sync_profiles()
         for did in sorted(set(domain_ids)):
@@ -332,7 +381,7 @@ class DomainIdentifier:
             self._results[doc_key] = res
             return dict(res)
         tf = _tf(tokens)
-        self._doc_tf[doc_key] = tf
+        self._doc_tf[doc_key] = CompactTF(tokens)  # NOCAP-1109: compact; reads equal tf exactly
         self._count_stats(tf)
         scores = self._scores(tf)
         hits = [(d, s) for d, s in scores if s > 0][: int(ic["max_domains_per_doc"])]
@@ -371,7 +420,7 @@ class DomainIdentifier:
         res["pending"] = True
         self._pending.append(doc_key)
         if int(ic["min_support"]) <= 1:  # support 1: a document matching no domain founds one immediately
-            self._clusters = [{"docs": [doc_key], "centroid": dict(tf)}]
+            self._clusters = [{"docs": [doc_key], "centroid": dict(tf.items())}]
             if self._promote(0, doc_key, asserted_by, res):
                 self._pending = [k for k in self._pending if k != doc_key]
             self._clusters = []
@@ -392,7 +441,7 @@ class DomainIdentifier:
                 if s >= ic["pending_min_sim"] and shared >= int(ic["min_shared_salient"]) and s > best_sim:
                     best_idx, best_sim = i, s
             if best_idx is None:
-                clusters.append({"docs": [key], "centroid": dict(tf)})
+                clusters.append({"docs": [key], "centroid": dict(tf.items())})
             else:
                 c = clusters[best_idx]
                 c["docs"].append(key)

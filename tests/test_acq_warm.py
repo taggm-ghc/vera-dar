@@ -26,7 +26,7 @@ class Mux:
         return self
 
     def execute(self, sql, params):
-        if sql in (fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_ACQ_INDEX,
+        if sql in (fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_INDEX_AFTER,
                    fulldoc_db.SQL_ACQ_SOURCES_BY_ID):
             self.cur = self.a
         elif sql == fulldoc_db.SQL_SOURCES:

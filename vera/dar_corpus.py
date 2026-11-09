@@ -31,9 +31,13 @@ Rules
 """
 from __future__ import annotations
 
+import copy
 import math
 import re
+from array import array
+from bisect import bisect_left
 from collections import Counter
+from collections.abc import Mapping
 from typing import Callable
 
 from vera import domain_registry, domain_routing
@@ -52,6 +56,123 @@ def _year(doc: dict):
 
 
 from vera.domain_identify import SECONDARY  # noqa: E402  asserted_by suffix of secondary document labels
+
+# NOCAP-1109 compact index. A chunk is stored as offsets into its document's text (no copied text, no per-chunk term
+# map); term frequencies live in shared postings: term -> array('I') of (chunk index << _CNT_BITS | count), with a
+# count of _CNT_MAX or more kept exactly in a side map. Every value a reader sees equals the former stored one.
+_CNT_BITS = 8
+_CNT_MAX = (1 << _CNT_BITS) - 1
+_IDX_LIMIT = 1 << (32 - _CNT_BITS)
+_CHUNK_KEYS = ("span_id", "source_key", "start", "end", "text", "tf", "len")
+
+
+class _Chunk(Mapping):
+    """Read-only chunk record with the former dict's keys. "text" is the document slice text[start:end] (the same
+    string the former record copied) and "tf" is Counter(tokenize(text)) recomputed on demand (same counts, same
+    first-occurrence key order). Immutable and shared between corpus versions."""
+    __slots__ = ("doc", "start", "end", "len", "idx", "_icfg")
+
+    def __init__(self, doc: dict, start: int, end: int, n_tokens: int, idx: int, icfg: dict):
+        self.doc, self.start, self.end, self.len, self.idx, self._icfg = doc, start, end, n_tokens, idx, icfg
+
+    @property
+    def source_key(self) -> str:
+        return self.doc["source_key"]
+
+    @property
+    def span_id(self) -> str:
+        return f"{self.doc['source_key']}:{self.start}-{self.end}"
+
+    @property
+    def text(self) -> str:
+        return self.doc["text"][self.start:self.end]
+
+    def __getitem__(self, k):
+        if k == "start":
+            return self.start
+        if k == "end":
+            return self.end
+        if k == "len":
+            return self.len
+        if k == "source_key":
+            return self.doc["source_key"]
+        if k == "span_id":
+            return self.span_id
+        if k == "text":
+            return self.text
+        if k == "tf":
+            return Counter(tokenize(self.text, self._icfg))
+        raise KeyError(k)
+
+    def __iter__(self):
+        return iter(_CHUNK_KEYS)
+
+    def __len__(self):
+        return len(_CHUNK_KEYS)
+
+    def __contains__(self, k):
+        return k in _CHUNK_KEYS
+
+    def __eq__(self, other):
+        if isinstance(other, _Chunk):
+            return self is other or (self.doc is other.doc and self.start == other.start and self.end == other.end)
+        return Mapping.__eq__(self, other)
+
+    __hash__ = None  # like the former dict record
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __copy__(self):
+        return self
+
+
+class _SpanIndex:
+    """span_id -> chunk for one corpus version (the former dict), resolved through the per-document chunk lists
+    instead of a stored string key per chunk. `mask` (optional) restricts it to a subset (the evidence-only view)."""
+    __slots__ = ("_dc", "_mask")
+
+    def __init__(self, doc_chunks: dict, mask=None):
+        self._dc, self._mask = doc_chunks, mask
+
+    def get(self, span_id, default=None):
+        if not isinstance(span_id, str):
+            return default
+        key, sep, rng = span_id.rpartition(":")
+        a, dash, b = rng.partition("-")
+        if not sep or not dash or not a.isdigit() or not b.isdigit():
+            return default
+        lst = self._dc.get(key)
+        if not lst:
+            return default
+        st, en = int(a), int(b)
+        i = bisect_left(lst, st, key=lambda c: c.start)
+        if i < len(lst) and lst[i].start == st and lst[i].end == en and str(st) == a and str(en) == b:
+            c = lst[i]
+            if self._mask is None or (c.idx < len(self._mask) and self._mask[c.idx]):
+                return c
+        return default
+
+    def __getitem__(self, span_id):
+        c = self.get(span_id)
+        if c is None:
+            raise KeyError(span_id)
+        return c
+
+    def __contains__(self, span_id):
+        return self.get(span_id) is not None
+
+    def __iter__(self):
+        for lst in self._dc.values():
+            for c in lst:
+                if self._mask is None or (c.idx < len(self._mask) and self._mask[c.idx]):
+                    yield c.span_id
+
+    def __len__(self):
+        return sum(1 for _ in self)
+
+    def values(self):
+        return [self[k] for k in self]
 
 
 def doc_from_admitted(cand: dict, outcome: str) -> dict:
@@ -111,8 +232,13 @@ class DarCorpus:
         self.skipped: list[dict] = []
         self._rejected: set = set()  # keys the gate refused during apply_delta (re-read in an overlap window: skip quietly)
         self._docs: dict[str, dict] = {}
-        self._chunks: list[dict] = []
-        self._by_span: dict[str, dict] = {}
+        self._chunks: list = []  # _Chunk records of THIS version (the evidence view: a subset)
+        self._all: list = self._chunks  # every chunk of this version by index (shared by an evidence view)
+        self._mask = None  # evidence view only: bytearray over chunk indexes (1 = in the view)
+        self._doc_chunks: dict[str, list] = {}  # source_key -> its chunks in start order
+        self._by_span = _SpanIndex(self._doc_chunks)
+        self._post: dict = {}  # term -> array('I'); SHARED by every version forked from this one (append-only)
+        self._post_big: dict = {}  # (term, chunk index) -> count, for counts >= _CNT_MAX (shared, append-only)
         self._df: Counter = Counter()
         self._total_len = 0
         self._reported: dict[str, set] = {}  # source_key -> corpus domain ids already reported in a plan
@@ -152,16 +278,130 @@ class DarCorpus:
             spans[-1] = (spans[-1][0], last[1])
         return [(s, e) for s, e in spans if text[s:e].strip()]
 
-    def _index_chunk(self, doc: dict, start: int, end: int) -> dict:
+    def _index_chunk(self, doc: dict, start: int, end: int):
         text = doc["text"][start:end]
         toks = tokenize(text, self._icfg)
-        rec = {"span_id": f"{doc['source_key']}:{start}-{end}", "source_key": doc["source_key"], "start": start,
-               "end": end, "text": text, "tf": Counter(toks), "len": len(toks)}
+        tf = Counter(toks)
+        idx = len(self._chunks)
+        if idx >= _IDX_LIMIT or self._mask is not None:
+            raise RuntimeError("compact index: chunk index out of range or ingest into an evidence view")
+        rec = _Chunk(doc, start, end, len(toks), idx, self._icfg)
+        post, big = self._post, self._post_big
+        for t, f in tf.items():  # postings first: a failure leaves the chunk list unchanged
+            a = post.get(t)
+            if a is None:
+                a = post[t] = array("I")
+            if f >= _CNT_MAX:
+                big[(t, idx)] = f
+                a.append(idx << _CNT_BITS | _CNT_MAX)
+            else:
+                a.append(idx << _CNT_BITS | f)
         self._chunks.append(rec)
-        self._by_span[rec["span_id"]] = rec
-        self._df.update(rec["tf"].keys())
-        self._total_len += rec["len"]
+        self._doc_chunks.setdefault(doc["source_key"], []).append(rec)
+        self._df.update(tf.keys())
+        self._total_len += rec.len
         return rec
+
+    # --- versions (NOCAP-1109) -------------------------------------------------------------------------------
+    def fork(self) -> "DarCorpus":
+        """A new version that can take more documents while this one keeps serving unchanged. Shared, never copied:
+        document records and texts, chunk records, and the postings (append-only; each version reads only chunk
+        indexes below its own chunk count). Copied: the containers and the identification and registry state that
+        ingest mutates. Two full copies of the index never exist."""
+        new = copy.copy(self)
+        new._fork_base = len(self._chunks)
+        new._docs = dict(self._docs)
+        new._chunks = list(self._chunks)
+        new._all = new._chunks
+        new._doc_chunks = dict(self._doc_chunks)
+        new._by_span = _SpanIndex(new._doc_chunks)
+        new._df = Counter(self._df)
+        new._reported = {k: set(v) for k, v in self._reported.items()}
+        new.skipped = list(self.skipped)
+        new._rejected = set(self._rejected)
+        memo = {id(d): d for d in self._docs.values()}
+        memo[id(self.cfg)] = self.cfg
+        memo[id(self._icfg)] = self._icfg
+        memo[id(self._post)] = self._post
+        memo[id(self._post_big)] = self._post_big
+        reg = copy.deepcopy(self.registry, memo)
+        memo[id(self.registry)] = reg
+        ident = copy.deepcopy(self.identifier, memo)
+        ident._dmemo = None
+        new.registry, new.identifier = reg, ident
+        reg.identify_question = lambda q: [d["domain_id"] for d in new.identifier.classify(q, "question")]
+        reg.domain_terms = lambda did, n: new.identifier.profile_terms(did, n)
+        return new
+
+    def discard(self) -> None:
+        """Undo a fork's postings appends (every entry at or above its base chunk index) so the shared postings again
+        hold exactly the parent's entries. Called when a fork is abandoned; the parent never saw those entries."""
+        base = getattr(self, "_fork_base", None)
+        if base is None:
+            return
+        for a in list(self._post.values()):
+            while a and (a[-1] >> _CNT_BITS) >= base:
+                a.pop()
+        for k in [k for k in list(self._post_big) if k[1] >= base]:
+            self._post_big.pop(k, None)
+        self._fork_base = None
+
+    def evidence_view(self, keep) -> "DarCorpus":
+        """A read-only view holding only the chunks for which keep(chunk) is true (the C1 evidence-only index): shares
+        documents, registry, identifier and postings; its own chunk list, df and length totals are recomputed over the
+        kept chunks exactly as the former filtered copy did."""
+        ev = copy.copy(self)
+        mask = bytearray(len(self._chunks))
+        kept = []
+        for c in self._chunks:
+            if keep(c):
+                mask[c.idx] = 1
+                kept.append(c)
+        ev._chunks = kept
+        ev._all = self._chunks
+        ev._mask = mask
+        ev._by_span = _SpanIndex(self._doc_chunks, mask)
+        df = Counter()
+        n_all = len(self._chunks)
+        for t, a in list(self._post.items()):
+            k = 0
+            for v in a:
+                i = v >> _CNT_BITS
+                if i < n_all and mask[i]:
+                    k += 1
+            if k:
+                df[t] = k
+        ev._df = df
+        ev._total_len = sum(c.len for c in kept)
+        return ev
+
+    def _scores(self, q_terms: list[str]) -> dict:
+        """chunk index -> BM25 score over this version's chunks (only chunks with a positive term frequency). Per
+        chunk the terms are added in q_terms order with the same expression as before, so each score is the same
+        float the former per-chunk loop produced."""
+        n = len(self._chunks)
+        if not n or not q_terms:
+            return {}
+        avg = (self._total_len / n) or 1.0
+        k1, b = float(self.ccfg["bm25_k1"]), float(self.ccfg["bm25_b"])
+        allc, mask, big = self._all, self._mask, self._post_big
+        n_all = len(allc)
+        sc: dict = {}
+        for t in q_terms:
+            a = self._post.get(t)
+            if not a:
+                continue
+            df = self._df.get(t, 0)
+            idf = math.log(1.0 + (n - df + 0.5) / (df + 0.5))
+            for v in a:
+                i = v >> _CNT_BITS
+                if i >= n_all or (mask is not None and not mask[i]):
+                    continue
+                f = v & _CNT_MAX
+                if f == _CNT_MAX:
+                    f = big[(t, i)]
+                sc[i] = sc.get(i, 0.0) + idf * f * (k1 + 1) / (f + k1 * (1 - b + b * allc[i].len / avg))
+        return sc
 
     def _gate(self, doc: dict):
         path = self.ccfg.get("contract_config_path") or CONTRACT_CONFIG_PATH
@@ -208,9 +448,7 @@ class DarCorpus:
         similar chunk from picking up a new tiny domain just because that domain's score alone clears the threshold."""
         dids, out = set(dids), []
         cap = int(self._icfg["max_domains_per_chunk"])
-        for c in self._chunks:
-            if c["source_key"] != pk:
-                continue
+        for c in self._doc_chunks.get(pk, ()):  # NOCAP-1109: the document's own chunks, same order as the full scan
             have = {d.domain_id for d in self.registry.domains_for_chunk(c["span_id"])}
             for hit in self.identifier.classify(c["text"], "chunk"):
                 did = int(hit["domain_id"])
@@ -235,9 +473,7 @@ class DarCorpus:
         lone = bool(own) and all(len(self.registry.corpora_for_domain(d)) == 1 for d in own)
         count: Counter = Counter()
         n_chunks = 0
-        for c in self._chunks:
-            if c["source_key"] != pk:
-                continue
+        for c in self._doc_chunks.get(pk, ()):  # NOCAP-1109: the document's own chunks, same order as the full scan
             n_chunks += 1
             top = [h for h in self.identifier.classify(c["text"], "chunk", exclude=own if lone else ())
                    if int(h["domain_id"]) not in own]
@@ -599,24 +835,19 @@ class DarCorpus:
         ids = [int(d["domain_id"]) for d in self.identifier.classify(question, "question")]
         return ids[: int(cap)] if cap is not None else ids
 
-    def _bm25(self, q_terms: list[str], pool: list[dict], limit: int) -> list[dict]:
-        n = len(self._chunks)
-        if not n or not q_terms:
+    def _bm25(self, q_terms: list[str], pool, limit: int, scores: dict | None = None) -> list:
+        """Top `limit` chunks of `pool` by BM25 (ties: source_key, start). pool is this version's chunk list or a
+        subset of it; `scores` (from _scores) may be passed to score once per question."""
+        sc = self._scores(q_terms) if scores is None else scores
+        if not sc:
             return []
-        avg = (self._total_len / n) or 1.0
-        k1, b = float(self.ccfg["bm25_k1"]), float(self.ccfg["bm25_b"])
-        scored = []
-        for c in pool:
-            sc = 0.0
-            for t in q_terms:
-                f = c["tf"].get(t, 0)
-                if not f:
-                    continue
-                df = self._df.get(t, 0)
-                idf = math.log(1.0 + (n - df + 0.5) / (df + 0.5))
-                sc += idf * f * (k1 + 1) / (f + k1 * (1 - b + b * c["len"] / avg))
-            if sc > 0:
-                scored.append((-sc, c["source_key"], c["start"], c))
+        allc = self._all
+        if pool is self._chunks:
+            items = sc.items()
+        else:
+            ids = {c.idx for c in pool}
+            items = [(i, s) for i, s in sc.items() if i in ids]
+        scored = [(-s, allc[i].doc["source_key"], allc[i].start, allc[i]) for i, s in items if s > 0]
         scored.sort(key=lambda x: x[:3])
         return [x[3] for x in scored[:limit]]
 
@@ -643,13 +874,16 @@ class DarCorpus:
             return {"candidates": [], "trace": trace}
         q_terms = sorted(set(tokenize(question, self._icfg)))
         fb = domain_routing.FALLBACK
-        branches = [(fb, self._bm25(q_terms, self._chunks, bk))]
+        scores = self._scores(q_terms)  # NOCAP-1109: scored once; each branch takes its pool's top chunks
+        branches = [(fb, self._bm25(q_terms, self._chunks, bk, scores))]
         qdoms = self._question_domains(question)
         trace["question_domains"] = qdoms
         trace["branch_counts"][fb] = len(branches[0][1])
-        for did in qdoms:
-            pool = [c for c in self._chunks if did in {x.domain_id for x in self.registry.domains_for_chunk(c["span_id"])}]
-            items = self._bm25(q_terms, pool, bk)
+        allc = self._all
+        for did in qdoms:  # the domain pool restricted to scored chunks (an unscored chunk is never ranked anyway)
+            pool = [allc[i] for i in scores
+                    if did in {x.domain_id for x in self.registry.domains_for_chunk(allc[i].span_id)}]
+            items = self._bm25(q_terms, pool, bk, scores)
             name = f"domain:{did}"
             trace["branch_counts"][name] = len(items)
             branches.append((name, items))

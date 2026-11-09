@@ -137,3 +137,142 @@ def test_single_profile_memo_gives_the_unmemoised_cosine():
         got = [x["score"] for x in ident.classify(t, "chunk")]
         assert (got[0] if got else 0.0) == want or (not got and want < ident.icfg["chunk_min_sim"])
         assert ident._dcos(tf, prof[0], ident._dmemo) == want if tf else True
+
+
+# ------------------------------------------------- append refresh, compact index, registry indexes (NOCAP-1109 part 2)
+QS = ("pathogen transmission incidence outbreak",
+      "outbreak incidence surveillance cohort", "What limits predictability of forecasts?")
+MARK = "vera-dar-auto-acquire-v1"
+
+
+def _fp(c):
+    """Everything a reader can observe of an acquired corpus (bit-level: floats via repr)."""
+    import json
+    dar = c._dar
+    ev = c._evidence_dar()
+    out = {"acq": [a["document_id"] for a in c.acquired], "unusable": c.unusable, "stamps": c.stamps,
+           "pins": sorted(c.pin_candidates), "chunks": [(ch["span_id"], sorted(ch["tf"].items()), ch["len"]) for ch in dar._chunks],
+           "df": sorted(dar._df.items()), "tl": dar._total_len, "ev": [len(ev._chunks), ev._total_len, sorted(ev._df.items())],
+           "cov": dar.registry.coverage(), "doms": [(ch["span_id"], [d.domain_id for d in dar.registry.domains_for_chunk(ch["span_id"])])
+                                                     for ch in dar._chunks],
+           "r": [c.retrieve(q, 12) for q in QS], "re": [c.retrieve(q, 12, evidence_only=True) for q in QS],
+           "raw": [dar.retrieve(q, 16, max_per_doc=8) for q in QS], "insp": c.inspection()}
+    return json.dumps(out, sort_keys=True, default=repr)
+
+
+def _db(plans):
+    conn = A.FakeConn(plans)
+    return lambda: conn
+
+
+def _sig(plans):
+    return fulldoc_db.acquired_signature(_db(plans), 1, MARK)
+
+
+def test_append_refresh_equals_full_build():
+    plans = plans100()
+    fd, acq = fulldoc_corpus.load_config(), A.cfg()
+    full = fulldoc_db.load_acquired_db(_db(plans), 1, fd, acq)
+    old = fulldoc_db.load_acquired_db(_db(plans[:90]), 1, fd, acq)
+    before = _fp(old)
+    new = fulldoc_db.extend_acquired_db(_db(plans), 1, fd, acq, old, _sig(plans[:90]), _sig(plans))
+    assert new is not None and new is not old and len(new.acquired) == N
+    assert _fp(new) == _fp(full)  # append == full build, bit for bit
+    assert _fp(old) == before  # the serving corpus never changed (shared postings are read below its own chunk count)
+    again = fulldoc_db.extend_acquired_db(_db(plans), 1, fd, acq, new, _sig(plans), _sig(plans))
+    assert again is None  # nothing newer: not an append
+
+
+def test_non_append_change_is_refused_for_full_rebuild():
+    plans = plans100()
+    fd, acq = fulldoc_corpus.load_config(), A.cfg()
+    old = fulldoc_db.load_acquired_db(_db(plans[:50]), 1, fd, acq)
+    conn = A.FakeConn(plans[:60])
+    conn.sources = [x for x in conn.sources if x["source_id"] != 1005]  # one old row removed, ten added
+    new_sig = fulldoc_db.acquired_signature(lambda: conn, 1, MARK)
+    assert new_sig == (1060, 59)
+    assert fulldoc_db.extend_acquired_db(lambda: conn, 1, fd, acq, old, _sig(plans[:50]), new_sig) is None
+    legacy = fulldoc_db.load_acquired_rows(*A.rows_from_plans(plans[:5]), fd, acq)  # in-memory order: not appendable
+    assert fulldoc_db.extend_acquired_db(_db(plans[:6]), 1, fd, acq, legacy, _sig(plans[:5]), _sig(plans[:6])) is None
+
+
+def test_failed_append_is_discarded_and_leaves_no_trace(monkeypatch):
+    from vera import dar_corpus
+    plans = plans100()
+    fd, acq = fulldoc_corpus.load_config(), A.cfg()
+    old = fulldoc_db.load_acquired_db(_db(plans[:80]), 1, fd, acq)
+    before = _fp(old)
+    real, n = dar_corpus.DarCorpus.ingest_document, {"i": 0}
+
+    def boom(self, d):
+        n["i"] += 1
+        if n["i"] == 3:
+            raise RuntimeError("injected")
+        return real(self, d)
+    monkeypatch.setattr(dar_corpus.DarCorpus, "ingest_document", boom)
+    assert fulldoc_db.extend_acquired_db(_db(plans), 1, fd, acq, old, _sig(plans[:80]), _sig(plans)) is None
+    monkeypatch.setattr(dar_corpus.DarCorpus, "ingest_document", real)
+    assert _fp(old) == before
+    new = fulldoc_db.extend_acquired_db(_db(plans), 1, fd, acq, old, _sig(plans[:80]), _sig(plans))
+    assert _fp(new) == _fp(fulldoc_db.load_acquired_db(_db(plans), 1, fd, acq))
+
+
+def test_full_rebuild_releases_the_serving_corpus_first(monkeypatch):
+    plans = plans100()[:20]
+    fd = fulldoc_corpus.load_config()
+    fulldoc_corpus.reset_acquired_for_tests()
+    fulldoc_corpus._ACQ.update(corpus=object(), sig=(None, 0))  # a non-appendable old state
+    seen = []
+    real = fulldoc_db.load_acquired_db
+
+    def spy(*a, **k):
+        seen.append(fulldoc_corpus._ACQ["corpus"])
+        return real(*a, **k)
+    monkeypatch.setattr(fulldoc_db, "load_acquired_db", spy)
+    fulldoc_corpus._ACQ["building"] = True
+    fulldoc_corpus._rebuild_acquired(fd, (A.cfg(), _db(plans), 1), _sig(plans))
+    assert seen == [None]  # old corpus dropped before the full build: never two full copies
+    assert len(fulldoc_corpus._ACQ["corpus"].acquired) == 20 and fulldoc_corpus._ACQ["building"] is False
+    fulldoc_corpus.reset_acquired_for_tests()
+
+
+def test_compact_chunk_records_hold_no_text_or_term_map():
+    c = fulldoc_db.load_acquired_db(_db(plans100()[:3]), 1, fulldoc_corpus.load_config(), A.cfg())
+    ch = c._dar._chunks[0]
+    assert not hasattr(ch, "__dict__") and set(ch.__slots__) == {"doc", "start", "end", "len", "idx", "_icfg"}
+    assert ch["text"] == c._dar._docs[ch["source_key"]]["text"][ch["start"]:ch["end"]]
+    assert c._dar._by_span[ch["span_id"]] is ch and ch["span_id"] in c._dar._by_span
+    assert c._dar._by_span.get(ch["span_id"] + "0") is None and c._dar._by_span.get("x:1-2") is None
+
+
+def test_registry_indexes_equal_full_scans():
+    import random
+    from vera.domain_registry import InMemoryDomainRegistry
+    reg = InMemoryDomainRegistry(clock=lambda: "t")
+    ids = [reg.register(f"dom {i}")[0].domain_id for i in range(6)]
+    rng = random.Random(3)
+    for _ in range(400):
+        d, a = rng.choice(ids), f"k{rng.randrange(40)}:{rng.randrange(9)}-1"
+        if rng.random() < 0.8:
+            reg.associate_chunk(d, a, "x")
+            reg.associate_corpus(d, a.split(":")[0], "x")
+        else:
+            reg.disassociate_chunk(d, a)
+            reg.disassociate_corpus(d, a.split(":")[0])
+    spans = {s for _, s in reg._chunk} | {"absent"}
+    for s in spans:
+        assert reg.domains_for_chunk(s) == [reg._by_id[d] for d, x in sorted(reg._chunk) if x == s]
+    for k in {c for _, c in reg._corpus} | {"absent"}:
+        assert reg.domains_for_corpus(k) == [reg._by_id[d] for d, c in sorted(reg._corpus) if c == k]
+    for d in ids:
+        assert reg.chunks_for_domain(d) == sorted(s for x, s in reg._chunk if x == d)
+        assert reg.corpora_for_domain(d) == sorted(c for x, c in reg._corpus if x == d)
+
+
+def test_domain_routed_retrieve_is_not_quadratic():
+    import time
+    c = fulldoc_db.load_acquired_db(_db(plans100()), 1, fulldoc_corpus.load_config(), A.cfg())
+    t = time.perf_counter()
+    r = c._dar.retrieve(QS[0], 16, max_per_doc=8)
+    assert r["trace"]["question_domains"] and r["candidates"]  # a domain branch ran
+    assert time.perf_counter() - t < 1.0

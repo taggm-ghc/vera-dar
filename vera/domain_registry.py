@@ -85,6 +85,33 @@ class InMemoryDomainRegistry:
         self._corpus: dict[tuple[int, int], str] = {}  # (domain_id, canonical_source_id) -> asserted_by
         self._chunk: dict[tuple[int, int], str] = {}   # (domain_id, span_id) -> asserted_by
         self._uncertain: list[dict] = []
+        # NOCAP-1109: secondary indexes over the same association maps (asset -> domain ids, domain -> asset ids), kept
+        # in step by every associate/disassociate. The lookups below return exactly what the former full scans of
+        # sorted(self._corpus) / sorted(self._chunk) returned, without the O(associations) scan per call (that scan
+        # made a domain-routed retrieve quadratic in the number of stored chunks).
+        self._corpus_by_asset: dict = {}
+        self._corpus_by_dom: dict = {}
+        self._chunk_by_asset: dict = {}
+        self._chunk_by_dom: dict = {}
+
+    @staticmethod
+    def _ix_add(by_asset: dict, by_dom: dict, domain_id, asset_id) -> None:
+        cur = by_asset.get(asset_id)
+        by_asset[asset_id] = (domain_id,) if cur is None else cur + (domain_id,)  # tuples: small and immutable
+        by_dom.setdefault(domain_id, set()).add(asset_id)
+
+    @staticmethod
+    def _ix_del(by_asset: dict, by_dom: dict, domain_id, asset_id) -> None:
+        cur = tuple(d for d in by_asset.get(asset_id, ()) if d != domain_id)
+        if cur:
+            by_asset[asset_id] = cur
+        else:
+            by_asset.pop(asset_id, None)
+        ds = by_dom.get(domain_id)
+        if ds is not None:
+            ds.discard(asset_id)
+            if not ds:
+                by_dom.pop(domain_id, None)
 
     # --- registration and resolution ---
     def register(self, name: str, description: str = "", origin: str = "manual") -> tuple[Domain, bool]:
@@ -141,10 +168,14 @@ class InMemoryDomainRegistry:
         if key in self._corpus:
             return False
         self._corpus[key] = _need_actor(asserted_by)
+        self._ix_add(self._corpus_by_asset, self._corpus_by_dom, domain_id, canonical_source_id)
         return True
 
     def disassociate_corpus(self, domain_id: int, canonical_source_id: int) -> bool:
-        return self._corpus.pop((domain_id, canonical_source_id), None) is not None
+        if self._corpus.pop((domain_id, canonical_source_id), None) is None:
+            return False
+        self._ix_del(self._corpus_by_asset, self._corpus_by_dom, domain_id, canonical_source_id)
+        return True
 
     def associate_chunk(self, domain_id: int, span_id: int, asserted_by: str) -> bool:
         """True if new; duplicate False. Never reads or writes corpus associations (no parent lookup)."""
@@ -153,22 +184,26 @@ class InMemoryDomainRegistry:
         if key in self._chunk:
             return False
         self._chunk[key] = _need_actor(asserted_by)
+        self._ix_add(self._chunk_by_asset, self._chunk_by_dom, domain_id, span_id)
         return True
 
     def disassociate_chunk(self, domain_id: int, span_id: int) -> bool:
-        return self._chunk.pop((domain_id, span_id), None) is not None
+        if self._chunk.pop((domain_id, span_id), None) is None:
+            return False
+        self._ix_del(self._chunk_by_asset, self._chunk_by_dom, domain_id, span_id)
+        return True
 
     def domains_for_corpus(self, canonical_source_id: int) -> list[Domain]:
-        return [self._by_id[d] for d, c in sorted(self._corpus) if c == canonical_source_id]
+        return [self._by_id[d] for d in sorted(self._corpus_by_asset.get(canonical_source_id, ()))]
 
     def domains_for_chunk(self, span_id: int) -> list[Domain]:
-        return [self._by_id[d] for d, s in sorted(self._chunk) if s == span_id]
+        return [self._by_id[d] for d in sorted(self._chunk_by_asset.get(span_id, ()))]
 
     def corpora_for_domain(self, domain_id: int) -> list[int]:
-        return sorted(c for d, c in self._corpus if d == domain_id)
+        return sorted(self._corpus_by_dom.get(domain_id, ()))
 
     def chunks_for_domain(self, domain_id: int) -> list[int]:
-        return sorted(s for d, s in self._chunk if d == domain_id)
+        return sorted(self._chunk_by_dom.get(domain_id, ()))
 
     def association_actor(self, kind: str, domain_id: int, asset_id: int) -> str | None:
         """Who asserted an association (kind 'corpus' or 'chunk'); None if absent."""

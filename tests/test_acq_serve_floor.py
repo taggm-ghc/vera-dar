@@ -71,15 +71,18 @@ def test_legacy_behaviour_unchanged():
 
 
 def test_load_acquired_db_switches(monkeypatch):
+    """NOCAP-1109: the stored read lists every row (SQL_ACQ_INDEX, no LIMIT) and reads them by id in batches; only a
+    numeric served_per_topic_max (rollback) takes the per-topic selection."""
     seen = []
-    monkeypatch.setattr(fulldoc_db, "fetch_acquired_rows", lambda *a, **k: seen.append(k) or ([], []))
-    monkeypatch.setattr(fulldoc_db, "load_acquired_rows", lambda *a, **k: "ok")
+    monkeypatch.setattr(fulldoc_db, "acquired_ids_per_topic", lambda *a, **k: seen.append(("pt", a[4])) or [])
     base = {"marker": "m", "micro_topic": MT}
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None,
-                                                                "served_topic_balanced": True}})
-    assert seen[0] == {}
-    assert seen[1]["per_topic_max"] is None and seen[1]["topic_balanced"] is True
+    for b in ({"served_per_topic_max": None}, {"served_per_topic_max": None, "served_topic_balanced": True}):
+        log = []
+        fulldoc_db.load_acquired_db(lambda: _Conn(_rows_full(), log), 1, {}, {**base, "bounds": b})
+        assert log[0] == fulldoc_db.SQL_ACQ_INDEX and fulldoc_db.SQL_ACQ_SOURCES_BY_ID in log
+    assert seen == []
+    fulldoc_db.load_acquired_db(lambda: _Conn(_rows_full(), []), 1, {}, {**base, "bounds": {"served_per_topic_max": 3}})
+    assert seen == [("pt", 3)]
 
 
 def test_fetch_path_serves_balanced_without_ceiling():

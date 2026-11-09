@@ -150,7 +150,8 @@ class FakeConn:
 
     def execute(self, sql, params):
         assert sql in (fulldoc_db.SQL_ACQ_MAX, fulldoc_db.SQL_ACQ_SOURCES, fulldoc_db.SQL_SPANS,
-                       fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_SOURCES_BY_ID), "unexpected SQL"
+                       fulldoc_db.SQL_ACQ_INDEX, fulldoc_db.SQL_ACQ_INDEX_AFTER,
+                       fulldoc_db.SQL_ACQ_SOURCES_BY_ID), "unexpected SQL"
         self.log.append(sql)
         mk = [s for s in self.sources if json.loads(s["provenance"]).get("acquisition", {}).get("marker")
               == params.get("marker", None)] if "marker" in params else None
@@ -159,6 +160,9 @@ class FakeConn:
         elif sql == fulldoc_db.SQL_ACQ_SOURCES:
             self._rows = [(s["run_id"], s["source_id"], s["canonical_url"], s["content"], s["content_hash"],
                            s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])][: params.get("lim")]
+        elif sql == fulldoc_db.SQL_ACQ_INDEX_AFTER:  # NOCAP-1109 append refresh: only rows newer than `after`
+            self._rows = [(s["source_id"], s["run_id"], s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])
+                          if s["source_id"] > params["after"]]
         elif sql == fulldoc_db.SQL_ACQ_INDEX:  # L9 light index: source_id, run_id, provenance only
             self._rows = [(s["source_id"], s["run_id"], s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])
                           ][: params.get("scan")]
