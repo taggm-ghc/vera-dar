@@ -489,3 +489,50 @@ def test_rerank_no_text_in_logs(monkeypatch, caplog):
     blob = " ".join(r.getMessage() + " " + repr(r.args) for r in caplog.records)
     assert marker not in blob and "Worker agents" not in blob and marker not in json.dumps(b.trace)
     assert all(isinstance(k[0], str) and len(k[0]) == 64 for k in hr._PCACHE)
+
+
+# ------------------------------------------------------------------------------------------------ BATCH4-FIX-1109
+def test_vector_fn_exception_falls_back_to_word_only():
+    c, _ = _corpus()
+    ev = c._evidence_dar()
+    lex = ev.retrieve(Q, 40, max_per_doc=40)["candidates"]
+
+    def boom(dar, scores):
+        raise RuntimeError("vector boom")
+    res = ev.retrieve(Q, 40, max_per_doc=40, vector_fn=boom)
+    assert [x["span_id"] for x in res["candidates"]] == [x["span_id"] for x in lex]
+    assert res["trace"]["branch_counts"]["vector"] == 0
+
+
+def test_embed_timeout_is_an_overall_deadline(monkeypatch):
+    import threading
+    import time as _t
+    gate = threading.Event()
+
+    class Slow(FakeEmbedder):
+        def embed(self, texts):
+            gate.wait(5)
+            return super().embed(texts)
+    slow = Slow()
+    monkeypatch.setattr(hr, "_embedder", lambda slot="emb": (slow, "ok"))
+    hr.set_config_for_tests({"enabled": True, "timeout_s": 0.3})
+    t0 = _t.perf_counter()
+    v, code, _ = hr.query_vector("a slow question")
+    gate.set()
+    assert v is None and code == "embed_error:TimeoutError" and _t.perf_counter() - t0 < 2.0
+
+
+def test_ask_count_restart_bound(monkeypatch):
+    monkeypatch.setattr(hr, "_taxo_cfg", lambda: {"cloudflare": {"reserve_neurons": 5000}})
+    hr.set_config_for_tests({"enabled": True, "ask_restart_margin_neurons": 500})
+    with hr._LOCK:
+        hr._STATE["ask_boot"] = True  # a fresh process: the earlier count is unknown
+    assert hr._ask_used() == 4500.0  # only the margin remains for the rest of the day
+    hr._ask_charge(100)
+    assert hr._ask_used() == 4600.0
+    t = [1_700_000_000.0]
+    hr.set_clock_for_tests(wall=lambda: t[0])
+    with hr._LOCK:
+        hr._STATE["ask_day"] = None
+        hr._STATE["ask_boot"] = False  # a later day in the same process starts at 0
+    assert hr._ask_used() == 0.0

@@ -32,6 +32,7 @@ Rules
 from __future__ import annotations
 
 import copy
+import logging
 import math
 import re
 from array import array
@@ -55,6 +56,7 @@ def _year(doc: dict):
     return int(m.group(1)) if m else None
 
 
+log = logging.getLogger(__name__)
 from vera.domain_identify import SECONDARY  # noqa: E402  asserted_by suffix of secondary document labels
 
 # NOCAP-1109 compact index. A chunk is stored as offsets into its document's text (no copied text, no per-chunk term
@@ -68,22 +70,22 @@ _CHUNK_KEYS = ("span_id", "source_key", "start", "end", "text", "tf", "len")
 
 def light_stem(t: str) -> str:
     """RETR-MECH-1109: light deterministic suffix stemmer for BM25 terms ("agents"/"agent", "forecasting"/"forecast").
-    Plural (-ies, -sses, -s) and -ing/-ed only; the stem keeps at least 4 characters; short tokens, digits and
-    -ss/-us/-is endings are unchanged. Generic: no word lists."""
+    Plural (-ies, -sses, -s) and -ing/-ed only. Conservative: tokens shorter than 5 characters (so "news", "lens", "gans"
+    stay), digits, and words ending in -ss/-us/-is are unchanged; a stem is never shorter than 4
+    characters; -ed is stripped only when what remains does not end in "it" ("united" stays). Generic: no word lists."""
     n = len(t)
-    if n < 5 and not (n == 4 and t.endswith("s")):
-        return t
-    if not t.isalpha():
+    if n < 5 or not t.isalpha():
         return t
     if t.endswith("ies") and n >= 6:
         return t[:-3] + "y"
     if t.endswith("sses"):
         return t[:-2]
-    if t.endswith("s") and not t.endswith(("ss", "us", "is")) and n >= 4:
+    if t.endswith("s") and not t.endswith(("ss", "us", "is")):
         return t[:-1]
-    for suf in ("ing", "ed"):
-        if t.endswith(suf) and n - len(suf) >= 4:
-            return t[:-len(suf)]
+    if t.endswith("ing") and n - 3 >= 4:
+        return t[:-3]
+    if t.endswith("ed") and n - 2 >= 4 and not t[:-2].endswith("it"):
+        return t[:-2]
     return t
 
 
@@ -942,7 +944,11 @@ class DarCorpus:
         if vector_fn is not None:
             # HYBRID-1109 (flag-gated by the caller): the word-matching order above (BM25 + domain branches, unchanged)
             # and the vector list are fused as two peers by rank-only RRF; ties keep the word-matching item first.
-            vitems = list(vector_fn(self, scores) or ())
+            try:
+                vitems = list(vector_fn(self, scores) or ())
+            except Exception as exc:  # noqa: BLE001  any vector failure => word-only retrieval (never lose candidates)
+                log.info("hybrid vector retrieval failed, word-only (%s)", type(exc).__name__)
+                vitems = []
             trace["branch_counts"]["vector"] = len(vitems)
             lex = [g["rep"] for g in reserved + rest]
             names = {g["key"]: g["branches"] for g in groups}

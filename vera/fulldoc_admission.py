@@ -34,6 +34,21 @@ DF_CACHE_MAX = 16
 _ET_AL = re.compile(r"\bet\.?\s+al\b\.?", re.IGNORECASE)
 
 
+
+def retrieval_kept_words(question: str, icfg: dict) -> list:
+    """RETR-MECH-1109: the question's words for the retrieval query: generic idioms removed (search_query.drop_generic) and
+    words in icfg["question_generic_terms"] removed. WHOLE words only (casefolded; a plain plural of a listed word also
+    matches); never 5-character prefixes, which would drop "commodity" (common), "imports" (important), "majority" (major).
+    [] when no content word would remain."""
+    from vera.search_query import drop_generic
+    gset = set(tokenize(" ".join(str(x) for x in (icfg.get("question_generic_terms") or [])), icfg))
+
+    def generic(t):
+        return t in gset or (t.endswith("s") and t[:-1] in gset)
+    kept = [w for w in drop_generic(question).split() if not any(generic(t) for t in tokenize(w, icfg))]
+    return kept if any(tokenize(w, icfg) for w in kept) else []
+
+
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -547,11 +562,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             rq = f"{question} {extra}" if extra else question
         if adm.get("retrieval_drop_generic") is True and icfg:  # RETR-MECH-1109: same filler _q_stems drops (idioms + words)
             try:
-                from vera.search_query import drop_generic
-                gset = {g[:stem_n] for g in tokenize(" ".join(str(x) for x in (icfg.get("question_generic_terms") or [])), icfg)}
-                kept = [w for w in drop_generic(question).split() if not tokenize(w, icfg)
-                        or all(t[:stem_n] not in gset for t in tokenize(w, icfg))]
-                if any(tokenize(w, icfg) for w in kept):
+                kept = retrieval_kept_words(question, icfg)
+                if kept:
                     rq = " ".join(kept) + rq[len(question):]
             except Exception:
                 pass

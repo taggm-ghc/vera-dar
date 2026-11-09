@@ -53,7 +53,8 @@ VECTOR = "vector"  # branch name in vera.dar_corpus.retrieve
 
 DEFAULTS = {"enabled": False, "timeout_s": 3.0, "rrf_k": 60, "vector_k": None, "chunks_per_partition": 2,
             "stem_floor_sim": None, "stem_floor_min_hits": 1, "cooldown_s": 60, "query_cache_max": 32,
-            "query_cache_ttl_s": 120, "index_refresh_s": 3600, "max_index_mb": 96, "page_ids": 256}
+            "query_cache_ttl_s": 120, "index_refresh_s": 3600, "max_index_mb": 96, "page_ids": 256,
+            "ask_restart_margin_neurons": 500}
 # Stage 2 (orchestrator decision within OD-1109-HYBRID): ask-time passage re-rank inside the top partitions. Own flag.
 RERANK_DEFAULTS = {"enabled": False, "top_partitions": 3, "max_passages": 48, "max_chars": 2000, "timeout_s": 3.0,
                    "cooldown_s": 60, "cache_max": 2048, "reserve_slots": 2}
@@ -62,7 +63,7 @@ _RR_BOUNDS = {"top_partitions": (1, 20), "max_passages": (1, 64), "max_chars": (
 _BOUNDS = {"timeout_s": (0.2, 30), "rrf_k": (1, 1000), "vector_k": (1, 1000), "chunks_per_partition": (1, 100),
            "stem_floor_sim": (-1.0, 1.0), "stem_floor_min_hits": (1, 20), "cooldown_s": (0, 86400),
            "query_cache_max": (1, 4096), "query_cache_ttl_s": (0, 86400), "index_refresh_s": (10, 10**7),
-           "max_index_mb": (1, 400), "page_ids": (1, 5000)}
+           "max_index_mb": (1, 400), "page_ids": (1, 5000), "ask_restart_margin_neurons": (0, 10**6)}
 
 SQL_VECTORS = ("SELECT v.span_id, v.text_sha256, v.vec FROM vera_vjay.tax_chunk_vectors v "
                "WHERE v.model = :model AND v.span_id = ANY(:ids) ORDER BY v.span_id")
@@ -143,7 +144,7 @@ def reset_for_tests() -> None:
     with _LOCK:
         _STATE.update(cfg=None, emb=None, emb_reason=None, emb_at=None, cool_until=0.0, cool_code=None,
                       emb2=None, emb2_reason=None, emb2_at=None, rr_cool_until=0.0, rr_cool_code=None,
-                      ask_day=None, ask_neurons=0.0,
+                      ask_day=None, ask_neurons=0.0, ask_boot=False,
                       neurons_today=None, loader=None, clock=time.monotonic, wall=time.time)
         _QCACHE.clear()
         _PCACHE.clear()
@@ -212,10 +213,18 @@ def _ask_share() -> float:
 
 
 def _ask_used() -> float:
+    """Neurons used by ask-time calls today. In-memory only (no DB write from the ask path). A process restart loses the
+    count, so the FIRST day this process sees starts at (ask share - ask_restart_margin_neurons): after a restart only the
+    margin remains for the rest of that day, so restarts cannot grant a fresh full share (each adds at most the margin).
+    Later days in the same process start at 0."""
     day = time.strftime("%Y-%m-%d", time.gmtime(_STATE["wall"]()))
+    floor = max(0.0, _ask_share() - float(config().get("ask_restart_margin_neurons", 500)))  # outside the lock
     with _LOCK:
         if _STATE["ask_day"] != day:
-            _STATE["ask_day"], _STATE["ask_neurons"] = day, 0.0
+            boot = _STATE.get("ask_boot", True)
+            _STATE["ask_boot"] = False
+            _STATE["ask_day"] = day
+            _STATE["ask_neurons"] = floor if boot else 0.0
         return _STATE["ask_neurons"]
 
 
@@ -251,6 +260,30 @@ def _cool(code: str, seconds: float) -> None:
         _STATE["cool_code"] = code
 
 
+def _embed_deadline(emb, text: str, timeout_s: float):
+    """emb.embed([text]) under an OVERALL deadline (timeout_s covers connect, send, read and retries together, not each
+    socket operation). The call runs in a daemon thread (its own socket timeout still bounds it); on expiry the ask moves on
+    (TimeoutError -> word-only) and the thread's neurons are still charged when it ends."""
+    box: dict = {}
+
+    def run():
+        try:
+            n0 = _neurons_of(emb)
+            box["out"] = emb.embed([text])
+            _ask_charge(_neurons_of(emb) - n0)
+        except BaseException as exc:  # noqa: BLE001
+            box["exc"] = exc
+
+    t = threading.Thread(target=run, name="hybrid-embed", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TimeoutError("deadline")
+    if "exc" in box:
+        raise box["exc"]
+    return box["out"]
+
+
 def query_vector(text: str):
     """(unit float32 vector | None, code, embed_ms). One embedding call per distinct question text (cached by its sha256).
     Never raises; the text is never logged."""
@@ -275,9 +308,7 @@ def query_vector(text: str):
     t0 = time.perf_counter()
     vec, code = None, "ok"
     try:
-        n0 = _neurons_of(emb)
-        out = emb.embed([str(text)])
-        _ask_charge(_neurons_of(emb) - n0)
+        out = _embed_deadline(emb, str(text), float(cfg["timeout_s"]))
         v = np.asarray(out[0], dtype=np.float32)
         n = float(np.linalg.norm(v))
         if v.ndim != 1 or v.size == 0 or not np.all(np.isfinite(v)) or n <= 0:

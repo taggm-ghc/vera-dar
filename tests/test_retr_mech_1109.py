@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("a,b", [("agents", "agent"), ("agent", "agent"), ("forecasting", "forecast"),
                                  ("forecasted", "forecast"), ("policies", "policy"), ("classes", "class"),
-                                 ("gans", "gan"), ("bus", "bus"), ("analysis", "analysis"), ("class", "class"),
+                                 ("gans", "gans"), ("news", "news"), ("lens", "lens"), ("united", "united"), ("bus", "bus"), ("analysis", "analysis"), ("class", "class"),
                                  ("red", "red"), ("ai", "ai"), ("2024s", "2024s")])
 def test_light_stem(a, b):
     assert light_stem(a) == b
@@ -52,3 +52,27 @@ def test_query_drops_generic_idiom():
     c = _corpus(True)
     assert "facto" not in c._query_terms("What is the de facto standard for agents?")
     assert "facto" in _corpus(False)._query_terms("What is the de facto standard for agents?")
+
+
+def test_light_stem_keeps_unrelated_words_distinct():
+    assert light_stem("news") != light_stem("new") and light_stem("united") != light_stem("unit")
+    assert light_stem("lens") != light_stem("len") and light_stem("gans") != light_stem("gan")
+    assert len(light_stem("tested")) >= 4 and light_stem("rated") == "rated"  # never a stem shorter than 4
+
+
+def _kept(q):
+    from vera import fulldoc_admission as fa
+    from vera.fulldoc_corpus import load_config
+    cfg = load_config()
+    icfg = cfg["admission"]["relevance"]
+    return " ".join(fa.retrieval_kept_words(q, icfg))
+
+
+def test_retrieval_drop_matches_whole_words_not_prefixes():
+    assert "commodity" in _kept("What drives commodity prices?")
+    assert "imports" in _kept("How do tariffs affect imports?")
+    assert "Commonwealth" in _kept("What is the British Commonwealth?")
+    assert "majority" in _kept("How did the majority leader vote?")
+    out = _kept("What are the de facto status quo best practices?")
+    assert "facto" not in out and "best" not in out and "practices" not in out
+    assert "important" not in _kept("What is important about tariffs?").split()
