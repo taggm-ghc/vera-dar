@@ -1524,7 +1524,11 @@ class CorpusDescriber:
                 if sa:
                     out = {**out, "subject_areas": sa}
             else:  # CORPUS-INTERIM-1108: no classifier output; year range and frequent subject phrases instead
+                from vera import corpus_interim  # OD-1109-HD3: no share/percentage/count sentence in the written text either
                 out = {**out, "subject_areas": None, "topic_shares": None, "topics": [], **self._interim(out)}
+                for k in ("summary", "coverage"):
+                    if out.get(k) and out.get("summary_source") not in ("deterministic_fallback",):
+                        out[k] = corpus_interim.strip_shares(out[k]) or None
         return out
 
     def _interim(self, overview: dict) -> dict:

@@ -178,3 +178,41 @@ def test_live_shaped_data_shows_none_of_the_pct_b_strings(off):
 def cd_sa():
     from tests.test_corpus_desc_1107 import SA
     return dict(SA)
+
+
+WORDY = ("A collection on influenza and reefs. Half of the sampled sources concern influenza. Twelve sources cover reefs. "
+         "About a third of papers concern ocean warming. A quarter are about coral. Most of 150 documents are recent. "
+         "The majority of sources are open access. Roughly two thirds of the articles are reviews. It spans 2005 to 2026.")
+
+
+def test_number_words_and_fractions_removed_page_and_api(off, monkeypatch):
+    kept = "A collection on influenza and reefs. It spans 2005 to 2026."
+    assert ci.strip_shares(WORDY) == kept and sb._interim_summary(WORDY) == kept
+    st, cap = _capture()
+    sb.render_corpus(st, {**DIGEST, **INTERIM, "summary": WORDY})
+    text = _NORM(" ".join(cap))
+    for bad in ("Half of", "Twelve sources", "third", "quarter", "Most of", "majority", "two thirds"):
+        assert bad not in text, (bad, text)
+    assert kept in text
+    # API: GET /corpus-summary payload (CorpusDescriber.current) in interim mode
+    d = _describer(lambda: (True, ROWS))
+    d.cfg = {**d.cfg, "subject_areas": {"enabled": False}}
+    monkeypatch.setattr(ci, "read_interim", lambda eng, cfg: INTERIM)
+    monkeypatch.setattr(d, "_current_digest", lambda llm: {**DIGEST, "summary": WORDY, "coverage": "Half of the sampled sources are recent. Mostly epidemiology.",
+                                                          "topic_shares": {"basis_documents": 9, "main": [], "main_pct": 60}, "topics": ["x"]})
+    out = d.current(_no_llm)
+    assert out["summary"] == kept and out["coverage"] == "Mostly epidemiology."
+    assert out["topic_shares"] is None and out["subject_areas"] is None and out["topics"] == []
+    assert not re.search(r"\d+\s*%|\b(half|third|quarter|majority|twelve)\b", " ".join([out["summary"], out["coverage"]]), re.I)
+
+
+def test_all_shares_summary_becomes_none_in_api_and_page_falls_back_to_phrases(off, monkeypatch):
+    d = _describer(lambda: (True, ROWS))
+    d.cfg = {**d.cfg, "subject_areas": {"enabled": False}}
+    monkeypatch.setattr(ci, "read_interim", lambda eng, cfg: INTERIM)
+    monkeypatch.setattr(d, "_current_digest", lambda llm: {**DIGEST, "summary": "Flu: 60%. Reefs: 40%."})
+    out = d.current(_no_llm)
+    assert out["summary"] is None
+    st, cap = _capture()
+    sb.render_corpus(st, out)
+    assert "Frequent subjects include:" in _NORM(" ".join(cap))

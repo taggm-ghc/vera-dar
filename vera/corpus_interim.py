@@ -93,3 +93,20 @@ def read_interim(engine, cfg: dict) -> dict:
                               "ORDER BY md5(s.source_id::text) LIMIT :n"), {"n": cfg["title_limit"]}).all()
     years = [str(y[0]), str(y[1])] if y[0] and y[1] else None
     return {"published_years": years, "frequent_subjects": frequent_phrases([r[0] for r in rows], cfg)}
+
+
+# OD-1109-HD3: interim mode never shows a share, percentage or per-subject count in the model-written description.
+_NUM = (r"(?:\d[\d.,]*|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+        r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundreds?|thousands?|dozens?|couple)")
+_UNIT = r"(?:sources?|documents?|papers?|articles?|texts?|works?|publications?|items?|studies|records?|entries|e-?prints?)"
+SHARE_RE = re.compile(
+    r"\d[\d.,]*\s*(?:%|percent|per\s*cent)"
+    r"|\b" + _NUM + r"\s+(?:[\w-]+\s+){0,2}" + _UNIT + r"\b"
+    r"|\b(?:half|halves|thirds?|quarters?|fifths?|sixths?|tenths?|majority|minority|percent|percentage|proportion|fraction|share|shares)\b"
+    r"|\b(?:most|much|many|few|some)\s+of\s+the\b|\b(?:most|majority|minority)\s+of\b", re.I)
+
+
+def strip_shares(text) -> str:
+    """Pure. The text without any sentence that states a share, percentage, fraction or per-subject count ("" if none is left)."""
+    parts = re.split(r"(?<=[.!?])\s+", str(text or "").strip())
+    return " ".join(x for x in parts if x and not SHARE_RE.search(x))
