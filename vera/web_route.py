@@ -258,6 +258,15 @@ def _takes_kwargs(f) -> bool:
     return any(p.kind is p.VAR_KEYWORD or p.name == "hop_gate" for p in ps)
 
 
+def _nd_outlet(url: str) -> bool:
+    """H19-FIX-1109: True when the URL's outlet row carries an ND `access` block (fail closed: an error is True)."""
+    try:
+        from vera import reporting_lane
+        return isinstance((reporting_lane.outlet_row(url) or {}).get("access"), dict)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _gov_pd(final: str, text: str, got: dict, dev: dict) -> dict | None:
     """GOV-PD-1108: licence status only, AFTER every read/use gate passed. Shadow and on record the rule's reason code
     in dev["gov_pd"] (no host, no text); only mode on returns the licence for the page. Never raises; any error = None
@@ -370,9 +379,26 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
             elif not text.strip():
                 dev["gate"]["read"] = "read_empty"
                 out.listed.append(_listed(c, url, title, cfg, ph.get("empty", ""), qmax))
+            elif _nd_outlet(final) or _nd_outlet(url):
+                # H19-FIX-1109 (OD-1109-T8C, ND news off): a page of an outlet with an ND access block is used only
+                # through the reporting lane's gates (and nd_guard), never as a plain web page
+                dev["gate"]["use"] = "use_nd_licence"
+                out.listed.append(_listed(c, url, title, cfg, post.use_phrase or ph.get("fetch_failed", ""), qmax))
             else:
+                from vera import page_licence  # H19-FIX-1109: A7, A8, A10, A11 before any page text is used
+                chk = page_licence.check(final, dict(got, url=final))
+                if chk.get("a11_dropped"):
+                    dev["a11_drop"] = int(chk["a11_dropped"])
+                if not chk["ok"]:
+                    dev["gate"]["use"] = "use_" + str(chk["reasons"][0])[:40]
+                    out.listed.append(_listed(c, url, title, cfg, post.use_phrase or ph.get("fetch_failed", ""), qmax))
+                    continue
+                text = chk["text"]
                 lic = _gov_pd(final, text, got, dev)
-                out.pages.append(WebPage(LANE, "", title, final, outlet=_host(final), text=text, licence=lic))
+                pg = WebPage(LANE, "", title, final, outlet=_host(final), text=text, licence=lic)
+                pg.licence_info = chk["licence"]
+                pg.byline = str(got.get("meta_author") or "")[:200]
+                out.pages.append(pg)
         except Exception as exc:  # noqa: BLE001  one candidate never sinks the route; class name only, no text
             dev["gate"]["error"] = type(exc).__name__
             out.listed.append(_listed(c, url, title, cfg, ph.get("fetch_failed", ""), qmax))

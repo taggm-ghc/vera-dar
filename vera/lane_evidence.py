@@ -52,6 +52,9 @@ class LaneResult:
     # PERF-MISS-1105-FIX2 F2: per-portal call records {portal, status, reason, items} (closed tokens and counts; for
     # the request trace only, never in public()).
     diag: list = field(default_factory=list)
+    # H19-FIX-1109 T6: page-check counters (closed tokens and counts only; request trace, never public()):
+    # nd_read, nd_link_only, page_link_only, acc_exc, a11_drop and acc_exc_first (the first failing token).
+    checks: dict = field(default_factory=dict)
 
     def __repr__(self) -> str:
         return f"LaneResult(links={len(self.links)}, pages={len(self.pages)})"
@@ -217,17 +220,22 @@ def collect(question: str, *, official=None, reporting=None, fetch=None, plan=No
                         if (_host(final) == _host(url) and post.read and post.use_for_answer
                                 and (page.get("text") or "").strip()
                                 and _text_ok(str(page.get("text")), rules) and _path_ok(final, rules)):
-                            pg = LanePage("reporting", "", str(it.get("title") or ""), final, outlet=it.get("outlet") or
-                                          _host(final), published=it.get("published"), text=str(page["text"]))
-                            pg.part = p.label
-                            res.pages.append(pg)
-                            lk["read"] = True
+                            chk = page_check(final, page, res.checks)  # H19-FIX-1109: A7, A8, A10, A11
+                            if chk is not None:
+                                pg = LanePage("reporting", "", str(it.get("title") or ""), final,
+                                              outlet=it.get("outlet") or _host(final), published=it.get("published"),
+                                              text=chk["text"])
+                                pg.part = p.label
+                                pg.licence_info = chk["licence"]
+                                pg.byline = str(page.get("meta_author") or "")[:200]
+                                res.pages.append(pg)
+                                lk["read"] = True
                     except Exception:  # noqa: BLE001  refused (robots, status, type, size, host): link only
                         pass
                 res.links.append(lk)
     except Exception:  # noqa: BLE001  a lane never breaks the answer path
-        return LaneResult(links=list(res.links), diag=list(res.diag) + [{"portal": "-", "status": "called",
-                                                                       "reason": "error", "items": 0}])
+        return LaneResult(links=list(res.links), checks=dict(res.checks),
+                          diag=list(res.diag) + [{"portal": "-", "status": "called", "reason": "error", "items": 0}])
     return res
 
 
@@ -333,7 +341,7 @@ def merge_wiki_links(lanes: "LaneResult | None", question) -> "LaneResult | None
         if not items:
             return lanes
         return LaneResult(links=list(base.links) + items, pages=list(base.pages),
-                          attributions=list(base.attributions), diag=list(base.diag))
+                          attributions=list(base.attributions), diag=list(base.diag), checks=dict(base.checks))
     except Exception:  # noqa: BLE001
         return lanes
 
@@ -358,6 +366,37 @@ def _reporting_hop(url: str, item: dict):
         except Exception:  # noqa: BLE001
             return False
     return ok
+
+
+def _count(checks: dict, key: str, n: int = 1) -> None:
+    checks[key] = int(checks.get(key, 0)) + n
+
+
+def page_check(final: str, page: dict, checks: dict | None = None):
+    """H19-FIX-1109: vera.page_licence.check on a fetched page (A7, A8, A10, A11), before any of its text is used.
+    Returns the check dict (filtered text, licence) when the page may be used, else None (a link only). Counts go to
+    `checks` (closed tokens and counts only). Never raises: an error is a link only."""
+    checks = checks if checks is not None else {}
+    try:
+        from vera import page_licence
+        nd = isinstance((reporting_lane.outlet_row(final) or {}).get("access"), dict)
+        chk = page_licence.check(final, dict(page, url=final))
+        if chk.get("a11_dropped"):
+            _count(checks, "a11_drop", int(chk["a11_dropped"]))
+        if not chk["ok"]:
+            _count(checks, "page_link_only")
+            _count(checks, "acc_exc")
+            if nd:
+                _count(checks, "nd_link_only")
+            checks.setdefault("acc_exc_first", chk["reasons"][0])
+            return None
+        if nd:
+            _count(checks, "nd_read")
+        return chk
+    except Exception:  # noqa: BLE001
+        _count(checks, "page_link_only")
+        checks.setdefault("acc_exc_first", "page_check_error")
+        return None
 
 
 def _outlet_gate(url: str):
@@ -417,15 +456,27 @@ def _chunk_cfg() -> tuple[int, int]:
 
 def _page_licence_id(page) -> str | None:
     """GOV-PD-1108: the licence id a web page carries (us-federal-public-domain, mode on), else None. Provenance only:
-    the page stays answer-only and is never stored (licence_decision unchanged)."""
+    the page stays answer-only and is never stored (licence_decision unchanged). H19-FIX-1109: otherwise the licence
+    found by vera.page_licence (row licence or the page's own licence link)."""
     lic = getattr(page, "licence", None)
-    return str(lic.get("id")) if isinstance(lic, dict) and lic.get("id") else None
+    if isinstance(lic, dict) and lic.get("id"):
+        return str(lic.get("id"))
+    info = getattr(page, "licence_info", None)
+    return str(info["id"]) if isinstance(info, dict) and info.get("id") else None
+
+
+def _page_licence_url(page) -> str | None:
+    info = getattr(page, "licence_info", None)
+    return str(info["url"]) if isinstance(info, dict) and info.get("url") else None
 
 
 def attribution_for(page: LanePage) -> dict:
     who = (f"{page.entity} documentation" if page.lane == "official"
            else f"Web source: {_host(page.url)}" if page.lane == "web"  # A6-W: a web page, never verified fact
            else f"As reported by {page.outlet or _host(page.url)}")
+    by = str(getattr(page, "byline", "") or "").strip()
+    if by and page.lane in ("reporting", "web"):  # H19-FIX-1109: the page's own byline (meta author), attribution only
+        who += f", by {by[:120]}"
     att = {"creator": who, "title": page.title or _host(page.url), "source": page.url,
            "lane": EPISTEMIC[page.lane], "scope": INSPECTION_LABEL}
     try:  # H5: an outlet row may carry its licence statement (Wikinews: CC BY 4.0 after 2024-12-16, CC BY 2.5 before)
@@ -434,6 +485,11 @@ def attribution_for(page: LanePage) -> dict:
             att["licence"] = note
     except Exception:  # noqa: BLE001
         pass
+    info = getattr(page, "licence_info", None)  # H19-FIX-1109 (G7): the licence actually found for this page
+    if isinstance(info, dict) and info.get("label"):
+        att["licence"] = str(info["label"])
+        if info.get("url"):
+            att["licence_url"] = str(info["url"])
     return att
 
 
@@ -481,7 +537,8 @@ def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:
             took += 1
             admitted.append({"span_id": f"{did}:{s}", "document_id": did, "canonical_source_id": pg.url,
                              "title": pg.title, "url": pg.url, "published": pg.published, "authors": None,
-                             "licence": _page_licence_id(pg), "licence_url": None, "start": s, "end": e, "text": seg,
+                             "licence": _page_licence_id(pg), "licence_url": _page_licence_url(pg), "start": s,
+                             "end": e, "text": seg,
                              "text_sha256": fa._sha(seg), "relevance": round(rel, 4), "attribution": att,
                              "answer_only": True, "lane": pg.lane, "origin": EPISTEMIC[pg.lane],
                              "lane_origin": ORIGIN[pg.lane], "epistemic": EPISTEMIC[pg.lane], "stored": False,

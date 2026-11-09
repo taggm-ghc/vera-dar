@@ -427,6 +427,15 @@ def _nd_guard(kept, sources, cfg, question):
     from vera import nd_guard
 
     out, _rep = nd_guard.apply(kept, sources, cfg, question)
+    try:  # H19-FIX-1109 T6: counts per rule and the first rule that dropped (closed tokens; never sentence text)
+        from vera import request_trace as rt
+        per = {k: int(v) for k, v in (_rep or {}).items() if isinstance(v, int) and not isinstance(v, bool)}
+        first = next((k for k in ("closed", "g9", "g1", "g2g3", "g10", "g4", "g5") if per.get(k)), "none")
+        rt.event("claim_check", "nd_guard", counts={"nd_guard_drop": len(kept) - len(out),
+                                                    **{f"nd_{k}": v for k, v in per.items()}},
+                 detail={"nd_guard_rule": first})
+    except Exception:  # noqa: BLE001
+        pass
     return out, len(kept) - len(out)
 
 

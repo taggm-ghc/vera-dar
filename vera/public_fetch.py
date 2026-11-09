@@ -524,6 +524,37 @@ def _licence_href(html: str, base: str) -> str:
     return ""
 
 
+def _canonical_href(html: str, base: str) -> str:
+    """H19-FIX-1109 A8: the first <link rel~=canonical href> as an absolute http(s) URL (signal string), else ''."""
+    for a in _tags_attrs(html, _LINK_TAG):
+        if "canonical" in set(a.get("rel", "").lower().split()) and a.get("href"):
+            u = urljoin(base, a["href"].strip())
+            if urlsplit(u).scheme in ("http", "https"):
+                return signal_value(u)
+    return ""
+
+
+def third_party_segments(body: str, content_type: str = "text/html", clock=None, end=None) -> list:
+    """H19-FIX-1109 A11 (design AD-2): the visible text inside third-party markup (blockquote, q, cite, figure,
+    figcaption, video, audio, picture), one string per outermost element, lines as extract_visible_text forms them.
+    Used only to remove those passages from the page text; at most 200 segments of 4000 chars."""
+    if "html" not in content_type:
+        return []
+    p = _ThirdParty(_hidden_selectors(body, clock, end), clock, end)
+    for i in range(0, len(body), 65536):
+        if clock is not None and clock() > end:
+            raise FetchRefused("timeout")
+        p.feed(body[i:i + 65536])
+    p.close()
+    out = []
+    for seg in p.segments[:200]:
+        lines = (" ".join(line.split()) for line in "".join(seg).splitlines())
+        s = "\n".join(l for l in lines if l)[:4000]
+        if s:
+            out.append(s)
+    return out
+
+
 def _meta_author(html: str) -> str:
     """H19: byline from <meta name=author> or <meta property=article:author> only (signal string, max 200), else ''."""
     for a in _tags_attrs(html, _META_TAG):
@@ -611,7 +642,7 @@ def _tdm_purpose_shadow(rules, url: str) -> None:
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
           robots_cache: dict | None = None, tdm_check: bool = False) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation"} (H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation", "canonical_url", "third_party_text"} (H19-FIX-1109: the last two feed vera.page_licence A8/A11; H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
     `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
     `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
     one request (rules only, never page text); default a fresh dict per call."""
@@ -653,7 +684,9 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
     return {"text": text, "url": final, "content_type": ctype,
             "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(cs),
             "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else ""),
-            "licence_href": _licence_href(html, final), "meta_author": _meta_author(html), "tdm_reservation": tdm}
+            "licence_href": _licence_href(html, final), "meta_author": _meta_author(html), "tdm_reservation": tdm,
+            "canonical_url": _canonical_href(html, final),
+            "third_party_text": third_party_segments(decoded, ctype, clock, end) if html else []}
 
 
 def signal_value(v) -> str:
@@ -897,6 +930,42 @@ class _Visible(HTMLParser):
         if not self.skip:
             self.parts.append(data)
     # handle_comment, handle_decl, handle_pi are intentionally not overridden: comments are dropped
+
+
+_THIRD_PARTY = {"blockquote", "q", "cite", "figure", "figcaption", "video", "audio", "picture"}
+
+
+class _ThirdParty(_Visible):
+    """_Visible that also records the visible text inside third-party markup (outermost element = one segment)."""
+
+    def __init__(self, sel=(), clock=None, end=None):
+        super().__init__(sel, clock, end)
+        self.segments: list[list[str]] = []
+        self._in = False
+
+    def _inside(self) -> bool:
+        return any(t in _THIRD_PARTY for t, _d in self.stack)
+
+    def handle_starttag(self, tag, attrs):
+        super().handle_starttag(tag, attrs)
+        now = self._inside()
+        if now and not self._in:
+            self.segments.append([])
+        self._in = now
+        if now and not self.skip and tag in _BLOCK:
+            self.segments[-1].append("\n")
+
+    def handle_endtag(self, tag):
+        was = self._in
+        super().handle_endtag(tag)
+        if was and not self.skip and tag in _BLOCK:
+            self.segments[-1].append("\n")
+        self._in = self._inside()
+
+    def handle_data(self, data):
+        super().handle_data(data)
+        if self._in and not self.skip:
+            self.segments[-1].append(data)
 
 
 def extract_visible_text(body: str, content_type: str = "text/html", clock=None, end=None) -> str:

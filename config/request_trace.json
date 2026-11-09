@@ -79,9 +79,10 @@
         "portal",
         "status",
         "reason",
-        "news"
+        "news",
+        "acc_exc_first"
       ],
-      "reason": "PERF-MISS-1105-FIX2 F2 inline_acquire._trace_lane: the lane pass portal token (gdelt, hn or -), called/skipped, a closed reason token (ok, no_items, outlet_policy, circuit, spacing, throttled, failed, http_4xx, off, no_terms, no_reporting_part, error) and the news-intent flag; item/page/link counts are counts. Never a URL, outlet, title or question text."
+      "reason": "PERF-MISS-1105-FIX2 F2 inline_acquire._trace_lane: the lane pass portal token (gdelt, hn or -), called/skipped, a closed reason token (ok, no_items, outlet_policy, circuit, spacing, throttled, failed, http_4xx, off, no_terms, no_reporting_part, error) and the news-intent flag; item/page/link counts are counts. Never a URL, outlet, title or question text. H19-FIX-1109 (design section 8, T6): acc_exc_first = the first page-check exception token of vera.page_licence (closed set: acc_page_licence_mismatch, page_licence_reject, acc_republished, acc_item_excluded, acc_third_party_page, acc_third_party_ambiguous, acc_third_party_all, acc_third_party_config, acc_licence_unset, page_check_error); nd_read, nd_link_only, page_link_only, acc_exc and a11_drop are counts."
     },
     "reading_list": {
       "keys": [],
@@ -122,9 +123,10 @@
       "keys": [
         "checker",
         "exc",
-        "per_claim"
+        "per_claim",
+        "nd_guard_rule"
       ],
-      "reason": "claim_check: checker label, exception class name, per-claim id/verdict/cites (nested keys id, verdict, cites)",
+      "reason": "claim_check: checker label, exception class name, per-claim id/verdict/cites (nested keys id, verdict, cites). H19-FIX-1109 (design section 8, T6): nd_guard_rule = the first nd_guard rule that dropped a sentence (closed set: closed, g9, g1, g2g3, g10, g4, g5, none); nd_guard_drop and nd_<rule> are counts.",
       "nested": {
         "per_claim": [
           "id",

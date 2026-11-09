@@ -316,11 +316,15 @@ def _trace_lane(question: str, lanes) -> None:
             vals = [d.get(src) for d in diag if isinstance(d.get(src), int) and not isinstance(d.get(src), bool)]
             if vals:
                 counts[dst] = max(vals) if dst == "terms" else sum(vals)
-        rt.event("lane", "done" if called else "skipped",
-                 counts=counts,
-                 detail={"portal": str(first.get("portal") or "-"), "status": "called" if called else "skipped",
-                         "reason": str(first.get("reason") or ("no_reporting_part" if not diag else "-")),
-                         "news": news})
+        chk = getattr(lanes, "checks", None) or {}  # H19-FIX-1109 T6: page-check counters (counts + one token)
+        for k in ("nd_read", "nd_link_only", "page_link_only", "acc_exc", "a11_drop"):
+            if isinstance(chk.get(k), int) and not isinstance(chk.get(k), bool):
+                counts[k] = chk[k]
+        det = {"portal": str(first.get("portal") or "-"), "status": "called" if called else "skipped",
+               "reason": str(first.get("reason") or ("no_reporting_part" if not diag else "-")), "news": news}
+        if isinstance(chk.get("acc_exc_first"), str):
+            det["acc_exc_first"] = chk["acc_exc_first"]
+        rt.event("lane", "done" if called else "skipped", counts=counts, detail=det)
     except Exception:  # noqa: BLE001
         pass
 
