@@ -286,6 +286,17 @@ def _frequent_line(phrases) -> str | None:
 NO_SUBJECTS = "A description by subject area is not available right now."
 
 
+_SHARE_RE = re.compile(r"\d[\d.,]*\s*(?:%|percent|per cent)|\b\d[\d,]*\s+(?:\w+\s+)?(?:sources?|documents?|papers?|articles?|texts?|works?)\b|\b(?:percent|percentage|share of)\b", re.I)
+
+
+def _interim_summary(text: str) -> str:
+    """OD-1109-HD3: in interim mode the checked written description keeps no percentage, share or per-subject count
+    (inferred subject distributions); sentences containing one are dropped. The total count and year range come from the
+    interim caption line, not from this text. Returns "" when nothing is left."""
+    parts = re.split(r"(?<=[.!?])\s+", str(text).strip())
+    return " ".join(x for x in parts if x and not _SHARE_RE.search(x))
+
+
 def render_corpus(st, data: dict | None) -> None:
     """CORPUS-DIGEST-1104: count/newest line, the digest, subject topics with shares, and the model-written line.
     CORPUS-DESC-1107: plus the code-built subject areas (domains, topics, subtopics) in every state; rendered on the
@@ -311,8 +322,9 @@ def render_corpus(st, data: dict | None) -> None:
         for line in subjects or [NO_SUBJECTS]:
             st.caption(line)
         return
-    if data.get("summary"):
-        st.caption(plain(data["summary"]) if _model_text_ok(data["summary"]) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
+    summary = _interim_summary(data["summary"]) if interim and data.get("summary") else data.get("summary")
+    if summary:
+        st.caption(plain(summary) if _model_text_ok(summary) else f"**VERA-DAR's corpus:** {NO_DESCRIPTION}")
     for line in subjects:
         st.caption(line)
     shares = _share_lines(data.get("topic_shares"))

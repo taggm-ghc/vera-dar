@@ -124,3 +124,57 @@ def test_api_default_is_off_when_key_missing():
     assert cd.subject_cfg({})["enabled"] is False and cd.subject_cfg({"subject_areas": {}})["enabled"] is False
     assert cd.subject_areas_for(None, {}, {}, registry_reader=lambda: (True, ROWS)) is None  # no engine needed: off
     assert cd.subject_cfg({"subject_areas": {"enabled": True}})["enabled"] is True
+
+
+def test_interim_checked_summary_drops_shares_and_per_subject_counts(off):
+    # OD-1109-HD3: the model-written description may state "label: N%" or "N sources" per subject; interim mode removes those sentences
+    summ = ("A collection on influenza and reefs. Influenza: 60% of the sample. Coral reefs: 12 sources. "
+            "About a third of papers concern ocean warming. It spans 2005 to 2026.")
+    st, cap = _capture()
+    sb.render_corpus(st, {**DIGEST, **INTERIM, "summary": summ})
+    text = _NORM(" ".join(cap))
+    assert "A collection on influenza and reefs." in text and "It spans 2005 to 2026." in text
+    assert "60%" not in text and "12 sources" not in text and "of the sample" not in text
+    assert "314 sources, newest source 2026-11-07, publication years 2005 to 2026." in text  # total count / years kept (interim block)
+
+
+def test_interim_summary_only_shares_leaves_no_summary_text(off):
+    assert sb._interim_summary("Flu: 60%. Reefs: 40 percent. 7 sources on coral.") == ""
+    assert sb._interim_summary("Covers physics and biology.") == "Covers physics and biology."
+
+
+def test_switch_on_keeps_summary_untouched(on):
+    st, cap = _capture()
+    sb.render_corpus(st, {**DIGEST, "summary": "A collection. Flu: 60%."})
+    assert "Flu: 60%." in _NORM(" ".join(cap))
+
+
+FORBIDDEN_LIVE = ("descending order of share", "Other / mixed", "Subject areas (", "automatic and approximate", "share of ",
+                  "Main topics (", "topic without an approved label", "Not grouped under a topic", "Topics: ", "21%", "17%", "43%", "57%")
+
+
+def test_live_shaped_data_shows_none_of_the_pct_b_strings(off):
+    # OD-1109-HD3 acceptance: fixtures shaped like the live CORPUS-PCT-B page (366 sources, subject areas with topic shares, digest with shares)
+    live = {**DIGEST, **INTERIM, "source_count": 366,
+            "summary": ("A collection on AI coding assistants and epidemiology. AI coding assistants: 21%. "
+                        "Main topics (57% of documents; share of the 150 sampled sources): topic without an approved label 17%. "
+                        "Not grouped under a topic: 43%. It also covers reef science."),
+            "coverage": "Not grouped under a topic: 43%.",
+            "topic_shares": {"basis_documents": 150, "main": [{"label": "topic without an approved label", "pct": 17}], "main_pct": 57},
+            "topics": ["topic without an approved label"],
+            "subject_areas": {**cd_sa(), "basis_documents": 366}}
+    st, cap = _capture()
+    sb.render_corpus(st, live)
+    text = _NORM(" ".join(cap))
+    for bad in FORBIDDEN_LIVE:
+        assert bad not in text, (bad, text)
+    assert "366 sources" in text and "publication years 2005 to 2026" in text and "Description written by a language model on 2026-11-07" in text
+    assert "A collection on AI coding assistants and epidemiology." in text and "It also covers reef science." in text
+    help_text = " ".join(json.loads((ROOT / "config" / "ui_help_pages.json").read_text())["corpus_page"]["paragraphs"])
+    for bad in ("descending order of share", "Other / mixed", "automatic and approximate", "share of the documents"):
+        assert bad not in help_text, bad
+
+
+def cd_sa():
+    from tests.test_corpus_desc_1107 import SA
+    return dict(SA)
