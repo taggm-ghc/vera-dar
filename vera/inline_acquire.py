@@ -1125,7 +1125,7 @@ def _variant_lane(question: str, q: str, acq: dict, st: dict, collect=None) -> i
         if not variant_lane_on(acq) or not reporting_lane.lane_enabled():
             return 0
         # A8 minor 2: lane_evidence.collect counts reads per call, so the variant rounds together stop once they have
-        # read the lane's per-request read cap (round 0 keeps its own cap): at most 2 x cap pages per request.
+        # read the lane's per-request read cap (round 0 keeps its own cap): up to 3 x cap - 1 lane pages per request (round 0 may read up to cap; each of the two variant rounds starts only while fewer than cap have been read, so the total is bounded by 3 x cap - 1).
         if int(st.get("n_lane", 0) or 0) >= int(lane_evidence._read_cap()):
             return 0
         plan = subquery.SubQueryPlan(original=str(question), parts=(subquery.SubPart("V", str(q)),), rule="single")
