@@ -199,8 +199,20 @@ def premise_unverified_text() -> str:
     return t.strip() if isinstance(t, str) and t.strip() and "{" not in t else ""
 
 
+def stored_checked(data: dict | None) -> int:
+    """NOANSWER-1109 R1: stored documents reused by this request's inline round whose passages were selected (listed in the
+    trace) with no fresh document admitted. The user cares that these stored documents were checked, not which search
+    stage found them, so they are counted as checked, never as "no stored document relevant"."""
+    data = data if isinstance(data, dict) else {}
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
+    re_ = _count(ia.get("reused"))
+    fe_ = _count((ia.get("counts") or {}).get("fetched", ia.get("admitted"))) if isinstance(ia.get("counts"), dict) or "admitted" in ia else 1
+    return re_ if re_ and not fe_ and trace_selected(data) > 0 and _no_answer(data) else 0
+
+
 def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_selected: int = 0, n_fetched: int = 0,
-                  n_matched: int | None = None) -> str:
+                  n_matched: int | None = None, n_stored_checked: int = 0) -> str:
     """Visitor sentence for a contract.fallback token (None/unknown -> generic). Never returns the token.
     n_matched (NOANSWER-RC-1107): documents with relevance-cleared passages (relevant_spans) for this question; None = unknown (old wording)."""
     if not isinstance(token, str) or not token:
@@ -213,6 +225,11 @@ def fallback_text(token, cfg: dict | None = None, n_inspected: int = 0, n_select
             return why
     cfg = _cfg() if cfg is None else cfg
     key = _TOKEN_TEXT.get(token)
+    if n_stored_checked > 0 and key == "insufficient_text" and count_matching_on(cfg):
+        return (f"{_stored_phrase(n_stored_checked).replace(' full', '')} "
+                f"{'was' if n_stored_checked == 1 else 'were'} checked for this question and passages from "
+                f"{'it' if n_stored_checked == 1 else 'them'} were selected, but none answered it, so VERA-DAR has not "
+                "written an answer or answered from memory.")
     alt = (insufficient_matching_text(cfg, n_matched, n_fetched) if key == "insufficient_text"
            else unsupported_matching_text(cfg, n_selected) if key == "unsupported_text" else None)
     if alt:
@@ -321,6 +338,11 @@ def evidence_scope_line(data: dict | None) -> str | None:
     n, m = _distinct_docs(data.get("examined_full_documents")), _count(data.get("admitted_evidence"))
     k = _distinct_docs(data.get("admitted_evidence")) if isinstance(data.get("admitted_evidence"), list) else 0
     f = fetched_for_request(data)
+    sc_ = stored_checked(data)
+    if sc_ and not m and count_matching_on(_cfg()):  # R1: stored documents were checked; say so instead of "none relevant"
+        t_ = trace_selected(data)
+        return (f"Evidence scope: {sc_} stored document{'s were' if sc_ != 1 else ' was'} checked for this question; "
+                f"{t_} of their passages {'were' if t_ != 1 else 'was'} selected as possible evidence; none was used in an answer.")
     if count_matching_on(_cfg()):  # NOANSWER-RC-1107 r2: never the size of a set searched regardless of subject
         mt = matched_for(data)
         parts = []
@@ -509,7 +531,7 @@ def render_fallback_reason(st, data) -> None:
     st.info(fallback_text(token, n_inspected=_count(data.get("examined_full_documents")),
                           n_selected=_distinct_docs(ae) if isinstance(ae, list) else 0,
                           n_fetched=fetched_for_request(data),
-                          n_matched=matched_for(data)))
+                          n_matched=matched_for(data), n_stored_checked=stored_checked(data)))
     render_evidence_scope(st, data)
 
 

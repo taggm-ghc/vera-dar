@@ -50,8 +50,11 @@ def test_midterms_source_attribution_is_consistent():
     d = _midterms()
     scope, src, cnt = u.evidence_scope_line(d), u.evidence_source_line(d), u.inline_counts_line(d)
     note = u.acquisition_notice_line(d)
-    assert "6 passages from documents already stored and checked for this question" in scope and "none was used" in scope
-    assert "fetched for this question" not in scope and "fetched for this question" not in src
+    assert scope == ("Evidence scope: 2 stored documents were checked for this question; 6 of their passages were "
+                     "selected as possible evidence; none was used in an answer.")
+    assert "no stored document relevant" not in scope and "fetched for this question" not in src
+    head = u.fallback_text(TOK, n_inspected=5, n_matched=u.matched_for(d), n_stored_checked=u.stored_checked(d))
+    assert head.startswith("2 stored documents were checked for this question") and "No stored full document" not in head
     assert src.startswith("Evidence source: documents already stored, checked for this question")
     assert "stored database" not in src
     assert "2 already stored" in cnt and "0 newly fetched" in cnt and "used for this answer" not in cnt
@@ -69,6 +72,9 @@ def test_hadrons_no_stored_database_source_when_nothing_was_used():
     d = _hadrons()
     assert "no passages selected" in u.evidence_scope_line(d)
     assert u.evidence_source_line(d) is None
+    d["contract"]["inline_acquisition"]["ledger"].update(counted=0, full_text=0)
+    assert u.acquisition_notice_line(d).startswith("Read 0 of the 6 sources targeted")
+    assert u.stored_checked(d) == 0
 
 
 def test_identical_passage_lines_collapse_to_one_without_naming_sources():
