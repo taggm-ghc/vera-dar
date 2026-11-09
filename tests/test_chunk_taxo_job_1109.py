@@ -17,7 +17,7 @@ from vera import chunk_taxo_job as job
 from vera import chunk_taxo_status as cstatus
 from vera import chunk_taxo_store as store
 
-SECRET = "SECRETCHUNKTEXT"
+SENTINEL_TEXT = "SENTINELCHUNKBODY"
 BY_TEXT = {t: n for n, t in store.SQL.items()}
 ENV = {"VERA_DB_URL_RW": "postgresql://fake/none"}
 
@@ -242,7 +242,7 @@ class StubCore:
 
 def spans(n=10):
     kinds = ["alpha", "beta", "gamma"]
-    return [(i, 100 + i % 3, f"{kinds[i % 3]} {SECRET} {i}") for i in range(1, n + 1)]
+    return [(i, 100 + i % 3, f"{kinds[i % 3]} {SENTINEL_TEXT} {i}") for i in range(1, n + 1)]
 
 
 def cfg(**jobkw):
@@ -384,7 +384,7 @@ def test_resume_embeds_only_missing_after_crash():
 def test_changed_text_is_reembedded():
     db = FakeDB(spans())
     make(db).run()
-    db.spans[0] = (1, 101, "beta changed " + SECRET)
+    db.spans[0] = (1, 101, "beta changed " + SENTINEL_TEXT)
     e = FakeEmb()
     make(db, e=e).run()
     assert sum(e.calls) == 1
@@ -398,7 +398,7 @@ def test_retire_scope():
                                   origin_ref="auto-chunk-taxo:v0" if "old" in s else "topreg:x", state="active")
     db.links[("chunk_subtopic", 1, 999, 99)] = dict(version="v0", state="active", score=None, score_kind=None)
     db.links[("chunk_subtopic", 1, 998, 98)] = dict(version="v0", state="active", score=None, score_kind=None)
-    db.spans.append((11, 100, "alpha new " + SECRET))  # new corpus => new version => full swap
+    db.spans.append((11, 100, "alpha new " + SENTINEL_TEXT))  # new corpus => new version => full swap
     assert make(db).run()["complete"]
     assert db.nodes[("subtopic", "ct-s-old000000000")]["state"] == "retired"  # in retired_keys, auto origin
     assert db.nodes[("topic", "ct-t-reg")]["state"] == "active"  # registry row never touched
@@ -496,8 +496,8 @@ def test_no_chunk_text_in_logs_or_status(caplog):
     db = FakeDB(spans())
     j = make(db)
     j.run()
-    assert SECRET not in caplog.text and SECRET not in repr(j.status())
-    assert SECRET not in json.dumps([p for n, p in db.log if n == "job_run_insert"], default=str)
+    assert SENTINEL_TEXT not in caplog.text and SENTINEL_TEXT not in repr(j.status())
+    assert SENTINEL_TEXT not in json.dumps([p for n, p in db.log if n == "job_run_insert"], default=str)
     assert "text-must-not-leak" not in repr(j.status())  # non-numeric metrics are dropped
 
 
@@ -534,7 +534,7 @@ def test_status_reader_absent_and_ok_and_cached():
 # ----------------------------------------------------------------------------------------------- Cloudflare adapter (fake opener)
 import urllib.error  # noqa: E402
 
-CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_AI_TOKEN": "TOKEN-SECRET-VALUE"}
+CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_AI_TOKEN": "TOKEN-SENTINEL_TEXT-VALUE"}
 
 
 class FakeResp:
@@ -605,10 +605,10 @@ def test_cf_success_request_shape_dim_detected_and_secrets_not_logged(caplog):
     out = e.embed(["a", "b"])
     r = op.reqs[0]
     assert r.full_url == "https://api.cloudflare.com/client/v4/accounts/acct123/ai/run/@cf/baai/bge-m3" and r.get_method() == "POST"
-    assert r.get_header("Authorization") == "Bearer TOKEN-SECRET-VALUE" and json.loads(r.data) == {"text": ["a", "b"]}
+    assert r.get_header("Authorization") == "Bearer TOKEN-SENTINEL_TEXT-VALUE" and json.loads(r.data) == {"text": ["a", "b"]}
     assert len(out) == 2 and e.dim == 5
     assert abs(e.stats()["neurons_today"] - 2000 / 1e6 * 1075) < 1e-6  # usage field preferred
-    assert "TOKEN-SECRET" not in caplog.text and "acct123" not in caplog.text
+    assert "TOKEN-SENTINEL_TEXT" not in caplog.text and "acct123" not in caplog.text
 
 
 def test_cf_dim_mismatch_refused():
