@@ -106,7 +106,8 @@ def topic_order(question, candidates, cfg=None) -> list:
         on, off = [], []
         for c in cands:
             text = f"{c.get('title') or ''} {c.get('snippet') or ''}" if isinstance(c, dict) else ""
-            (on if search_query.matched_concepts(kc2, text) else off).append(c)
+            vetted = isinstance(c, dict) and c.get("portal_origin") is True  # OD-1109-ORIGIN: on-question reference
+            (on if vetted or search_query.matched_concepts(kc2, text) else off).append(c)
         return on + off if on else []
     except Exception:  # noqa: BLE001  (ordering must never break the web lane)
         return cands
@@ -187,7 +188,8 @@ def make_hop_gate(start: str, *, registry=None, deny_list=None, cfg=None, hosts=
     return gate
 
 
-def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None, deny_list=None, cfg=None):
+def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None, deny_list=None, cfg=None,
+                     licence=None):
     """source_permissions.evaluate on a public_fetch result: X-Robots-Tag, Content-Signal (header and robots.txt),
     meta robots, the login/paywall text heuristic and the registry derivative rules. Signal strings only."""
     cfg = cfg if cfg is not None else load_config()
@@ -197,7 +199,7 @@ def evaluate_fetched(final: str, got: dict, *, registry=None, registry_row=None,
     sig = {k: str(got[f]) for k, f in (("X-Robots-Tag", "x_robots_tag"), ("Content-Signal", "content_signal"),
                                                   ("TDM-Reservation", "tdm_reservation"))  # H19 A9
            if got.get(f)}
-    return sp.evaluate(final, headers=sig, html_head=head, registry=registry, registry_row=registry_row,
+    return sp.evaluate(final, licence=licence, headers=sig, html_head=head, registry=registry, registry_row=registry_row,
                        robots_allowed=True, deny_list=deny_list,
                        page_signals={"login_required": True} if _login_wall(text, cfg) else None)
 
@@ -290,7 +292,9 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
     robots_cache: dict = {}  # M2: parsed robots.txt rules per host for this call (rules only)
     halted = None  # first stop/deadline/budget code; every later candidate is listed without a fetch
 
-    def hop_gate(hop: str, start: str):
+    def hop_gate(hop: str, start: str, same_host: bool = False):
+        if same_host and _host(hop) != _host(start):  # OD-1109-ORIGIN: no redirect off the original host
+            return "read_redirect_off_host"
         return make_hop_gate(start, registry=registry, deny_list=deny_list, cfg=cfg, hosts=hosts)(hop)
     pool = [c for c in candidates or () if is_web_candidate(c)]
     candidates = topic_order(question, pool, cfg)  # SELFQ-RCA-1107 D4 r2
@@ -326,7 +330,8 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
             hosts.add(host)
             out.fetched += 1
             try:
-                got = fetch(url, hop_gate=lambda hop, _s=url: hop_gate(hop, _s), robots_cache=robots_cache)
+                got = fetch(url, hop_gate=lambda hop, _s=url, _o=bool(c.get("portal_origin")): hop_gate(hop, _s, _o),
+                            robots_cache=robots_cache)
                 dev["fetched"] = True
             except _pf.FetchRefused as exc:
                 reason = str(getattr(exc, "reason", "") or "refused")[:40]
@@ -346,11 +351,20 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 continue
             final = str(got.get("url") or url)
             text = str(got.get("text") or "")
-            post = evaluate_fetched(final, got, registry=registry, deny_list=deny_list, cfg=cfg)
+            origin = c.get("portal_origin") is True  # OD-1109-ORIGIN: the page's own licence link is gated too
+            post = evaluate_fetched(final, got, registry=registry, deny_list=deny_list, cfg=cfg,
+                                    licence=(str(got.get("licence_href") or "") or None) if origin else None)
             dev["gate"].update(read=post.read_reason, use=post.use_reason, ingest="ingest_answer_only_wp",
                                ingest_evaluated=post.ingest_reason)
+            lic_bad = None
+            if origin and got.get("licence_href"):  # OD-1109-ORIGIN: ND / no educational use / fee only -> not used
+                from vera import licence_gate
+                lic_bad = licence_gate.reject_reason(None, str(got.get("licence_href")))
             if not post.read:
                 out.listed.append(_listed(c, url, title, cfg, post.read_phrase, qmax))
+            elif lic_bad:
+                dev["gate"]["use"] = "use_licence_reject"
+                out.listed.append(_listed(c, url, title, cfg, post.use_phrase or ph.get("fetch_failed", ""), qmax))
             elif not post.use_for_answer:
                 out.listed.append(_listed(c, url, title, cfg, post.use_phrase, qmax))
             elif not text.strip():

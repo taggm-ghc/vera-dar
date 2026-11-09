@@ -40,7 +40,7 @@
     "doi_prefixes": ["10.1101"],
     "_note": "A host equal to, or a subdomain of, an entry is never read as a portal and no link TO it is kept, whatever portal_hosts.json says (exclusion wins). A DOI is a separate identifier: a doi.org link to an excluded publisher's work is dropped only when its prefix is in doi_prefixes (10.1101 = bioRxiv/medRxiv, OD-7), checked on every candidate from every adapter; other DOIs go to the unchanged acquisition gates. OpenStax: terms forbid generative-AI ingestion (GENSCI-SOURCES-1108 S3). OAPEN/DOAB: www.oapen.org robots disallows ClaudeBot and anthropic-ai (B2). CERN CDS: Anubis challenge, never bypassed (E1). bioRxiv/medRxiv: preprint policy OD-7. AWS, Nvidia, Microsoft Learn docs: terms forbid automated access (R-050)."
   },
-  "classifier": {
+  "classifier": {"follow_origin": true, "_follow_origin_note": "OD-1109-ORIGIN (owner 2026-11-09, Follow to any original host (gated)): an on-question reference (COinS title/venue matches the question) on a registered portal page may lead to its ORIGINAL host even when unregistered; the link becomes an ordinary URL candidate read only through vera.web_route (READ gate, public_fetch URL safety with pinned public IPs, robots.txt for our tokens, AI-use / Content-Usage / TDM signals, licence, rate limit and Crawl-delay, redirects only within the target host) and is answer-only (never persisted by this route). Hop budget: the portal page is hop 1 and the original host hop 2 (caps.max_hops); an origin link from a hop-2 portal page is not followed. false restores the registered-landing-only rule.", 
     "kinds": ["doi", "pmcid", "pmid", "arxiv", "handle", "landing"],
     "landing_hosts_from": "auto_acquire.landing_route.publisher_hosts",
     "drop_host_patterns": [

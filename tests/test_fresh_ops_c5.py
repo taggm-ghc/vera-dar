@@ -112,7 +112,7 @@ def _jobs_run(world):
 def test_shipped_bounds_and_budget_values():
     c = acq_config.load_config()
     b = lambda k: int(acq_config.bound(c, k))  # noqa: E731
-    assert (b("jobs_per_hour"), b("jobs_per_day"), b("max_docs_per_job")) == (30, 180, 2)  # OD-1031-PROMPTLIM
+    assert (b("jobs_per_hour"), b("jobs_per_day"), b("max_docs_per_job")) == (120, 180, 2)  # OD-1031-PROMPTLIM; OD-1109-QUOTA
     assert acq_config.docs_per_day_cap(c) is None
     assert float(c["inline"]["deadline_s"]) == 45 and b("job_deadline_s") == 120
     assert public_mode.ASK_TIMEOUT_S == 180

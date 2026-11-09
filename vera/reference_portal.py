@@ -321,8 +321,32 @@ def portal_links(html_hrefs, page_url: str, cfg: Mapping, hosts: Mapping, limit:
     return out
 
 
+def origin_link(href: str, page_url: str, cfg: Mapping) -> dict | None:
+    """OD-1109-ORIGIN (owner 2026-11-09, "Follow to any original host (gated)"): a REFERENCE's own link (a COinS
+    rft_id URL) to its original host, even when that host is not registered. Only the shape is checked here (http(s),
+    no userinfo/odd characters, another host, not excluded or dropped); every fetch gate runs later, per hop, in
+    vera.web_route / vera.public_fetch (URL safety and pinned public IPs, robots.txt for our tokens, AI-use and
+    Content-Usage signals, licence, rate limit and Crawl-delay, no redirect off the target host). Answer-only there:
+    nothing from an original host is persisted by this route."""
+    from vera import search_providers as sp
+    try:
+        u = urljoin(page_url, str(href or "").strip())
+        parts = urlsplit(u)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or parts.username or parts.password or re.search(r"[\s\x00-\x1f\x7f]", u):
+        return None
+    host = _host(u)
+    if not host or host == _host(page_url) or excluded(host, cfg):
+        return None
+    if any(re.search(p, host) for p in (cfg["classifier"].get("drop_host_patterns") or ())):
+        return None
+    safe = sp.safe_target_url(u)
+    return {"url": safe, "kind": "origin"} if safe else None
+
+
 def extract(html: str, page_url: str, question: str, cfg: Mapping, landing_hosts: set | None = None,
-            hrefs_out: list | None = None) -> list:
+            hrefs_out: list | None = None, allow_origin: bool = False) -> list:
     """Page HTML -> ordered reference records [{"ids"|"url", "kind", "score"}]. Raises Skip("tdm_reservation") when
     the page's own meta reserves TDM. COinS records are ordered by their own title/venue match to the question (never
     page prose); plain links keep page order after them. Capped at caps.max_links_per_page."""
@@ -350,6 +374,8 @@ def extract(html: str, page_url: str, question: str, cfg: Mapping, landing_hosts
             recs.append({"ids": ids, "kind": "coins", "score": score})
         elif rec.get("url"):
             c = classify(rec["url"], page_url, cfg, lh)
+            if c is None and allow_origin and score > 0:  # OD-1109-ORIGIN: an on-question reference's own link
+                c = origin_link(rec["url"], page_url, cfg)
             if c:
                 recs.append({**c, "score": score})
     recs.sort(key=lambda r: -r["score"])  # stable: page order within equal scores
@@ -391,6 +417,8 @@ def to_candidate(rec: Mapping, rank: int, adapter: str) -> dict | None:
         c = w.to_url_candidate(rec["url"], rank=rank)
         if c is not None:
             c["ref_id_kind"] = rec.get("kind") or "url"
+            if rec.get("kind") == "origin":
+                c["portal_origin"] = True  # vera.web_route: same-host redirects only; on-question by its reference
     else:
         c = None
     if c is None:
@@ -773,9 +801,10 @@ def collect(question: str, *, base=None, ddg_raw=None, cfg: Mapping | None = Non
                     html = fetch_page(url, row, cfg, deps, clock, deadline)
                     per_host[h] = per_host.get(h, 0) + 1  # pages READ per host (alternatives of one page share it)
                     rest: list = []
-                    recs = extract(html, url, question, cfg, landing, hrefs_out=rest if max_hops > 1 else None)
-                    html = None  # the page is discarded as soon as its identifiers are out
                     hop = hop_of.get(url, 1)
+                    recs = extract(html, url, question, cfg, landing, hrefs_out=rest if max_hops > 1 else None,
+                                   allow_origin=cfg["classifier"].get("follow_origin") is True and hop < max_hops)
+                    html = None  # the page is discarded as soon as its identifiers are out
                     if hop < max_hops and rest:  # follow on toward the original host (bounded: hops, pages, hosts)
                         room = int(caps["max_pages_per_question"]) - counts["pages_read"] - 1
                         ins = gi  # depth first: a follow-on page is read before the next first-hop page

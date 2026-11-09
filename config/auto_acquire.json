@@ -96,7 +96,7 @@
     "source_authored_partial_dates_trusted": true,
     "rank_prefer_recent": true,
     "sufficiency": {"partial_is_insufficient": true}, "always_acquire_new": true, "_always_acquire_new_note": "OD-1109-SIX (owner 2026-11-09, verbatim: \"ingest at least 6 new documents found from external search results, including from following links from portals until arriving at original hosts of sources\"). Exactly true: every grounded answer also runs the existing research attempt (trigger new_documents; one inline acquisition per request, its rounds aiming at bounds.acq_round_target_new_docs NEW documents, i.e. reused stored documents do not count unless bounds.acq_round_count_reused is true), bounded by the unchanged deadline, job quota and the per-prompt ceiling (max_docs_per_prompt), then answers from stored + new evidence; texts.new_documents states how many new were obtained. Fewer than the target is a resource limitation, never a reason not to answer. false restores the previous trigger rule (insufficient / stale / unknown only).",
-    "texts": { "new_documents": "VERA-DAR searched for new sources for this question and obtained {n} new full document{s} (it aims for at least {m}).",
+    "texts": { "new_documents_quota": "No new search was possible for this question this hour: VERA-DAR's limit on new searches has been reached, so this answer uses only the documents it already holds.", "new_documents": "VERA-DAR searched for new sources for this question and obtained {n} new full document{s} (it aims for at least {m}).",
       "fresh_new": "Freshness: {n_new} cited document(s) were found by a new search for this question; cited documents published within the last 24 hours: {n_fresh}; published earlier: {n_stale}; publication time not precise enough to tell: {n_unknown}. Documents are dated by publication, not by when VERA-DAR added them to its collection.",
       "mixed_ages": "Older and newly found sources are both cited and labelled by publication date; where they differ, the more recent publication is not automatically correct, and an older publication is not current because VERA-DAR obtained it today.",
       "new_evidence_unanswered": "A new search found full-text sources, but no checked answer could be written from them, so this answer uses the earlier sources only."
@@ -104,7 +104,7 @@
   },
   "bounds": {
     "queue_max": 4,
-    "jobs_per_hour": 30,
+    "jobs_per_hour": 120, "_jobs_per_hour_note": "OD-1109-QUOTA (owner 2026-11-09, Raise the quota): 30 -> 120, because OD-1109-SIX runs a new-document search (one job per round) on every answered question. An owner-set resource bound, not calibrated; when it is still exhausted the answer says so (freshness.texts.new_documents_quota). What would change it: live hourly job use per question.",
     "jobs_per_day": 180,
     "docs_per_day": null,
     "_docs_per_day_note": "OWNER DECISION 2026-10-22 (verbatim, relayed by the orchestrator to DAR-TRACE-1022): \"abolish the 20-a-day limit\". null = no daily document cap (vera.acq_config.docs_per_day_cap); the RO daily count is not read. Still bounded by jobs_per_hour 30, jobs_per_day 180 and max_docs_per_job 2 (at most 360 documents/day; was 6/30/2 = 60 before OD-1031-PROMPTLIM). A number restores the cap.",

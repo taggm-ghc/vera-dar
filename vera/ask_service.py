@@ -1752,6 +1752,10 @@ def _six_line(texts: dict, trig, o, acq) -> str:
     t = texts.get("new_documents") if isinstance(texts, dict) else None
     if rr.TRIGGER_NEW not in (trig or ()) or o is None or not isinstance(t, str) or not t:
         return ""
+    if str(getattr(o, "status", "")) in ("rate", "daily_cap"):  # OD-1109-QUOTA: say plainly no new search ran
+        q = texts.get("new_documents_quota")
+        if isinstance(q, str) and q:
+            return q
     try:
         from vera import acq_rounds, inline_acquire
         n, m = inline_acquire.new_documents(o), acq_rounds.target_of(acq)
