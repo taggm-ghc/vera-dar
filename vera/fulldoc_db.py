@@ -901,15 +901,18 @@ def _pin_attrs(out, pin_candidates: dict, report: dict):
 
 # NOCAP-1109: streamed reads of the stored acquired rows. The id list is read first (no content); rows and spans are then
 # read and verified ACQ_BATCH documents at a time, so raw rows never pile up. SQL_ACQ_INDEX_AFTER lists only rows newer
-# than a source_id (the append refresh).
+# than a source_id (the append refresh) together with the count of ALL marked rows, in ONE statement (one snapshot,
+# F2): the append test then cannot be confused by a row committed between the refresh probe and the listing.
 ACQ_BATCH = 25
-SQL_ACQ_INDEX_AFTER = (f"SELECT s.source_id, d.run_id, s.provenance {SQL_ACQ_FILTER} AND s.source_id > %(after)s "
-                       f"ORDER BY s.source_id DESC")
+SQL_ACQ_INDEX_AFTER = (f"SELECT m.source_id, m.run_id, m.provenance, m.n_all FROM (SELECT s.source_id, d.run_id, "
+                       f"s.provenance, count(*) OVER () AS n_all {SQL_ACQ_FILTER}) m WHERE m.source_id > %(after)s "
+                       f"ORDER BY m.source_id DESC")
 
 
-def _acq_ids(conn, cur, rid: int, acq_cfg: dict, after=None) -> tuple[list, int]:
-    """(source ids to serve in ascending order, number of marked rows listed before the pins pre-selection). A
-    numeric served_per_topic_max (rollback only) selects per micro-topic over the whole set."""
+def _acq_ids(conn, cur, rid: int, acq_cfg: dict, after=None) -> tuple[list, tuple | None, int]:
+    """(source ids to serve in ascending order, (max source_id, count) of ALL marked rows in the same snapshot as the
+    listing or None when unknown, number of marked rows listed before the pins pre-selection). A numeric served_per_topic_max (rollback only) selects per micro-topic over the
+    whole set. With `after`, only newer rows are listed; the count still covers all marked rows."""
     from vera import acquired_pins
     marker = acq_cfg["marker"]
     use_pt, ptm = _per_topic_mode(acq_cfg)
@@ -917,16 +920,20 @@ def _acq_ids(conn, cur, rid: int, acq_cfg: dict, after=None) -> tuple[list, int]
     allow = acquired_pins.pinned_ids(pm) if pm["mode"] == "on" else None  # H1B-PROMOTE-1107: only pinned rows
     if after is None and use_pt and ptm is not None:
         ids = acquired_ids_per_topic(conn, cur, rid, marker, ptm, acq_cfg.get("micro_topic") or {}, allow_ids=allow)
-        return sorted(int(x) for x in ids), -1
+        return sorted(int(x) for x in ids), None, -1
     params = {"kind": FULLDOC_CHUNKS_KIND, "marker": str(marker), "base": int(rid)}
     if after is not None:
         params["after"] = int(after)
     rows = _select(cur, SQL_ACQ_INDEX if after is None else SQL_ACQ_INDEX_AFTER, params)
     idx = [{"source_id": r[0], "run_id": r[1], "provenance": r[2]} for r in rows]
+    if after is None:
+        snap = (max((int(i["source_id"]) for i in idx), default=None), len(idx))
+    else:
+        snap = (max(int(i["source_id"]) for i in idx), int(rows[0][3])) if rows else None
     n_listed = len(idx)
     if allow is not None:
         idx = [i for i in idx if acquired_pins.row_document_id(i) in allow]
-    return sorted(int(i["source_id"]) for i in idx), n_listed
+    return sorted(int(i["source_id"]) for i in idx), snap, n_listed
 
 
 def _acq_batches(conn, cur, rid: int, acq_cfg: dict, sids: list):
@@ -974,7 +981,7 @@ def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocC
     try:
         b = _AcqBuilder(cfg, acq_cfg)
         b.order = "oldest"
-        sids, _ = _acq_ids(conn, cur, rid, acq_cfg)
+        sids, snap, _ = _acq_ids(conn, cur, rid, acq_cfg)
         for sources, spans in _acq_batches(conn, cur, rid, acq_cfg, sids):
             b.add(sources, spans, order="oldest")
     except Exception as e:  # noqa: BLE001
@@ -985,15 +992,19 @@ def load_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict) -> FullDocC
         c = b.finish()
     except Exception as e:  # noqa: BLE001  fail closed
         return _unusable_corpus(cfg, [], R_ERR, f"acquired rows could not be loaded ({type(e).__name__})")
+    if snap is not None:
+        c._acq_sig = snap  # the (max source_id, count) this corpus was built from (F2)
     _log_pins(c)
     return c
 
 
 def extend_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict, corpus, old_sig, new_sig):
-    """NOCAP-1109 append refresh. When the change since `old_sig` is a pure append (every marked row newer than the old
-    maximum source_id, and exactly new_count - old_count of them), verify and index ONLY those rows on a fork of
-    `corpus` (the serving corpus is never modified) and return the new corpus; otherwise None (the caller then does a
-    full rebuild). Never raises; a failure discards the fork and returns None."""
+    """NOCAP-1109 append refresh. When the change since `old_sig` (the signature `corpus` was built at) is a pure append
+    (in ONE snapshot: the count of all marked rows equals old_count plus the rows newer than the old maximum
+    source_id), verify and index ONLY those newer rows on a fork of `corpus` (the serving corpus is never modified) and
+    return the new corpus, carrying in `_acq_sig` the signature of that snapshot; otherwise None (the caller then does
+    a full rebuild). `new_sig` (the refresh probe) only triggers the attempt. Never raises; a failure discards the fork
+    and returns None. A caller that abandons the returned corpus before serving it must call its _dar.discard()."""
     rid = parse_run_id(base_run_id)
     st = getattr(corpus, "_acq_state", None)
     if rid is None or st is None or st.get("order") != "oldest" or corpus.status != STATUS_OK or corpus._dar is None:
@@ -1015,9 +1026,9 @@ def extend_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict, corpus, o
     except Exception:  # noqa: BLE001
         return None
     try:
-        sids, n_listed = _acq_ids(conn, cur, rid, acq_cfg, after=old_max)
-        if n_listed != new_n - old_n:
-            return None  # rows were also removed or changed: not a pure append
+        sids, snap, n_listed = _acq_ids(conn, cur, rid, acq_cfg, after=old_max)
+        if snap is None or n_listed <= 0 or snap[1] != old_n + n_listed:
+            return None  # rows were also removed or changed (same snapshot): not a pure append
         b = _AcqBuilder(cfg, acq_cfg, base=corpus)
         b.order = "oldest"
         for sources, spans in _acq_batches(conn, cur, rid, acq_cfg, sids):
@@ -1032,5 +1043,6 @@ def extend_acquired_db(connect, base_run_id, cfg: dict, acq_cfg: dict, corpus, o
     if c.status != STATUS_OK:
         b.discard()
         return None
+    c._acq_sig = snap
     _log_pins(c)
     return c

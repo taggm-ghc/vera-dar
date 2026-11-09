@@ -589,16 +589,26 @@ def _rebuild_acquired(cfg, setup, sig) -> None:
         c = None
         if old is not None and old_sig is not None:
             c = fulldoc_db.extend_acquired_db(connect, rid, cfg, acfg, old, old_sig, sig)
+        appended = c is not None
         if c is None:
             with _ACQ_LOCK:
                 _ACQ["corpus"], _ACQ["sig"] = None, None
             old = None
             c = fulldoc_db.load_acquired_db(connect, rid, cfg, acfg)
-        if c.status == STATUS_OK and c.acquired and (cfg.get("retrieval") or {}).get("evidence_only"):
-            c._evidence_dar()  # pre-warm the evidence-only index here, never on the request path (measured, plan V7)
-        with _ACQ_LOCK:
-            _ACQ["corpus"] = c if (c.status == STATUS_OK and c.acquired) else None
-            _ACQ["sig"] = sig
+        swapped = False
+        try:
+            if c.status == STATUS_OK and c.acquired and (cfg.get("retrieval") or {}).get("evidence_only"):
+                c._evidence_dar()  # pre-warm the evidence-only index here, never on the request path (measured, plan V7)
+            with _ACQ_LOCK:
+                _ACQ["corpus"] = c if (c.status == STATUS_OK and c.acquired) else None
+                # NOCAP-1109 F2: the signature the corpus was really built at (one snapshot), else the probe's
+                _ACQ["sig"] = getattr(c, "_acq_sig", None) or sig
+                swapped = True
+        finally:
+            if appended and not swapped and c._dar is not None:
+                # NOCAP-1109 F1: an appended fork abandoned before the swap must take its entries back out of the
+                # postings it shares with the serving corpus, or the next append would duplicate them
+                c._dar.discard()
     finally:
         with _ACQ_LOCK:
             _ACQ["building"] = False

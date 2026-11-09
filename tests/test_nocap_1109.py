@@ -5,6 +5,8 @@ model. Proves: (1) every stored acquired document is eligible for internal searc
 no R-ACQ-SERVECAP drop); (2) the ~30-document soft ceiling still stops acquisition rounds."""
 from __future__ import annotations
 
+import pytest
+
 from tests import acq_support as A
 from tests import fulltext_synth
 from vera import acq_config, auto_acquire, fulldoc_corpus, fulldoc_db, query_variants6
@@ -276,3 +278,48 @@ def test_domain_routed_retrieve_is_not_quadratic():
     r = c._dar.retrieve(QS[0], 16, max_per_doc=8)
     assert r["trace"]["question_domains"] and r["candidates"]  # a domain branch ran
     assert time.perf_counter() - t < 1.0
+
+
+# ------------------------------------------------------------------------------- verifier findings F1, F2 (2026-11-09)
+def test_f1_append_abandoned_before_swap_is_discarded(monkeypatch):
+    """verify/orphan.py: an append that succeeds but is abandoned before the swap (here the evidence-view pre-warm
+    raises) must take its postings back out, or the retry from the same serving corpus double-counts them."""
+    plans = plans100()[:40]
+    fd, acq = fulldoc_corpus.load_config(), A.cfg()
+    assert (fd.get("retrieval") or {}).get("evidence_only")  # _rebuild_acquired pre-warms the evidence view
+    want = _fp(fulldoc_db.load_acquired_db(_db(plans), 1, fd, acq))
+    old = fulldoc_db.load_acquired_db(_db(plans[:30]), 1, fd, acq)
+    before = _fp(old)
+    fulldoc_corpus.reset_acquired_for_tests()
+    fulldoc_corpus._ACQ.update(corpus=old, sig=old._acq_sig, building=True)
+    real = fulldoc_corpus.FullDocCorpus._evidence_dar
+
+    def boom(self):
+        if self is not old:
+            raise RuntimeError("injected after a successful append")
+        return real(self)
+    monkeypatch.setattr(fulldoc_corpus.FullDocCorpus, "_evidence_dar", boom)
+    with pytest.raises(RuntimeError):
+        fulldoc_corpus._rebuild_acquired(fd, (acq, _db(plans), 1), _sig(plans))
+    monkeypatch.setattr(fulldoc_corpus.FullDocCorpus, "_evidence_dar", real)
+    assert fulldoc_corpus._ACQ["corpus"] is old and fulldoc_corpus._ACQ["building"] is False
+    assert _fp(old) == before  # the serving corpus is untouched
+    fulldoc_corpus._ACQ["building"] = True
+    fulldoc_corpus._rebuild_acquired(fd, (acq, _db(plans), 1), _sig(plans))  # the retry
+    assert _fp(fulldoc_corpus._ACQ["corpus"]) == want  # no duplicated postings: equals a full build
+    fulldoc_corpus.reset_acquired_for_tests()
+
+
+def test_f2_rows_committed_after_the_probe_still_append():
+    """A row committed between the refresh probe and the listing no longer forces a full rebuild: the count and the
+    newer rows come from one snapshot, and the corpus records the signature it was really built at."""
+    plans = plans100()
+    fd, acq = fulldoc_corpus.load_config(), A.cfg()
+    old = fulldoc_db.load_acquired_db(_db(plans[:50]), 1, fd, acq)
+    assert old._acq_sig == (1050, 50)
+    probe = _sig(plans[:55])  # the probe saw 55 rows; 5 more were committed before the listing
+    new = fulldoc_db.extend_acquired_db(_db(plans[:60]), 1, fd, acq, old, old._acq_sig, probe)
+    assert new is not None and len(new.acquired) == 60 and new._acq_sig == (1060, 60)
+    assert _fp(new) == _fp(fulldoc_db.load_acquired_db(_db(plans[:60]), 1, fd, acq))
+    nxt = fulldoc_db.extend_acquired_db(_db(plans[:62]), 1, fd, acq, new, new._acq_sig, _sig(plans[:62]))
+    assert nxt is not None and len(nxt.acquired) == 62 and not any(u["code"] == fulldoc_db.R_DUP for u in nxt.unusable)
