@@ -342,7 +342,7 @@ def evidence_scope_line(data: dict | None) -> str | None:
     if sc_ and not m and count_matching_on(_cfg()):  # R1: stored documents were checked; say so instead of "none relevant"
         t_ = trace_selected(data)
         return (f"Evidence scope: {sc_} stored document{'s were' if sc_ != 1 else ' was'} checked for this question; "
-                f"{t_} of their passages {'were' if t_ != 1 else 'was'} selected as possible evidence; none was used in an answer.")
+                f"{t_} of {'their' if sc_ != 1 else 'its'} passages {'were' if t_ != 1 else 'was'} selected as possible evidence; none was used in an answer.")
     if count_matching_on(_cfg()):  # NOANSWER-RC-1107 r2: never the size of a set searched regardless of subject
         mt = matched_for(data)
         parts = []
@@ -462,8 +462,9 @@ def acquisition_notice_line(data: dict | None) -> str | None:
             f = led["examined_unqualified"]
             if f < 1:
                 return f"{head}.{_stop_clause(aq)}"
-            clause = (f"{f} other document fetched did not have enough relevant passages to keep." if f == 1
-                      else f"{f} other documents fetched did not have enough relevant passages to keep.")
+            oth = "other " if c else ""  # "other" only when some were read
+            clause = (f"{f} {oth}document fetched did not have enough relevant passages to keep." if f == 1
+                      else f"{f} {oth}documents fetched did not have enough relevant passages to keep.")
         if clause is None:  # review F2: the stop disclosure does not depend on a status clause
             return _stop_clause(aq).strip() or None
         if led["partial_text"] > 0:

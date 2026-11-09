@@ -195,3 +195,15 @@ def test_coverage_causes_are_separate_sentences():
                              budget_exhausted=False, older_evidence_available=False, new_evidence_admitted=True)
     assert r.user_text.startswith("This answer uses newly found sources. Coverage was incomplete. A search service had a failure. ")
     assert " because " not in r.user_text
+
+
+def test_wording_singular_scope_and_no_other_when_none_read():
+    d = _midterms()
+    d["contract"]["inline_acquisition"].update(reused=1, counts={"stored": 1, "fetched": 0})
+    scope = u.evidence_scope_line(d)
+    assert "1 stored document was checked" in scope and "6 of its passages were" in scope and "their passages" not in scope
+    d = _midterms()
+    led = d["contract"]["inline_acquisition"]["ledger"]
+    led.update(counted=0, full_text=0, scholarly=0)
+    note = u.acquisition_notice_line(d)
+    assert note.startswith("Read 0 of the 6 sources targeted; 9 documents fetched did not have") and "other" not in note
