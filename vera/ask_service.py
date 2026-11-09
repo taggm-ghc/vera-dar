@@ -169,6 +169,10 @@ _FD_TRACE: contextvars.ContextVar = contextvars.ContextVar("nonask_fd_trace", de
 # ephemeral corpus or lane pages), whose passages are not the response's admitted_evidence (the held attempt's).
 _FD_TRACE_FETCHED: contextvars.ContextVar = contextvars.ContextVar("selfq_fd_trace_fetched", default=False)
 _INLINE_COUNTS: contextvars.ContextVar = contextvars.ContextVar("vera_inline_counts", default=None)  # NONASK-1103 A6-4: {stored, fetched} of the inline attempt in progress
+# MULTIQ-1108: set only while answer_in_scope answers ONE question of a multi-question prompt; holds the whole prompt's
+# scope decision (routed once, never per part) with its classifier cost zeroed (counted once on the combined result).
+_MQ_PART: contextvars.ContextVar = contextvars.ContextVar("multiq_part_decision", default=None)
+_MQ_DOCS: contextvars.ContextVar = contextvars.ContextVar("multiq_part_docs_share", default=None)  # MULTIQ-1109: this question's share of max_docs_per_prompt
 
 
 def _fd_trace_contract() -> dict:
@@ -242,18 +246,24 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _INLINE_OUT.set(None)
     _QUESTION.set(question)  # PORT-P2: the discovery recorder hashes it (text never stored)
     from vera import scope_router as _sr_self
-    if not _sr_self.injection_unstripped(original):  # SELFQ-RELEVANCE-1108: before routing, help scoring or any search
+    _pd = _MQ_PART.get()  # MULTIQ-1108: the whole prompt's decision when this call answers one of its questions
+    if _pd is None and not _sr_self.injection_unstripped(original):  # SELFQ-RELEVANCE-1108: before routing, help scoring or any search
         _pre = _clarify_or_help(question)
         if _pre is not None:
             return _pre
     budget = budget or REQUEST_BUDGET.get() or request_budget()  # CMF-1022: one deadline per request (main.py passes the handler-entry one)
     if _stream_ctx.active() and budget.deadline != float("inf"):
         budget.deadline = float("inf")  # STREAM-1031: whichever budget was passed, the streamed path has no deadline
-    decision = route(original, model, pricing, chat=chat if (client or extra_body) else None)  # D1: route nullifies
-    decision = _catstep(decision, question, model, pricing, chat if (client or extra_body) else None)  # CATSTEP-1028
+    if _pd is not None:  # MULTIQ-1108: the whole prompt was routed once (a part is never re-classified on its own)
+        decision = _pd
+    else:
+        decision = route(original, model, pricing, chat=chat if (client or extra_body) else None)  # D1: route nullifies
+        decision = _catstep(decision, question, model, pricing, chat if (client or extra_body) else None)  # CATSTEP-1028
+    _mq = _multiq(question, original) if _pd is None else None  # MULTIQ-1108: off/shadow -> None (trace counts only)
     from vera import provider_exhaustion as _pxw
     _pxw.note_work(decision=decision)  # OD-1031-EXHAUST-GRACE: work has started; the decision is what a completion reuses
     acq = _acq_cfg_if_on()  # WED-ACQ2: None unless automatic acquisition is effectively on (byte-identical when off)
+    acq = _mq_share_acq(acq)  # MULTIQ-1109: a question of a multi-question prompt gets its share of the per-prompt ceiling
     _log_basis(decision)  # SCOPE-GATE-1104 S2: basis=safe|none (class tokens only, never reason text)
     chained = {k: v for k, v in (("client", client), ("extra_body", extra_body)) if v}  # only from the #77 chain
     if not decision.accepted:
@@ -278,6 +288,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         _rt_event("outcome", "decline", detail={"category": _rt_token(decision.category)})
         return AskResult(answer=decline_text(), tokens_used=decision.tokens_used, cost_usd=decision.cost_usd,
                          result_kind="decline")
+    if _mq is not None:  # MULTIQ-1108 (mode on): each question routed and answered, or refused, on its own
+        return _answer_parts(_mq, question, model, pricing, client, extra_body, grounding, budget, decision, acq)
     if not _sr_self.injection_unstripped(original):  # SELFQ-RELEVANCE-1108: a routed, accepted question about VERA-DAR
         _h = _help_answer(question, covered_only=False, tokens=decision.tokens_used, cost=decision.cost_usd)
         if _h is not None:
@@ -355,6 +367,7 @@ def _clarify_or_help(question: str):
     from vera import answer_contract as contract
     c = spell_clarify.check(question)
     if c is not None:
+        c = _multiq_spell(question, c)  # MULTIQ-1108 (mode on): one round covering every question's unknown word
         logging.getLogger("vera").info("scope basis=none layer=layer1 class=spell_clarify rid=%s", _rid())
         _rt_event("outcome", "clarification", counts={"suggestions": len(c["suggestions"])})
         return AskResult(answer=spell_clarify.reply_text(c), tokens_used=0, cost_usd=0.0, accepted=False,
@@ -397,6 +410,232 @@ def _corpus_best_relevance(question: str):
         return best
     except Exception:  # noqa: BLE001
         return None
+
+
+# ------------------------------------------------------------------------------------------------ MULTIQ-1108
+def _multiq(question: str, original: str):
+    """MULTIQ-1108: the split of a routed prompt into separate questions (vera.multi_question). off: nothing runs.
+    shadow: counts and the shape token go to the request trace only; None (nothing user-visible changes). on: the
+    Split when the prompt holds 2+ questions, else None. A prompt with an unstripped injection is never split (the
+    normal route judges it whole). Never raises."""
+    try:
+        from vera import multi_question as mq, scope_router as _sr
+        cfg = mq.load_config()
+        mode = mq.mode_of(cfg)
+        if mode == "off":
+            return None
+        sp = mq.detect(question, cfg)
+        _rt_event("multiq", "split" if sp is not None else "single",
+                  counts={"parts": len(sp.parts) if sp else 1, "over_cap": len(sp.over_cap) if sp else 0,
+                          "pronoun_carry": sp.pronoun_carry if sp else 0},
+                  detail={"shape": _rt_token(mq.shape(question, sp)), "mode": _rt_token(mode)})
+        if mode != "on" or sp is None or _sr.injection_unstripped(original):
+            return None
+        return sp
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _mq_rewrite(part, q: str) -> str:
+    """A part's text after a clarification choice: the chosen question for the part, in the user's words (the carried
+    subject words that were appended for answering are not shown back)."""
+    q = str(q or "")
+    return part.text + q[len(part.query):] if part.query != part.text and q.startswith(part.query) else q
+
+
+def _mq_combined(question: str, split, items: list) -> dict:
+    """ONE clarification block for the whole prompt from the per-question blocks `items` [(Part, block)], in the
+    spell_clarify shape. Suggestion k rewrites every unclear question with its k-th option (its last when it has
+    fewer), so one click answers the whole round. final=True: whatever the user picks is sent with the per-request
+    spell check off, so neither a typo nor a sense round is asked again for this prompt (owner: at most one round)."""
+    many = len(items) > 1
+    lines, n = [], max(len(b.get("suggestions") or []) for _, b in items)
+    for p, b in items:
+        opts = ", ".join(str(s.get("word")) for s in b.get("suggestions") or [])
+        lines.append(f"{f'({p.index}) ' if many else ''}{b.get('text', '')} {opts}?".strip())
+    sugs = []
+    for k in range(n):
+        texts, words = [], []
+        by_idx = {p.index: b for p, b in items}
+        for p in split.parts:
+            b = by_idx.get(p.index)
+            opts = (b or {}).get("suggestions") or []
+            if not opts:
+                texts.append(p.text)
+                continue
+            o = opts[min(k, len(opts) - 1)]
+            texts.append(_mq_rewrite(p, o.get("question")))
+            words.append(str(o.get("word")))
+        sugs.append({"word": " / ".join(words), "question": " ".join(texts + list(split.over_cap))})
+    first = items[0][1]
+    return {"word": first.get("word"), "text": " ".join(lines), "as_typed": question,
+            "as_typed_label": first.get("as_typed_label") or "search as typed", "suggestions": sugs, "final": True,
+            "questions": len(items)}
+
+
+def _multiq_spell(question: str, c: dict) -> dict:
+    """MULTIQ-1108 (mode on): when the prompt holds several questions, the typo round covers every question's first
+    unknown word at once and is final. Otherwise (or on any failure) the unchanged block."""
+    try:
+        from vera import multi_question as mq, spell_clarify
+        cfg = mq.load_config()
+        if mq.mode_of(cfg) != "on":
+            return c
+        sp = mq.detect(question, cfg)
+        if sp is None:
+            return c
+        items = [(p, b) for p in sp.parts if (b := spell_clarify.check(p.text)) is not None]
+        return _mq_combined(question, sp, items) if items else dict(c, final=True)
+    except Exception:  # noqa: BLE001
+        return c
+
+
+def _mq_share_acq(acq):
+    """MULTIQ-1109: while one question of a multi-question prompt is answered, bounds.max_docs_per_prompt (the per-prompt
+    new-document ceiling, OD-1031-CEIL31) is replaced by this question's share, so the prompt as a whole stays within
+    the ceiling. Outside a part (or with acquisition off) acq is returned unchanged. Never raises."""
+    try:
+        share = _MQ_DOCS.get()
+        if share is None or not isinstance(acq, dict):
+            return acq
+        b = dict(acq.get("bounds") or {})
+        cap = b.get("max_docs_per_prompt")
+        if isinstance(cap, int) and not isinstance(cap, bool):
+            b["max_docs_per_prompt"] = min(cap, int(share))
+        out = dict(acq)
+        out["bounds"] = b
+        return out
+    except Exception:  # noqa: BLE001
+        return acq
+
+
+def _mq_part_decline(text: str) -> bool:
+    """Layer 1 (deterministic, free) on one question: True when it declines that question."""
+    try:
+        from vera import scope_router as _sr
+        return _sr.layer1(text, _sr.load_config())[0] == _sr.DECLINE
+    except Exception:  # noqa: BLE001  fail closed: the part is not answered
+        return True
+
+
+def _answer_parts(split, question, model, pricing, client, extra_body, grounding, budget, decision, acq) -> AskResult:
+    """MULTIQ-1108 (mode on). The whole prompt was routed once (a safety decline already declined everything). Each
+    question is then answered on its own, sequentially and cheapest first: questions the published help fully covers
+    (no cost), then the others through the unchanged single-question path (help-as-evidence, the stored documents,
+    inline acquisition within the remaining request budget, its own no-answer and reading list). Layer 1 also judges
+    each question; a declined question gets the decline line for that question only. A clarification from any
+    question (a sense round) becomes ONE combined round for the prompt."""
+    from vera.scope_router import decline_text
+    n = len(split.parts)
+    part_dec = replace(decision, tokens_used=0, cost_usd=0.0, llm_calls=0)
+    results: dict = {}
+    ceiling = ((acq or {}).get("bounds") or {}).get("max_docs_per_prompt")
+    share = ceiling // max(1, n) if isinstance(ceiling, int) and not isinstance(ceiling, bool) else 1
+    for p in split.parts:  # help first: zero cost, never lost to a late deadline
+        if not _mq_part_decline(p.query):
+            h = _help_answer(p.query, covered_only=True)
+            if h is not None:
+                results[p.index] = h
+    for p in split.parts:
+        if p.index in results:
+            continue
+        _rt_event("multiq", "part_start", counts={"part": p.index, "parts": n})
+        if _mq_part_decline(p.query):
+            results[p.index] = AskResult(answer=decline_text(), tokens_used=0, cost_usd=0.0, result_kind="decline")
+            continue
+        # MULTIQ-1109 (reconciles SIX-1109): every question is its own research unit: its own new-document search
+        # (budget.inline_used is per question, so one job per question against jobs_per_hour/jobs_per_day), under the
+        # ONE shared request deadline, and an equal share of the per-prompt ceiling (max_docs_per_prompt // n).
+        budget.inline_used = False
+        tok = _MQ_PART.set(part_dec)
+        tok2 = _MQ_DOCS.set(max(1, share))
+        try:
+            results[p.index] = answer_in_scope(p.query, model, pricing, client=client, extra_body=extra_body,
+                                               grounding=grounding, budget=budget)
+        finally:
+            _MQ_PART.reset(tok)
+            _MQ_DOCS.reset(tok2)
+    for p in split.parts:
+        _rt_event("multiq", "part_done", counts={"part": p.index},
+                  detail={"result_kind": _rt_token(results[p.index].result_kind)})
+    tokens = int(decision.tokens_used or 0) + sum(int(r.tokens_used or 0) for r in results.values())
+    cost = round(float(decision.cost_usd or 0.0) + sum(float(r.cost_usd or 0.0) for r in results.values()), 6)
+    clar = [(p, (results[p.index].contract or {}).get("clarification")) for p in split.parts
+            if results[p.index].result_kind == "clarification"]
+    clar = [(p, b) for p, b in clar if isinstance(b, dict) and b.get("suggestions")]
+    if clar:
+        from vera import answer_contract as contract, spell_clarify
+        c = _mq_combined(question, split, clar)
+        _rt_event("outcome", "clarification", counts={"suggestions": len(c["suggestions"]), "questions": len(clar)})
+        return AskResult(answer=spell_clarify.reply_text(c), tokens_used=tokens, cost_usd=cost, accepted=False,
+                         result_kind="clarification", contract={"layers": contract.layers(), "fallback": None,
+                                                                "clarification": c})
+    return _mq_compose(split, results, decision, acq, tokens, cost)
+
+
+def _mq_public_sources(r) -> list:
+    return [{k: s.get(k) for k in ("n", "title", "url", "published")} for s in r.sources or ()
+            if isinstance(s, dict)] if r.result_kind == "answer" else []
+
+
+def _mq_compose(split, results: dict, decision, acq, tokens: int, cost: float) -> AskResult:
+    """One page for the prompt: a section per question (the user's own words as its heading), each with its own
+    answer or honest no-answer, sources and counts; notes shared by every question (the acquisition-off note, limitation
+    notes) once; questions beyond the cap listed once to ask separately. No sentence appears twice: a question whose
+    whole text an earlier one already said gets the same-reason line instead. Fail closed for older clients: the
+    top-level kind is "answer" only when every question was answered; no top-level sources, evidence or claims (so
+    nothing is written to memory from a combined result)."""
+    from vera import answer_contract as contract, multi_question as mq, page_text
+    cfg = mq.load_config()
+    off = ""
+    if acq is None:
+        try:
+            from vera import scope_router as _sr
+            off = _sr.acquisition_off_note() or ""
+        except Exception:  # noqa: BLE001
+            off = ""
+    said: dict = {}  # sentence key -> question index that said it first
+    sections, parts_pub, notes, seen_notes = [], [], [], set()
+    for p in split.parts:
+        r = results[p.index]
+        text = (r.answer or "").replace(off, "").strip() if off else (r.answer or "").strip()
+        sents = page_text.sentences(text)
+        keys = [page_text._key(s) for s in sents]
+        fresh = [s for s, k in zip(sents, keys) if k not in said]
+        if sents and not fresh:
+            text = str(cfg.get("same_reason_text") or "").replace("{n}", str(said[keys[0]])) or text
+        elif len(fresh) < len(sents):
+            text = " ".join(fresh)
+        for k in keys:
+            said.setdefault(k, p.index)
+        c = r.contract or {}
+        parts_pub.append({"index": p.index, "question": p.text, "result_kind": r.result_kind,
+                          "outcome": contract.outcome_for(r.result_kind, c.get("fallback"), len(r.candidates or ())),
+                          "answer": text, "fallback": c.get("fallback"), "sources": _mq_public_sources(r),
+                          "candidates": [] if r.result_kind == "answer" else list(r.candidates or ()),
+                          **{k: c[k] for k in ("inline_acquisition", "search_counts") if c.get(k) is not None}})
+        sections.append(f"**{p.index}. {p.text}**\n\n{text}")
+        for note in r.notes or ():
+            key = (note.get("kind"), note.get("text")) if isinstance(note, dict) else (None, str(note))
+            if key not in seen_notes:
+                seen_notes.add(key)
+                notes.append(note)
+    if split.over_cap:
+        sections.append(str(cfg.get("over_cap_text") or "") + "\n" + "\n".join(f"- {q}" for q in split.over_cap))
+    if off:
+        sections.append(off)
+    kinds = [results[p.index].result_kind for p in split.parts]
+    top = "answer" if all(k == "answer" for k in kinds) else next(k for k in kinds if k != "answer")
+    fallback = next((results[p.index].contract or {}).get("fallback") for p in split.parts
+                    if results[p.index].result_kind == top) if top != "answer" else None
+    _rt_event("outcome", "multi_question", counts={"parts": len(split.parts), "over_cap": len(split.over_cap),
+                                                   "answered": sum(1 for k in kinds if k == "answer")})
+    return AskResult(answer="\n\n".join(sections), tokens_used=tokens, cost_usd=cost, accepted=decision.accepted,
+                     result_kind=top, notes=tuple(notes),
+                     contract={"layers": contract.layers(), "fallback": fallback, "parts": parts_pub,
+                               "over_cap": list(split.over_cap), "shared_notes": [off] if off else [],
+                               "multi_question": {"parts": len(split.parts), "over_cap": len(split.over_cap)}})
+
 
 def _with_off_note(res, acq):
     """SCOPE-GATE-1104 S2-T2: with automatic acquisition effectively off, a non-answer is the corpus attempt plus the

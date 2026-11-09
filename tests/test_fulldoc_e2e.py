@@ -351,3 +351,12 @@ def _legacy_concatenated_notes(monkeypatch):
     tests/test_ans_layers_s1.py."""
     from vera import answer_contract
     monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
+def _single_path_multiq_off(monkeypatch):
+    """MULTIQ-1109: these tests pin the single-question writer / Gate C path with a conjoined two-part prompt (Q_TWO).
+    The multi-question split (config/multi_question.json, default on) would answer its two questions separately;
+    that behaviour is covered by tests/test_multiq_1108.py. Pin the split off here."""
+    from vera import multi_question as mq
+    monkeypatch.setattr(mq, "load_config", lambda path=None: {"mode": "off"})

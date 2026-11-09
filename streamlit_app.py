@@ -208,10 +208,57 @@ def _render_research_captions(data: dict, outcome: bool = True, ui=None) -> None
                                                   if isinstance(_dc.get(k), int) and _dc[k] > 0))
 
 
+def render_parts(data: dict, ui=None) -> bool:
+    """MULTIQ-1108: a multi-question result (contract.parts) as one section per question, headed by the user's own
+    words: that question's answer (green only for an answer) or its no-answer line, its own sources or reading list.
+    Notes shared by every question, limitations and the questions beyond the cap (each with an ask-separately button)
+    appear once at the end. Every sentence once per page (page_text.Seen). False (nothing drawn) without parts."""
+    ui = ui if ui is not None else st
+    c = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    parts = [p for p in (c.get("parts") or []) if isinstance(p, dict)] if isinstance(c.get("parts"), list) else []
+    if not parts:
+        return False
+    seen = page_text.Seen()
+    for p in parts:
+        ui.markdown(f"#### {int(p.get('index') or 0)}. {safe_markdown(str(p.get('question') or ''))}")
+        text = seen.new(str(p.get("answer") or ""))
+        seen.add(text)
+        answered = p.get("result_kind") == "answer"
+        if text:
+            (ui.success if answered else ui.info)(safe_markdown(text))
+        # an answer lists its numbered sources; a non-answer its reading-list links (titles and links only)
+        for i, s in enumerate((p.get("sources") if answered else p.get("candidates")) or [], 1):
+            if isinstance(s, dict) and isinstance(s.get("url"), str) and s["url"].startswith(("https://", "http://")):
+                lead = f"[{int(s.get('n') or i)}] " if answered else "- "
+                ui.markdown(f"{lead}{safe_markdown(str(s.get('title') or s['url']))} - {safe_markdown(s['url'])}")
+    for t in c.get("shared_notes") or []:
+        t = seen.new(str(t or ""))
+        if t:
+            seen.add(t)
+            ui.caption(safe_markdown(t))
+    over = [q for q in (c.get("over_cap") or []) if isinstance(q, str) and q.strip()]
+    if over:
+        from vera import multi_question
+        ui.markdown(safe_markdown(str(multi_question.load_config().get("over_cap_text") or "")))
+        for i, q in enumerate(over):
+            ui.button(q, key=f"vera_multiq_{abs(hash(q)) % 10**8}_{i}", on_click=ui_wake.queue_question,
+                      args=(st.session_state, {"question": q}))
+    if has_layers(data):
+        lim = [t for t in (seen.take(x) for x in _note_texts(data.get("limitations"))) if t]
+        if lim:
+            render_limitations(ui, dict(data, limitations=lim))
+        if ui is st:
+            _layer4(data)
+    ui.info("💡 Ask a follow-up question to explore further.")
+    return True
+
+
 def render_result(data: dict) -> None:
     """Render one 200 /ask body (W4b-1: pure extract of the former inline block, unchanged output)."""
     from vera import spell_clarify  # SELFQ-RELEVANCE-1108: an unknown word paused the request; the user picks
     if spell_clarify.render_clarification(st, data, lambda p: ui_wake.queue_question(st.session_state, p)):
+        return
+    if render_parts(data):  # MULTIQ-1108: one section per question of a multi-question prompt
         return
     layered = has_layers(data)  # ANS-LAYERS-1101: newer API; absent fields keep the unchanged rendering
     # K2.I5 (fail-closed): the green Answer block only for an evidentiary answer; every other

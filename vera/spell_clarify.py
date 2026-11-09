@@ -315,7 +315,8 @@ def render_clarification(st, data, queue) -> bool:
         return False
     from vera.ui_safety import safe_markdown
     st.info(safe_markdown(str(c.get("text") or "")))
-    opts = [(str(s.get("word")), {"question": str(s.get("question"))}) for s in c["suggestions"]
+    final = {"spell_check": False} if c.get("final") is True else {}  # MULTIQ-1108: one round per prompt at most
+    opts = [(str(s.get("word")), {"question": str(s.get("question")), **final}) for s in c["suggestions"]
             if isinstance(s, dict) and s.get("question")]
     opts.append((str(c.get("as_typed_label") or "search as typed"),
                  {"question": str(c.get("as_typed") or ""), "spell_check": False}))

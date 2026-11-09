@@ -166,6 +166,10 @@
     "purpose_grant": {
       "keys": ["mode", "restriction", "why", "channel", "kind", "purposes", "conditions", "evidence"],
       "reason": "PURPOSE-GRANTS-1108 vera/purpose_grants.shadow: shadow record of what a site-owner purpose grant would do to a restriction. Code is the decision (would_admit|review|negated|not_overridable); detail holds closed tokens only: mode, restriction reason code, why token, channel (robots_comment|robots_field|http_header|tdmrep), grant kind, purpose and condition names joined by ':', and a list of 16-hex evidence ids. Never the verbatim text, URL or host: those stay in the owner-only in-process ring keyed by evidence id."
+    },
+    "multiq": {
+      "keys": ["shape", "mode", "result_kind"],
+      "reason": "MULTIQ-1108 vera/ask_service.py _multiq/_answer_parts: shape (multi_question|multi_part|single), mode (off|shadow|on) and a part's result_kind (closed enum); counts (parts, over_cap, pronoun_carry, part) go in counts. Never the question or any part text. Calibration of max_questions reads these counts."
     }
   },
   "limits": {
