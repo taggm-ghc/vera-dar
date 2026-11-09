@@ -310,7 +310,7 @@ class _Resp:
 
 def test_budget_job_reserve_and_ask_share(monkeypatch):
     cf = chunk_taxo.load_cfg()["cloudflare"]
-    assert cf["reserve_neurons"] == 500 and cf["daily_neuron_budget"] == 8000
+    assert cf["reserve_neurons"] == 5000 and cf["daily_neuron_budget"] == 8000  # job 3000/day, ask share 5000
     calls = []
 
     def opener(req, timeout):
@@ -318,7 +318,7 @@ def test_budget_job_reserve_and_ask_share(monkeypatch):
         n = len(json.loads(req.data.decode())["text"])
         return _Resp(json.dumps({"success": True, "result": {"data": [[0.5, 0.5]] * n, "usage": {"total_tokens": 30}}}).encode())
     job = emb.CloudflareEmbedder(cf, env=dict(CF_ENV), opener=opener, clock=lambda: 1_700_000_000.0, sleep=lambda s: None)
-    job.set_day_used(7499.99)
+    job.set_day_used(2999.99)
     with pytest.raises(emb.Deferred):
         job.embed(["x" * 300])  # the job may not eat into the ask-time reserve
     # ask-time adapter as built by hybrid_retrieval: whole budget, one attempt, short timeout
@@ -327,7 +327,7 @@ def test_budget_job_reserve_and_ask_share(monkeypatch):
         monkeypatch.setenv(k, v)
     hr.set_config_for_tests({"enabled": True, "timeout_s": 3.0})
     with hr._LOCK:
-        hr._STATE["neurons_today"] = 7499.99
+        hr._STATE["neurons_today"] = 2999.99
     v, code, _ms = hr.query_vector("a short question")
     assert code == "ok" and v is not None and calls[-1] == 3.0
     e = hr._STATE["emb"]
