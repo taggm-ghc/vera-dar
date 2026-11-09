@@ -238,10 +238,10 @@ def test_shadow_serves_and_reports(plans, tmp_path, monkeypatch):
 
 def test_fetch_side_preselection_keeps_only_pinned(monkeypatch):
     rows = [(5, 2, {"document_id": "acq-aaaaaaaaaaaaaaaa"}), (4, 3, {"document_id": "acq-bbbbbbbbbbbbbbbb"})]
-    monkeypatch.setattr(fulldoc_db, "_select", lambda cur, sql, params: rows if "LIMIT" in sql and "scan" in str(params) else [])
-    out = fulldoc_db.acquired_ids_per_topic(None, None, 1, "m", None, 10, 10, {}, allow_ids=frozenset({"acq-bbbbbbbbbbbbbbbb"}))
+    monkeypatch.setattr(fulldoc_db, "_select", lambda cur, sql, params: rows if sql == fulldoc_db.SQL_ACQ_INDEX else [])
+    out = fulldoc_db.acquired_ids_per_topic(None, None, 1, "m", None, {}, allow_ids=frozenset({"acq-bbbbbbbbbbbbbbbb"}))
     assert out == [4]
-    assert sorted(fulldoc_db.acquired_ids_per_topic(None, None, 1, "m", None, 10, 10, {})) == [4, 5]
+    assert sorted(fulldoc_db.acquired_ids_per_topic(None, None, 1, "m", None, {})) == [4, 5]
 
 
 # ------------------------------------------------------------------------------------------------ promotion tool

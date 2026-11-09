@@ -158,10 +158,10 @@ class FakeConn:
             self._rows = [(max((s["source_id"] for s in mk), default=None), len(mk))]
         elif sql == fulldoc_db.SQL_ACQ_SOURCES:
             self._rows = [(s["run_id"], s["source_id"], s["canonical_url"], s["content"], s["content_hash"],
-                           s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])][: params["lim"]]
+                           s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])][: params.get("lim")]
         elif sql == fulldoc_db.SQL_ACQ_INDEX:  # L9 light index: source_id, run_id, provenance only
             self._rows = [(s["source_id"], s["run_id"], s["provenance"]) for s in sorted(mk, key=lambda s: -s["source_id"])
-                          ][: params["scan"]]
+                          ][: params.get("scan")]
         elif sql == fulldoc_db.SQL_ACQ_SOURCES_BY_ID:
             want = set(params["sids"])
             self._rows = [(s["run_id"], s["source_id"], s["canonical_url"], s["content"], s["content_hash"],

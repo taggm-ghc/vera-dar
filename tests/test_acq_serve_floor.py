@@ -24,22 +24,22 @@ def test_shipped_config_has_no_ceiling_balanced_order_totals_unchanged():
     b = acq_config.load_config()["bounds"]
     assert b["served_per_topic_max"] is None and b["served_topic_balanced"] is True
     assert "served_per_topic_min" not in b  # the floor is an acquisition target, not a serving rule
-    assert b["served_acquired_max"] == 30 and b["served_acquired_max_bytes"] == 50000000
+    assert "served_acquired_max" not in b and "served_acquired_max_bytes" not in b  # OD-1109-NOCAP: no total cap
     assert "FLOOR6-1028" in b["_served_topic_balanced_note"] and "OD-1027(4)" in b["_served_topic_balanced_note"]
     assert fulldoc_db._per_topic_mode({"bounds": b}) == (True, None)
 
 
 def test_no_ceiling_when_budget_remains():
-    got = fulldoc_db.select_served(_rows(), None, 30, MT)
+    got = fulldoc_db.select_served(_rows(), None, MT)[:30]
     c = _counts(got)
     assert len(got) == 30 and len(set(got)) == 30
     assert c["A"] + c["B"] + c["C"] == 28 and max(c["A"], c["B"], c["C"]) > 6  # beyond 6: no ceiling
-    assert sorted(fulldoc_db.select_served(_rows(), None, 1000, MT)) == list(range(1, 61))  # all served
-    assert len(fulldoc_db.select_served(_rows(), 6, 1000, MT)) == 20  # contrast: the A4 ceiling stops at 3x6+2
+    assert sorted(fulldoc_db.select_served(_rows(), None, MT)[:1000]) == list(range(1, 61))  # all served
+    assert len(fulldoc_db.select_served(_rows(), 6, MT)[:1000]) == 20  # contrast: the A4 ceiling stops at 3x6+2
 
 
 def test_balanced_order_newest_first_within_topic():
-    got = fulldoc_db.select_served(_rows(), None, 30, MT)
+    got = fulldoc_db.select_served(_rows(), None, MT)[:30]
     assert got[:5] == [60, 59, 58, 40, 20]  # round 1: every topic once, newest-member topic first
     for ids in (range(1, 21), range(21, 41), range(41, 59)):
         mine = [g for g in got if g in ids]
@@ -49,21 +49,21 @@ def test_balanced_order_newest_first_within_topic():
 
 def test_budget_exhaustion_is_deterministic_newest_topics_win():
     rows = [_row(t * 10 + i, f"T{t}") for t in range(1, 6) for i in range(1, 7)]
-    got = fulldoc_db.select_served(rows, None, 10, MT)
+    got = fulldoc_db.select_served(rows, None, MT)[:10]
     assert got == [56, 46, 36, 26, 16, 55, 45, 35, 25, 15]
-    assert got == fulldoc_db.select_served(list(reversed(rows)), None, 10, MT)  # input order does not matter
-    assert fulldoc_db.select_served(rows, None, 3, MT) == [56, 46, 36]
-    assert fulldoc_db.select_served(rows, None, 0, MT) == [] and fulldoc_db.select_served([], None, 5, MT) == []
+    assert got == fulldoc_db.select_served(list(reversed(rows)), None, MT)[:10]  # input order does not matter
+    assert fulldoc_db.select_served(rows, None, MT)[:3] == [56, 46, 36]
+    assert fulldoc_db.select_served(rows, None, MT)[:0] == [] and fulldoc_db.select_served([], None, MT)[:5] == []
 
 
 def test_unkeyed_rows_are_each_their_own_topic():
     rows = [_row(i) for i in range(1, 11)] + [_row(i, "K") for i in range(11, 21)]
-    got = fulldoc_db.select_served(rows, None, 16, MT)
+    got = fulldoc_db.select_served(rows, None, MT)[:16]
     assert set(range(1, 11)) <= set(got) and sum(1 for g in got if g > 10) == 6
 
 
 def test_legacy_behaviour_unchanged():
-    assert fulldoc_db.select_served(_rows(), 3, 4, MT) == [60, 59, 58, 40]  # A4 ceiling when a number is set
+    assert fulldoc_db.select_served(_rows(), 3, MT)[:4] == [60, 59, 58, 40]  # A4 ceiling when a number is set
     assert fulldoc_db._per_topic_mode({"bounds": {"served_per_topic_max": None}}) == (False, None)  # newest-N
     assert fulldoc_db._per_topic_mode({"bounds": {}}) == (False, None) and fulldoc_db._per_topic_mode({}) == (False, None)
     assert fulldoc_db._per_topic_mode({"bounds": {"served_topic_balanced": "yes"}}) == (False, None)  # strict bool
@@ -75,8 +75,8 @@ def test_load_acquired_db_switches(monkeypatch):
     monkeypatch.setattr(fulldoc_db, "fetch_acquired_rows", lambda *a, **k: seen.append(k) or ([], []))
     monkeypatch.setattr(fulldoc_db, "load_acquired_rows", lambda *a, **k: "ok")
     base = {"marker": "m", "micro_topic": MT}
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_acquired_max": 5, "served_per_topic_max": None}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_acquired_max": 5, "served_per_topic_max": None,
+    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None}})
+    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None,
                                                                 "served_topic_balanced": True}})
     assert seen[0] == {}
     assert seen[1]["per_topic_max"] is None and seen[1]["topic_balanced"] is True
@@ -85,13 +85,13 @@ def test_load_acquired_db_switches(monkeypatch):
 def test_fetch_path_serves_balanced_without_ceiling():
     log = []
     conn = _Conn(_rows_full(), log)
-    s, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m", 30, per_topic_max=None, topic_balanced=True,
-                                          scan_max=2000, micro_cfg=MT)
+    s, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m", per_topic_max=None, topic_balanced=True,
+                                          micro_cfg=MT)
     assert fulldoc_db.SQL_ACQ_INDEX in log and fulldoc_db.SQL_ACQ_SOURCES not in log
-    assert sorted(x["source_id"] for x in s) == sorted(fulldoc_db.select_served(_rows(), None, 30, MT))
+    assert sorted(x["source_id"] for x in s) == list(range(1, 61))  # OD-1109-NOCAP: every row
     log2 = []
-    s2, _ = fulldoc_db.fetch_acquired_rows(lambda: _Conn(_rows_full(), log2), 999, "m", 5)  # legacy newest-N
-    assert log2[0] == fulldoc_db.SQL_ACQ_SOURCES and [x["source_id"] for x in s2] == [60, 59, 58, 57, 56]
+    s2, _ = fulldoc_db.fetch_acquired_rows(lambda: _Conn(_rows_full(), log2), 999, "m")  # legacy newest-first order
+    assert log2[0] == fulldoc_db.SQL_ACQ_SOURCES and [x["source_id"] for x in s2] == list(range(60, 0, -1))
 
 
 # ------------------------------------------------------------------------------------- acquisition rounds (interim)

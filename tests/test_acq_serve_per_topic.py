@@ -23,7 +23,7 @@ def _rows():
 
 
 def test_older_topics_served_and_per_topic_cap():
-    got = fulldoc_db.select_served(_rows(), 3, 30, MT)
+    got = fulldoc_db.select_served(_rows(), 3, MT)[:30]
     assert len(got) == 3 * 3 + 2 and len(set(got)) == len(got)
     assert sum(1 for g in got if g <= 20) == 3 and not {1, 2, 3} & set(got)  # topic A: only its newest three
     for lo, hi in ((1, 20), (21, 40), (41, 58)):
@@ -34,20 +34,21 @@ def test_older_topics_served_and_per_topic_cap():
 
 
 def test_total_cap_and_round_robin():
-    got = fulldoc_db.select_served(_rows(), 3, 4, MT)
+    got = fulldoc_db.select_served(_rows(), 3, MT)[:4]
     assert got == [60, 59, 58, 40]
-    assert fulldoc_db.select_served(_rows(), 3, 0, MT) == [] and fulldoc_db.select_served([], 3, 5, MT) == []
+    assert fulldoc_db.select_served(_rows(), 3, MT)[:0] == [] and fulldoc_db.select_served([], 3, MT)[:5] == []
 
 
 def test_legacy_newest_n_unchanged_when_null():
     plans = None
     log = []
     conn = _Conn(_rows_full(), log)
-    s, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m", 5)
-    assert log[0] == fulldoc_db.SQL_ACQ_SOURCES and [x["source_id"] for x in s] == [60, 59, 58, 57, 56]
-    s2, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m", 5, per_topic_max=3, scan_max=2000, micro_cfg=MT)
-    assert fulldoc_db.SQL_ACQ_INDEX in log and [x["source_id"] for x in s2] == [60, 59, 58, 40, 20]
-    assert len(s2) <= 5  # rebuild-size bound: never more than the total cap
+    s, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m")
+    assert log[0] == fulldoc_db.SQL_ACQ_SOURCES and [x["source_id"] for x in s] == list(range(60, 0, -1))  # OD-1109-NOCAP: all
+    s2, _ = fulldoc_db.fetch_acquired_rows(lambda: conn, 999, "m", per_topic_max=3, micro_cfg=MT)
+    assert fulldoc_db.SQL_ACQ_INDEX in log
+    assert sorted(x["source_id"] for x in s2) == sorted(fulldoc_db.select_served(_rows(), 3, MT))
+    assert len(s2) == 3 * 3 + 2  # rollback per-topic ceiling only; no total cap (OD-1109-NOCAP)
 
 
 def test_load_acquired_db_uses_config_switch(monkeypatch):
@@ -55,25 +56,24 @@ def test_load_acquired_db_uses_config_switch(monkeypatch):
     monkeypatch.setattr(fulldoc_db, "fetch_acquired_rows", lambda *a, **k: seen.append(k) or ([], []))
     monkeypatch.setattr(fulldoc_db, "load_acquired_rows", lambda *a, **k: "ok")
     base = {"marker": "m", "micro_topic": MT}
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_acquired_max": 5}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_acquired_max": 5, "served_per_topic_max": None}})
-    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_acquired_max": 5, "served_per_topic_max": 3,
-                                                                "served_scan_max": 77}})
+    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {}})
+    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": None}})
+    fulldoc_db.load_acquired_db(None, 1, {}, {**base, "bounds": {"served_per_topic_max": 3}})
     assert seen[0] == {} and seen[1] == {}
-    assert seen[2]["per_topic_max"] == 3 and seen[2]["scan_max"] == 77
+    assert seen[2]["per_topic_max"] == 3 and "scan_max" not in seen[2]  # OD-1109-NOCAP: no scan cap
 
 
 def test_selection_over_2000_rows_is_fast():
     idx = [_row(i, f"T{i % 40}") for i in range(1, 2001)]
     t = time.perf_counter()
-    got = fulldoc_db.select_served(idx, 3, 30, MT)
+    got = fulldoc_db.select_served(idx, 3, MT)[:30]
     assert time.perf_counter() - t < 0.5
     assert len(got) == 30
 
 
 def test_load_acquired_rows_orders_by_topic_when_set():
     src = [{"source_id": i, "run_id": i, "provenance": _row(i, "A" if i < 10 else "B")["provenance"]} for i in range(1, 20)]
-    picked = fulldoc_db.select_served(src, 2, 3, MT)
+    picked = fulldoc_db.select_served(src, 2, MT)[:3]
     assert picked == [19, 9, 18]
 
 
@@ -102,9 +102,9 @@ class _Conn:
         rs = sorted(self.rows, key=lambda r: -r["source_id"])
         full = lambda r: (r["run_id"], r["source_id"], r["canonical_url"], r["content"], r["content_hash"], r["provenance"])
         if sql == fulldoc_db.SQL_ACQ_SOURCES:
-            self._r = [full(r) for r in rs][: params["lim"]]
+            self._r = [full(r) for r in rs][: params.get("lim")]
         elif sql == fulldoc_db.SQL_ACQ_INDEX:
-            self._r = [(r["source_id"], r["run_id"], r["provenance"]) for r in rs][: params["scan"]]
+            self._r = [(r["source_id"], r["run_id"], r["provenance"]) for r in rs][: params.get("scan")]
         elif sql == fulldoc_db.SQL_ACQ_SOURCES_BY_ID:
             self._r = [full(r) for r in rs if r["source_id"] in set(params["sids"])]
         else:
@@ -123,10 +123,10 @@ def _prod_prov(title):
 def test_select_served_keys_from_first_span_when_content_empty():
     rows = [{"source_id": i, "provenance": _prod_prov("Qzxv"), "content": ""} for i in range(1, 7)]
     with_text = [{**r, "content": EPI} for r in rows[:3]]
-    keyed = fulldoc_db.select_served(with_text + rows[3:], 1, 10, MT)
+    keyed = fulldoc_db.select_served(with_text + rows[3:], 1, MT)[:10]
     assert len(keyed) == 4 and 3 in keyed and 1 not in keyed and 2 not in keyed  # 1 keyed topic + 3 unkeyed rows
-    assert len(fulldoc_db.select_served(rows, 1, 10, MT)) == 6  # no text: every row its own topic
-    assert len(fulldoc_db.select_served(with_text, 1, 10, MT)) == 1  # same text => same micro-topic
+    assert len(fulldoc_db.select_served(rows, 1, MT)[:10]) == 6  # no text: every row its own topic
+    assert len(fulldoc_db.select_served(with_text, 1, MT)[:10]) == 1  # same text => same micro-topic
 
 
 def test_load_acquired_rows_keys_from_spans_when_content_empty():
@@ -135,7 +135,7 @@ def test_load_acquired_rows_keys_from_spans_when_content_empty():
              + [{"source_id": i, "start_index": 0, "end_index": 10, "text": EPI} for i in range(1, 4)])
     first = fulldoc_db._first_span_texts(spans)
     assert first[1] == EPI and first[5] == "zzz"
-    pick = fulldoc_db.select_served([{**s, "content": s["content"] or first.get(s["source_id"])} for s in srcs], 1, 10, MT)
+    pick = fulldoc_db.select_served([{**s, "content": s["content"] or first.get(s["source_id"])} for s in srcs], 1, MT)[:10]
     assert 3 in pick and 2 not in pick and 1 not in pick and len(pick) == 4
 
 
@@ -153,7 +153,7 @@ def test_per_topic_index_fetches_first_span_text_with_guarded_select():
     rows = [{"source_id": i, "run_id": i, "provenance": _prod_prov("Qzxv"), "canonical_url": f"u{i}", "content": "",
              "content_hash": "h"} for i in range(1, 7)]
     conn = C(rows, log)
-    ids = fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, 2000, 10, MT)
+    ids = fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, MT)
     assert fulldoc_db.SQL_ACQ_FIRST_SPANS in log
     assert 3 in ids and 1 not in ids and 2 not in ids and len(ids) == 4
     assert fulldoc_db.SQL_ACQ_FIRST_SPANS.count("%(") == 2 and "{" not in fulldoc_db.SQL_ACQ_FIRST_SPANS
@@ -177,7 +177,7 @@ def test_first_span_failure_rolls_back_so_later_sql_still_works():
     rows = [{"source_id": i, "run_id": i, "provenance": _prod_prov("Qzxv"), "canonical_url": f"u{i}", "content": "",
              "content_hash": "h"} for i in range(1, 4)]
     conn = A(rows, [])
-    ids = fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, 2000, 10, MT)
+    ids = fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, MT)
     assert state["rollbacks"] == 1 and len(ids) == 3
     conn.execute(fulldoc_db.SQL_ACQ_SOURCES_BY_ID, {"sids": [1]})  # post-fallback SQL accepted
 
@@ -194,7 +194,7 @@ def test_first_span_failure_with_failing_rollback_is_still_soft():
     rows = [{"source_id": i, "run_id": i, "provenance": _prod_prov("Qzxv"), "canonical_url": f"u{i}", "content": "",
              "content_hash": "h"} for i in range(1, 4)]
     conn = B(rows, [])
-    assert len(fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, 2000, 10, MT)) == 3
+    assert len(fulldoc_db.acquired_ids_per_topic(conn, conn, 999, "m", 1, MT)) == 3
 
 
 # CAP6-1028: OD-1027(4) "at least 6 docs per micro-topic" -> shipped served_per_topic_max is 6 (added tests; none edited)
@@ -202,14 +202,14 @@ def test_shipped_per_topic_cap_is_six_and_totals_unchanged():
     b = acq_config.load_config()["bounds"]
     # OD-1028(14)/(15): per-topic serving ceiling retired (6 is a per-round acquisition target, not a serving cap)
     assert b["served_per_topic_max"] is None
-    assert b["served_acquired_max"] == 30 and b["served_acquired_max_bytes"] == 50000000
+    assert "served_acquired_max" not in b and "served_acquired_max_bytes" not in b  # OD-1109-NOCAP
     assert "OD-1027(4)" in b["_served_per_topic_note"]
 
 
 def test_six_per_topic_serves_six_and_respects_total_cap():
     """Rollback path (OD-1028(14)/(15)): an explicit numeric served_per_topic_max still caps each topic."""
-    got = fulldoc_db.select_served(_rows(), 6, 30, MT)
+    got = fulldoc_db.select_served(_rows(), 6, MT)[:30]
     for lo, hi in ((1, 20), (21, 40), (41, 58)):
         assert sum(1 for g in got if lo <= g <= hi) == 6
     assert {59, 60} <= set(got) and len(got) == 3 * 6 + 2 and len(set(got)) == len(got)
-    assert len(fulldoc_db.select_served(_rows(), 6, 10, MT)) == 10  # total cap still binds
+    assert len(fulldoc_db.select_served(_rows(), 6, MT)) == 20  # per-topic rollback ceiling only; no total cap

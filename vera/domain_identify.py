@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import re
+from sys import intern as _intern
 from collections import Counter
 
 from vera.domain_registry import normalize_domain_name
@@ -29,7 +30,7 @@ def tokenize(text: str, icfg: dict) -> list[str]:
     out = []
     for t in pat.findall(str(text or "").casefold()):
         if len(t) >= min_len and t not in stop:
-            out.append(t)
+            out.append(_intern(t))  # NOCAP-1109: one shared str per distinct token across chunk/doc term maps (memory)
     return out
 
 
@@ -117,7 +118,21 @@ class DomainIdentifier:
         # call instead of once per (text, profile) pair. Same expressions in the same order => bit-identical scores.
         profs = list(self._active().values()) if ctx is None else ctx["profs"]
         if len(profs) < 2:
-            return self._cos(a, b)
+            if ctx is None:
+                return self._cos(a, b)
+            # NOCAP-1109: the same memo for the plain cosine. Document-level idf depends on _n and _df, which change only
+            # together (_count_stats), so the profile vector is cached per (_pver, _n); same expressions, same order
+            # => bit-identical scores. Without it every chunk re-weighted the whole profile (quadratic rebuild time).
+            pv = ctx["pv"].get(("cos", id(b)))
+            if pv is None or pv[0] is not b or pv[1] != self._n:
+                pv = ctx["pv"][("cos", id(b))] = (b, self._n, *self._vec(b))
+            va, na = self._vec(a)
+            _, _, vb, nb = pv
+            if not na or not nb:
+                return 0.0
+            if len(va) > len(vb):
+                va, vb = vb, va
+            return sum(x * vb.get(t, 0.0) for t, x in va.items()) / (na * nb)
         D = len(profs)
         fac = {} if ctx is None else ctx["fac"]
         def f(t):

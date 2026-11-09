@@ -243,7 +243,8 @@ def test_acquired_corpus_is_none_when_killed_or_in_bundle_mode(h, monkeypatch):
     assert fulldoc_corpus.get_acquired_corpus(cfg) is None
 
 
-def test_serve_caps_documents_and_bytes(h):
+def test_no_serve_cap_on_documents_or_bytes(h):
+    """OD-1109-NOCAP (owner 2026-11-09): no cap on stored documents served; legacy cap keys, if present, are ignored."""
     recs, jats, cands = {}, {}, []
     for i in range(3):
         doi, pmc = f"10.9999/acq.cap{i}", f"PMC70000{i}"
@@ -257,10 +258,11 @@ def test_serve_caps_documents_and_bytes(h):
     src, spans = A.rows_from_plans(store.plans)
     fd = fulldoc_corpus.load_config()
     c = fulldoc_db.load_acquired_rows(src, spans, fd, A.cfg(served_acquired_max=2))
-    assert len(c.acquired) == 2 and {a["text_sha256"] for a in c.acquired} == {
-        json.loads(s["provenance"])["text_sha256"] for s in src[1:]}  # newest first (source_id DESC)
+    assert len(c.acquired) == 3 and {a["text_sha256"] for a in c.acquired} == {
+        json.loads(s["provenance"])["text_sha256"] for s in src}
     c = fulldoc_db.load_acquired_rows(src, spans, fd, A.cfg(served_acquired_max_bytes=1))
-    assert not c.acquired and any(u["code"] == fulldoc_db.R_ACQCAP for u in c.unusable)
+    assert len(c.acquired) == 3 and not any(u["code"] == "R-ACQ-SERVECAP" for u in c.unusable)
+    assert not hasattr(fulldoc_db, "R_ACQCAP")
 
 
 def test_base_pinned_run_validation_is_untouched_by_acquired_rows():

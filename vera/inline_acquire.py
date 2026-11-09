@@ -1586,7 +1586,7 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
     from vera import fulldoc_admission, fulldoc_db
     try:
         src = json.loads(json.dumps(row, default=str))
-        c = fulldoc_db.load_acquired_rows([src], [dict(sp) for sp in spans], fdcfg, acq, ingest_cfg=icfg, max_docs=1)
+        c = fulldoc_db.load_acquired_rows([src], [dict(sp) for sp in spans], fdcfg, acq, ingest_cfg=icfg)
         if c.status != "ok" or not c.acquired:
             return REUSE_UNUSABLE
         ev = fulldoc_admission.admit(question, c, fdcfg)
@@ -1808,7 +1808,7 @@ def ephemeral_corpus(plans: list, acq: dict, fdcfg: dict, icfg: dict, stored=Non
                      for s in plan["spans"])
     if not srcs:
         return None
-    c = fulldoc_db.load_acquired_rows(srcs, spans, fdcfg, acq, ingest_cfg=icfg, max_docs=len(srcs))
+    c = fulldoc_db.load_acquired_rows(srcs, spans, fdcfg, acq, ingest_cfg=icfg)
     if c.status == "ok" and c.acquired:
         c.seed_per_doc = True  # NONASK-1103 A6-3: admit() seeds each document's own candidates (admission.seed_per_doc_spans)
         return c

@@ -146,8 +146,8 @@ def row_document_id(row: dict):
 
 
 def export_records(sources: list, spans: list, fdcfg: dict, acq_cfg: dict) -> dict:
-    """Hash-only promotion records for every stored acquired row given, verified by the acquired-path reader with its
-    serve caps lifted. {"documents": [{document_id, verdict, <PIN_FIELDS>, acquired_on}], "unusable": {code: n}}.
+    """Hash-only promotion records for every stored acquired row given, verified by the acquired-path reader (no serve
+    cap since OD-1109-NOCAP). {"documents": [{document_id, verdict, <PIN_FIELDS>, acquired_on}], "unusable": {code: n}}.
     verdict "verified" = passed every reader check except the pin comparison. No text, titles or URLs are returned."""
     import copy
 
@@ -156,8 +156,7 @@ def export_records(sources: list, spans: list, fdcfg: dict, acq_cfg: dict) -> di
     b = a.setdefault("bounds", {})
     b.update(served_per_topic_max=None, served_topic_balanced=False)
     rows = [{k: v for k, v in r.items() if k != EPHEMERAL_KEY} for r in sources]  # stored rows only
-    n = max(1, len(rows))
-    c = fulldoc_db.load_acquired_rows(rows, spans, fdcfg, a, max_docs=n, max_bytes=1 << 62)
+    c = fulldoc_db.load_acquired_rows(rows, spans, fdcfg, a)  # OD-1109-NOCAP: the reader has no serve cap
     cands = getattr(c, "pin_candidates", None) or {}
     docs = []
     for did in sorted(cands):
