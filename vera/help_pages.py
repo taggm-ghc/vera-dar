@@ -143,6 +143,7 @@ def render_corpus_page(st, cfg=_UNSET) -> None:
         st.markdown(str(para))
     data = sources_sidebar._corpus(st)
     sources_sidebar.render_corpus(st, data)
+    sources_sidebar.render_stored_taxonomy(st, data)  # WP6: no output unless the API sent stored_taxonomy (flag off: never)
     cov = sources_sidebar.coverage_text(data)
     if cov:
         st.markdown(f"**Current coverage:** {cov}")

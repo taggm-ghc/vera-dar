@@ -1,0 +1,62 @@
+{
+  "_note": "CHUNK-TAXO-CORE-1109 + JOB. job.text_chars defaults to 8000 characters per chunk sent to the embedder (was 1000): bge-m3 accepts long inputs (limit 60000 tokens), so this keeps most chunks whole; longer chunks are still split and the part vectors averaged. Neuron cost scales with characters (about chars/3 tokens at 1075 neurons per million tokens, so 8000 chars is about 2.9 neurons per chunk at most; the daily_neuron_budget of 8000 still bounds the day). Domain-only back-offs get no stored link: WP6 counts them as unlabelled. Flag off by default. All thresholds for vera/chunk_taxo.py; gate thresholds are starting values to be calibrated on real data and only control whether the Corpus page DISPLAYS the taxonomy. Outbound control (OD-1109-DEMB-3): the only outbound host is api.cloudflare.com, pinned in code (vera/chunk_taxo_embed.py HOST, https) and no api_permissions.json entry is added; server-side LLM calls such as api.groq.com are not governed by that gate. send_allowed true follows v3.8a (Cloudflare data-use terms confirmed); the flag stays off until the owner-ordered release steps are done.",
+  "enabled": false,
+  "embedder": "cloudflare",
+  "cloudflare": {
+    "model": "@cf/baai/bge-m3",
+    "send_allowed": true,
+    "daily_neuron_budget": 8000
+  },
+  "job": {},
+  "params": {
+    "seeds": [
+      11,
+      23,
+      37
+    ],
+    "k_min": 2,
+    "k_max": 40,
+    "k_step": 1,
+    "gain_epsilon": 0.005,
+    "patience": 2,
+    "min_cluster_size": 3,
+    "kmeans_max_iter": 50,
+    "topic_range": {
+      "min_count": 2,
+      "max_count": 20,
+      "max_frac": 0.5
+    },
+    "domain_range": {
+      "min_count": 2,
+      "max_count": 8,
+      "max_frac": 0.5
+    },
+    "null_seeds": [
+      101,
+      102,
+      103
+    ],
+    "null_q_dist": 0.05,
+    "null_q_margin": 0.25,
+    "min_support": 3,
+    "identity_jaccard": 0.5,
+    "term_count": 8,
+    "label_terms": 3,
+    "term_max_df": 0.5,
+    "term_min_len": 3,
+    "vote_min_share": 0.4,
+    "vote_min_lead": 0.1,
+    "stability_match_cos": 0.9
+  },
+  "display_gate": {
+    "min_silhouette_subtopic": 0.1,
+    "min_silhouette_topic": 0.05,
+    "min_silhouette_domain": 0.0,
+    "min_stability_ari": 0.6,
+    "min_center_match_rate": 0.7,
+    "min_coverage_subtopic": 0.5,
+    "min_coverage_domain": 0.8,
+    "max_null_floor_spread": 0.1,
+    "max_abstain_share": 0.3
+  }
+}

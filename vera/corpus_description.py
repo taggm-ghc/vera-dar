@@ -1529,7 +1529,34 @@ class CorpusDescriber:
                 for k in ("summary", "coverage"):
                     if out.get(k) and out.get("summary_source") not in ("deterministic_fallback",):
                         out[k] = corpus_interim.strip_shares(out[k]) or None
+            if (self.cfg.get("stored_taxonomy") or {}).get("enabled") is True:  # WP6: separate flag, default off
+                st = self._stored_taxonomy(out)
+                if st:
+                    out = {**out, "stored_taxonomy": st}
         return out
+
+    def _stored_taxonomy(self, overview: dict):
+        """WP6: the stored-label aggregation (vera.corpus_taxonomy), cached like the subject areas; None when nothing is
+        stored or on any problem (the page then falls back to the interim view). Never raises."""
+        key = (overview.get("source_count"), overview.get("corpus_updated_at"))
+        now, ttl = self.clock(), float(subject_cfg(self.cfg)["cache_s"])
+        tc = getattr(self, "_taxo_cache", None)
+        if tc is not None and tc[1] == key and now - tc[0] < ttl:
+            return tc[2]
+        try:
+            from vera import corpus_taxonomy
+            sc = self.cfg.get("stored_taxonomy") or {}
+            st = (getattr(self, "taxo_status_fn", None) or corpus_taxonomy.job_status)()  # display gate: the job's mechanical metrics
+            engine = self._engine_or_none() if st.get("display_ok") is True else None
+            val = None if engine is None else corpus_taxonomy.read_stored(
+                engine, str(sc.get("classifier_name") or corpus_taxonomy.CLASSIFIER))
+            if val is not None:
+                val = {**val, "version": str(st.get("version") or "")[:64]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("stored taxonomy unavailable (%s)", type(exc).__name__)
+            val = None
+        self._taxo_cache = (now, key, val)
+        return val
 
     def _interim(self, overview: dict) -> dict:
         """CORPUS-INTERIM-1108: {"published_years", "frequent_subjects"}, cached like the subject areas; never raises ({} on a problem)."""

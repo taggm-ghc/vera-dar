@@ -9,3 +9,5 @@ urllib3==2.8.0  # E3 (SECVET C6): the version the CMF-I2 pinned-transport tests 
 sqlalchemy==2.0.36
 psycopg2-binary==2.9.10
 defusedxml==0.7.1
+# OD-1109-DEMB-3 (chunk taxonomy engine, vera/chunk_taxo.py): numpy, pinned to the version in the workspace test venv.
+numpy==2.5.4

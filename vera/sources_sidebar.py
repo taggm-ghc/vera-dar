@@ -64,7 +64,8 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
-                           "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects"})
+                           "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects",
+                           "stored_taxonomy"})
 # D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
 # many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
 # topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
@@ -291,6 +292,55 @@ def _interim_summary(text: str) -> str:
     count (inferred subject distributions); see corpus_interim.strip_shares. Returns "" when nothing is left."""
     from vera import corpus_interim
     return corpus_interim.strip_shares(text)
+
+
+def _n(v) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+
+
+def taxonomy_lines(tx) -> list[str]:
+    """WP6: caption blocks for the stored per-chunk taxonomy (vera.corpus_taxonomy payload); [] when absent or malformed.
+    Names are taxonomy entities (domain, topic, subtopic), never a source. Both views of a document's subject areas are
+    shown and labelled: 'main label' is the one stored document-level vote; 'contains passages on' is the union of the
+    document's stored chunk labels (a document may appear under several subjects). Unlabelled counts are derived from
+    missing rows (abstentions are not stored), so they are one combined figure."""
+    try:
+        if not isinstance(tx, dict) or not isinstance(tx.get("domains"), list):
+            return []
+        t = tx["totals"]
+        docs, dch, lab_c = _n(t["documents"]), _n(t["documents_with_chunks"]), _n(t["chunks_labelled"])
+        lines = [
+            "**Stored subject labels** (automatic and approximate; made by a program that groups passages by meaning and names groups from frequent terms, not read or checked by a person. "
+            "The subject list is incomplete, so some material is outside it). Two views of a document are shown. "
+            "**Main label (vote)**: the one subject area stored for the whole document. **Contains passages on (union)**: "
+            "every subject area at least one of the document's stored passages was labelled with, so a document can appear "
+            "under several subjects and the figures do not add up to the document count."]
+        for d in tx["domains"]:
+            head = (f"**{plain(d['label'])}**: main label for {_n(d['vote_docs'])} documents; contains passages on it in "
+                    f"{_n(d['union_docs'])} documents ({_n(d['chunks']):,} labelled passages)")
+            rows = [head]
+            for tp in d.get("topics") or []:
+                rows.append(f"- {plain(tp['label'])}: main label for {_n(tp['vote_docs'])} documents; passages in "
+                            f"{_n(tp['union_docs'])} documents ({_n(tp['chunks']):,} passages)")
+                for sb_ in tp.get("subtopics") or []:
+                    if _n(sb_["chunks"]):
+                        rows.append(f"    - {plain(sb_['label'])}: passages in {_n(sb_['union_docs'])} documents ({_n(sb_['chunks']):,} passages)")
+            lines.append("\n".join(rows))
+        lines.append(
+            f"**Not labelled or outside the subject list** (not told apart: unlabelled passages are not recorded by reason): "
+            f"{_n(t['chunks_not_labelled']):,} of {_n(t['chunks']):,} stored passages have no subject label. "
+            f"{_n(t['documents_vote_not_labelled'])} of {docs} documents have no main label; "
+            f"{_n(t['documents_union_not_labelled'])} of the {dch} documents with stored passages have no labelled passage.")
+        return lines if lab_c or any(d.get("vote_docs") for d in tx["domains"]) else []
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+def render_stored_taxonomy(st, data: dict | None) -> None:
+    """WP6: the stored per-chunk subject labels, appended by the Corpus page after render_corpus. Nothing is written unless the
+    API sent a stored_taxonomy block (flag corpus_description.stored_taxonomy.enabled; default off sends none)."""
+    for line in taxonomy_lines(data.get("stored_taxonomy") if isinstance(data, dict) else None):
+        st.caption(line)
 
 
 def render_corpus(st, data: dict | None) -> None:

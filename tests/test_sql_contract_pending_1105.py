@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parent.parent
 # sorted "table.column\n" lines). The required contract at the candidate must be exactly this set.
 CONTRACT_2C0A323_COUNT = 158
 CONTRACT_2C0A323_FROZEN_SHA256 = "84d028093cc8e770d732a2c7ad3095313e50a6295582709b2555a28fad511e73"  # old collector at 2c0a323
+N024 = 17  # tax_chunk_vectors, tax_job_runs pairs proven by the 024 draft (CHUNK-TAXO-INT-1109)
 N020 = 28  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108)
 
 
@@ -163,16 +164,18 @@ def test_unknown_function_call_fails(tmp_path, monkeypatch):
     assert set(sc.unknown_function_calls(root)) == {"ghost_fn", "pending_fn"}
 
 
-def test_real_tree_exemptions_are_exactly_016_017_020_022_and_reported():
+def test_real_tree_exemptions_are_exactly_016_017_020_022_024_and_reported():
     ex = sc.pending_exemptions()
     assert set(sc.PENDING_DRAFT_ALLOWLIST) == {"016-DRAFT-lists-to-db.sql.draft", "017-DRAFT-topic-tags.sql.draft",
-                                               "020-DRAFT-taxonomy.sql.draft", "022-DRAFT-taxonomy-extensible.sql.draft"}
+                                               "020-DRAFT-taxonomy.sql.draft", "022-DRAFT-taxonomy-extensible.sql.draft",
+                                               "024-DRAFT-chunk-vectors.sql.draft"}
     assert {t for t, _ in ex} == {"lstreg_active_lists_v", "lstreg_active_items_v", "toptag_document_topics",
                                   "tax_domains", "tax_topics", "tax_subtopics", "tax_domain_topic", "tax_topic_subtopic",
-                                  "tax_anchors", "tax_registry_active_v", "tax_registry_eval_v"}
-    assert len(ex) == 54 + N020
+                                  "tax_anchors", "tax_registry_active_v", "tax_registry_eval_v", "tax_chunk_vectors",
+                                  "tax_job_runs"}
+    assert len(ex) == 54 + N020 + N024
     report = sc.exemption_report()
-    assert report.startswith(f"SQL contract pending-migration EXEMPTION: {54 + N020} (table, column) pairs exempt")
+    assert report.startswith(f"SQL contract pending-migration EXEMPTION: {54 + N020 + N024} (table, column) pairs exempt")
     assert all(f"exempt: {t}.{c} ({d})" in report for (t, c), d in ex.items())
     warnings.warn(report, UserWarning)  # loud on every suite run (shown in the pytest warnings summary)
 

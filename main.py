@@ -169,6 +169,11 @@ dar_health.startup_log_async()
 from vera import fulldoc_warm  # noqa: E402
 fulldoc_warm.start()
 
+# CHUNK-TAXO-JOB-1109 (OD-1109-DEMB-2): mechanical chunk-taxonomy job; flag config/chunk_taxo.json enabled (default false) => no
+# thread, no engine. One daemon thread otherwise; never raises, never on a request thread.
+from vera import chunk_taxo_job  # noqa: E402
+chunk_taxo_job.start()
+
 
 class APIModel(BaseModel):
     """Shared base: unknown fields 422, they are never silently dropped."""
@@ -408,9 +413,17 @@ class CorpusDescription(BaseModel):
     subject_areas: dict | None = None  # CORPUS-DESC-1107: domain > topic > subtopic shares of documents (code-computed, no titles)
     published_years: list[str] | None = None  # CORPUS-INTERIM-1108: [first, last] publication year
     frequent_subjects: list[str] | None = None  # CORPUS-INTERIM-1108: frequent multi-word subject phrases from titles (no counts, no titles)
+    stored_taxonomy: dict | None = None  # WP6: stored per-chunk labels aggregated (flag corpus_description.stored_taxonomy.enabled, default off; key omitted from the response when None)
     summary_source: str
     summary_generated_at: str | None = None
     summary_model: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_stored_taxonomy(self, handler):
+        d = handler(self)  # WP6: flag off (default) keeps the exact previous key set
+        if d.get("stored_taxonomy") is None:
+            d.pop("stored_taxonomy", None)
+        return d
 
 
 @app.get("/corpus-summary", response_model=CorpusDescription, dependencies=[Depends(verify_api_key)])

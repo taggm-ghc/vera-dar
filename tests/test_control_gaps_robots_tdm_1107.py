@@ -357,6 +357,11 @@ REGISTRY: dict[str, tuple] = {
     "vera/m6/judge.py:OpenAICompatJudge._call": (LLM_API,),
     "vera/m6/judge.py:preflight_judge": (LLM_API,),
     "vera/mvp_preflight.py:run_preflight": (LLM_API,),
+    # CHUNK-TAXO-INT-1109 (OD-1109-DEMB-3): Cloudflare Workers AI embeddings API; https to api.cloudflare.com only, pinned in
+    # code; a vendor API call like the LLM calls above, not a crawl (no robots/TDM question, no api_permissions entry).
+    "vera/chunk_taxo_embed.py:CloudflareEmbedder._post": (LLM_API,),
+    "vera/chunk_taxo_embed.py:_NoRedirect": (LLM_API,),
+    "vera/chunk_taxo_embed.py:_default_open": (LLM_API,),
     "vera/run_mvp.py:run_mvp": (LLM_API,),
     "vera/rate_limit.py:httpx_transport._LimitedTransport.__init__": (LLM_API,),
     "vera/rate_limit.py:openai_http_client": (LLM_API,),
@@ -392,7 +397,7 @@ _NAMES = ("pinned_get", "http_get", "http_post", "urlopen")
 # Network client modules: any import of one (any alias, any form) must be listed in IMPORTS (r2 (3)).
 _NET_MODULES = ("requests", "httpx", "urllib.request", "http.client", "urllib3", "aiohttp", "socket")
 IMPORTS = {  # file -> the network modules it may import (anything else fails test_network_imports_are_registered)
-    "vera/acq_discovered.py": set(), "vera/api_kickstart.py": {"requests"}, "vera/api_triage.py": {"requests"},
+    "vera/acq_discovered.py": set(), "vera/chunk_taxo_embed.py": {"urllib.request"}, "vera/api_kickstart.py": {"requests"}, "vera/api_triage.py": {"requests"},
     "vera/judge_select.py": {"requests"}, "vera/m6/judge.py": {"requests"},
     "vera/memory_review_panel.py": {"requests"}, "vera/public_fetch.py": {"requests", "socket", "urllib3"},
     "vera/public_mode.py": {"requests"}, "vera/progress_ui.py": {"requests"}, "vera/rate_limit.py": {"httpx"}, "vera/reporting_lane.py": {"urllib.request"},

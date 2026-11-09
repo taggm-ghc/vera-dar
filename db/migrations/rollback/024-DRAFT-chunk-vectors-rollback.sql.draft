@@ -1,0 +1,57 @@
+-- 024_vera_chunk_vectors rollback. CHUNK-TAXO-MIG024-1109 DRAFT. NOT EXECUTED. OWNER-ONLY, admin-run, never via db/apply_migrations.py.
+-- A prepared undo path that is never expected to run (OD-1031-ROLLBACK-KEEP). Drops tax_job_runs and tax_chunk_vectors. Nothing else is touched:
+-- no CASCADE; evidence_spans, the 020/022 objects and every role are unchanged.
+-- DATA-SAFE: it REFUSES while any row exists in either table (vectors are derived and can be recomputed, but run rows are history).
+-- To roll back anyway the owner first exports (rollback_024.sh --export), then runs this file with -v purge_rows=1, which deletes the rows
+-- inside the same transaction before the drops.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v purge_rows=1] -f <this file>   (own BEGIN/COMMIT; any error rolls everything back).
+\if :{?purge_rows}
+\else
+  \set purge_rows 0
+\endif
+BEGIN;
+SELECT set_config('vera024rb.purge', :'purge_rows', true);
+SET LOCAL lock_timeout = '5s';
+
+DO $$
+DECLARE n text; cnt bigint; total bigint := 0;
+BEGIN
+  IF pg_catalog.to_regclass('vera_vjay.tax_chunk_vectors') IS NULL OR pg_catalog.to_regclass('vera_vjay.tax_job_runs') IS NULL THEN
+    RAISE EXCEPTION '024 rollback: a 024 table is missing (024 not applied, partly applied, or already rolled back); nothing done.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = 'vera_vjay.tax_chunk_vectors'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user)
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = 'vera_vjay.tax_job_runs'::pg_catalog.regclass
+                    AND pg_catalog.pg_get_userbyid(c.relowner) = current_user) THEN
+    RAISE EXCEPTION '024 rollback must run as the owner of the 024 tables.';
+  END IF;
+  FOREACH n IN ARRAY ARRAY['tax_job_runs','tax_chunk_vectors'] LOOP
+    EXECUTE pg_catalog.format('LOCK TABLE vera_vjay.%I IN ACCESS EXCLUSIVE MODE', n);
+    EXECUTE pg_catalog.format('SELECT count(*) FROM vera_vjay.%I', n) INTO cnt;
+    RAISE NOTICE '024 rollback: % rows in %', cnt, n;
+    total := total + cnt;
+  END LOOP;
+  IF total > 0 AND current_setting('vera024rb.purge') <> '1' THEN
+    RAISE EXCEPTION '024 rollback refused: % rows exist. Export them, then re-run with -v purge_rows=1.', total;
+  END IF;
+  IF total > 0 THEN
+    DELETE FROM vera_vjay.tax_job_runs;
+    DELETE FROM vera_vjay.tax_chunk_vectors;
+    RAISE NOTICE '024 rollback: purged % rows (purge_rows=1)', total;
+  END IF;
+END $$;
+
+DROP TABLE vera_vjay.tax_job_runs;
+DROP TABLE vera_vjay.tax_chunk_vectors;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+              WHERE ns.nspname = 'vera_vjay' AND (c.relname LIKE 'tax\_chunk\_vectors%' OR c.relname LIKE 'tax\_job\_runs%')) THEN
+    RAISE EXCEPTION '024 rollback: a 024 object is still present after the drops; rolled back.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.evidence_spans') IS NULL THEN
+    RAISE EXCEPTION '024 rollback: evidence_spans is missing after the drops; rolled back.';
+  END IF;
+END $$;
+
+COMMIT;

@@ -1,0 +1,194 @@
+-- 024_vera_chunk_vectors.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (convention of 007/011/012/017/020/022); rename only at approval.
+-- CHUNK-TAXO-MIG024-1109 DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL. NOT EXECUTED: owner-run apply only. APPLYING IT NEEDS
+-- OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin-run only, rehearsal first
+-- (work/CHUNK-TAXO-MIG024-1109/scripts/rehearse_024.sh in vera_dar_rehearsal), never via db/apply_migrations.py.
+-- Design: work/CHUNK-TAXO-1109/status-plan.md sections v3.1 and v3.8 (OD-1109-DEMB-3: embeddings from Cloudflare Workers AI bge, called by the API job).
+--   The vectors and run rows are written by the API's in-app job through the rw app path (vera_vjay_rw login); no other writer exists.
+--   model and dim are stored per row: model must be a '@cf/baai/...' id, dim between 64 and 4096 (bge-small-en-v1.5 is 384; the job detects other dims, e.g. bge-m3, at runtime).
+-- REQUIRES: PostgreSQL 16 or newer; vera_vjay.evidence_spans (003) with BIGINT PK span_id; group roles vera_vjay_rw/_ro/_wo and the app logins
+--   (as 020/022). INDEPENDENT of 020 and 022 (no tax_ entity is referenced); the in-app job needs 022 only to write links, not to store vectors.
+-- Why REAL[] and not pgvector: no extension is needed (whether the Render Postgres offers pgvector was not verified and is not needed);
+--   cluster centers are computed in the API job, not in SQL; 5.5k x 384 float4 is about 9 MB and fits in memory. REAL[] is portable to any host.
+-- Objects (prefix tax_):
+--   tax_chunk_vectors  one embedding per evidence span (chunk): model, dim, text_sha256 (change detector: re-embed when the chunk text hash
+--                      differs), vec REAL[] (1-D, length = dim, no NULL, no NaN, no +-Infinity), created_at, updated_at.
+--   tax_job_runs       one row per job pass: classifier_name/version, started_at, finished_at, metrics JSONB (mechanical numbers only),
+--                      display_ok (NULL while unfinished), reasons TEXT[], utc_day, neurons_used (daily Workers AI usage counter), state
+--                      running|finished|deferred|failed. The job INSERTs a 'running' row when a pass starts, UPDATEs neurons_used after each embed
+--                      batch, and finishes the row (a non-running row needs finished_at and display_ok). The day total is
+--                      SUM(neurons_used) WHERE utc_day = today (survives restarts). The API status reader takes the latest finished row.
+-- No text of any chunk is stored here, only its hash and vector. FK ON DELETE RESTRICT; app roles get no DELETE (re-embed by UPDATE).
+-- Grants (default deny; rw and ro ONLY, as 020): rw SELECT + column INSERT + column UPDATE as listed below; ro SELECT; vera_vjay_wo and PUBLIC
+--   get nothing (D2). Identity sequence: no app privilege needed (GENERATED ALWAYS identity inserts need none).
+-- NOT enforced by the database: that vec really is the embedding of the text with that hash; the DB checks shape only.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SET LOCAL lock_timeout = '5s';   -- the FK briefly locks evidence_spans; never queue behind ingest for long
+SELECT set_config('vera024.rw', :'app_rw_login', true), set_config('vera024.ro', :'app_ro_login', true);
+
+-- Preflight 1: PG16+; evidence_spans keyed by BIGINT span_id; nothing this file creates exists (strictly additive).
+DO $$
+BEGIN
+  IF pg_catalog.current_setting('server_version_num')::int < 160000 THEN
+    RAISE EXCEPTION '024 requires PostgreSQL 16 or newer.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.evidence_spans') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                     WHERE c.conrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass AND c.contype IN ('p','u')
+                       AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'span_id' AND a.atttypid = 'pg_catalog.int8'::pg_catalog.regtype) THEN
+    RAISE EXCEPTION '024 requires vera_vjay.evidence_spans keyed by BIGINT span_id (migration 003).';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+              WHERE ns.nspname = 'vera_vjay' AND (c.relname LIKE 'tax\_chunk\_vectors%' OR c.relname LIKE 'tax\_job\_runs%')) THEN
+    RAISE EXCEPTION '024 already applied or name collision (tax_chunk_vectors / tax_job_runs).';
+  END IF;
+END $$;
+
+-- Preflight 2 (as 020/022): roles exist; logins inherit their groups; the account running this file is not an app role nor reachable from one.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera024.rw')], ['vera_vjay_ro', current_setting('vera024.ro')]];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo') THEN
+    RAISE EXCEPTION '024 requires group role vera_vjay_wo (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '024 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '024 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '024: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF current_user = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera024.rw'), current_setting('vera024.ro')])
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname IN ('vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera024.rw'), current_setting('vera024.ro'))
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '024 must not run as, or as a member of, an app group or login role: the table owner is unrestricted.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera024.rw'), current_setting('vera024.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '024: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 1. tax_chunk_vectors. 7 constraints: pk, fk, model, dim, sha, vec, ts.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_chunk_vectors (
+    span_id     BIGINT NOT NULL CONSTRAINT tax_chunk_vectors_pk PRIMARY KEY
+                CONSTRAINT tax_chunk_vectors_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    model       TEXT NOT NULL CONSTRAINT tax_chunk_vectors_model_chk CHECK (model ~ '^@cf/baai/[a-z0-9.-]{1,64}$'),
+    dim         SMALLINT NOT NULL CONSTRAINT tax_chunk_vectors_dim_chk CHECK (dim BETWEEN 64 AND 4096),
+    text_sha256 CHAR(64) NOT NULL CONSTRAINT tax_chunk_vectors_sha_chk CHECK (text_sha256 ~ '^[0-9a-f]{64}$'),
+    vec         REAL[] NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT tax_chunk_vectors_vec_chk CHECK (
+        coalesce(pg_catalog.array_ndims(vec), 0) = 1 AND pg_catalog.cardinality(vec) = dim
+        AND pg_catalog.array_position(vec, NULL::real) IS NULL
+        AND pg_catalog.array_position(vec, 'NaN'::real) IS NULL
+        AND pg_catalog.array_position(vec, 'Infinity'::real) IS NULL
+        AND pg_catalog.array_position(vec, '-Infinity'::real) IS NULL),
+    CONSTRAINT tax_chunk_vectors_ts_chk CHECK (updated_at >= created_at)
+);
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 2. tax_job_runs. 10 constraints: pk, name, version, finished, metrics, display, reasons, neurons, state, state_fin. Indexes: tax_job_runs_finished_idx, tax_job_runs_day_idx.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_job_runs (
+    run_id             BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_job_runs_pk PRIMARY KEY,
+    classifier_name    TEXT NOT NULL CONSTRAINT tax_job_runs_cname_chk CHECK (classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT NOT NULL CONSTRAINT tax_job_runs_cver_chk CHECK (classifier_version ~ '^[ -~]{1,128}$'),
+    started_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at        TIMESTAMPTZ,
+    metrics            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    display_ok         BOOLEAN,
+    reasons            TEXT[] NOT NULL DEFAULT '{}'::text[],
+    utc_day            DATE NOT NULL DEFAULT (now() AT TIME ZONE 'utc')::date,
+    neurons_used       INTEGER NOT NULL DEFAULT 0 CONSTRAINT tax_job_runs_neurons_chk CHECK (neurons_used >= 0),
+    state              TEXT NOT NULL CONSTRAINT tax_job_runs_state_chk CHECK (state IN ('running','finished','deferred','failed')),
+    CONSTRAINT tax_job_runs_fin_chk CHECK (finished_at IS NULL OR finished_at >= started_at),
+    CONSTRAINT tax_job_runs_metrics_chk CHECK (pg_catalog.jsonb_typeof(metrics) = 'object' AND pg_catalog.octet_length(metrics::pg_catalog.text) <= 65536),
+    CONSTRAINT tax_job_runs_disp_chk CHECK ((display_ok IS NULL) = (finished_at IS NULL)),
+    CONSTRAINT tax_job_runs_statefin_chk CHECK (state = 'running' OR finished_at IS NOT NULL),
+    CONSTRAINT tax_job_runs_reasons_chk CHECK (pg_catalog.cardinality(reasons) = 0
+        OR (pg_catalog.array_ndims(reasons) = 1 AND pg_catalog.cardinality(reasons) <= 64
+            AND pg_catalog.array_position(reasons, NULL::text) IS NULL
+            AND pg_catalog.octet_length(pg_catalog.array_to_string(reasons, '|')) <= 4096))
+);
+CREATE INDEX tax_job_runs_finished_idx ON vera_vjay.tax_job_runs (finished_at DESC, run_id DESC) WHERE finished_at IS NOT NULL;
+CREATE INDEX tax_job_runs_day_idx ON vera_vjay.tax_job_runs (utc_day);
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 3. Grants: default deny, then exact grants to the rw and ro groups only.
+-- ---------------------------------------------------------------------------------------------------------------------------------
+REVOKE ALL ON vera_vjay.tax_chunk_vectors, vera_vjay.tax_job_runs FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.tax_chunk_vectors, vera_vjay.tax_job_runs FROM %I, %I', current_setting('vera024.rw'), current_setting('vera024.ro'));
+  EXECUTE pg_catalog.format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro, %I, %I',
+    pg_catalog.pg_get_serial_sequence('vera_vjay.tax_job_runs', 'run_id'), current_setting('vera024.rw'), current_setting('vera024.ro'));
+END $$;
+GRANT SELECT ON vera_vjay.tax_chunk_vectors, vera_vjay.tax_job_runs TO vera_vjay_rw, vera_vjay_ro;
+GRANT INSERT (span_id, model, dim, text_sha256, vec) ON vera_vjay.tax_chunk_vectors TO vera_vjay_rw;
+GRANT UPDATE (model, dim, text_sha256, vec, updated_at) ON vera_vjay.tax_chunk_vectors TO vera_vjay_rw;
+GRANT INSERT (classifier_name, classifier_version, started_at, finished_at, metrics, display_ok, reasons, utc_day, neurons_used, state) ON vera_vjay.tax_job_runs TO vera_vjay_rw;
+GRANT UPDATE (finished_at, metrics, display_ok, reasons, neurons_used, state) ON vera_vjay.tax_job_runs TO vera_vjay_rw;
+
+-- Final privilege check against the actual logins (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  rw text := current_setting('vera024.rw'); ro text := current_setting('vera024.ro');
+  t text; r text; p text; c text; ins text[]; upd text[];
+BEGIN
+  FOR t, ins, upd IN SELECT * FROM (VALUES
+      ('vera_vjay.tax_chunk_vectors', ARRAY['span_id','model','dim','text_sha256','vec']::text[], ARRAY['model','dim','text_sha256','vec','updated_at']::text[]),
+      ('vera_vjay.tax_job_runs',      ARRAY['classifier_name','classifier_version','started_at','finished_at','metrics','display_ok','reasons','utc_day','neurons_used','state']::text[],
+                                     ARRAY['finished_at','metrics','display_ok','reasons','neurons_used','state']::text[])
+    ) v(t, ins, upd) LOOP
+    FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+      IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '024 grant check failed: login % needs SELECT on %.', r, t; END IF;
+      FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+        IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '024 grant check failed: login % holds table-wide % on %.', r, p, t; END IF;
+      END LOOP;
+    END LOOP;
+    FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+      IF pg_catalog.has_column_privilege(rw, t, c, 'INSERT') <> (c = ANY (ins)) THEN
+        RAISE EXCEPTION '024 grant check failed: column INSERT for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(rw, t, c, 'UPDATE') <> (c = ANY (upd)) THEN
+        RAISE EXCEPTION '024 grant check failed: column UPDATE for login % is wrong on %.%.', rw, t, c;
+      END IF;
+      IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE') THEN
+        RAISE EXCEPTION '024 grant check failed: ro login holds a column write privilege on %.%.', t, c;
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname IN ('tax_chunk_vectors','tax_job_runs')
+                AND (x.grantee = 0 OR x.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))) THEN
+    RAISE EXCEPTION '024 grant check failed: PUBLIC or vera_vjay_wo holds a privilege on a new table.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k JOIN pg_catalog.pg_namespace ns ON ns.oid = k.relnamespace, pg_catalog.aclexplode(k.relacl) x
+              WHERE ns.nspname = 'vera_vjay' AND k.relname = 'tax_job_runs_run_id_seq' AND k.relkind = 'S'
+                AND (x.grantee = 0 OR x.grantee IN (SELECT oid FROM pg_catalog.pg_roles
+                                                     WHERE rolname IN ('vera_vjay_wo','vera_vjay_rw','vera_vjay_ro', rw, ro)))) THEN
+    RAISE EXCEPTION '024 grant check failed: an app role or PUBLIC holds a privilege on the tax_job_runs identity sequence.';
+  END IF;
+END $$;
+
+COMMIT;
