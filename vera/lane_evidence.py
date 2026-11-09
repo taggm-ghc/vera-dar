@@ -415,6 +415,13 @@ def _chunk_cfg() -> tuple[int, int]:
         return 400, 40
 
 
+def _page_licence_id(page) -> str | None:
+    """GOV-PD-1108: the licence id a web page carries (us-federal-public-domain, mode on), else None. Provenance only:
+    the page stays answer-only and is never stored (licence_decision unchanged)."""
+    lic = getattr(page, "licence", None)
+    return str(lic.get("id")) if isinstance(lic, dict) and lic.get("id") else None
+
+
 def attribution_for(page: LanePage) -> dict:
     who = (f"{page.entity} documentation" if page.lane == "official"
            else f"Web source: {_host(page.url)}" if page.lane == "web"  # A6-W: a web page, never verified fact
@@ -474,13 +481,13 @@ def admit_pages(question: str, pages: list, cfg: dict) -> tuple[list, list]:
             took += 1
             admitted.append({"span_id": f"{did}:{s}", "document_id": did, "canonical_source_id": pg.url,
                              "title": pg.title, "url": pg.url, "published": pg.published, "authors": None,
-                             "licence": None, "licence_url": None, "start": s, "end": e, "text": seg,
+                             "licence": _page_licence_id(pg), "licence_url": None, "start": s, "end": e, "text": seg,
                              "text_sha256": fa._sha(seg), "relevance": round(rel, 4), "attribution": att,
                              "answer_only": True, "lane": pg.lane, "origin": EPISTEMIC[pg.lane],
                              "lane_origin": ORIGIN[pg.lane], "epistemic": EPISTEMIC[pg.lane], "stored": False,
                              **({"licence_class": "nd", "canonical_text": pg.text} if nd else {})})
         examined.append({"document_id": did, "canonical_source_id": pg.url, "title": pg.title, "url": pg.url,
-                         "doi": None, "licence": None, "licence_decision": LICENCE_DISPOSITION,
+                         "doi": None, "licence": _page_licence_id(pg), "licence_decision": LICENCE_DISPOSITION,
                          "text_sha256": None, "chars": len(pg.text), "admitted_spans": took, "answer_only": True,
                          "lane": pg.lane, "origin": EPISTEMIC[pg.lane], "lane_origin": ORIGIN[pg.lane],
                          "stored": False})

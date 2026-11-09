@@ -34,6 +34,7 @@ RC_ALLOW, RC_REJECT, RC_ARXIV = "licence_allow", "licence_reject", "licence_reje
 RC_MISSING, RC_UNKNOWN, RC_NOT_STORABLE = "licence_missing", "licence_unknown", "licence_not_storable"
 RC_CONFLICT, RC_HOST = "licence_id_url_conflict", "licence_host_unnormalisable"
 RC_ND_NEWS = "licence_nd_news_answer_only"  # H19 (OD-1106-NEWS): ND news with a satisfied access verdict; never stored
+RC_US_FED_PD = "licence_us_federal_pd"  # GOV-PD-1108: no declared licence; US federal work (17 U.S.C. 105), mode on only
 
 # Why: arXiv's terms forbid storing/serving e-prints without permission; only /abs/ pages may be stored.
 ARXIV_HOSTS = ("arxiv.org", "www.arxiv.org", "export.arxiv.org")
@@ -248,6 +249,17 @@ def nd_news_permitted(c: dict) -> bool:
         return False
 
 
+def _us_federal_pd(c: dict) -> dict | None:
+    """GOV-PD-1108: the us-federal-public-domain decision when vera.gov_public_domain is in mode 'on' and allows this
+    candidate's full content (host from data, recomputed from c["url"]; page test on the page text), else None.
+    Any error = None (the missing-licence hold stands)."""
+    try:
+        from vera import gov_public_domain
+        return gov_public_domain.gate_allow(c)
+    except Exception:  # noqa: BLE001  fail closed
+        return None
+
+
 def licence_status(c: dict) -> tuple[str, str, str]:
     """(decision, rationale, reason_code). decision is 'allow', 'defer' (link-only / held) or 'reject'."""
     try:
@@ -276,6 +288,10 @@ def licence_status(c: dict) -> tuple[str, str, str]:
                          "answer-only, not stored (OD-1106-NEWS H19, R-037)", RC_ND_NEWS)
     governing = meta if c.get("stored_text_kind") == METADATA_KIND else content
     if not governing.get("id"):
+        pd = _us_federal_pd(c) if governing is content and not content.get("url") else None
+        if pd is not None:  # GOV-PD-1108: licence status only; needs the bound fetched full text (access gated on fetch)
+            return ("allow", f"US federal government work, 17 U.S.C. 105 (rule {pd.get('rule')}, {pd.get('basis')}); "
+                             f"no licence declared on the page", RC_US_FED_PD)
         return "defer", "no declared licence for the stored text: held for review (#63)", RC_MISSING
     entry, how = match_entry(governing.get("id"), governing.get("url"))
     if how == "conflict":
@@ -297,12 +313,26 @@ def licence_decision(c: dict) -> tuple[str, str]:
     return d, why
 
 
+def _gov_pd_shadow(c: dict, code: str) -> None:
+    """GOV-PD-1108 shadow mode: for a missing-licence candidate, record what the us-federal-public-domain rule would
+    decide (reason code only) in c["gov_pd_shadow"]; the decision itself is unchanged. Off/on: nothing recorded."""
+    try:
+        from vera import gov_public_domain as g
+        if code != RC_MISSING or g.mode() != "shadow":
+            return
+        d = g.decide(str(c.get("url") or ""), g.candidate_text(c), c.get("licence_href") or "")
+        c["gov_pd_shadow"] = d.get("reason_code")
+    except Exception:  # noqa: BLE001  shadow must never affect the gate
+        pass
+
+
 def apply_licence_gate(scored: list[dict]) -> list[dict]:
     """Mutates and returns `scored`. A Gate A reject is kept; otherwise reject/defer override a fetch."""
     for c in scored:
         d, why, code = licence_status(c)
         c["licence_decision"] = d
         c["licence_reason_code"] = code
+        _gov_pd_shadow(c, code)
         if d != "allow" and c.get("gate_a_decision") != "reject":
             c["gate_a_decision"] = d
         c["gate_a_rationale"] = f"{c.get('gate_a_rationale', '')} Licence: {why}."

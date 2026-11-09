@@ -43,6 +43,7 @@ class WebPage(LanePage):
     stored: bool = False
     epistemic: str = "web"
     label: str = "web source"
+    licence: dict | None = None  # GOV-PD-1108: {"id", "rule", "basis"} when us-federal-public-domain applies (mode on)
 
     def __repr__(self) -> str:
         return f"WebPage(url={self.url!r}, chars={len(self.text)})"
@@ -255,6 +256,21 @@ def _takes_kwargs(f) -> bool:
     return any(p.kind is p.VAR_KEYWORD or p.name == "hop_gate" for p in ps)
 
 
+def _gov_pd(final: str, text: str, got: dict, dev: dict) -> dict | None:
+    """GOV-PD-1108: licence status only, AFTER every read/use gate passed. Shadow and on record the rule's reason code
+    in dev["gov_pd"] (no host, no text); only mode on returns the licence for the page. Never raises; any error = None
+    (the page is used exactly as before)."""
+    try:
+        from vera import gov_public_domain as g
+        if g.mode() == "off":
+            return None
+        d = g.decide(final, text, str(got.get("licence_href") or ""))
+        dev["gov_pd"] = d.get("reason_code")
+        return d.get("licence") if d.get("mode") == "on" and d.get("applies") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None, cfg=None, clock=time.monotonic,
              rate=None, should_stop=None, max_fetches=None) -> WebResult:
     """Never raises for a single bad candidate. `fetch` is vera.public_fetch.fetch-compatible
@@ -341,7 +357,8 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 dev["gate"]["read"] = "read_empty"
                 out.listed.append(_listed(c, url, title, cfg, ph.get("empty", ""), qmax))
             else:
-                out.pages.append(WebPage(LANE, "", title, final, outlet=_host(final), text=text))
+                lic = _gov_pd(final, text, got, dev)
+                out.pages.append(WebPage(LANE, "", title, final, outlet=_host(final), text=text, licence=lic))
         except Exception as exc:  # noqa: BLE001  one candidate never sinks the route; class name only, no text
             dev["gate"]["error"] = type(exc).__name__
             out.listed.append(_listed(c, url, title, cfg, ph.get("fetch_failed", ""), qmax))
