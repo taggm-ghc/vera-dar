@@ -29,14 +29,6 @@ from tests._gap_support import http_ask
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 from vera import search_providers as sp
 
-
-@pytest.fixture(autouse=True)
-def _answer_floor_off(monkeypatch):
-    """ANSWER-SCOPE-1109: these fixtures hold fewer than 6 documents and test the freshness / insufficiency triggers in
-    isolation, so the >= 6 distinct-document answer floor (freshness.sufficiency.min_distinct_documents) is switched off
-    here; the floor itself is tested in tests/test_answer_scope_1109.py."""
-    monkeypatch.setattr("vera.answer_scope.floor_of", lambda fcfg: None)
-
 ROOT = Path(__file__).resolve().parent.parent
 Q = e2e.Q_EPI
 

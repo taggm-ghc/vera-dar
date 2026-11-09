@@ -181,3 +181,42 @@ def test_seed_groups_unchanged_and_token_injection_defused():
     assert g.spelled == "rag"
     s = te.canonicalize("xgacrrag and RAG and retrieval-augmented generation", (g,))
     assert s.split().count("xgacrrag") == 2 and "xg_acrrag" in s
+
+
+# -------------------------------------------------------------------------------------- verifier follow-ups (11-09)
+RAG2 = "Recurrent Attention Gate (RAG) layers gate recurrent features."
+
+
+def test_long_form_question_never_equates_two_senses():
+    q = "What are components of retrieval augmented generation?"
+    gs = am.groups(q, [DEFN, RAG2], {"enabled": True}, STOP)
+    assert gs == ()  # two different long forms for RAG: no group at all, in either direction
+    assert am.groups(Q, [DEFN, RAG2], {"enabled": True}, STOP) == ()
+    gate = {"g": ("t", [RAG2, "Components of recurrent attention gate layers include sigmoid units."])}
+    gen = {"d": ("t", [DEFN])}
+    b = fa.admit(q, Corpus({**gen, **gate}), cfg(True))
+    assert "g:1" not in {a["span_id"] for a in b.admitted}
+    # one sense only: the phrase group holds only the question's own phrase
+    one = am.groups(q, [DEFN], {"enabled": True}, STOP)
+    assert len(one) == 1 and one[0].phrases == (("retrieval augmented generation", False),) and one[0].upper == "RAG"
+
+
+def test_odd_definition_disables_only_that_acronym():
+    odd = "Results are shown in the table (RAG)."
+    llm = "Large language models (LLMs) generate text."
+    q = "How do LLMs use RAG components?"
+    gs = am.groups(q, [DEFN, odd, llm], {"enabled": True}, STOP)
+    assert [g.upper for g in gs] == ["LLM"]  # RAG is ambiguous here; LLM still expands
+    assert am.groups(Q, [DEFN, llm], {"enabled": True}, STOP)[0].upper == "RAG"
+
+
+def test_df_cache_is_bounded_lru():
+    docs = {f"d{i}": ("t", [f"Definition {i}: Alpha beta gamma (ABG{i % 1}) and more text {i}."]) for i in range(3)}
+    corp = Corpus({"g1": ("t", [DEFN, GEN_HY]), "l1": ("t", ["Large language models (LLMs) generate text."]), **docs})
+    c = cfg(True, "idf_weighted")
+    c["admission"]["df_cache_max"] = 2
+    for q in (Q, "How do LLMs work?", "What is ABG?", Q, "What are LLMs and RAG?"):
+        fa.admit(q, corp, c)
+        assert len(corp.__dict__["_fda_cache"]) <= 2
+    assert len(corp.__dict__["_fda_cache"]) == 2  # it did fill (distinct group sets), then evicted
+    assert FD["admission"]["df_cache_max"] >= 1

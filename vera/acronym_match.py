@@ -155,13 +155,14 @@ def groups(question: str, texts, acfg: dict, stop, seed_groups=()) -> tuple:
         min_len = int(acfg.get("min_word_len", 3))
         min_scan = int(acfg.get("min_scan_len", 3))
         seeded = {t for g in seed_groups or () for t, _a in g.phrases}
+        max_senses = max(1, int(acfg.get("max_senses", 1)))
         out, ids = [], set()
         for a in question_acronyms(question):
             if a in seeded:
                 continue  # an owner-seeded group already covers it
             other: list = []
             learned = tuple(definitions(texts, a, stop, min_len, other=other))
-            if other or len(learned) > max(1, int(acfg.get("max_senses", 1))):
+            if other or len(learned) > max_senses:
                 continue  # the corpus uses this acronym for another (or several) long forms: ambiguous, no expansion
             scan = a if (acfg.get("bare_initials") is True and len(a) >= min_scan) else ""
             if not learned and not scan:
@@ -176,10 +177,12 @@ def groups(question: str, texts, acfg: dict, stop, seed_groups=()) -> tuple:
                 continue
             other2: list = []
             learned = definitions(texts, ini, stop, min_len, other=other2)
-            if phrase not in learned or other2:
+            if phrase not in learned:
                 continue  # direction 2 only on the corpus's own definition of this phrase
+            if other2 or len(learned) > max_senses:
+                continue  # the same ambiguity guard as direction 1: two senses are never treated as equivalent
             ids.add(gid)
-            out.append(Group(gid, tuple((p, False) for p in [phrase] + [x for x in learned if x != phrase]), (),
+            out.append(Group(gid, ((phrase, False),), (),
                              initials="", upper=ini.upper(), own=phrase, stop=stop, min_len=min_len))
         return tuple(out)
     except Exception:  # noqa: BLE001  (odd input: the feature adds nothing)

@@ -23,14 +23,6 @@ from tests.test_fresh_acceptance_c4 import (HOURS, NEW_DOI, NOW, YEARS_AGO, Worl
 from tests._pipeline_support import h, rig  # noqa: F401  (fixtures)
 from vera import acq_config, auto_acquire, fulldoc_corpus, fulldoc_db, inline_acquire, public_mode
 
-
-@pytest.fixture(autouse=True)
-def _answer_floor_off(monkeypatch):
-    """ANSWER-SCOPE-1109: these fixtures hold fewer than 6 documents and test the freshness / insufficiency triggers in
-    isolation, so the >= 6 distinct-document answer floor (freshness.sufficiency.min_distinct_documents) is switched off
-    here; the floor itself is tested in tests/test_answer_scope_1109.py."""
-    monkeypatch.setattr("vera.answer_scope.floor_of", lambda fcfg: None)
-
 Q_REPL = "Why do many scientific studies fail to replicate?"
 REPL_WORDS = ["replicate", "scientific", "studies", "fail", "findings", "reproducible", "research", "bias", "power",
               "published", "false", "results", "computational", "rules", "significance"]

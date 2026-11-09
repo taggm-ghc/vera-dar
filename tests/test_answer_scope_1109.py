@@ -134,10 +134,11 @@ def test_limited_evidence_note_when_still_below_floor(monkeypatch):
     assert [n["text"] for n in once.notes].count("Note: 1 full document, fewer than 6.") <= 1
 
 
-def test_shipped_floor_equals_acquisition_target():
+def test_shipped_floor_is_off_pending_owner_decision():
     acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text())
     floor = acq["freshness"]["sufficiency"]["min_distinct_documents"]
-    assert floor == acq["bounds"]["acq_round_target_new_docs"] == 6
+    assert floor is None  # OFF pending the owner's decision on what the 6 counts (verifier 2026-11-09)
+    assert asc.floor_of(acq["freshness"]) is None
     sc = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())["answer"]["scope_check"]
     assert sc["enabled"] is True and "{n}" in sc["limited_evidence_text"] and "{titles}" in sc["specific_scope_text"]
 

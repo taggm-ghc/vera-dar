@@ -16,6 +16,8 @@ import hashlib
 import inspect
 import math
 import re
+from collections import OrderedDict
+
 from vera.fulldoc_evidence import EvidenceBundle
 
 REASONS = ("not_acquired", "licence", "attribution_incomplete", "span_mismatch", "not_body_section", "excluded_section",
@@ -26,6 +28,9 @@ REASONS = ("not_acquired", "licence", "attribution_incomplete", "span_mismatch",
 # shipped behaviour until INT applies the config delta. FIXED in weighted mode, not configurable away: >= 2 matched
 # non-selector stems, body-only ranges, C1 exclusions, licence/attribution gates, span re-verification.
 MIN_MATCHED_STEMS_FLOOR = 2
+# ANSWER-SCOPE-1109: default per-corpus document-frequency cache bound (entries; one per distinct term-group set);
+# admission.df_cache_max overrides it. A resource bound, not a decision threshold.
+DF_CACHE_MAX = 16
 _ET_AL = re.compile(r"\bet\.?\s+al\b\.?", re.IGNORECASE)
 
 
@@ -233,21 +238,27 @@ def _evidence_texts(corpus, acquired) -> list:
     return out
 
 
-def _df_table(corpus, acquired, icfg: dict, n: int, tg=None) -> tuple[dict, int]:
+def _df_table(corpus, acquired, icfg: dict, n: int, tg=None, max_entries: int = DF_CACHE_MAX) -> tuple[dict, int]:
     key = ("_fda_df", n, str(icfg.get("token_pattern")), icfg.get("min_token_len"), tuple(icfg.get("stopwords") or ()))
     if tg is not None:  # E1: df on canonicalised chunks, so a group token is in vocabulary (SECREV C1)
         key = key + (tuple(sorted(tg.w)),)
     cache = getattr(corpus, "__dict__", None)
-    if cache is not None and key in cache.get("_fda_cache", {}):
-        return cache["_fda_cache"][key]
+    store = cache.setdefault("_fda_cache", OrderedDict()) if cache is not None else None
+    if store is not None and not isinstance(store, OrderedDict):  # a plain dict from an older caller: upgrade in place
+        store = cache["_fda_cache"] = OrderedDict(store)
+    if store is not None and key in store:
+        store.move_to_end(key)  # LRU: most recently used last
+        return store[key]
     texts = _evidence_texts(corpus, acquired)
     df: dict = {}
     for t in texts:
         for st in _stems(t, icfg, n, tg):
             df[st] = df.get(st, 0) + 1
     res = (df, len(texts))
-    if cache is not None:
-        cache.setdefault("_fda_cache", {})[key] = res
+    if store is not None:
+        store[key] = res
+        while len(store) > max(1, int(max_entries)):  # ANSWER-SCOPE-1109: bounded (one entry per term-group set)
+            store.popitem(last=False)
     return res
 
 
@@ -478,6 +489,10 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     if isinstance(gv2, dict) and gv2.get("enabled") is True and icfg:
         icfg = dict(icfg, question_generic_terms=list(icfg.get("question_generic_terms") or [])
                     + [str(x) for x in (gv2.get("add") or []) if isinstance(x, str)])
+    try:
+        df_max = max(1, int(adm.get("df_cache_max", DF_CACHE_MAX)))
+    except (TypeError, ValueError):
+        df_max = DF_CACHE_MAX
     tg = _term_ctx(question, cfg, icfg, stem_n, corpus, acquired)  # E1 term groups (+ acronym groups): None = none
 
     q_text = _ET_AL.sub(" ", question) if weighted and scfg.get("enabled", True) else question
@@ -496,7 +511,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
                     selector_docs.add(str(d["document_id"]))
         q_ns = q_all - sel
         q_raw = _stems(q_text, icfg, stem_n) if tg is not None else q_ns  # F2: floor counts on the raw question
-        df, n_chunks = _df_table(corpus, acquired, icfg, stem_n, tg)
+        df, n_chunks = _df_table(corpus, acquired, icfg, stem_n, tg, df_max)
         idf = idf_weights(q_ns, df, n_chunks)
         if tg is not None:  # E1: a group token weighs as the stems it replaced
             idf = {x: v * tg.w.get(x, 1) for x, v in idf.items()}
@@ -508,7 +523,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     anchors: set = set()
     if tacfg.get("enabled") is True and icfg:
         try:
-            df_a, n_a = _df_table(corpus, acquired, icfg, stem_n, tg)
+            df_a, n_a = _df_table(corpus, acquired, icfg, stem_n, tg, df_max)
             anchors = topic_anchor_stems(q_ns if weighted else _q_stems(question, icfg, stem_n, tg), df_a, n_a,
                                          float(tacfg["max_df_ratio"]))
         except (KeyError, TypeError, ValueError):
@@ -645,7 +660,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         lo, hi = tfc.get("fit_lo"), tfc.get("fit_hi")
         if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and not isinstance(lo, bool) \
                 and not isinstance(hi, bool):
-            dft, nct = _df_table(corpus, acquired, icfg, stem_n, tg)
+            dft, nct = _df_table(corpus, acquired, icfg, stem_n, tg, df_max)
             qs = q_ns if weighted else _q_stems(question, icfg, stem_n, tg)
             fit = {k2: topical_fit(qs, _body_text(corpus, docs[k2]), dft, nct, icfg, stem_n,
                                    int(tfc.get("top_n") or 20), tg)

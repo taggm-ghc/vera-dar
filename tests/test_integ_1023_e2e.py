@@ -17,14 +17,6 @@ from vera import arxiv_fulltext, auto_acquire, inline_acquire
 
 
 @pytest.fixture(autouse=True)
-def _answer_floor_off(monkeypatch):
-    """ANSWER-SCOPE-1109: these fixtures hold fewer than 6 documents and test the freshness / insufficiency triggers in
-    isolation, so the >= 6 distinct-document answer floor (freshness.sufficiency.min_distinct_documents) is switched off
-    here; the floor itself is tested in tests/test_answer_scope_1109.py."""
-    monkeypatch.setattr("vera.answer_scope.floor_of", lambda fcfg: None)
-
-
-@pytest.fixture(autouse=True)
 def _isolated_queue(monkeypatch):
     auto_acquire.reset_for_tests()
     inline_acquire.reset_for_tests()
