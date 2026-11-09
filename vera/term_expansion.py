@@ -34,6 +34,12 @@ class Group:
     id: str
     phrases: tuple  # ((text, ambiguous), ...) in config order; the first non-ambiguous phrase is the spelled-out form
     cues: tuple = ()
+    # ANSWER-SCOPE-1109 (vera.acronym_match dynamic groups only; seed groups leave these empty = unchanged behaviour):
+    initials: str = ""  # contiguous content-word runs whose initials spell this also match
+    upper: str = ""  # this upper-case acronym (optional plural s) matches, case-SENSITIVELY ("rag" the word does not)
+    own: str = ""  # the question's own form: the spelled-out form for weighting
+    stop: frozenset = frozenset()  # tokenizer stopwords: their initials never spell an acronym
+    min_len: int = 3  # shortest content word of an initials run
 
     @property
     def token(self) -> str:
@@ -41,6 +47,8 @@ class Group:
 
     @property
     def spelled(self) -> str:
+        if self.own:
+            return self.own
         return next((t for t, amb in self.phrases if not amb), self.phrases[0][0])
 
 
@@ -122,12 +130,27 @@ def triggered(question: str, groups) -> tuple:
     return tuple(out)
 
 
+def _dynamic(s: str, groups) -> str:
+    dyn = [g for g in groups or () if getattr(g, "upper", "") or getattr(g, "initials", "")]
+    if not dyn:
+        return s
+    from vera import acronym_match as am
+    for g in dyn:
+        if g.initials:
+            for a, b in reversed(am.initial_runs(s, g.initials, g.stop, g.min_len)):
+                s = s[:a] + f" {g.token} " + s[b:]
+        if g.upper:
+            s = re.sub(r"(?<![A-Za-z0-9])" + re.escape(g.upper) + r"s?(?![A-Za-z0-9])", f" {g.token} ", s)
+    return s
+
+
 def canonicalize(text: str, groups) -> str:
     """Every phrase of `groups` (pass only TRIGGERED groups) replaced by the group token, longest phrase first,
     whole-word, case-insensitive. Pure text rewrite; tokenizer settings are unchanged."""
     # a literal group token already in the text (document or question) is defused first, so text cannot inject a
     # group match by spelling "xg<id>" (REVIEW-1028-E1FA7 probe "inject")
     s = re.sub(r"(?<![^\W_])" + TOKEN_PREFIX + r"(?=[^\W\d_])", TOKEN_PREFIX + "_", str(text or ""), flags=re.IGNORECASE)
+    s = _dynamic(s, groups)  # ANSWER-SCOPE-1109: acronym groups (no-op for seed groups)
     pairs = sorted(((t, g.token) for g in groups or () for t, _a in g.phrases), key=lambda p: (-len(p[0]), p[0]))
     for t, tok in pairs:
         s = _phrase_rx(t).sub(f" {tok} ", s)

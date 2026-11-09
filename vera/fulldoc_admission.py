@@ -66,13 +66,20 @@ class _TermCtx:
         self.ph = ph or {}  # group token -> the content stems of its spelled-out phrase (matched-stem floor, F2)
 
 
-def _term_ctx(question: str, cfg: dict, icfg: dict, n: int):
-    """admission.term_groups.enabled exactly true AND the question triggers >= 1 group -> _TermCtx, else None."""
+def _term_ctx(question: str, cfg: dict, icfg: dict, n: int, corpus=None, acquired=()):
+    """admission.term_groups.enabled exactly true AND the question triggers >= 1 group -> _TermCtx, else None.
+    ANSWER-SCOPE-1109: with admission.acronym_match on, the question's acronym groups (vera.acronym_match: derived
+    from the question's shape and the corpus's own "long form (ACR)" definitions, no list) join the seed groups."""
     if not icfg or n <= 0:
         return None
     try:
         from vera import term_expansion as te
         gs = te.triggered(question, te.groups_for(cfg))
+        from vera import acronym_match as am
+        acfg = am.cfg_of(cfg)
+        if acfg is not None:
+            texts = am.corpus_texts(corpus, acquired) if corpus is not None else []
+            gs = tuple(gs) + am.groups(question, texts, acfg, icfg.get("stopwords") or (), gs)
         if not gs:
             return None
         gen = {str(g).casefold() for g in (icfg.get("question_generic_terms") or []) if isinstance(g, str)}
@@ -471,7 +478,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     if isinstance(gv2, dict) and gv2.get("enabled") is True and icfg:
         icfg = dict(icfg, question_generic_terms=list(icfg.get("question_generic_terms") or [])
                     + [str(x) for x in (gv2.get("add") or []) if isinstance(x, str)])
-    tg = _term_ctx(question, cfg, icfg, stem_n)  # E1 term groups: None = off or no group in the question
+    tg = _term_ctx(question, cfg, icfg, stem_n, corpus, acquired)  # E1 term groups (+ acronym groups): None = none
 
     q_text = _ET_AL.sub(" ", question) if weighted and scfg.get("enabled", True) else question
     et_al = bool(_ET_AL.search(question)) if weighted and scfg.get("enabled", True) else False
@@ -515,7 +522,12 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     if seed:
         k = k * len(acquired)
     try:
-        cands = list(_call_retrieve(corpus, question, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
+        rq = question  # ANSWER-SCOPE-1109: candidate retrieval also searches the acronym groups' learned forms
+        if tg is not None:
+            from vera import acronym_match as _am
+            extra = _am.retrieval_terms([g for g in tg.groups if getattr(g, "upper", "")])
+            rq = f"{question} {extra}" if extra else question
+        cands = list(_call_retrieve(corpus, rq, k, bool((cfg.get("retrieval") or {}).get("evidence_only"))) or [])
     except Exception:
         cands = []
     try:
