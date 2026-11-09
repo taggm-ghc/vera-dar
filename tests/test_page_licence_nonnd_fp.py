@@ -75,3 +75,60 @@ def test_non_nd_row_with_explicit_markers_still_applies():
     assert not r["ok"] and r["reasons"] == ["acc_republished"]
     r2 = pl.check(URL, {"text": "Hadrons are composite particles. Members only item.", "url": URL}, row=row)
     assert not r2["ok"] and r2["reasons"] == ["acc_item_excluded"]
+
+
+# ------------------------------------------------- bf66ade re-check: ND content re-entering through another host
+from vera import web_route as wr  # noqa: E402
+
+HP = ("<p>County officials certified the midterm election results after a hand recount of the ballots.</p>"
+      "<p>Turnout reached a record level for a midterm.</p>")
+HOLES = {  # reviewer's work/H19-T8-1109/hole_probe_bf66ade.py: every case must be link-only
+    "nonND_host_canonical_to_votebeat": ("https://news.example.com/a", '<html><head><link rel="canonical" '
+                                         f'href="https://www.votebeat.org/2026/11/07/x"></head><body>{HP}</body></html>'),
+    "nonND_host_canonical_to_nd_subdomain": ("https://news.example.com/a2", '<html><head><link rel="canonical" '
+                                             f'href="https://data.votebeat.org/x"></head><body>{HP}</body></html>'),
+    "nonND_host_canonical_to_links_only_row": ("https://news.example.com/a3", '<html><head><link rel="canonical" '
+                                               f'href="https://www.nytimes.com/2026/x"></head><body>{HP}</body></html>'),
+    "nonND_host_text_originally_published_by_votebeat": (
+        "https://news.example.com/b", f"<html><body>{HP}<p>This story was originally published by Votebeat.</p></body></html>"),
+    "nonND_host_republished_from_kff_health_news": (
+        "https://news.example.com/b2", f"<html><body>{HP}<p>Republished from KFF Health News.</p></body></html>"),
+    "nonND_host_republished_from_commondreams_with_ccbyncnd_link": (
+        "https://news.example.com/c", '<html><head><link rel="license" href="https://creativecommons.org/licenses/by-nc-nd/'
+        f'3.0/"></head><body>{HP}<p>Republished from Common Dreams.</p></body></html>'),
+    "nonND_page_explicit_ND_licence_link": ("https://journals.example.org/p", '<html><head><link rel="license" '
+                                            'href="https://creativecommons.org/licenses/by-nd/4.0/"></head>'
+                                            f"<body>{HP}</body></html>"),
+    "nonND_page_cc_by_nc_nd_link": ("https://journals.example.org/q", '<html><head><link rel="license" '
+                                    'href="https://creativecommons.org/licenses/by-nc-nd/4.0/"></head>'
+                                    f"<body>{HP}</body></html>"),
+    "ND_host_page_direct": ("https://www.votebeat.org/2026/11/07/y", f"<html><body>{HP}</body></html>"),
+    "ND_subdomain_page": ("https://data.votebeat.org/z", f"<html><body>{HP}</body></html>"),
+}
+
+
+def _got(url, html):
+    return {"text": pf.extract_visible_text(html, "text/html"), "url": url, "content_type": "text/html",
+            "licence_href": pf._licence_href(html, url), "canonical_url": pf._canonical_href(html, url),
+            "third_party_text": pf.third_party_segments(html, "text/html")}
+
+
+@pytest.mark.parametrize("name", list(HOLES))
+def test_nd_reentry_through_other_hosts_is_link_only(name):
+    url, html = HOLES[name]
+    got = _got(url, html)
+    if not name.startswith("ND_"):  # pages on ND hosts are stopped by the web route's outlet rule
+        assert not pl.check(url, dict(got))["ok"], name
+    c = {"url": url, "title": "t", "snippet": "", "doi": None, "discovered_url": url, "portal_origin": True}
+    out = wr.read_web("What happened in the midterm election certification?", [c],
+                      fetch=lambda u, _g=got, **k: dict(_g), registry={}, deny_list=[], cfg=wr.load_config())
+    assert out.pages == [], name
+
+
+@pytest.mark.parametrize("text", ["This article was originally published in Physical Review D 101, 2020.",
+                                  "Republished from the author's institutional repository.",
+                                  "Originally published by Global Voices."])  # allow row: not restricted
+def test_generic_republication_of_unrestricted_source_stays_usable(text):
+    url = "https://journals.example.org/article/2"
+    r = pl.check(url, {"text": "Hadrons are composite particles made of quarks. " + text, "url": url})
+    assert r["ok"], r["reasons"]

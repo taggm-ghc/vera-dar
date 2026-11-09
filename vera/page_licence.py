@@ -8,7 +8,9 @@ check(url, page) -> {"ok", "reasons", "text", "a11_dropped", "licence"}:
       (vera.news_access._page_licence_checks, which also runs that row's A8/A10 markers).
   A8  republication or syndication: the row's own republished_markers (any row) -> acc_republished; for ND-outlet rows
       only, also a configured republication cue or a <link rel=canonical> on another site (re-verify F2: a non-ND page,
-      e.g. an open-access paper with "originally published in" or a canonical DOI/PMC link, is not affected).
+      e.g. an open-access paper with "originally published in" or a canonical DOI/PMC link, is not affected). On EVERY
+      row: a canonical link to a restricted outlet row (ND access block or verdict not allow, subdomains included) or a
+      republication cue naming a restricted outlet (name from the row host) -> acc_republished (no ND re-entry).
   A10 item exclusion: the row's exclude_item_markers -> acc_item_excluded; for ND-outlet rows only, an "All Rights
       Reserved" notice with no explicit page licence link -> acc_item_excluded (re-verify F1: an explicit page licence
       link takes precedence over a generic footer). Elsewhere the notice only sets the shown licence when no licence
@@ -114,6 +116,47 @@ def _row_licence(row: dict | None) -> dict | None:
     return None
 
 
+def _restricted_row(row) -> bool:
+    """An outlet row whose content may not be used as plain page text: an ND `access` block, or any verdict but allow."""
+    return isinstance(row, dict) and (isinstance(row.get("access"), dict) or row.get("terms_verdict") != "allow")
+
+
+def _restricted_labels(rcfg: dict) -> set:
+    """Outlet names derived mechanically from the restricted rows' hosts ('votebeat.org' -> 'votebeat',
+    'kffhealthnews.org' -> 'kffhealthnews'); matched against words joined without spaces ("KFF Health News")."""
+    out = set()
+    for o in (rcfg or {}).get("outlets") or []:
+        if _restricted_row(o) and isinstance(o.get("host"), str):
+            h = o["host"].lower().removeprefix("www.")
+            parts = [x for x in h.split(".") if x]
+            if len(parts) >= 2:
+                lab = parts[-3] if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "ac") else parts[-2]
+                if len(lab) >= 3:
+                    out.add(lab)
+    return out
+
+
+def _names_restricted(window: str, labels: set) -> bool:
+    words = re.findall(r"[a-z0-9]+", window.lower())
+    for i in range(len(words)):
+        for n in (1, 2, 3):
+            if "".join(words[i:i + n]) in labels:
+                return True
+    return False
+
+
+def _cue_names_restricted(low: str, cues, labels: set) -> bool:
+    """A republication cue followed (within 80 chars) by the name or host of a restricted outlet."""
+    for m in cues:
+        cue = _norm(m)
+        start = 0
+        while cue and (i := low.find(cue, start)) >= 0:
+            if _names_restricted(low[i + len(cue): i + len(cue) + 80], labels):
+                return True
+            start = i + 1
+    return False
+
+
 def filter_third_party(text: str, segments, pc: dict) -> tuple[str, int, list[str]]:
     """(filtered text, passages dropped, reasons). Paragraph (line) level for markup, sentence level for credits."""
     reasons: list[str] = []
@@ -189,7 +232,13 @@ def check(url: str, page: dict, *, row: dict | None = None, cfg: dict | None = N
         canon, here = _host(page.get("canonical_url") or ""), _host(page.get("url") or url)
         off_site = bool(canon and here and canon != here and not canon.endswith("." + here)
                         and not here.endswith("." + canon))
-        if any(_norm(m) in low for m in markers) or (nd_row and off_site):
+        # bf66ade re-check: ND or restricted content re-entering through another host stays closed on every row: a
+        # canonical link to a restricted outlet row (ND access block or any verdict but allow; subdomains included),
+        # or a republication cue that names a restricted outlet (names derived from the row hosts, not topic lists).
+        canon_row = reporting_lane.outlet_row(str(page.get("canonical_url") or ""), rcfg) if canon else None
+        restricted_canon = bool(off_site and canon_row is not None and canon_row is not row and _restricted_row(canon_row))
+        named = _cue_names_restricted(low, pc["republished_markers"], _restricted_labels(rcfg))
+        if any(_norm(m) in low for m in markers) or (nd_row and off_site) or restricted_canon or named:
             reasons.append("acc_republished")
         # A10 (re-verify F1): a row's explicit exclude_item_markers always apply. The generic "All Rights Reserved"
         # rule applies to ND-outlet rows only, and an explicit page licence link takes precedence over such a footer
