@@ -54,6 +54,11 @@ VECTOR = "vector"  # branch name in vera.dar_corpus.retrieve
 DEFAULTS = {"enabled": False, "timeout_s": 3.0, "rrf_k": 60, "vector_k": None, "chunks_per_partition": 2,
             "stem_floor_sim": None, "stem_floor_min_hits": 1, "cooldown_s": 60, "query_cache_max": 32,
             "query_cache_ttl_s": 120, "index_refresh_s": 3600, "max_index_mb": 96, "page_ids": 256}
+# Stage 2 (orchestrator decision within OD-1109-HYBRID): ask-time passage re-rank inside the top partitions. Own flag.
+RERANK_DEFAULTS = {"enabled": False, "top_partitions": 3, "max_passages": 48, "max_chars": 2000, "timeout_s": 3.0,
+                   "cooldown_s": 60, "cache_max": 2048, "reserve_slots": 2}
+_RR_BOUNDS = {"top_partitions": (1, 20), "max_passages": (1, 64), "max_chars": (50, 20000), "timeout_s": (0.2, 30),
+              "cooldown_s": (0, 86400), "cache_max": (0, 100000), "reserve_slots": (0, 20)}
 _BOUNDS = {"timeout_s": (0.2, 30), "rrf_k": (1, 1000), "vector_k": (1, 1000), "chunks_per_partition": (1, 100),
            "stem_floor_sim": (-1.0, 1.0), "stem_floor_min_hits": (1, 20), "cooldown_s": (0, 86400),
            "query_cache_max": (1, 4096), "query_cache_ttl_s": (0, 86400), "index_refresh_s": (10, 10**7),
@@ -66,7 +71,10 @@ SQL_NEURONS_TODAY = ("SELECT COALESCE(SUM(r.neurons_used), 0) FROM vera_vjay.tax
 
 _LOCK = threading.Lock()
 _STATE: dict = {"cfg": None, "emb": None, "emb_reason": None, "emb_at": None, "cool_until": 0.0, "cool_code": None,
+                "emb2": None, "emb2_reason": None, "emb2_at": None, "rr_cool_until": 0.0, "rr_cool_code": None,
+                "ask_day": None, "ask_neurons": 0.0,
                 "neurons_today": None, "loader": None, "clock": time.monotonic, "wall": time.time}
+_PCACHE: "OrderedDict[tuple, object]" = OrderedDict()  # (sha256(passage text), model) -> unit float32 vector (stage 2)
 _QCACHE: "OrderedDict[str, tuple]" = OrderedDict()  # sha256(question) -> (expires, vec | None, code, embed_ms)
 _TL = threading.local()
 
@@ -84,6 +92,14 @@ def _clean(raw) -> dict:
             c[k] = None
         elif isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and lo <= v <= hi:
             c[k] = v
+    rr, rraw = dict(RERANK_DEFAULTS), raw.get("rerank")
+    if isinstance(rraw, dict):
+        rr["enabled"] = rraw.get("enabled") is True
+        for k, (lo, hi) in _RR_BOUNDS.items():
+            v = rraw.get(k, rr[k])
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and lo <= v <= hi:
+                rr[k] = v
+    c["rerank"] = rr
     return c
 
 
@@ -94,7 +110,7 @@ def config() -> dict:
             try:
                 _STATE["cfg"] = _clean(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
             except Exception:  # noqa: BLE001  unreadable => off
-                _STATE["cfg"] = dict(DEFAULTS)
+                _STATE["cfg"] = _clean({})
         return _STATE["cfg"]
 
 
@@ -126,8 +142,11 @@ def set_clock_for_tests(clock=None, wall=None) -> None:
 def reset_for_tests() -> None:
     with _LOCK:
         _STATE.update(cfg=None, emb=None, emb_reason=None, emb_at=None, cool_until=0.0, cool_code=None,
+                      emb2=None, emb2_reason=None, emb2_at=None, rr_cool_until=0.0, rr_cool_code=None,
+                      ask_day=None, ask_neurons=0.0,
                       neurons_today=None, loader=None, clock=time.monotonic, wall=time.time)
         _QCACHE.clear()
+        _PCACHE.clear()
     _TL.__dict__.clear()
 
 
@@ -160,25 +179,64 @@ def _text_chars() -> int:
         return 8000
 
 
-def _embedder():
-    """(embedder | None, reason). Created once; a failed creation is retried after cooldown_s. Never raises."""
+def _embedder(slot: str = "emb"):
+    """(embedder | None, reason). slot "emb" = the question embedder (timeout_s), "emb2" = the stage-2 passage embedder
+    (rerank.timeout_s); each is a separate adapter instance (one attempt). Created once; a failed creation is retried after
+    cooldown_s. Never raises."""
     now = _STATE["clock"]()
     with _LOCK:
-        if _STATE["emb"] is not None:
-            return _STATE["emb"], "ok"
-        if _STATE["emb_at"] is not None and now - _STATE["emb_at"] < float(config()["cooldown_s"]):
-            return None, _STATE["emb_reason"]
+        if _STATE[slot] is not None:
+            return _STATE[slot], "ok"
+        if _STATE[slot + "_at"] is not None and now - _STATE[slot + "_at"] < float(config()["cooldown_s"]):
+            return None, _STATE[slot + "_reason"]
     try:
         from vera.chunk_taxo_embed import load_embedder
         tc = _taxo_cfg()
-        cf = dict(tc.get("cloudflare") or {}, reserve_neurons=0, max_attempts=1, timeout_s=float(config()["timeout_s"]))
+        to = float(config()["timeout_s"] if slot == "emb" else config()["rerank"]["timeout_s"])
+        cf = dict(tc.get("cloudflare") or {}, reserve_neurons=0, max_attempts=1, timeout_s=to)
         emb, why = load_embedder(dict(tc, cloudflare=cf))
     except Exception as exc:  # noqa: BLE001
         emb, why = None, "embedder_error"
         log.warning("hybrid embedder unavailable (%s)", type(exc).__name__)
     with _LOCK:
-        _STATE["emb"], _STATE["emb_reason"], _STATE["emb_at"] = emb, why, now
+        _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
     return emb, why
+
+
+def _ask_share() -> float:
+    """The ask-time share of the daily neuron budget: config/chunk_taxo.json cloudflare.reserve_neurons."""
+    try:
+        return float((_taxo_cfg().get("cloudflare") or {}).get("reserve_neurons", 0) or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _ask_used() -> float:
+    day = time.strftime("%Y-%m-%d", time.gmtime(_STATE["wall"]()))
+    with _LOCK:
+        if _STATE["ask_day"] != day:
+            _STATE["ask_day"], _STATE["ask_neurons"] = day, 0.0
+        return _STATE["ask_neurons"]
+
+
+def _ask_charge(neurons: float) -> None:
+    _ask_used()
+    with _LOCK:
+        _STATE["ask_neurons"] += max(0.0, float(neurons))
+
+
+def _neurons_of(emb) -> float:
+    st = getattr(emb, "stats_run", None)
+    return float(st.get("neurons", 0.0)) if isinstance(st, dict) else 0.0
+
+
+def neurons_estimate(texts, emb=None) -> float:
+    """Estimated neurons for embedding `texts`: tokens (chars / chars_per_token) x neurons_per_m / 1e6 (bge-m3: 1075)."""
+    cfg = getattr(emb, "cfg", None) or {}
+    mcfg = getattr(emb, "mcfg", None) or {}
+    cpt = float(cfg.get("chars_per_token", 3.0) or 3.0)
+    npm = float(mcfg.get("neurons_per_m", 1075) or 1075)
+    return sum(len(t) for t in texts) / cpt / 1e6 * npm
 
 
 def model_name() -> str | None:
@@ -217,7 +275,9 @@ def query_vector(text: str):
     t0 = time.perf_counter()
     vec, code = None, "ok"
     try:
+        n0 = _neurons_of(emb)
         out = emb.embed([str(text)])
+        _ask_charge(_neurons_of(emb) - n0)
         v = np.asarray(out[0], dtype=np.float32)
         n = float(np.linalg.norm(v))
         if v.ndim != 1 or v.size == 0 or not np.all(np.isfinite(v)) or n <= 0:
@@ -502,6 +562,10 @@ def vector_fn(corpus, question: str):
                 return None
             return float(sims[pidx[i]])
 
+        def psg_of(i):  # stage 2: the passage's own cosine, only for re-ranked passages
+            return state.get("psg", {}).get(i)
+        sim_of.psg = psg_of
+
         def fn(dar, scores):
             import numpy as np
             pidx, per = idx.chunk_map(dar, corpus._key_to_doc)
@@ -517,7 +581,16 @@ def vector_fn(corpus, question: str):
                 out.extend(allc[i] for i in cs[:per_part])
                 if len(out) >= k:
                     break
-            return out[:k]
+            out = out[:k]
+            rr = cfg["rerank"]
+            if rr.get("enabled") is not True:
+                return out
+            ranked = _rerank(q, sims, pidx, per, dar, scores, rr, int(cfg["rrf_k"]), state)
+            fn.reserve = ranked[:int(rr["reserve_slots"])]
+            if not ranked:
+                return out  # stage-2 fallback: the stage-1 vector list
+            seen = {c.idx for c in ranked}
+            return (ranked + [c for c in out if c.idx not in seen])[:k]
 
         _set_status(status="ok", vectors=len(idx), embed_ms=ms)
         return fn, sim_of
@@ -528,13 +601,147 @@ def vector_fn(corpus, question: str):
 
 
 def fuse_order(items: list, lex_key, vec_key, k: int) -> list:
-    """Reciprocal rank fusion of two orders over the same items: the lexical order (all items, by lex_key) and the vector
-    order (items whose vec_key is not None, by descending vec_key, ties in lexical order). Ties keep lexical order."""
+    """Reciprocal rank fusion of the lexical order (all items, by lex_key) and one or more vector orders (vec_key: one
+    callable or a list; each order holds the items whose key is not None, by descending key, ties in lexical order).
+    Ties keep lexical order."""
     lex = sorted(items, key=lex_key)
     pos = {id(t): r for r, t in enumerate(lex, start=1)}
-    vec = sorted((t for t in lex if vec_key(t) is not None), key=lambda t: (-vec_key(t), pos[id(t)]))
     sc = {id(t): 1.0 / (k + pos[id(t)]) for t in lex}
-    for r, t in enumerate(vec, start=1):
-        sc[id(t)] += 1.0 / (k + r)
+    for key in (vec_key if isinstance(vec_key, (list, tuple)) else [vec_key]):
+        vec = sorted((t for t in lex if key(t) is not None), key=lambda t, key=key: (-key(t), pos[id(t)]))
+        for r, t in enumerate(vec, start=1):
+            sc[id(t)] += 1.0 / (k + r)
     return sorted(lex, key=lambda t: (-sc[id(t)], pos[id(t)]))
+
+
+# ------------------------------------------------------------------------------------------------ stage 2: passage re-rank
+def _rr_status(**kw) -> None:
+    st = getattr(_TL, "status", None)
+    if isinstance(st, dict):
+        st["rerank"] = dict(kw)
+
+
+def passage_vectors(texts: list, model: str):
+    """(float32 unit matrix rows in `texts` order | None, code, neurons_est). Cached per (sha256(text), model) in an LRU of
+    rerank.cache_max entries (process memory only; no DB writes). The uncached texts go out in ONE batched call (at most
+    rerank.max_passages <= 64, the adapter batch size), checked against the ask-time share of the daily budget first.
+    Never raises; texts are never logged."""
+    import numpy as np
+    rr = config()["rerank"]
+    keys = [(hashlib.sha256(t.encode("utf-8")).hexdigest(), model) for t in texts]
+    now = _STATE["clock"]()
+    with _LOCK:
+        have = {k: _PCACHE[k] for k in keys if k in _PCACHE}
+        for k in have:
+            _PCACHE.move_to_end(k)
+        cool = now < _STATE["rr_cool_until"]
+        cool_code = _STATE["rr_cool_code"]
+    miss = [i for i, k in enumerate(keys) if k not in have]
+    est = 0.0
+    if miss:
+        if cool:
+            return None, "cooldown:" + str(cool_code), 0.0
+        emb, why = _embedder("emb2")
+        if emb is None:
+            return None, "embedder:" + str(why), 0.0
+        if getattr(emb, "name", model) != model:
+            return None, "model_mismatch", 0.0
+        mtexts = list(dict.fromkeys(texts[i] for i in miss))
+        est = neurons_estimate(mtexts, emb)
+        if _ask_used() + est > _ask_share():
+            code = "deferred:ask_share_reached"
+            with _LOCK:
+                _STATE["rr_cool_until"] = now + _seconds_to_midnight()
+                _STATE["rr_cool_code"] = code
+            return None, code, est
+        from vera.chunk_taxo_embed import Deferred, EmbedError
+        with _LOCK:
+            day_used = _STATE["neurons_today"]
+        if day_used is not None and hasattr(emb, "set_day_used"):
+            emb.set_day_used(day_used)
+        code, wait = None, float(rr["cooldown_s"])
+        try:
+            n0 = _neurons_of(emb)
+            out = emb.embed(mtexts)
+            _ask_charge(max(_neurons_of(emb) - n0, 0.0) if hasattr(emb, "stats_run") else est)
+            if not isinstance(out, list) or len(out) != len(mtexts):
+                raise EmbedError("bad_response")
+            new = {}
+            for t, v in zip(mtexts, out):
+                a = np.asarray(v, dtype=np.float32)
+                n = float(np.linalg.norm(a))
+                if a.ndim != 1 or a.size == 0 or not np.all(np.isfinite(a)) or n <= 0:
+                    raise EmbedError("bad_response")
+                new[(hashlib.sha256(t.encode("utf-8")).hexdigest(), model)] = a / n
+        except Deferred as d:
+            code, wait = "deferred:" + str(getattr(d, "code", "deferred")), float(getattr(d, "retry_in_s", 3600.0))
+        except EmbedError as e:
+            code = "embed_error:" + str(e)
+        except Exception as e:  # noqa: BLE001
+            code = "embed_error:" + type(e).__name__
+        if code is not None:
+            with _LOCK:
+                _STATE["rr_cool_until"] = now + max(0.0, wait)
+                _STATE["rr_cool_code"] = code
+            log.info("hybrid passage re-rank fell back to stage 1 (%s)", code)
+            return None, code, est
+        have.update(new)
+        cap = int(rr["cache_max"])
+        with _LOCK:
+            for k2, v in new.items():
+                if cap > 0:
+                    _PCACHE[k2] = v
+                    _PCACHE.move_to_end(k2)
+            while len(_PCACHE) > cap:
+                _PCACHE.popitem(last=False)
+    rows = [have[k] for k in keys]
+    if len({r.size for r in rows}) != 1:
+        return None, "dim_mismatch", est
+    return np.vstack(rows), "ok", est
+
+
+def _seconds_to_midnight() -> float:
+    from vera.chunk_taxo_embed import seconds_to_utc_midnight
+    return seconds_to_utc_midnight(_STATE["wall"]())
+
+
+def _rerank(q, sims, pidx, per, dar, scores, rr: dict, k_rrf: int, state: dict) -> list:
+    """Stage 2: the top rerank.top_partitions partitions by RRF of (partition cosine order, partition best-BM25 order);
+    their retrieval chunks (masked, in position order, at most max_passages, text cut to max_chars) are embedded and
+    ranked by cosine to the question. Returns the ranked chunks, or [] on any fallback (status traced)."""
+    import numpy as np
+    t0 = time.perf_counter()
+    mask, allc = dar._mask, dar._all
+    best: dict = {}
+    for i, sc in scores.items():
+        if i < len(pidx) and pidx[i] >= 0 and (mask is None or mask[i]) and sc > best.get(int(pidx[i]), 0.0):
+            best[int(pidx[i])] = sc
+    vec_order = [int(p) for p in np.argsort(-sims, kind="stable")]
+    lex_order = sorted(best, key=lambda p: (-best[p], p))
+    fs: dict = {}
+    for order in (vec_order, lex_order):
+        for r, p in enumerate(order, start=1):
+            fs[p] = fs.get(p, 0.0) + 1.0 / (k_rrf + r)
+    vpos = {p: r for r, p in enumerate(vec_order)}
+    top = sorted(fs, key=lambda p: (-fs[p], vpos.get(p, 0)))[:int(rr["top_partitions"])]
+    cand = []
+    for p in top:
+        cand.extend(sorted((i for i in per[p] if i < len(allc) and (mask is None or mask[i])), key=lambda i: allc[i].start))
+    cand = cand[:int(rr["max_passages"])]
+    if not cand:
+        _rr_status(status="no_passages", partitions=len(top), passages=0)
+        return []
+    texts = [allc[i].text[:int(rr["max_chars"])] for i in cand]
+    model = model_name()
+    mat, code, est = passage_vectors(texts, model) if model else (None, "embedder:none", 0.0)
+    ms = int(round((time.perf_counter() - t0) * 1000))
+    if mat is None or mat.shape[1] != q.size:
+        _rr_status(status=code if mat is None else "dim_mismatch", partitions=len(top), passages=len(cand),
+                   neurons_est=round(est, 3), ms=ms)
+        return []
+    ps = mat @ q
+    state["psg"] = {i: float(v) for i, v in zip(cand, ps)}
+    order = sorted(range(len(cand)), key=lambda j: (-float(ps[j]), allc[cand[j]].start))
+    _rr_status(status="ok", partitions=len(top), passages=len(cand), neurons_est=round(est, 3), ms=ms)
+    return [allc[cand[j]] for j in order]
 

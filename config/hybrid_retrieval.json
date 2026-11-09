@@ -19,5 +19,18 @@
   "index_refresh_s": 3600,
   "max_index_mb": 96,
   "_max_index_note": "Refuses to build a vector index larger than this (float32 rows x dim x 4 bytes). Measured offline (synthetic, 5,500 x 1024): matrix 21.5 MB, resident +27.5 MB after build, peak +28.4 MB, chunk map +0.9 MB (work/HYBRID-1109/measurements.md, not in the repo). Not a decision threshold: a memory guard under the 512 MB service limit.",
-  "page_ids": 256
+  "page_ids": 256,
+  "rerank": {
+    "_note": "Stage 2 (orchestrator decision within OD-1109-HYBRID, 2026-11-09). OWN FLAG, default false; needs the stage-1 flag above too. After stage 1, the top_partitions stored partitions (RRF of the partition cosine order and the partition best-BM25 order) have their 400-character retrieval passages (at most max_passages, each cut to max_chars) embedded at ask time in ONE batched Cloudflare call (timeout_s, one attempt) and ranked by cosine to the question vector; that passage order joins the vector candidate list and is a third RRF input to the admission order. Passage vectors are cached in process memory per (sha256(text), model), LRU of cache_max entries; nothing is written to the database from the ask path. Budget: the estimated neurons (characters / 3 tokens x 1075 per million for bge-m3; 48 x 400 characters is about 6.9 neurons) must fit the ask-time share (config/chunk_taxo.json cloudflare.reserve_neurons, counted per UTC day in process memory together with the question embeddings); else, and on any error, quota or timeout, stage 2 falls back to the stage-1 list (traced as a code) and waits cooldown_s (quota or share: until 00:00 UTC). At the shipped share of 500 that is about 70 uncached re-ranks a day: raise reserve_neurons before relying on it for every question.",
+    "enabled": false,
+    "top_partitions": 3,
+    "max_passages": 48,
+    "max_chars": 2000,
+    "timeout_s": 3.0,
+    "cooldown_s": 60,
+    "cache_max": 2048,
+    "reserve_slots": 2,
+    "_reserve_slots_note": "The reserve_slots best passage-level matches are placed first in the candidate list (before the per-document cap), as the domain-branch fallback reservation does for word matching: without it a passage found only by stage 2 is outvoted by passages that appear in both word and partition lists. The vector stem-floor rule uses the passage cosine instead of the partition cosine for re-ranked passages.",
+    "_cache_note": "2048 x 1024 float32 = 8 MB plus keys; measured in work/HYBRID-1109/measurements.md. top_partitions, max_passages and cache_max are structural and cost bounds set by the orchestrator, not decision thresholds."
+  }
 }

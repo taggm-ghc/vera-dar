@@ -167,6 +167,9 @@ class FullDocCorpus:
             if sim_of is not None:  # HYBRID-1109: the passage's partition cosine (None = no stored vector)
                 ch = dar._by_span.get(c["span_id"])
                 out[-1]["vec_sim"] = None if ch is None or sim_of(ch.idx) is None else round(sim_of(ch.idx), 6)
+                ps = getattr(sim_of, "psg", None)
+                if ps is not None and ch is not None and ps(ch.idx) is not None:  # stage 2 re-ranked passages only
+                    out[-1]["psg_sim"] = round(ps(ch.idx), 6)
         return out
 
     def evidence_chunk_texts(self) -> list:

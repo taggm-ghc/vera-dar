@@ -38,22 +38,26 @@ def fake_vec(t: str, dim: int = 64) -> list:
 class FakeEmbedder:
     name = MODEL
 
-    def __init__(self, fail=None):
-        self.calls, self.texts, self.fail, self.day_used = 0, [], fail, None
+    def __init__(self, fail=None, fail_batch=None):
+        self.calls, self.batches, self.fail, self.fail_batch, self.day_used = 0, [], fail, fail_batch, None
 
     def set_day_used(self, n):
         self.day_used = n
 
     def embed(self, texts):
         self.calls += 1
+        self.batches.append(len(texts))
         if self.fail is not None:
             raise self.fail
+        if self.fail_batch is not None and len(texts) > 1:
+            raise self.fail_batch
         return [fake_vec(t) for t in texts]
 
 
 PARA_A = ("The orchestration layer of a multi-agent system routes messages between agents and keeps the multi-agent "
           "orchestration state consistent across agent turns, so that every agent sees the orchestration plan. ")
-INTRO_B = "This survey reviews enterprise adoption, governance and deployment practice for agent platforms in industry. "
+INTRO_B = ("This survey reviews enterprise adoption, governance and deployment practice for multi-agent orchestration "
+           "platforms; each agent platform is compared on orchestration cost and agent uptime. ")
 ROLE_B = ["Below are the key categories and types of specialized agents found in multi-agent deployments today. ",
           "Worker agents are the most basic type; they carry out well-defined tasks such as retrieval pipelines. ",
           "Supervisor agents are a second kind; they assign work to workers and check results before release. ",
@@ -227,18 +231,18 @@ def test_vector_stem_floor_rule(monkeypatch):
     c, table = _corpus()
     b0 = c._texts["DB"].index("Worker agents")
     q = "Which agent archetypes?"  # content stems: agent, arche (a role passage matches "agent" only)
-    fake, _ = setup_hybrid(monkeypatch, c, table, chunks_per_partition=4)
+    fake, _ = setup_hybrid(monkeypatch, c, table, chunks_per_partition=4, vector_k=4)
     base = fa.admit(q, c, load_config())
     assert base.trace["hybrid"]["floor_by_vector"] == 0
     assert not any(_role(a, b0) for a in base.admitted)
-    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 4, "stem_floor_sim": 0.3})
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 4, "vector_k": 4, "stem_floor_sim": 0.3})
     hr.set_loader_for_tests(Loader(c, table))
     hr.ensure_index(c, MODEL, sync=True)
     on = fa.admit(q, c, load_config())
     assert on.trace["hybrid"]["floor_by_vector"] >= 1
     assert any(_role(a, b0) for a in on.admitted)
     # never without a matched content stem: a floor of -1 still leaves zero-stem passages out
-    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 4, "stem_floor_sim": -1.0})
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 4, "vector_k": 4, "stem_floor_sim": -1.0})
     hr.set_loader_for_tests(Loader(c, table))
     hr.ensure_index(c, MODEL, sync=True)
     any_floor = fa.admit("Which archetypes?", c, load_config())  # only "arche": no stored passage matches it
@@ -382,3 +386,106 @@ def test_no_question_text_in_logs_or_trace(monkeypatch, caplog):
     assert marker not in blob and "tok-secret" not in blob
     assert marker not in json.dumps(ok.trace) and marker not in json.dumps(bad.trace)
     assert all(marker not in k for k in hr._QCACHE)
+
+
+# ------------------------------------------------------------------------------------------------ stage 2: passage re-rank
+ONE_PART = None  # doc B stored as ONE partition: stage 1 alone cannot tell its role passages from its intro
+
+
+def _rr_corpus(monkeypatch, fake=None, **rr):
+    c, table = _corpus(spans_b=[(0, len(_texts()[1]))])
+    fake, loader = setup_hybrid(monkeypatch, c, table, fake=fake, chunks_per_partition=1,
+                                rerank=dict({"enabled": True, "top_partitions": 3, "max_passages": 48}, **rr))
+    return c, table, fake
+
+
+def test_rerank_off_by_default_and_stage1_unchanged(monkeypatch):
+    assert hr._clean({})["rerank"]["enabled"] is False
+    assert json.loads(hr.CONFIG_PATH.read_text())["rerank"]["enabled"] is False
+    c, table = _corpus(spans_b=[(0, len(_texts()[1]))])
+    setup_hybrid(monkeypatch, c, table, chunks_per_partition=1)
+    out = c.retrieve(Q, 16, True)
+    assert all("psg_sim" not in x for x in out) and "rerank" not in hr.last_status()
+
+
+def test_rerank_admits_role_passage_inside_a_large_partition(monkeypatch):
+    c, table, fake = _rr_corpus(monkeypatch)
+    b0 = c._texts["DB"].index("Below are")
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 1})
+    stage1 = fa.admit(Q, c, load_config())
+    assert not any(_role(a, b0) for a in stage1.admitted)
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 1, "rerank": {"enabled": True}})
+    on = fa.admit(Q, c, load_config())
+    rr = on.trace["hybrid"]["rerank"]
+    assert rr["status"] == "ok" and 0 < rr["passages"] <= 48 and rr["neurons_est"] > 0
+    assert any(_role(a, b0) for a in on.admitted), on.trace
+    assert fake.batches.count(1) >= 1 and max(fake.batches) <= 48  # one question call, one batched passage call
+
+
+def test_rerank_single_batched_call_and_cache(monkeypatch):
+    c, table, fake = _rr_corpus(monkeypatch)
+    c.retrieve(Q, 16, True)
+    batches = [b for b in fake.batches if b > 1]
+    assert len(batches) == 1
+    n = len(hr._PCACHE)
+    c.retrieve(Q + " (again)", 16, True)  # new question vector, same passages: served from the passage cache
+    assert [b for b in fake.batches if b > 1] == batches and len(hr._PCACHE) == n
+    assert hr.last_status()["rerank"]["status"] == "ok"
+
+
+def test_rerank_cache_is_bounded(monkeypatch):
+    c, table, fake = _rr_corpus(monkeypatch, cache_max=5)
+    c.retrieve(Q, 16, True)
+    assert hr.last_status()["rerank"]["status"] == "ok" and hr.last_status()["rerank"]["passages"] > 5
+    assert len(hr._PCACHE) == 5
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 1, "rerank": {"enabled": True, "cache_max": 0}})
+    hr._PCACHE.clear()
+    c.retrieve(Q + "?", 16, True)
+    assert len(hr._PCACHE) == 0
+
+
+def test_rerank_error_falls_back_to_stage1(monkeypatch):
+    c, table, fake = _rr_corpus(monkeypatch, fake=FakeEmbedder(fail_batch=emb.EmbedError("request_failed")))
+    got = [x["span_id"] for x in c.retrieve(Q, 16, True)]
+    st = hr.last_status()
+    assert st["status"] == "ok" and st["rerank"]["status"] == "embed_error:request_failed"
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 1})
+    want = [x["span_id"] for x in c.retrieve(Q, 16, True)]
+    assert got == want  # the stage-1 list, unchanged
+    hr.set_config_for_tests({"enabled": True, "chunks_per_partition": 1, "rerank": {"enabled": True}})
+    n = len(fake.batches)
+    c.retrieve(Q + "!", 16, True)
+    assert hr.last_status()["rerank"]["status"].startswith("cooldown:embed_error") and [b for b in fake.batches[n:] if b > 1] == []
+
+
+def test_rerank_quota_and_ask_share(monkeypatch):
+    c, table, fake = _rr_corpus(monkeypatch, fake=FakeEmbedder(fail_batch=emb.Deferred("quota_reached", 3600.0)))
+    c.retrieve(Q, 16, True)
+    assert hr.last_status()["rerank"]["status"] == "deferred:quota_reached"
+    hr.reset_for_tests()
+    c, table, fake = _rr_corpus(monkeypatch)
+    tc = chunk_taxo.load_cfg()
+    monkeypatch.setattr(hr, "_taxo_cfg", lambda: dict(tc, embedder="fakehybrid", cloudflare=dict(tc["cloudflare"], reserve_neurons=0.5)))
+    c.retrieve(Q, 16, True)
+    st = hr.last_status()["rerank"]
+    assert st["status"] == "deferred:ask_share_reached" and st["neurons_est"] > 0.5
+    assert [b for b in fake.batches if b > 1] == []  # nothing sent over the share
+
+
+def test_neurons_estimate_bge_m3():
+    class E:
+        cfg = {"chars_per_token": 3.0}
+        mcfg = {"neurons_per_m": 1075}
+    est = hr.neurons_estimate(["x" * 400] * 48, E())
+    assert abs(est - 48 * 400 / 3.0 * 1075 / 1e6) < 1e-9 and 6.8 < est < 6.9
+
+
+def test_rerank_no_text_in_logs(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
+    marker = "zqxjrerankmarker"
+    c, table, fake = _rr_corpus(monkeypatch, fake=FakeEmbedder(fail_batch=RuntimeError("Worker agents " + marker)))
+    b = fa.admit(f"Which agent archetypes {marker} are used in multi-agent orchestration?", c, load_config())
+    assert b.trace["hybrid"]["rerank"]["status"] == "embed_error:RuntimeError"
+    blob = " ".join(r.getMessage() + " " + repr(r.args) for r in caplog.records)
+    assert marker not in blob and "Worker agents" not in blob and marker not in json.dumps(b.trace)
+    assert all(isinstance(k[0], str) and len(k[0]) == 64 for k in hr._PCACHE)

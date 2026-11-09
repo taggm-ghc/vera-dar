@@ -636,6 +636,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             # (cosine >= stem_floor_sim; null = rule off) passes the two lexical floors if it still matches at least
             # stem_floor_min_hits question content stems. Every other rule below still applies.
             vs = c.get("vec_sim") if hy is not None else None
+            if hy is not None and c.get("psg_sim") is not None:
+                vs = c.get("psg_sim")  # stage 2: the passage's own cosine replaces its partition's for this rule
             fs = hcfg.get("stem_floor_sim") if hcfg is not None else None
             if not (isinstance(vs, (int, float)) and isinstance(fs, (int, float)) and q_n > 0 and vs >= fs
                     and hits >= int(hcfg.get("stem_floor_min_hits", 1))):
@@ -684,7 +686,8 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     if hy is not None and any(t[3].get("vec_sim") is not None for t in scored):
         # HYBRID-1109: admission order = RRF of the lexical order and the vector order (rank only); the tuples are
         # re-keyed by fused position so every later sort on t[:3] keeps it.
-        fused = _hr.fuse_order(scored, lambda t: t[:3], lambda t: t[3].get("vec_sim"), int(hcfg["rrf_k"]))
+        fused = _hr.fuse_order(scored, lambda t: t[:3], [lambda t: t[3].get("vec_sim"), lambda t: t[3].get("psg_sim")],
+                               int(hcfg["rrf_k"]))  # stage 2: the passage-level order is a third RRF input when present
         scored = [(i, 0.0, t[2], t[3], t[4], t[5]) for i, t in enumerate(fused)]
         hy["fused"] = True
     extra_trace: dict = {}

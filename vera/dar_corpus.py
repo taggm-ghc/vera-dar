@@ -949,6 +949,11 @@ class DarCorpus:
             fused, _ = domain_routing._rrf([("lexical", lex), ("vector", vitems)], int(self.cfg["rrf_k"]),
                                            key_fn=lambda c: c["span_id"])
             fused.sort(key=lambda g: (-g["score"], g["best"]))
+            pre = [c["span_id"] for c in (getattr(vector_fn, "reserve", None) or ())]
+            if pre:  # stage 2: the best passage-level matches go first (a passage-only match cannot be outvoted)
+                rank = {sid: r for r, sid in enumerate(pre)}
+                fused.sort(key=lambda g: rank.get(g["key"], len(rank)))
+                trace["reserved_passages"] = sum(1 for g in fused if g["key"] in rank)
             for g in fused:
                 g["branches"] = list(names.get(g["key"], [])) + (["vector"] if "vector" in g["branches"] else [])
             reserved, rest = [], fused
