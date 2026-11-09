@@ -5,8 +5,9 @@
   "mode": "on",
   "user_agent": "VERA-DAR-reference-portal/0.1 (non-commercial educational research assistant; reference-link discovery only; https://github.com/taggm-ghc/vera-dar)",
   "host_registry": "config/portal_hosts.json",
+  "_max_hops_note": "OD-1109-SIX (owner 2026-11-09: follow links from portals until arriving at original hosts of sources): caps.max_hops 2 lets a portal page lead to ONE further eligible portal page (another host with an active, terms-permit registry row; robots/TDM/AI signals/rate/Crawl-delay checked per page exactly as for the first page) whose identifiers and approved landing links become candidates; every candidate still goes through the unchanged acquisition gates and is acquired only as full text through a permitted route. Bounded by max_pages_per_question (4), max_pages_per_host and the deadline. A structural bound, not calibrated; 1 restores the single hop.",
   "caps": {
-    "max_pages_per_question": 4,
+    "max_pages_per_question": 4, "max_hops": 2,
     "max_pages_per_host": 1,
     "max_links_per_page": 50,
     "max_candidates_per_question": 30,

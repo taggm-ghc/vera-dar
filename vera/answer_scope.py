@@ -8,9 +8,6 @@ stored NON-answer.
 
 This module holds the generic, data-driven pieces; no topic, question or name list lives here:
 
-* distinct_documents(): how many distinct full documents an answer's admitted passages come from (the evidence floor
-  in vera.research_record.sufficient and the limited-evidence note in vera.ask_service compare it with the configured
-  minimum, config/auto_acquire.json freshness.sufficiency.min_distinct_documents).
 * title_qualifiers(): the content words of a passage's title that the question does not use, after generic
   acronym matching (a question acronym covers the title words whose initials spell it). A hint to the writer and the
   mechanical fallback of the scope note, never a filter.
@@ -89,30 +86,6 @@ def is_specific(question: str, title, scfg: dict) -> bool:
     return bool(title) and len(title_qualifiers(question, title)) >= max(1, n)
 
 
-def doc_key(a) -> str | None:
-    """One key per full document (stored id, canonical source id, else URL, else title)."""
-    if not isinstance(a, dict):
-        return None
-    for k in ("document_id", "canonical_source_id", "url", "title"):
-        v = a.get(k)
-        if v not in (None, ""):
-            return f"{k}:{v}"
-    return None
-
-
-def distinct_documents(admitted, *, count_lane_pages: bool = True) -> int:
-    """Distinct full documents behind the admitted passages. Lane pages (answer_only) count for answering
-    (project_ingest_six_then_answer) unless count_lane_pages is False."""
-    keys = set()
-    for a in admitted or ():
-        if not count_lane_pages and isinstance(a, dict) and a.get("answer_only") is True:
-            continue
-        k = doc_key(a)
-        if k is not None:
-            keys.add(k)
-    return len(keys)
-
-
 def payload_hint(question: str, source: dict, scfg: dict | None) -> dict:
     """Per-passage writer hint {"title_terms_not_in_question": [...]} (empty dict when off or nothing to say)."""
     if scfg is None or scfg.get("writer_hint", True) is not True:
@@ -147,20 +120,3 @@ def scope_note(question: str, shown, sources, scfg: dict | None) -> str | None:
     if not text:
         return None
     return text.format(titles="; ".join(f"“{t[:160]}”" for t in uniq[:3]) or "the cited documents")
-
-
-def floor_of(fcfg: dict | None) -> int | None:
-    """freshness.sufficiency.min_distinct_documents (a positive int) or None (floor off)."""
-    v = ((fcfg or {}).get("sufficiency") or {}).get("min_distinct_documents")
-    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
-
-
-def below_floor(result, fcfg: dict | None) -> tuple[int, int] | None:
-    """(documents used, floor) when a grounded answer draws on fewer distinct documents than the floor, else None."""
-    m = floor_of(fcfg)
-    ev = getattr(result, "evidence", None)
-    if m is None or ev is None or not getattr(ev, "admitted", None):
-        return None
-    lanes = ((fcfg or {}).get("sufficiency") or {}).get("count_lane_pages", True) is not False
-    n = distinct_documents(ev.admitted, count_lane_pages=lanes)
-    return (n, m) if n < m else None

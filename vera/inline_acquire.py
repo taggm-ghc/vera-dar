@@ -715,7 +715,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             tgt = acq_rounds.target_of(acq)
             stop = _stop_reason(ctx, st) if ctx is not None else None
             fb = st.get("fresh_budget")  # the pass's fresh-document budget (None if never reserved)
-            if (o.admitted + o.reused + _n_ao(st) >= tgt) if rounds_on else (o.stored >= tgt):  # A6 D1: answer-eligible incl. answer-only
+            if (o.admitted + (o.reused if count_reused(acq) else 0) + _n_ao(st) >= tgt) if rounds_on else (o.stored >= tgt):  # A6 D1: answer-eligible incl. answer-only
                 aq_status = "met"
             elif ctx is not None and stop == stream_ctx.DISCONNECTED:  # STREAM-1031
                 aq_status = "incomplete_disconnected"
@@ -1077,6 +1077,29 @@ def _web_read(question, acq, cands, st, ctx, count, clock=time.monotonic, deadli
         logger.warning("autoacq web route failed (%s)", type(e).__name__)
 
 
+def count_reused(acq) -> bool:
+    """OD-1109-SIX (owner 2026-11-09, verbatim: "ingest at least 6 new documents found from external search results,
+    including from following links from portals until arriving at original hosts of sources"): already-stored documents
+    re-found by a search are NOT new, so they do not count toward the round target unless
+    bounds.acq_round_count_reused is exactly true (the pre-SIX behaviour)."""
+    return ((acq or {}).get("bounds") or {}).get("acq_round_count_reused") is True
+
+
+def _rn(acq, reused) -> int:
+    """Reused stored documents counted toward the round target (0 under OD-1109-SIX; see count_reused)."""
+    return len(reused[0]) if count_reused(acq) else 0
+
+
+def new_documents(o) -> int:
+    """New documents this acquisition obtained (fresh admitted full texts + request-local web pages read), for the
+    page statement. Never raises."""
+    try:
+        web = getattr(o, "web", None)
+        return int(getattr(o, "admitted", 0) or 0) + len(getattr(web, "pages", None) or ())
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _n_ao(st: dict) -> int:
     """Answer-only request-local pages counted toward the round target: web route pages (A6-W) and, RETRIEVAL-1109 A3,
     variant-round reporting-lane pages."""
@@ -1214,7 +1237,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     passes = 0
     while pending and passes <= len(pend_ids):  # each pass takes at least one candidate off `pending`; the cap is a guard
         passes += 1
-        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
+        eligible = len(plans) + len(extra) + _rn(acq, reused) + _n_ao(st)
         remaining = fresh_budget - len(plans) - len(extra)
         if eligible >= tgt:
             stop_pre = "met"
@@ -1252,7 +1275,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
             reused = (list(reused[0]) + list(got_reused[0]), list(reused[1]) + list(got_reused[1]))
         for cid, (oc, why) in reuse_info.items():
             _settle(st, cid, oc, why)
-        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + len(reused[0]))))
+        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + _rn(acq, reused))))
         taken = aa.reserve_reads(left, need, acq, route)
         taken_ids = {id(r[2]) for r in taken}
         reuse_ids = {cid for cid in reuse_info}
@@ -1286,7 +1309,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     if stop_pre:
         stop = stop_pre
     for q in ([] if stop_pre else variants):
-        cur = len(extra) + len(reused[0]) + int(st.get("n_lane", 0) or 0)  # usable = answer-eligible documents gained
+        cur = len(extra) + _rn(acq, reused) + int(st.get("n_lane", 0) or 0)  # usable = answer-eligible documents gained
         # (fresh or reused; RETRIEVAL-1109 A3: variant-round reporting-lane pages too)
         if last is not None:
             idle = idle + 1 if cur == last else 0
@@ -1296,7 +1319,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                     break
                 r6["heuristic_overridden"] = 1  # WP8: keep-searching overrides the heuristic (telemetry only)
         last = cur
-        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
+        eligible = len(plans) + len(extra) + _rn(acq, reused) + _n_ao(st)
         remaining = fresh_budget - len(plans) - len(extra)
         if eligible >= tgt:
             stop = "met"
@@ -1374,7 +1397,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                                           if ctx is not None else {}))
         if got_reused[0]:
             reused = (list(reused[0]) + list(got_reused[0]), list(reused[1]) + list(got_reused[1]))
-        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + len(reused[0]))))
+        need = max(1, min(remaining, tgt - (len(plans) + len(extra) + _rn(acq, reused))))
         left = aa.reserve_reads(left, need, acq, route)
         if not left:
             continue
@@ -1388,7 +1411,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         extra += _evaluate_parallel(question, left, acq, deps, icfg, fdcfg, clock, deadline, need, count, ms,
                                     per={}, skips={}, **({"ctx": ctx, "st": st} if ctx is not None else {}))
     else:
-        eligible = len(plans) + len(extra) + len(reused[0]) + _n_ao(st)
+        eligible = len(plans) + len(extra) + _rn(acq, reused) + _n_ao(st)
         stop = stop_pre or ("met" if eligible >= tgt else "variants_exhausted")
     r6["stop"] = stop
     for c in pending:  # still unevaluated: label by the real stop (WP7 b), not by the cut

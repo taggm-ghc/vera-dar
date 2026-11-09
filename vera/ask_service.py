@@ -290,8 +290,8 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         fcfg = _fresh_cfg(acq)  # FRESH-1023: a retrieved, grounded answer is not by itself a reason to stop researching
         if fcfg is None or fd.evidence is None:
             return fd
-        return _with_floor_note(_freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg,
-                                                    fd, used_in, budget), fcfg)  # ANSWER-SCOPE-1109 (a)
+        return _freshness_research(question, model, pricing, decision, chained, grounding, acq, fcfg, fd, used_in,
+                                   budget)
     not_configured = fd is None  # the full-document path is not configured (or its base corpus is not loaded)
     if not_configured:
         ev, token, tokens, cost, text = None, None, decision.tokens_used, decision.cost_usd, _NOT_CONFIGURED_TEXT
@@ -307,10 +307,9 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
         res_inl = _acquire_rounds(question, model, pricing, decision, chained, grounding, acq, budget, used_in, token,
                                   not_configured)
         if isinstance(res_inl, AskResult):
-            return _with_floor_note(_research_on_insufficient(res_inl, ev, acq,
-                                                              (res_inl.contract or {}).get("inline_acquisition"),
-                                                              answered=True, held_ev=used_in.get("ev_acq")),
-                                    _fresh_cfg(acq))  # ANSWER-SCOPE-1109 (a)
+            return _research_on_insufficient(res_inl, ev, acq, (res_inl.contract or {}).get("inline_acquisition"),
+                                             answered=True,
+                                             held_ev=used_in.get("ev_acq"))
         inline_note, ia = res_inl
     _INLINE_OUT.set(ia)  # DDFIX-1023/INTEG item 6: the reading list drops records this attempt marked irrelevant
     res = _reading_list(question, model, pricing, decision, chained, grounding, contract, tokens=tokens, cost=cost)
@@ -333,31 +332,6 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     _rt_event("outcome", "no_answer", detail={"cause": _rt_token(cause), "fallback": _rt_token(token),
                                               "inline_status": _rt_token((ia or {}).get("status"))})
     return _with_off_note(_with_cause(out, cause, text), acq)
-
-
-def _with_floor_note(res, fcfg):
-    """ANSWER-SCOPE-1109 (a): a written answer whose admitted passages still come from fewer distinct full documents
-    than freshness.sufficiency.min_distinct_documents (after the research attempt that the same floor triggered) says
-    so plainly (answer.scope_check.limited_evidence_text, kind "coverage"). Never raises; non-answers unchanged."""
-    try:
-        if not isinstance(res, AskResult) or res.result_kind != "answer":
-            return res
-        from vera import answer_contract as contract
-        from vera import answer_scope, fulldoc_corpus
-        low = answer_scope.below_floor(res, fcfg)
-        scfg = answer_scope.scope_cfg(fulldoc_corpus.load_config())
-        t = str((scfg or {}).get("limited_evidence_text") or "")
-        if low is None or not t:
-            return res
-        n, m = low
-        text = t.format(n=n, m=m, s="" if n == 1 else "s")
-        if any(isinstance(x, dict) and x.get("text") == text for x in res.notes or ()) or text in (res.answer or ""):
-            return res
-        _a, _n = contract.add_note(res.answer, res.notes, "coverage", text)
-        return replace(res, answer=_a, notes=_n)
-    except Exception:  # noqa: BLE001  (a missing note never breaks an answer)
-        logging.getLogger("vera").warning("limited-evidence note skipped")
-        return res
 
 
 _NOT_CONFIGURED_TEXT = ("VERA-DAR could not write an answer to this question. The sources below may still help; read them "
@@ -1713,6 +1687,8 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     texts = fcfg.get("texts") or {}
     fr = rr.assess(fd.evidence.admitted, fcfg, at)
     trig = rr.triggers(rr.sufficient(fd, fcfg), fr)
+    if rr.always_new(fcfg) and rr.TRIGGER_NEW not in trig:  # OD-1109-SIX: search for new documents on every answer
+        trig.append(rr.TRIGGER_NEW)
     bf = _backfill(fcfg, at, acq, fr)
     if not trig:
         return _with_research(_annotate(fd, fr), rr.summarize(triggers=[], inline=None, used_new=False,
@@ -1746,7 +1722,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
                            answer_basis="generated_new_evidence" if found else "generated_existing_only")
         suffix = " ".join(t for t in ((_fresh_line(texts, fr2, len(new_ids)) if found else ""),
                                       _mixed_line(texts, fr2), rec["user_text"]) if t)
-        return _with_research(_annotate(new_res, fr2), rec, suffix or None)
+        return _with_six(_with_research(_annotate(new_res, fr2), rec, suffix or None), texts, trig, o, acq)
     rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
                        citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
                        failed_text=texts.get("new_evidence_unanswered"), backfill=bf,
@@ -1756,7 +1732,32 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
         base = replace(base, tokens_used=failed.tokens, cost_usd=round(failed.cost, 6))
     if pub is not None and pub.get("status") not in (None, "off"):
         base = replace(base, contract={**(base.contract or {}), "inline_acquisition": pub})
-    return _with_research(base, rec, rec["user_text"] or None)
+    return _with_six(_with_research(base, rec, rec["user_text"] or None), texts, trig, o, acq)
+
+
+def _with_six(res, texts, trig, o, acq):
+    """OD-1109-SIX: the new-document count as its own process note (kind research_outcome), never merged into another."""
+    t = _six_line(texts, trig, o, acq)
+    if not t:
+        return res
+    from vera import answer_contract as contract
+    a, n = contract.add_note(res.answer, res.notes, "research_outcome", t, "suffix", "\n\n")
+    return replace(res, answer=a, notes=n)
+
+
+def _six_line(texts: dict, trig, o, acq) -> str:
+    """OD-1109-SIX: how many NEW documents the search for this question obtained, against the aim of at least the
+    round target (freshness.texts.new_documents); "" when the trigger is off or no search ran (o is None)."""
+    from vera import research_record as rr
+    t = texts.get("new_documents") if isinstance(texts, dict) else None
+    if rr.TRIGGER_NEW not in (trig or ()) or o is None or not isinstance(t, str) or not t:
+        return ""
+    try:
+        from vera import acq_rounds, inline_acquire
+        n, m = inline_acquire.new_documents(o), acq_rounds.target_of(acq)
+        return t.format(n=n, m=m, s="" if n == 1 else "s")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _research_may_run(question, acq, budget, grounding=None) -> bool:

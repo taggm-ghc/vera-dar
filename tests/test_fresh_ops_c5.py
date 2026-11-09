@@ -44,6 +44,13 @@ class FakeClock:
         return self.t
 
 
+
+def _ft(body):
+    """OD-1109-SIX: a grounded answer now also carries the new_documents trigger (freshness.always_acquire_new); the
+    freshness triggers this suite specifies are the rest, in order."""
+    t = body["triggers"]
+    return [x for x in t if x != "new_documents"]
+
 def _install_cap_clock(world, fc):
     prev = inline_acquire.acquire  # the rig's spy (records outcomes) around the real acquire
 
@@ -120,7 +127,7 @@ def test_cap_storm_ten_stale_asks_in_one_hour(world):
     _stale_world(world, fc)
     drained = []
     bodies = _ask_n(world, fc, 10, 300.0, drained)  # 10 asks over 45 min
-    assert all(_need(b, "triggers") == ["stale"] for b in bodies)  # the stale trigger fires every time ...
+    assert all(_ft(b) == ["stale"] for b in bodies)  # the stale trigger fires every time ...
     assert len(_jobs_run(world)) <= 6, [o.status for o in world.rig.outcomes]  # ... but at most jobs_per_hour jobs run
     # CONT-1023: continuation jobs (a request's unfinished candidates, background queue) share the SAME cap, so the cap
     # is reached by inline runs + continuation jobs together
@@ -146,7 +153,7 @@ def test_cap_storm_across_a_simulated_day(world):
     _stale_world(world, fc)
     drained = []
     bodies = _ask_n(world, fc, 40, 1500.0, drained)  # 40 asks spaced 25 min: <= 3 per hour, 16.7 h in total (inside one 24 h window)
-    assert all(_need(b, "triggers") == ["stale"] for b in bodies)
+    assert all(_ft(b) == ["stale"] for b in bodies)
     run = _jobs_run(world)
     assert len(run) + len(drained) == 30 == len(auto_acquire._S.jobs_day), [o.status for o in world.rig.outcomes]  # jobs_per_day (CONT-1023: inline + continuation jobs share it)
     assert all(r["stored"] <= 2 and r["trigger"] == "continue" for r in drained)
@@ -172,7 +179,7 @@ def test_slow_portals_honour_inline_deadline_and_return_honest_outcome(world):
     t0 = time.monotonic()
     body = world.ask(web=Slow(world.web.records, world.web.jats))
     took = time.monotonic() - t0
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     ro = _need(body, "research_outcome")
     assert ro["kind"] in HONEST and ro["user_text"], ro  # never 'hang', never 'no_valuable_source' for a search that ran out of time
     if ro["kind"] == "incomplete_search":
@@ -199,7 +206,7 @@ def test_kill_switch_stale_trigger_but_no_external_work(world, monkeypatch):
     world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     monkeypatch.setenv("VERA_AUTOACQ_DISABLED", "1")
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     assert _need(body, "freshness")["any_stale_or_unknown"] is True
     e = world.external
     assert e["acq_searches"] == 0 and e["http_urls"] == 0 and e["plans_written"] == 0, e
@@ -221,7 +228,7 @@ def test_no_wo_url_nothing_persisted_and_citations_are_admitted_only(world, monk
     monkeypatch.delenv("VERA_DB_URL_WO", raising=False)
     monkeypatch.setenv("VERA_DB_URL_RO", "postgresql://ro.invalid/x")  # harmless placeholder; the guards forbid any connection
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     assert world.rig.store.plans == []  # acquisition may run (answer-only) but NOTHING is written
     assert body["contract"].get("inline_acquisition", {}).get("persisted") in (None, False)
     ro = _need(body, "research_outcome")
@@ -266,7 +273,7 @@ def test_replication_question_stale_unknown_qualified_older_only(rig, monkeypatc
                  dict(doi="10.9999/rep.wmpf", title="Why Most Published Research Findings Are False", published=pub[0]))
     # no newer source: the only candidate is an off-topic outbreak paper, which the relevance gate rejects
     body = w.ask(q=Q_REPL)
-    tr = _need(body, "triggers")
+    tr = _ft(body)
     assert set(tr) & {"stale", "freshness_unknown"}, tr
     assert _need(body, "freshness")["any_stale_or_unknown"] is True
     assert w.triggered(), w.external  # external verification was attempted

@@ -34,6 +34,13 @@ Q = e2e.Q_EPI
 
 
 # ------------------------------------------------------------------------------------------------ fixtures / helpers
+def _ft(body):
+    """OD-1109-SIX: a grounded answer now also carries the new_documents trigger (freshness.always_acquire_new); the
+    freshness triggers this suite specifies are the rest, in order."""
+    t = body["triggers"]
+    return [x for x in t if x != "new_documents"]
+
+
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch):
     from vera import acq_discovered
@@ -206,7 +213,7 @@ def _plan(world, doi):
 
 def test_hop01_trigger_and_ddg_called_and_recorded_first(happy):
     body, world, _ = happy
-    assert body["triggers"] == ["insufficient"]
+    assert _ft(body) == ["insufficient"]
     assert world.p.log[0] == DDG and world.p.log.count(DDG) == 1, world.p.log
     ports = _ro(body)["portals"]
     assert canon(ports[0]["portal"]) == "ddg" and ports[0]["status"] == "completed" and ports[0]["n_results"] == 1
@@ -541,7 +548,7 @@ def test_stale_corpus_added_30h_ddg_epmc_url(world, spy):
     world.store(dict(doi="10.9999/ddgflow.old", published=HOURS(1), acquired=HOURS(30)))
     body = ask(world)
     obs("stale", body, world, spy)
-    assert body["triggers"] == ["stale"] and world.p.log[0] == DDG
+    assert _ft(body) == ["stale"] and world.p.log[0] == DDG
     assert ap.grounded_failures(200, body) == [] and by(body, "doi", doi)[0]["terminal_reason"] == "admitted"
     old = [s for s in body["sources"] if s.get("corpus_added_at") == HOURS(30).isoformat(timespec="seconds")]
     assert all(s["evidence_recency"] == "recent" for s in old)  # authored 1 h ago: recent label, but stale by added-at

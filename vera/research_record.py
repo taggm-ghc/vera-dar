@@ -13,6 +13,13 @@ from vera import freshness as fz
 from vera import research_outcome as ro
 
 TRIGGER_INSUFFICIENT, TRIGGER_STALE, TRIGGER_UNKNOWN = "insufficient", "stale", "freshness_unknown"
+# OD-1109-SIX (owner 2026-11-09): every question searches for >= 6 NEW documents before answering, even when stored
+# documents could answer it. freshness.always_acquire_new exactly true adds this trigger to every answer.
+TRIGGER_NEW = "new_documents"
+
+
+def always_new(cfg: dict | None) -> bool:
+    return isinstance(cfg, dict) and cfg.get("always_acquire_new") is True
 _BUDGET_STATUSES = frozenset({"rate", "daily_cap", "deadline", "budget_unknown", "busy"})
 _PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "paced", "own_cap": "own_cap", "robots": "robots",
                   "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped",
@@ -163,9 +170,6 @@ def sufficient(result, cfg: dict) -> bool:
     cc = getattr(result, "claim_check", None) or {}
     if (cfg.get("sufficiency") or {}).get("partial_is_insufficient") is True and isinstance(cc, dict) \
             and cc.get("answer_completeness") == "partial":
-        return False
-    from vera import answer_scope  # ANSWER-SCOPE-1109 (a): the owner's >= 6 full-text aim applies to answering too
-    if answer_scope.below_floor(result, cfg) is not None:  # fewer distinct documents than the floor: search more
         return False
     return True
 

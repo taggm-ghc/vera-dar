@@ -167,6 +167,13 @@ def world(rig, monkeypatch, tmp_path, clock, no_db_no_socket):  # noqa: F811
     assert no_db_no_socket == []
 
 
+def _ft(body):
+    """OD-1109-SIX: a grounded answer now also carries the new_documents trigger (freshness.always_acquire_new); the
+    freshness triggers this suite specifies are the rest, in order."""
+    t = body["triggers"]
+    return [x for x in t if x != "new_documents"]
+
+
 def _need(body, key):
     assert key in body, f"feature missing: response has no {key!r} (keys: {sorted(body)})"
     return body[key]
@@ -186,18 +193,20 @@ def _fresh_doc(doi, hours=2, **kw):
 
 
 # ============================================================================================================ A
-def test_A_sufficient_and_fresh_no_external_search(world):
+def test_A_sufficient_and_fresh_still_searches_for_new_documents(world):
+    # OD-1109-SIX (owner 2026-11-09) supersedes "sufficient and fresh: no external search": every question now runs
+    # the research attempt for >= 6 NEW documents; no freshness trigger fires and the stored answer still stands.
     world.store(_fresh_doc(OLD_DOI, 2))
     body = world.ask()
-    assert _need(body, "triggers") == []
+    assert _ft(body) == []
     fr = _need(body, "freshness")
     assert fr["any_stale_or_unknown"] is False
-    assert world.external == {"discovery_searches": 0, "acq_searches": 0, "acquire_calls": 0, "http_urls": 0, "plans_written": 0}
+    assert world.external["acquire_calls"] == 1  # exactly ONE research attempt per request (unchanged bound)
     _grounded(body)
-    assert _doc_ids(body) == {a["document_id"] for a in body["admitted_evidence"]} and all(d.startswith("acq-") for d in _doc_ids(body))
-    assert "discovered" not in ((body.get("contract") or {}).get("inline_acquisition") or {})
-    ro = body.get("research_outcome")
-    assert ro is None or ro.get("kind") != "answered_with_new"
+    # the answer draws on stored + new evidence: every cited document was admitted (new ones may join the stored one)
+    assert _doc_ids(body) <= {a["document_id"] for a in body["admitted_evidence"]} and all(d.startswith("acq-") for d in _doc_ids(body))
+    ro = body.get("research_outcome")  # OD-1109-SIX: new sources found by the search may join the answer
+    assert ro is None or ro.get("kind") in ("answered_with_new", "not_needed") or ro.get("user_text") is not None
 
 
 # ============================================================================================================ B
@@ -205,7 +214,7 @@ def test_B_sufficient_but_stale_triggers_discovery_and_acquisition(world):
     # FRESH-AMEND-1023: ADDED to the corpus 30 h ago, published 1 h ago: authoring-time-as-freshness would call this fresh
     world.store(dict(doi=OLD_DOI, published=HOURS(1), acquired=HOURS(30)))
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     assert _need(body, "freshness")["any_stale_or_unknown"] is True
     assert world.triggered(), world.external
     assert world.external["discovery_searches"] >= 1 and world.external["http_urls"] >= 1
@@ -216,7 +225,7 @@ def test_B_sufficient_but_stale_triggers_discovery_and_acquisition(world):
 def test_C_insufficient_but_fresh_triggers(world):
     world.store(_fresh_doc("10.9999/old.clim1", 2, topic="clim"))  # fresh chunks, but none answers the epidemiology question
     body = world.ask()
-    assert _need(body, "triggers") == ["insufficient"]
+    assert _ft(body) == ["insufficient"]
     assert _need(body, "freshness")["any_stale_or_unknown"] is False
     assert world.triggered(), world.external
 
@@ -229,7 +238,7 @@ def test_D_insufficient_and_stale_triggers_both_reasons(world):
     # passage for this question), so it is not "materially relevant" evidence and adds no freshness trigger;
     # insufficiency alone triggers (tightened back to == per FRESH-VERIFY-1023). Both-trigger behaviour on relevant
     # stale evidence is covered by tests/test_fresh_1023_integration.py.
-    assert _need(body, "triggers") == ["insufficient"]
+    assert _ft(body) == ["insufficient"]
     assert world.triggered(), world.external
 
 
@@ -244,7 +253,7 @@ def test_E_missing_or_untrustworthy_timestamp_triggers_verification(world, kind,
     # publication date is a valid recent one, so authoring time cannot explain the trigger.
     world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(2), stamp=stamp))  # otherwise sufficient
     body = world.ask()
-    assert _need(body, "triggers") == ["freshness_unknown"], kind  # not 'stale', not 'insufficient': the stamp is unknown
+    assert _ft(body) == ["freshness_unknown"], kind  # not 'stale', not 'insufficient': the stamp is unknown
     fr = _need(body, "freshness")
     assert fr["any_stale_or_unknown"] is True
     assert world.triggered(), world.external
@@ -256,7 +265,7 @@ def test_E2_invalid_corpus_stamp_is_revised_to_now_and_next_request_is_fresh(wor
     world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(2), stamp=stamp))
     did = world.corpus.acquired[0]["document_id"]
     body = world.ask()
-    assert _need(body, "triggers") == ["freshness_unknown"], kind
+    assert _ft(body) == ["freshness_unknown"], kind
     bf = _need(body, "freshness").get("corpus_added_backfill")
     assert bf and bf["count"] >= 1 and bf["at"] == NOW.isoformat(), bf
     assert bf["persist"]["status"] == "not_needed" and bf["persist"]["not_persistable"] >= 1  # in-memory chunk: no DB row
@@ -272,7 +281,7 @@ def test_E3_valid_corpus_stamp_is_never_overwritten(world):
     world.store(dict(doi=OLD_DOI, published=HOURS(2), acquired=HOURS(30)))
     did = world.corpus.acquired[0]["document_id"]
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     assert not _need(body, "freshness").get("corpus_added_backfill")
     assert all(x["corpus_added_at"] == t for x in world.corpus.stamps[did]["corpus_stamps"])
 
@@ -283,12 +292,14 @@ def test_F_recently_ingested_old_publication_is_old(world):
     # never called recent; both dates are exposed per source and are distinct.
     world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(0.5)))  # acquired today, published years ago
     body = world.ask()
-    assert _need(body, "triggers") == []
+    assert _ft(body) == []
     assert _need(body, "freshness")["any_stale_or_unknown"] is False
-    assert not world.triggered() and world.external["plans_written"] == 0, world.external
+    assert world.external["acquire_calls"] == 1, world.external  # OD-1109-SIX: the new-document search still runs
     _grounded(body)
     assert body["sources"]
-    for s in body["sources"]:
+    stored = [s for s in body["sources"] if s.get("corpus_added_at") == HOURS(0.5).isoformat(timespec="seconds")]  # SIX: new ones
+    assert stored  # found by the new-document search may also be cited; this test is about the stored one
+    for s in stored:
         assert s["evidence_recency"] == "older", s
         assert s["source_authored_at"].startswith(YEARS_AGO.date().isoformat()) and s["source_authored_precision"] == "day"
         assert s["corpus_added_at"] == HOURS(0.5).isoformat(timespec="seconds")
@@ -302,7 +313,7 @@ def test_F_recently_ingested_old_publication_is_old(world):
 def test_G_newly_acquired_licensed_chunks_admitted_and_cited_in_same_request(world):
     world.store()  # nothing stored: insufficient
     body = world.ask()
-    assert "insufficient" in _need(body, "triggers")
+    assert "insufficient" in _ft(body)
     _grounded(body)
     ia = body["contract"]["inline_acquisition"]
     assert ia["status"] == "ok" and ia["admitted"] == 1 and ia["persisted"] is True
@@ -345,7 +356,7 @@ def test_H_new_evidence_contradicts_old_both_kept_and_marked(world):
     world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30), seed=3))  # sufficient but added 30 h ago
     world.answer_hook = lambda: _per_doc_answer(world)
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     ids = _doc_ids(body)
     adm = {a["document_id"] for a in body["admitted_evidence"]}
     assert len(ids) == 2 and ids == adm, (ids, adm)  # the older and the newly acquired document are both cited
@@ -366,7 +377,7 @@ def test_I1_no_eligible_full_text_older_evidence_only_is_qualified(world):
     world.store(dict(doi=OLD_DOI, published=YEARS_AGO, acquired=HOURS(30)))
     world.web.records[NEW_DOI]["isOpenAccess"] = "N"  # candidate has no eligible (open licensed) full text
     body = world.ask()
-    assert _need(body, "triggers") == ["stale"]
+    assert _ft(body) == ["stale"]
     ro = _need(body, "research_outcome")
     assert ro["kind"] == "qualified_older_only" and ro["user_text"] and ro["complete"] is True
     assert ro["candidates"] and all(c["terminal_reason"] for c in ro["candidates"])
@@ -380,7 +391,7 @@ def test_I2_no_eligible_full_text_and_nothing_stored_abstains(world):
     world.store()
     world.web.records[NEW_DOI]["isOpenAccess"] = "N"
     body = world.ask()
-    assert "insufficient" in _need(body, "triggers")
+    assert "insufficient" in _ft(body)
     ro = _need(body, "research_outcome")
     assert ro["kind"] in ("abstain", "no_valuable_source") and ro["user_text"] and ro["complete"] is True
     assert body["result_kind"] != "answer" and not body.get("admitted_evidence") and not body.get("citations")

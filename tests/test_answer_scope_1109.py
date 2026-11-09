@@ -9,7 +9,7 @@ from vera import answer_scope as asc
 from vera import claim_check as cc
 from vera import fulldoc_answer as fa
 from vera import research_record as rr
-from vera.ask_service import AskResult, _with_floor_note
+from vera.ask_service import AskResult
 from vera.fulldoc_evidence import EvidenceBundle
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,8 +23,7 @@ GEN1_TXT = ("A retrieval-augmented generation system combines a retriever that f
             "that writes the answer from them.")
 GEN2_TXT = "RAG pipelines also need an index of embedded documents that the retriever searches."
 SCOPE = {"enabled": True, "writer_hint": True, "min_title_qualifiers": 3, "prompt_sentence": "\nSCOPE RULE.",
-         "specific_scope_text": "Note: specific system ({titles}) only.",
-         "limited_evidence_text": "Note: {n} full document{s}, fewer than {m}."}
+         "specific_scope_text": "Note: specific system ({titles}) only."}
 MARK = "INSUFFICIENT_EVIDENCE"
 PP = {"enabled": True, "system_prompt": "Parts then answers. Max {max_parts}. Marker {insufficient_marker}.\n{sources}",
       "partial_statement": "PARTIAL ANSWER.", "part_heading": "Part {n} ({part}):",
@@ -98,49 +97,11 @@ def test_title_qualifiers_flag_the_specific_paper_not_the_general_ones():
     assert asc.title_qualifiers("What are components of retrieval augmented generation?", SPEC_TITLE)[:1] == ["vlm"]
 
 
-def test_distinct_documents_counts_documents_not_passages():
-    two_from_one = [span(1, SPEC_TITLE, SPEC_TXT), dict(span(1, SPEC_TITLE, SPEC_TXT), span_id="s1b")]
-    assert asc.distinct_documents(two_from_one) == 1
-    assert asc.distinct_documents([span(i, "T", "x") for i in range(6)]) == 6
-
-
-# ---------------------------------------------------------------------------------------------------- (a) the floor
-FCFG = {"sufficiency": {"partial_is_insufficient": True, "min_distinct_documents": 6}}
-
-
-def answered(n_docs, completeness="complete"):
-    ev = bundle([span(i, f"T{i}", "x") for i in range(n_docs)])
-    return AskResult("a [1]", 1, 0.0, result_kind="answer", evidence=ev,
-                     claim_check={"answer_completeness": completeness})
-
-
-def test_one_document_answer_is_insufficient_so_research_runs():
-    assert rr.sufficient(answered(1), FCFG) is False
-    assert rr.triggers(rr.sufficient(answered(1), FCFG), {}) == [rr.TRIGGER_INSUFFICIENT]
-
-
-def test_six_documents_answer_is_sufficient_and_floor_off_is_previous_behaviour():
-    assert rr.sufficient(answered(6), FCFG) is True
-    assert rr.sufficient(answered(1), {"sufficiency": {"partial_is_insufficient": True}}) is True
-
-
-def test_limited_evidence_note_when_still_below_floor(monkeypatch):
-    monkeypatch.setattr("vera.fulldoc_corpus.load_config", lambda *a, **k: cfg())
-    out = _with_floor_note(answered(1), FCFG)
-    texts = [n["text"] for n in out.notes] + [out.answer]
-    assert any("Note: 1 full document, fewer than 6." in t for t in texts)
-    assert _with_floor_note(answered(6), FCFG).notes == answered(6).notes
-    once = _with_floor_note(out, FCFG)
-    assert [n["text"] for n in once.notes].count("Note: 1 full document, fewer than 6.") <= 1
-
-
-def test_shipped_floor_is_off_pending_owner_decision():
-    acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text())
-    floor = acq["freshness"]["sufficiency"]["min_distinct_documents"]
-    assert floor is None  # OFF pending the owner's decision on what the 6 counts (verifier 2026-11-09)
-    assert asc.floor_of(acq["freshness"]) is None
+def test_shipped_scope_config():
     sc = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text())["answer"]["scope_check"]
-    assert sc["enabled"] is True and "{n}" in sc["limited_evidence_text"] and "{titles}" in sc["specific_scope_text"]
+    assert sc["enabled"] is True and "{titles}" in sc["specific_scope_text"] and "limited_evidence_text" not in sc
+    acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text())
+    assert "min_distinct_documents" not in acq["freshness"]["sufficiency"]  # cited-evidence floor dropped (OD-1109-SIX)
 
 
 # ------------------------------------------------------------------------------------------------- (b) writer prompt

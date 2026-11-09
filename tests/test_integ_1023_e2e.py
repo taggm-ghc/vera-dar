@@ -16,6 +16,13 @@ from tests.test_route_ddg_first_r2 import (  # noqa: F401  (h, rig, clock, no_db
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 
 
+def _ft(body):
+    """OD-1109-SIX: a grounded answer now also carries the new_documents trigger (freshness.always_acquire_new); the
+    freshness triggers this suite specifies are the rest, in order."""
+    t = body["triggers"]
+    return [x for x in t if x != "new_documents"]
+
+
 @pytest.fixture(autouse=True)
 def _isolated_queue(monkeypatch):
     auto_acquire.reset_for_tests()
@@ -211,15 +218,15 @@ def test_e2e_freshness_trigger_uses_corpus_added_at_not_authoring_date(world):
     # added to the corpus 30 h ago, authored 1 h ago -> stale (trigger basis corpus_added_at)
     world.store(dict(doi="10.9999/integ.f1", published=HOURS(1), acquired=HOURS(30)))
     body = world.ask()
-    assert body["triggers"] == ["stale"] and body["freshness"]["any_stale_or_unknown"] is True
+    assert _ft(body) == ["stale"] and body["freshness"]["any_stale_or_unknown"] is True
     assert world.p.log and world.p.log[0] == DDG
 
 
 def test_e2e_recently_added_old_publication_is_fresh_but_labelled_older(world):
     world.store(dict(doi="10.9999/integ.f2", published=NOW.replace(year=2019), acquired=HOURS(0.5)))
     body = world.ask()
-    assert body["triggers"] == [] and body["freshness"]["any_stale_or_unknown"] is False
-    assert world.p.log == [] and world.rig.store.plans == []
+    assert _ft(body) == [] and body["freshness"]["any_stale_or_unknown"] is False
+    # OD-1109-SIX: the new-document search runs on every answer, so portals are queried; freshness is unchanged
     _grounded(body)
     for s in body["sources"]:
         assert s["evidence_recency"] == "older" and s["corpus_added_at"] == HOURS(0.5).isoformat(timespec="seconds")

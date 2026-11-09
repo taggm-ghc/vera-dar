@@ -298,7 +298,31 @@ def classify(href: str, page_url: str, cfg: Mapping, landing_hosts: set) -> dict
     return None
 
 
-def extract(html: str, page_url: str, question: str, cfg: Mapping, landing_hosts: set | None = None) -> list:
+def portal_links(html_hrefs, page_url: str, cfg: Mapping, hosts: Mapping, limit: int) -> list:
+    """OD-1109-SIX hop 2: outbound links of a portal page that are themselves eligible portal pages (another host with
+    an active, terms-permit registry row whose paths allow the URL: page_row passes). Identifier and landing links are
+    handled by classify(); same-host navigation is never followed. Order kept, unique, at most `limit`."""
+    out: list = []
+    src = _host(page_url)
+    for h in html_hrefs or ():
+        if len(out) >= limit:
+            break
+        try:
+            u = urljoin(page_url, str(h or "").strip())
+        except ValueError:
+            continue
+        if not u.lower().startswith("https://") or _host(u) == src or u in out:
+            continue
+        try:
+            page_row(u, cfg, hosts)
+        except Skip:
+            continue
+        out.append(u)
+    return out
+
+
+def extract(html: str, page_url: str, question: str, cfg: Mapping, landing_hosts: set | None = None,
+            hrefs_out: list | None = None) -> list:
     """Page HTML -> ordered reference records [{"ids"|"url", "kind", "score"}]. Raises Skip("tdm_reservation") when
     the page's own meta reserves TDM. COinS records are ordered by their own title/venue match to the question (never
     page prose); plain links keep page order after them. Capped at caps.max_links_per_page."""
@@ -337,6 +361,8 @@ def extract(html: str, page_url: str, question: str, cfg: Mapping, landing_hosts
         c = classify(h, page_url, cfg, lh)
         if c:
             recs.append({**c, "score": 0.0})
+        elif hrefs_out is not None:
+            hrefs_out.append(h)  # OD-1109-SIX: unclassified hrefs, for the hop-2 portal check (no text, attributes only)
     return recs[: int(caps["max_links_per_page"])]
 
 
@@ -723,7 +749,12 @@ def collect(question: str, *, base=None, ddg_raw=None, cfg: Mapping | None = Non
         per_host: dict = {}
         landing = _landing_hosts()
         done_urls = set()
-        for adapter, alts in groups:
+        max_hops = max(1, int(caps.get("max_hops", 1)))  # OD-1109-SIX: 1 = the pre-SIX single portal hop
+        hop_of: dict = {}  # url -> hop number of a queued follow-on portal page (hop 2..max_hops)
+        gi = 0
+        while gi < len(groups):
+            adapter, alts = groups[gi]
+            gi += 1
             if counts["pages_read"] >= int(caps["max_pages_per_question"]) or len(out) >= cap_q:
                 break
             if deadline is not None and clock() >= deadline:
@@ -741,8 +772,19 @@ def collect(question: str, *, base=None, ddg_raw=None, cfg: Mapping | None = Non
                         raise Skip("host_cap")
                     html = fetch_page(url, row, cfg, deps, clock, deadline)
                     per_host[h] = per_host.get(h, 0) + 1  # pages READ per host (alternatives of one page share it)
-                    recs = extract(html, url, question, cfg, landing)
+                    rest: list = []
+                    recs = extract(html, url, question, cfg, landing, hrefs_out=rest if max_hops > 1 else None)
                     html = None  # the page is discarded as soon as its identifiers are out
+                    hop = hop_of.get(url, 1)
+                    if hop < max_hops and rest:  # follow on toward the original host (bounded: hops, pages, hosts)
+                        room = int(caps["max_pages_per_question"]) - counts["pages_read"] - 1
+                        ins = gi  # depth first: a follow-on page is read before the next first-hop page
+                        for nxt in portal_links(rest, url, cfg, hosts, max(0, room)):
+                            if nxt not in done_urls and nxt not in hop_of:
+                                hop_of[nxt] = hop + 1
+                                groups.insert(ins, (adapter, [nxt]))
+                                ins += 1
+                                counts["hop_queued"] = counts.get("hop_queued", 0) + 1
                 except Skip as s:
                     counts[s.code] = counts.get(s.code, 0) + 1
                     if s.code == "unreachable":
