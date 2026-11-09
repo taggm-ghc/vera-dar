@@ -37,15 +37,35 @@ def test_reused_stored_documents_do_not_count_toward_six():
     assert ia._rn({}, reused) == 0
 
 
+@pytest.mark.parametrize("status", sorted(ia.SEARCHED))
+def test_count_sentence_only_when_a_search_ran(status):
+    texts = ACQ["freshness"]["texts"]
+    line = _six_line(texts, [rr.TRIGGER_NEW], SimpleNamespace(status=status, admitted=1, web=None), ACQ)
+    assert line.startswith("VERA-DAR searched for new sources") and "1 new full document " in line
+
+
+@pytest.mark.parametrize("status,o_present,must", [
+    ("rate", True, "this hour"), ("daily_cap", True, "today"), ("busy", False, "already running"),
+    ("off", False, "switched off"), ("budget_unknown", False, "not enough time"), ("deadline", False, "not enough time"),
+    ("error", True, "internal error"), ("weird_code", False, "internal error")])
+def test_no_search_statuses_get_their_own_accurate_sentence(status, o_present, must):
+    texts = ACQ["freshness"]["texts"]
+    o = SimpleNamespace(status=status, admitted=0, web=None) if o_present else None
+    line = _six_line(texts, [rr.TRIGGER_NEW], o, ACQ, None if o_present else status)
+    assert must in line and "searched for new sources" not in line and "obtained" not in line
+    assert line == texts["new_documents_not_run"][{"budget_unknown": "no_time", "deadline": "no_time",
+                                                   "weird_code": "error"}.get(status, status)]
+
+
 def test_six_line_states_new_count_only_under_the_trigger():
     texts = ACQ["freshness"]["texts"]
-    o = SimpleNamespace(admitted=2, web=SimpleNamespace(pages=[object()]))
+    o = SimpleNamespace(status="ok", admitted=2, web=SimpleNamespace(pages=[object()]))
     line = _six_line(texts, [rr.TRIGGER_NEW], o, ACQ)
     assert "3 new full documents" in line and "at least 6" in line
-    one = _six_line(texts, [rr.TRIGGER_NEW], SimpleNamespace(admitted=1, web=None), ACQ)
+    one = _six_line(texts, [rr.TRIGGER_NEW], SimpleNamespace(status="none", admitted=1, web=None), ACQ)
     assert "1 new full document " in one
     assert _six_line(texts, [rr.TRIGGER_STALE], o, ACQ) == ""  # trigger off: nothing said
-    assert _six_line(texts, [rr.TRIGGER_NEW], None, ACQ) == ""  # no search ran (guards): nothing claimed
+    assert "searched for new sources" not in _six_line(texts, [rr.TRIGGER_NEW], None, ACQ)  # no search: never a count
 
 
 def test_always_new_switch_is_exact_true():

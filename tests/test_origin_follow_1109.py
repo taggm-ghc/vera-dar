@@ -228,7 +228,8 @@ def test_origin_candidate_is_on_topic_for_the_web_topic_gate():
 def test_quota_raised_and_exhaustion_is_stated_plainly():
     acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text())
     assert acq["bounds"]["jobs_per_hour"] == 120
+    assert acq["bounds"]["acq_rounds_one_job"] is True
     texts = acq["freshness"]["texts"]
     line = _six_line(texts, [rr.TRIGGER_NEW], SimpleNamespace(status="rate", admitted=0, web=None), acq)
-    assert line == texts["new_documents_quota"] and "this hour" in line
+    assert line == texts["new_documents_not_run"]["rate"] and "this hour" in line
     assert "obtained 2 new" in _six_line(texts, [rr.TRIGGER_NEW], SimpleNamespace(status="ok", admitted=2, web=None), acq)

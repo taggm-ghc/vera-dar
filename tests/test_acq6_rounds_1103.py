@@ -142,18 +142,34 @@ def test_lane_pages_count_toward_target_but_never_stored(monkeypatch):
     assert not ia._I.results
 
 
+def per_round_cfg():
+    """The pre-QUOTA accounting (one job per round), which the floor tests below specify."""
+    a = cfg()
+    a["bounds"]["acq_rounds_one_job"] = False
+    return a
+
+
 def test_one_job_per_round(monkeypatch):
     h = H(monkeypatch, [[cand("j0", usable=False)]], endless=True)
     before = len(aa._S.jobs_hour)
-    h.run(cfg(), stream=True)
+    h.run(per_round_cfg(), stream=True)
     assert [s["jobs"] for s in h.searches] == list(range(before + 1, before + 1 + len(h.searches)))
     assert len(aa._S.jobs_hour) - before == len(h.searches)
+
+
+def test_one_job_per_question_under_od1109_quota(monkeypatch):
+    # OD-1109-QUOTA (shipped): every round of one question shares the single job round 0 reserved
+    h = H(monkeypatch, [[cand("q0", usable=False)]], endless=True)
+    before_h, before_d = len(aa._S.jobs_hour), len(aa._S.jobs_day)
+    h.run(cfg(), stream=True)
+    assert len(h.searches) > 1
+    assert len(aa._S.jobs_hour) - before_h == 1 and len(aa._S.jobs_day) - before_d == 1
 
 
 @pytest.mark.parametrize("prefill,rounds", [(0, 4), (3, 1)])
 def test_floor_keeps_two_free_hourly_jobs(monkeypatch, prefill, rounds):
     h = H(monkeypatch, [[cand(f"f{i}")] for i in range(10)])  # one usable doc per round: no-progress never fires
-    a = cfg()
+    a = per_round_cfg()
     a["bounds"]["jobs_per_hour"] = 6
     for _ in range(prefill):
         aa._S.jobs_hour.append(h.t)
@@ -263,7 +279,7 @@ def test_no_progress_stop_after_two_empty_rounds(monkeypatch):
     o = h.run(cfg(), stream=True)
     assert len(h.searches) == 3, len(h.searches)  # round 0 + 2 empty variant rounds
     assert o.acquisition["stop"] == "no_progress"
-    assert len(aa._S.jobs_hour) - before == 3  # one job per search, then no more
+    assert len(aa._S.jobs_hour) - before == 1  # OD-1109-QUOTA: one job for the whole question
 
 
 def test_no_progress_counter_resets_on_a_round_with_new_candidates(monkeypatch):

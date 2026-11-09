@@ -205,8 +205,10 @@ def test_A_sufficient_and_fresh_still_searches_for_new_documents(world):
     _grounded(body)
     # the answer draws on stored + new evidence: every cited document was admitted (new ones may join the stored one)
     assert _doc_ids(body) <= {a["document_id"] for a in body["admitted_evidence"]} and all(d.startswith("acq-") for d in _doc_ids(body))
-    ro = body.get("research_outcome")  # OD-1109-SIX: new sources found by the search may join the answer
-    assert ro is None or ro.get("kind") in ("answered_with_new", "not_needed") or ro.get("user_text") is not None
+    ro = body.get("research_outcome")  # OD-1109-SIX: the new-document search ran and its new source joined the answer
+    assert body["triggers"] == ["new_documents"] and ro["kind"] == "answered_with_new", (body["triggers"], ro)
+    import json as _json
+    assert "new full document" in _json.dumps(body)  # the new-document count sentence (freshness.texts.new_documents)
 
 
 # ============================================================================================================ B

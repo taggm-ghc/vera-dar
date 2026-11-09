@@ -86,6 +86,14 @@ def _norm(phrase: str) -> str:
     return " ".join(w.lower() for w in _WORD.findall(phrase))
 
 
+def _sense(phrase: str) -> str:
+    """One key per long form regardless of a plural last word ("large language model(s)" -> one sense)."""
+    ws = phrase.split()
+    if ws and len(ws[-1]) > 3 and ws[-1].endswith("s") and not ws[-1].endswith("ss"):
+        ws[-1] = ws[-1][:-1]
+    return " ".join(ws)
+
+
 def definitions(texts, acr: str, stop: frozenset, min_len: int = 3, max_defs: int = 8, other: list | None = None
                 ) -> list[str]:
     """Expansions defined in `texts` as "long form (ACR)" / "(ACRs)" whose initials spell ACR (normalised, unique).
@@ -103,7 +111,7 @@ def definitions(texts, acr: str, stop: frozenset, min_len: int = 3, max_defs: in
             runs = initial_runs(head, acr, stop, min_len)
             if runs and runs[-1][1] == len(head):
                 p = _norm(head[runs[-1][0]:runs[-1][1]])
-                if p and p not in out:
+                if p and _sense(p) not in {_sense(x) for x in out}:  # singular and plural are one sense
                     out.append(p)
                     if len(out) >= max_defs:
                         return out
@@ -177,7 +185,7 @@ def groups(question: str, texts, acfg: dict, stop, seed_groups=()) -> tuple:
                 continue
             other2: list = []
             learned = definitions(texts, ini, stop, min_len, other=other2)
-            if phrase not in learned:
+            if _sense(phrase) not in {_sense(x) for x in learned}:
                 continue  # direction 2 only on the corpus's own definition of this phrase
             if other2 or len(learned) > max_senses:
                 continue  # the same ambiguity guard as direction 1: two senses are never treated as equivalent

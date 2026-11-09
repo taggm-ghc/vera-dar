@@ -1085,6 +1085,11 @@ def count_reused(acq) -> bool:
     return ((acq or {}).get("bounds") or {}).get("acq_round_count_reused") is True
 
 
+def rounds_share_job(acq) -> bool:
+    """OD-1109-QUOTA: one question's search rounds count as ONE job against jobs_per_hour (bounds.acq_rounds_one_job)."""
+    return ((acq or {}).get("bounds") or {}).get("acq_rounds_one_job") is True
+
+
 def _rn(acq, reused) -> int:
     """Reused stored documents counted toward the round target (0 under OD-1109-SIX; see count_reused)."""
     return len(reused[0]) if count_reused(acq) else 0
@@ -1334,7 +1339,11 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
             count(acq_config.reason(acq, "deadline"))
             stop = "deadline"
             break
-        why = aa.reserve_job(acq, question, clock=clock, floor=aa.BG_MIN_FREE_HOURLY_JOBS)
+        # OD-1109-QUOTA: with bounds.acq_rounds_one_job exactly true, a question's variant rounds share the ONE job its
+        # round 0 reserved (normal use must not exhaust jobs_per_hour); per-source rate limits, robots and Crawl-delay
+        # still bound every fetch. Otherwise each round reserves one job (the pre-QUOTA rule).
+        why = None if rounds_share_job(acq) else aa.reserve_job(acq, question, clock=clock,
+                                                                floor=aa.BG_MIN_FREE_HOURLY_JOBS)
         if why:
             count(why)
             stop = "rate"

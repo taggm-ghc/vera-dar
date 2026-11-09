@@ -121,4 +121,4 @@ def test_cited_verified_false_premise_correction_is_still_shown(replay):
     assert r.result_kind == "answer" and r.answer.startswith(fa.PREMISE_PREFIX) and "[1]" in r.answer
     assert r.claim_check["premise_status"] == "false" and r.claim_check["premise_verified"] is True
     # OD-1109-SIX: a verified answer still runs the ONE research attempt for new documents (never the retry loop)
-    assert len(replay.acquire) <= 1
+    assert len(replay.acquire) == 1

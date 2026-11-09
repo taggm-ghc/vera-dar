@@ -1722,7 +1722,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
                            answer_basis="generated_new_evidence" if found else "generated_existing_only")
         suffix = " ".join(t for t in ((_fresh_line(texts, fr2, len(new_ids)) if found else ""),
                                       _mixed_line(texts, fr2), rec["user_text"]) if t)
-        return _with_six(_with_research(_annotate(new_res, fr2), rec, suffix or None), texts, trig, o, acq)
+        return _with_six(_with_research(_annotate(new_res, fr2), rec, suffix or None), texts, trig, o, acq, pub)
     rec = rr.summarize(triggers=trig, inline=pub, used_new=False, older_available=True, fr_before=fr,
                        citations=_source_freshness(fd.sources, fr), answer_failed=bool(failed),
                        failed_text=texts.get("new_evidence_unanswered"), backfill=bf,
@@ -1732,12 +1732,12 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
         base = replace(base, tokens_used=failed.tokens, cost_usd=round(failed.cost, 6))
     if pub is not None and pub.get("status") not in (None, "off"):
         base = replace(base, contract={**(base.contract or {}), "inline_acquisition": pub})
-    return _with_six(_with_research(base, rec, rec["user_text"] or None), texts, trig, o, acq)
+    return _with_six(_with_research(base, rec, rec["user_text"] or None), texts, trig, o, acq, pub)
 
 
-def _with_six(res, texts, trig, o, acq):
-    """OD-1109-SIX: the new-document count as its own process note (kind research_outcome), never merged into another."""
-    t = _six_line(texts, trig, o, acq)
+def _with_six(res, texts, trig, o, acq, pub=None):
+    """OD-1109-SIX: the new-document outcome as its own process note (kind research_outcome), never merged into another."""
+    t = _six_line(texts, trig, o, acq, (pub or {}).get("status") if isinstance(pub, dict) else None)
     if not t:
         return res
     from vera import answer_contract as contract
@@ -1745,23 +1745,33 @@ def _with_six(res, texts, trig, o, acq):
     return replace(res, answer=a, notes=n)
 
 
-def _six_line(texts: dict, trig, o, acq) -> str:
-    """OD-1109-SIX: how many NEW documents the search for this question obtained, against the aim of at least the
-    round target (freshness.texts.new_documents); "" when the trigger is off or no search ran (o is None)."""
+def _six_line(texts: dict, trig, o, acq, status=None) -> str:
+    """OD-1109-SIX: one accurate sentence about the search for new documents. The count sentence
+    (freshness.texts.new_documents) ONLY when a search really ran (the outcome status is in inline_acquire.SEARCHED);
+    otherwise the sentence for why no search ran (freshness.texts.new_documents_not_run[status], else its "error"):
+    hourly quota ("this hour"), daily cap ("today"), busy, off, no time left, error. "" when the trigger is off."""
     from vera import research_record as rr
-    t = texts.get("new_documents") if isinstance(texts, dict) else None
-    if rr.TRIGGER_NEW not in (trig or ()) or o is None or not isinstance(t, str) or not t:
+    if rr.TRIGGER_NEW not in (trig or ()) or not isinstance(texts, dict):
         return ""
-    if str(getattr(o, "status", "")) in ("rate", "daily_cap"):  # OD-1109-QUOTA: say plainly no new search ran
-        q = texts.get("new_documents_quota")
-        if isinstance(q, str) and q:
-            return q
-    try:
-        from vera import acq_rounds, inline_acquire
-        n, m = inline_acquire.new_documents(o), acq_rounds.target_of(acq)
-        return t.format(n=n, m=m, s="" if n == 1 else "s")
-    except Exception:  # noqa: BLE001
+    from vera import inline_acquire
+    st = str(getattr(o, "status", "") or "") if o is not None else str(status or "")
+    if o is not None and st in inline_acquire.SEARCHED:
+        t = texts.get("new_documents")
+        if not isinstance(t, str) or not t:
+            return ""
+        try:
+            from vera import acq_rounds
+            n, m = inline_acquire.new_documents(o), acq_rounds.target_of(acq)
+            return t.format(n=n, m=m, s="" if n == 1 else "s")
+        except Exception:  # noqa: BLE001
+            return ""
+    nr = texts.get("new_documents_not_run")
+    if not isinstance(nr, dict):
         return ""
+    key = {"rate": "rate", "daily_cap": "daily_cap", "busy": "busy", "off": "off", "budget_unknown": "no_time",
+           "deadline": "no_time"}.get(st, "error")
+    t = nr.get(key) or nr.get("error")
+    return t if isinstance(t, str) else ""
 
 
 def _research_may_run(question, acq, budget, grounding=None) -> bool:

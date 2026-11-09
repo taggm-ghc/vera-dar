@@ -220,3 +220,14 @@ def test_df_cache_is_bounded_lru():
         assert len(corp.__dict__["_fda_cache"]) <= 2
     assert len(corp.__dict__["_fda_cache"]) == 2  # it did fill (distinct group sets), then evicted
     assert FD["admission"]["df_cache_max"] >= 1
+
+
+def test_singular_and_plural_long_forms_are_one_sense():
+    texts = ["Large language models (LLMs) generate text.", "A large language model (LLM) predicts tokens."]
+    assert am.definitions(texts, "llm", STOP) == ["large language models"]
+    gs = am.groups("How do LLMs work?", texts, {"enabled": True}, STOP)
+    assert len(gs) == 1 and gs[0].upper == "LLM"
+    g2 = am.groups("How does a large language model work?", texts, {"enabled": True}, STOP)
+    assert len(g2) == 1 and g2[0].phrases == (("large language model", False),)
+    # still two senses when the long forms really differ
+    assert am.groups("What is RAG?", [DEFN, RAG2], {"enabled": True}, STOP) == ()
