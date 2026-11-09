@@ -67,7 +67,9 @@ def test_3_persist_still_stops_on_rate(monkeypatch):
         n["i"] += 1
         return real(acq, q, clock=clock, floor=floor) if n["i"] <= 2 else "R-ACQ-RATE"
     monkeypatch.setattr(aa, "reserve_job", reserve)
-    o = _run(h, cfg(), persist=True)
+    a = cfg()
+    a["bounds"]["acq_rounds_one_job"] = False  # the per-round job rule, under which a round can hit the rate cap
+    o = _run(h, a, persist=True)
     assert o.acquisition["stop"] == "rate" and len(h.searches) == 2
 
 
