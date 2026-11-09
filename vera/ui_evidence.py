@@ -298,6 +298,20 @@ def _no_answer(data: dict) -> bool:
     return isinstance(contract.get("fallback"), str) and bool(contract.get("fallback"))
 
 
+def _attempt_docs(data: dict) -> str:
+    """NOANSWER-1109: what the inline attempt's documents were. Its corpus includes stored documents reused for this
+    request, so with reuse and no fresh document it is not "fetched"; the origin comes from the counts, not the trace tag."""
+    contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+    ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
+    re_ = _count(ia.get("reused"))
+    fe_ = _count((ia.get("counts") or {}).get("fetched", ia.get("admitted"))) if isinstance(ia.get("counts"), dict) or "admitted" in ia else 1
+    if re_ and not fe_:
+        return "documents already stored and checked for this question"
+    if re_ and fe_:
+        return "stored documents and documents fetched for this question"
+    return "documents fetched for this question"
+
+
 def evidence_scope_line(data: dict | None) -> str | None:
     """'N documents inspected, M passages from K documents selected as possible evidence' from the response, or None without evidence fields.
     N and K count distinct documents, so inspected vs used are never conflated."""
@@ -321,7 +335,7 @@ def evidence_scope_line(data: dict | None) -> str | None:
         head = f"Evidence scope: {n} document{'s' if n != 1 else ''} inspected; "
     t = trace_selected(data)  # SELFQ-RCA-1107 D2: the trace's fetched-document passages are named, never denied
     tail = "; none was used in an answer." if _no_answer(data) else "."
-    fetched_part = f"{t} passage{'s' if t != 1 else ''} from documents fetched for this question" if t else ""
+    fetched_part = f"{t} passage{'s' if t != 1 else ''} from {_attempt_docs(data)}" if t else ""
     if not m:
         if t:
             return head + fetched_part + " selected as possible evidence" + tail
@@ -350,8 +364,13 @@ def evidence_source_line(data: dict | None) -> str | None:
         if _no_answer(data) and not only:
             # NOANSWER-1109: documents fetched for this request and saved are not "stored database" evidence; with no
             # answer, the source is where the selected passages came from (none: no source line at all).
-            if t:
-                return ("Evidence source: documents fetched for this question; passages from them were selected as "
+            if t:  # origin from the counts, not the trace tag (the inline attempt includes reused stored documents)
+                re_, fe_ = _count(ia.get("reused")), _count((ia.get("counts") or {}).get("fetched", ia.get("admitted")))
+                what = ("documents already stored, checked for this question" if re_ and not fe_
+                        else "documents fetched for this question" if fe_ and not re_
+                        else "stored documents and documents fetched for this question" if re_ and fe_
+                        else "documents checked for this question")
+                return (f"Evidence source: {what}; passages from them were selected as "
                         "possible evidence but not used in an answer.")
             if not admitted:
                 return None
@@ -421,8 +440,8 @@ def acquisition_notice_line(data: dict | None) -> str | None:
             f = led["examined_unqualified"]
             if f < 1:
                 return f"{head}.{_stop_clause(aq)}"
-            clause = (f"the {f} document fetched did not have enough relevant passages to keep." if f == 1
-                      else f"none of the {f} documents fetched had enough relevant passages to keep.")
+            clause = (f"{f} other document fetched did not have enough relevant passages to keep." if f == 1
+                      else f"{f} other documents fetched did not have enough relevant passages to keep.")
         if clause is None:  # review F2: the stop disclosure does not depend on a status clause
             return _stop_clause(aq).strip() or None
         if led["partial_text"] > 0:
@@ -453,7 +472,7 @@ def inline_counts_line(data: dict | None) -> str | None:
         return None
     if _no_answer(data):  # NOANSWER-1109: nothing was used; stored = held before this request, fetched = read for it
         return f"Sources checked for this question: {n} already stored, {f} newly fetched."
-    return f"Sources used for this answer: {n} stored, {f} fetched for this request only."
+    return f"Sources used for this answer: {n} stored, {f} newly fetched."
 
 
 def _shortfall_in_limitations(data, note) -> bool:

@@ -20,19 +20,19 @@ class Cap:
 
 
 def _midterms():
-    """2 stored + 0 fetched in the old counts = 2 documents fetched and saved for this request (n_persisted 2, reused 0);
-    9 fetched but not kept; 6 passages from fetched documents selected, none cited; nothing stored was relevant."""
+    """Live shape (731863f): 2 stored documents reused, 0 fresh admitted, nothing saved this request (no "saved" clause);
+    9 other documents fetched and not kept; 6 passages from the reused documents selected, none cited."""
     return {"evidence_status": "insufficient", "corpus_source": {"kind": "db"},
             "examined_full_documents": [{"document_id": f"d{i}", "candidate_spans": 0, "relevant_spans": 0,
                                          "admitted_spans": 0} for i in range(5)],
             "admitted_evidence": [],
             "contract": {"fallback": TOK, "search_counts": {"matched": 0}, "trace_attempt": "fetched",
                          "inline_acquisition": {
-                             "reused": 0, "n_persisted": 2, "documents": [{"persisted": True, "reason": "persisted"}] * 2,
-                             "counts": {"stored": 0, "fetched": 2},  # after the fix: reused=0, fetched=admitted-reused
+                             "reused": 2, "n_persisted": 0, "admitted": 0, "documents": [],
+                             "counts": {"stored": 2, "fetched": 0},
                              "acquisition": {"status": "relevance_rejected", "target": 6},
                              "ledger": {"counted": 2, "full_text": 2, "partial_text": 0, "metadata_only": 0,
-                                        "examined_unqualified": 9, "duplicates": 0, "stored": 2, "scholarly": 2,
+                                        "examined_unqualified": 9, "duplicates": 0, "stored": 0, "scholarly": 2,
                                         "news": 0, "official": 0, "web": 0}},
                          "trace": {"view": "public", "origin": "fetched",
                                    "passages": [{"n": i + 1, "cited": False, "reason": NOT_ANSWER} for i in range(6)]}}}
@@ -42,18 +42,27 @@ def _hadrons():
     d = _midterms()
     d["contract"]["trace"] = {"view": "public", "passages": []}
     d["contract"].pop("trace_attempt")
-    d["contract"]["inline_acquisition"].update(reused=0, n_persisted=1, counts={"stored": 0, "fetched": 1})
+    d["contract"]["inline_acquisition"].update(reused=0, n_persisted=0, admitted=0, counts={"stored": 0, "fetched": 0})
     return d
 
 
 def test_midterms_source_attribution_is_consistent():
     d = _midterms()
     scope, src, cnt = u.evidence_scope_line(d), u.evidence_source_line(d), u.inline_counts_line(d)
-    assert "6 passages from documents fetched for this question" in scope and "none was used" in scope
-    assert "no stored document relevant" in scope
-    assert "stored database" not in src  # nothing stored was relevant or used
-    assert src.startswith("Evidence source: documents fetched for this question")
-    assert "0 already stored" in cnt and "2 newly fetched" in cnt and "used for this answer" not in cnt
+    note = u.acquisition_notice_line(d)
+    assert "6 passages from documents already stored and checked for this question" in scope and "none was used" in scope
+    assert "fetched for this question" not in scope and "fetched for this question" not in src
+    assert src.startswith("Evidence source: documents already stored, checked for this question")
+    assert "stored database" not in src
+    assert "2 already stored" in cnt and "0 newly fetched" in cnt and "used for this answer" not in cnt
+    assert note.startswith("Read 2 of the 6 sources targeted; 9 other documents fetched did not have enough relevant passages to keep")
+    assert "saved to VERA-DAR" not in note
+
+
+def test_fresh_documents_are_counted_as_fetched_not_minus_reused():
+    from vera import ask_service as a
+    import inspect
+    assert '"fetched": n_ad}' in inspect.getsource(a)  # admitted = fresh only; disjoint from reused
 
 
 def test_hadrons_no_stored_database_source_when_nothing_was_used():
@@ -161,13 +170,15 @@ def test_reused_document_is_not_newly_found_even_when_the_held_snapshot_lags():
     pub = {"candidates": [{"outcome": "reused", "doi": "10.1234/abc"}]}
     assert a._new_doc_ids(adm, held_keys=()) == {"d9"}  # the stale snapshot alone says new
     assert a._new_doc_ids(adm, held_keys=(), reused_keys=a._reused_keys(pub)) == set()
+    assert a._new_doc_ids(adm, held_keys=(), none_fresh=a._nothing_fresh({"admitted": 0})) == set()  # nothing fresh admitted
+    assert a._nothing_fresh({"admitted": 2}) is False and a._nothing_fresh({}) is False
     other = [{"document_id": "d8", "canonical_source_id": "https://doi.org/10.1234/zzz"}]
     assert a._new_doc_ids(other, held_keys=(), reused_keys=a._reused_keys(pub)) == {"d8"}
 
 
 def test_answered_page_counts_and_freshness_agree_for_a_reused_document():
     d = {"citations": [], "contract": {"inline_acquisition": {"counts": {"stored": 1, "fetched": 0}}}}
-    assert u.inline_counts_line(d) == "Sources used for this answer: 1 stored, 0 fetched for this request only."
+    assert u.inline_counts_line(d) == "Sources used for this answer: 1 stored, 0 newly fetched."
     r = ro.summarize_outcome([ro.PortalAttempt("a", "completed", 2)], [], budget_exhausted=False,
                              older_evidence_available=True, new_evidence_admitted=False)
     assert "newly found" not in r.user_text

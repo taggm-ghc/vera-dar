@@ -199,7 +199,7 @@ def test_counts_agree_with_one_attempt_record(monkeypatch, case):
         assert found == truth["found"]
         assert _nums(page, r"(\d+) judged not relevant") == truth["irrelevant"]
     assert _nums(page, r"Read (\d+) of the 6 sources targeted") == truth["read"]
-    n_f = _nums(page, r"(?:none of the|the) (\d+) documents? fetched")
+    n_f = _nums(page, r"(?:none of the|the|; )(\d+) (?:other )?documents? fetched")
     if truth["fetched"]:
         assert n_f == truth["fetched"]
     else:  # D3: never a claim about fetched documents when none was fetched

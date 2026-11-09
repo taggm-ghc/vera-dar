@@ -36,7 +36,7 @@ def render_trace(st, trace, public=None, redact=None) -> bool:
     if passages:
         st.markdown("**How VERA-DAR chose the evidence**")
         if trace.get("origin") == "fetched":  # SELFQ-RCA-1107 D2: these are not the passages counted from the collection
-            st.caption("Passages from documents fetched for this question:")
+            st.caption("Passages from documents checked for this question:")
         unc_p = [p for p in passages if not p.get("cited")]
         reasons = {s(p.get("reason") or "") for p in unc_p}
         collapse = len(unc_p) > 1 and len(reasons) == 1  # NOANSWER-1109: identical lines become one count line
