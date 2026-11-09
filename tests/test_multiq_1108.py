@@ -36,6 +36,8 @@ def test_multi_question_prompts_split(q, n):
 
 
 @pytest.mark.parametrize("q", [
+    "When it rains and is cold, do flu cases rise?",  # MULTIQ-1109 F1: a subordinate clause is not a question
+    "How long does it take, and is it painful, to get a tattoo removed?",  # shared infinitive adjunct
     "What is dengue? And why?",  # follow-on without a content word: merged, one question
     "Compare influenza vaccines and COVID-19 vaccines on cost and accuracy",
     "What is Vera dar magops?",
@@ -109,7 +111,7 @@ def test_config_is_grammar_only_and_ships_on():
     assert SHIPPED["mode"] == "on"  # MULTIQ-1109: owner "VD needs to be able to handle both"
     assert "_max_questions_calibration_note" in SHIPPED and "PROVISIONAL" in SHIPPED["_max_questions_calibration_note"]
     lists = {k for k, v in SHIPPED.items() if isinstance(v, list)}
-    assert lists == {"interrogatives", "auxiliaries", "leading_conjunctions", "pronouns", "subordinators"}  # closed classes, no topics
+    assert lists == {"interrogatives", "auxiliaries", "leading_conjunctions", "pronouns", "subordinators", "adverbial_interrogatives", "shared_adjunct_leaders"}  # closed classes, no topics
 
 
 def test_trace_allowlist_has_the_multiq_stage():
@@ -366,3 +368,32 @@ def test_each_question_gets_its_own_job_and_an_equal_share(ask, monkeypatch, q, 
     assert r.result_kind == "answer" and len(seen) == n
     assert all(used is False for used, _ in seen)  # the previous question's attempt never blocks the next one
     assert {sh for _, sh in seen} == {31 // n} and n * (31 // n) <= 31  # the prompt stays within the ceiling
+
+
+# ---- MULTIQ-1109 F3: stream round budget, share floor ---------------------------------------------------------------------
+def test_more_questions_than_the_floor_allows_are_listed_not_answered(ask, monkeypatch):
+    monkeypatch.setattr(mq, "load_config", lambda path=None: dict(SHIPPED, mode="on", max_questions=8))
+    monkeypatch.setattr(ask_service, "_acq_cfg_if_on", lambda: {"bounds": {"max_docs_per_prompt": 31}})
+    from vera import acq_rounds
+    monkeypatch.setattr(acq_rounds, "target_of", lambda acq: 6)
+    q = " ".join(f"Who founded company{i}?" for i in range(1, 8))
+    r = ask_service.answer_in_scope(q, "m", PRICING)
+    assert len(r.contract["parts"]) == 5 and len(ask["parts"]) == 5  # 31 // 6 = 5 answered, the rest listed once
+    assert "company6" in r.answer and "company7" in r.answer
+
+
+def test_stream_rounds_cap_is_set_only_without_a_deadline_and_cut_is_announced(ask, monkeypatch):
+    seen = []
+
+    def fulldoc(question, *a, **k):
+        seen.append(ask_service._MQ_ROUNDS.get())
+        ask_service._MQ_CUT.get().append(True)  # as _acquire_rounds does when the bound ends a search early
+        return _answer(question, len(seen))
+    monkeypatch.setattr(ask_service, "_fulldoc", fulldoc)
+    q = "What is CRISPR? Is it used in agriculture?"
+    ask_service.answer_in_scope(q, "m", PRICING, budget=ask_service.RequestBudget(1e18))
+    assert seen == [None, None]  # a real deadline bounds the request: no round cap
+    seen.clear()
+    r = ask_service.answer_in_scope(q, "m", PRICING, budget=ask_service.RequestBudget(float("inf")))
+    assert seen == [SHIPPED["stream_rounds_per_question"]] * 2
+    assert all(SHIPPED["cut_text"].replace("{n}", str(p["index"])) in p["answer"] for p in r.contract["parts"])

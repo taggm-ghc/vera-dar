@@ -172,6 +172,8 @@ _INLINE_COUNTS: contextvars.ContextVar = contextvars.ContextVar("vera_inline_cou
 # MULTIQ-1108: set only while answer_in_scope answers ONE question of a multi-question prompt; holds the whole prompt's
 # scope decision (routed once, never per part) with its classifier cost zeroed (counted once on the combined result).
 _MQ_PART: contextvars.ContextVar = contextvars.ContextVar("multiq_part_decision", default=None)
+_MQ_ROUNDS: contextvars.ContextVar = contextvars.ContextVar("multiq_part_rounds", default=None)  # MULTIQ-1109 F3: max acquisition rounds of this question (no-deadline stream path); None = unbounded
+_MQ_CUT: contextvars.ContextVar = contextvars.ContextVar("multiq_part_cut", default=None)  # MULTIQ-1109 F3: [bool] set when that bound ended this question's search early
 _MQ_DOCS: contextvars.ContextVar = contextvars.ContextVar("multiq_part_docs_share", default=None)  # MULTIQ-1109: this question's share of max_docs_per_prompt
 
 
@@ -529,8 +531,24 @@ def _answer_parts(split, question, model, pricing, client, extra_body, grounding
     n = len(split.parts)
     part_dec = replace(decision, tokens_used=0, cost_usd=0.0, llm_calls=0)
     results: dict = {}
+    from vera import multi_question as _mq
+    _mcfg = _mq.load_config()
+    rc = _mcfg.get("stream_rounds_per_question")
+    rounds_cap = rc if isinstance(rc, int) and not isinstance(rc, bool) and rc >= 1 else 2
+    cut_text = str(_mcfg.get("cut_text") or "The search for new documents for question {n} was stopped early so that every question gets a fair share of the time.")
     ceiling = ((acq or {}).get("bounds") or {}).get("max_docs_per_prompt")
     share = ceiling // max(1, n) if isinstance(ceiling, int) and not isinstance(ceiling, bool) else 1
+    try:  # F3: a question's share of the ceiling stays >= the round target (6): more questions than that are listed, not answered
+        from vera import acq_rounds
+        tgt = int(acq_rounds.target_of(acq)) if acq else 0
+        if tgt > 0 and isinstance(ceiling, int) and not isinstance(ceiling, bool) and share < tgt:
+            keep = max(1, ceiling // tgt)
+            if keep < n:
+                split = replace(split, parts=split.parts[:keep], over_cap=tuple(p.text for p in split.parts[keep:]) + tuple(split.over_cap))
+                n = keep
+                share = ceiling // n
+    except Exception:  # noqa: BLE001
+        pass
     for p in split.parts:  # help first: zero cost, never lost to a late deadline
         if not _mq_part_decline(p.query):
             h = _help_answer(p.query, covered_only=True)
@@ -549,12 +567,19 @@ def _answer_parts(split, question, model, pricing, client, extra_body, grounding
         budget.inline_used = False
         tok = _MQ_PART.set(part_dec)
         tok2 = _MQ_DOCS.set(max(1, share))
+        cut: list = []
+        tok3 = _MQ_CUT.set(cut)
+        tok4 = _MQ_ROUNDS.set(rounds_cap if budget.deadline == float("inf") else None)
         try:
             results[p.index] = answer_in_scope(p.query, model, pricing, client=client, extra_body=extra_body,
                                                grounding=grounding, budget=budget)
         finally:
             _MQ_PART.reset(tok)
             _MQ_DOCS.reset(tok2)
+            _MQ_CUT.reset(tok3)
+            _MQ_ROUNDS.reset(tok4)
+        if cut and results[p.index].result_kind == "answer":  # F3: say so when this question's search was cut short
+            results[p.index] = replace(results[p.index], answer=f"{results[p.index].answer}\n\n{cut_text.replace('{n}', str(p.index))}".strip())
     for p in split.parts:
         _rt_event("multiq", "part_done", counts={"part": p.index},
                   detail={"result_kind": _rt_token(results[p.index].result_kind)})
@@ -603,7 +628,8 @@ def _mq_compose(split, results: dict, decision, acq, tokens: int, cost: float) -
         keys = [page_text._key(s) for s in sents]
         fresh = [s for s, k in zip(sents, keys) if k not in said]
         if sents and not fresh:
-            text = str(cfg.get("same_reason_text") or "").replace("{n}", str(said[keys[0]])) or text
+            if r.result_kind != "answer":  # MULTIQ-1109 (verifier): an answered question is never relabelled "not answered"
+                text = str(cfg.get("same_reason_text") or "").replace("{n}", str(said[keys[0]])) or text
         elif len(fresh) < len(sents):
             text = " ".join(fresh)
         for k in keys:
@@ -800,6 +826,13 @@ def _acquire_rounds(question, model, pricing, decision, chained, grounding, acq,
                 q_cur, qn_retried = _q2, True
                 continue
         if inl is None or eligible >= target or stop != "incomplete_deadline" or not new_keys:
+            break
+        _mr = _MQ_ROUNDS.get()
+        if _mr is not None and rounds >= _mr:  # MULTIQ-1109 F3: a fair share of rounds per question on the no-deadline stream
+            _cut = _MQ_CUT.get()
+            if _cut is not None:
+                _cut.append(True)
+            _rt_event("multiq", "rounds_cut", counts={"rounds": rounds})
             break
     if (spent_t or spent_c) and isinstance(note, str):
         t, c = (note.tokens, note.cost) if isinstance(note, _Note) else (int(decision.tokens_used or 0),

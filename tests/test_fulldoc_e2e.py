@@ -360,3 +360,24 @@ def _single_path_multiq_off(monkeypatch):
     that behaviour is covered by tests/test_multiq_1108.py. Pin the split off here."""
     from vera import multi_question as mq
     monkeypatch.setattr(mq, "load_config", lambda path=None: {"mode": "off"})
+
+
+def test_multiq_split_on_runs_each_question_through_the_real_writer_and_gate_c(h, monkeypatch):
+    """MULTIQ-1109: split ON (default config), real _fulldoc admission, writer path and Gate C per question; only the
+    router, the answering LLM, the claim checker and the grounding are stubbed."""
+    from vera import multi_question as mq
+    h.bundle()
+    _relax_coverage()
+    monkeypatch.setattr(mq, "load_config", lambda path=None: dict(_MQ_SHIPPED))
+    res = _in_process(h, monkeypatch, Q_TWO, PARTS_REPLY)
+    parts = (res.contract or {}).get("parts")
+    assert parts and len(parts) == 2, res.contract  # two sections, one per question
+    assert res.result_kind == "answer" and all(p["result_kind"] == "answer" for p in parts)
+    for p in parts:  # each question was answered by its own writer + Gate C pass, with its own sources and no mislabel
+        assert p["sources"] and "Not answered" not in p["answer"], p
+    assert "Part 2 (" in parts[0]["answer"] and parts[1]["question"].startswith("and how did the temperature")
+    kinds = [p.get("result_kind") for p in parts]
+    assert all(k in ("answer", "reading_list", "decline", "insufficient") for k in kinds), kinds
+
+
+_MQ_SHIPPED = __import__("json").loads((__import__("pathlib").Path(__file__).resolve().parents[1] / "config" / "multi_question.json").read_text())

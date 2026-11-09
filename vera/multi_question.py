@@ -150,7 +150,19 @@ def _left_can_split(left: str, cfg: dict) -> bool:
     if not clause_is_question(tail, cfg):
         return False
     w = _lead(_words(tail), _set(cfg, "leading_conjunctions"))
+    if w and w[0] in _set(cfg, "adverbial_interrogatives"):  # 'When it rains' is a subordinate clause, not a question
+        win = cfg.get("aux_window")
+        win = int(win) if isinstance(win, int) and not isinstance(win, bool) and win > 0 else 3
+        if not any(x in _set(cfg, "auxiliaries") for x in w[1:1 + win]):
+            return False
     return not any(x in _set(cfg, "interrogatives") | _set(cfg, "subordinators") for x in w[1:])
+
+
+def _shares_adjunct(right: str, cfg: dict) -> bool:
+    """MULTIQ-1109 F1: a right clause that carries a trailing comma-set infinitive adjunct ('is it painful, to get a
+    tattoo removed?') shares that adjunct with the clause before it: the parts are not complete questions alone."""
+    leaders = _set(cfg, "shared_adjunct_leaders")
+    return any(len(_words(seg)) > 0 and _words(seg)[0] in leaders for seg in right.split(",")[1:])
 
 
 def _conjoined(sentence: str, cfg: dict) -> list:
@@ -158,7 +170,8 @@ def _conjoined(sentence: str, cfg: dict) -> list:
     for m in _IN_SENT.finditer(sentence):
         if m.start() <= start or _in_spans(spans, m.start()):
             continue
-        if _left_can_split(sentence[start:m.start()], cfg) and clause_is_question(sentence[m.end():], cfg, in_sentence=True):
+        if _left_can_split(sentence[start:m.start()], cfg) and clause_is_question(sentence[m.end():], cfg, in_sentence=True) \
+                and not _shares_adjunct(sentence[m.end():], cfg):
             pieces.append(sentence[start:m.start()].strip())
             start = m.end()
     pieces.append(sentence[start:].strip())
