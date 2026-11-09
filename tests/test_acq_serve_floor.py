@@ -101,7 +101,7 @@ def test_fetch_path_serves_balanced_without_ceiling():
 def test_shipped_round_target_is_six_and_job_caps_unchanged():
     b = acq_config.load_config()["bounds"]
     assert b["acq_round_target_new_docs"] == 6 and acq_rounds.target_of({"bounds": b}) == 6
-    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"]) == (120, 180, 2)  # OD-1031-PROMPTLIM; OD-1109-QUOTA 30 -> 120
+    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"]) == (120, 2000, 2)  # OD-1031-PROMPTLIM; OD-1109-QUOTA 30 -> 120
     assert "FLOOR6-1028" in b["_acq_round_target_note"] and "in-process" in b["_acq_round_target_note"]
     assert acq_rounds.target_of({}) == 6 and acq_rounds.target_of({"bounds": {"acq_round_target_new_docs": True}}) == 6
 

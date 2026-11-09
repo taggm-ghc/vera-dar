@@ -130,7 +130,7 @@ def test_max_open_comes_from_config_and_defaults():
 # ------------------------------------------------------------------------------------------------ no behaviour change
 def test_caps_and_results_unchanged_by_tracking(monkeypatch):
     b = acq_config.load_config()["bounds"]
-    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"], b["queue_max"]) == (120, 180, 2, 4)  # OD-1031-PROMPTLIM; OD-1109-QUOTA
+    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"], b["queue_max"]) == (120, 2000, 2, 4)  # OD-1031-PROMPTLIM; OD-1109-QUOTA
     with_t = [_bg(DOIS[2 * i:2 * i + 2]) for i in range(3)]
     state_with = (len(auto_acquire._S.docs_day), len(auto_acquire._S.jobs_hour), auto_acquire._S.docs_reserved)
     auto_acquire.reset_for_tests()

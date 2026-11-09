@@ -105,7 +105,7 @@
   "bounds": {
     "queue_max": 4,
     "jobs_per_hour": 120, "acq_rounds_one_job": true, "_acq_rounds_one_job_note": "OD-1109-QUOTA (owner intent: normal use must not exhaust the quota): one question's variant rounds share the single job its round 0 reserved, so a question costs ONE job against jobs_per_hour / jobs_per_day; per-source rate limits (config/rate_limits.json), robots.txt and Crawl-delay still bound every fetch. false restores one job per round.", "_jobs_per_hour_note": "OD-1109-QUOTA (owner 2026-11-09, Raise the quota): 30 -> 120, because OD-1109-SIX runs a new-document search on every answered question (one job per question with acq_rounds_one_job). An owner-set resource bound, not calibrated; when it is still exhausted the answer says so (freshness.texts.new_documents_not_run.rate; jobs_per_day 180 is unchanged and then says 'today'). What would change it: live hourly job use per question.",
-    "jobs_per_day": 180,
+    "jobs_per_day": 2000, "_jobs_per_day_note_1109": "OD-1109-DAILYCAP (owner 2026-11-09: \"Raise to 2000/day (Recommended)\"): 180 -> 2000; supersedes the day figure of OD-1031-PROMPTLIM.",
     "docs_per_day": null,
     "_docs_per_day_note": "OWNER DECISION 2026-10-22 (verbatim, relayed by the orchestrator to DAR-TRACE-1022): \"abolish the 20-a-day limit\". null = no daily document cap (vera.acq_config.docs_per_day_cap); the RO daily count is not read. Still bounded by jobs_per_hour 30, jobs_per_day 180 and max_docs_per_job 2 (at most 360 documents/day; was 6/30/2 = 60 before OD-1031-PROMPTLIM). A number restores the cap.",
     "max_search_calls_per_job": 7,

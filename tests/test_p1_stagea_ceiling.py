@@ -8,7 +8,7 @@ from vera import acq_config, auto_acquire as aa
 
 def test_shipped_caps_unchanged():
     b = acq_config.load_config()["bounds"]
-    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"]) == (120, 180, 2)  # OD-1109-QUOTA
+    assert (b["jobs_per_hour"], b["jobs_per_day"], b["max_docs_per_job"]) == (120, 2000, 2)  # OD-1109-QUOTA
     assert b["docs_per_day"] is None and b["max_candidates_resolved"] == 31
     assert acq_config.load_config()["inline"]["deadline_s"] == 45
 
@@ -94,7 +94,7 @@ def test_rank_candidates_cut_follows_the_ceiling():
 
 def test_job_caps_od_1031_promptlim_and_unchanged_companions():
     b = acq_config.load_config()["bounds"]
-    assert (b["jobs_per_hour"], b["jobs_per_day"]) == (120, 180)  # OD-1109-QUOTA
+    assert (b["jobs_per_hour"], b["jobs_per_day"]) == (120, 2000)  # OD-1109-QUOTA
     assert (b["max_docs_per_job"], b["queue_max"]) == (2, 4) and aa.BG_MIN_FREE_HOURLY_JOBS == 2
     assert "OD-1031-PROMPTLIM" in b["_jobs_per_hour_day_note"]
 
