@@ -524,14 +524,74 @@ def _licence_href(html: str, base: str) -> str:
     return ""
 
 
+def _abs_http(base: str, href) -> str:
+    u = urljoin(base, str(href or "").strip()) if str(href or "").strip() else ""
+    return signal_value(u) if u and urlsplit(u).scheme in ("http", "https") else ""
+
+
+_JSONLD = re.compile(r"<script\b[^>]*type\s*=\s*[\"']?application/ld\+json[\"']?[^>]*>(.*?)</script\s*>", re.I | re.S)
+
+
+def _jsonld_urls(html: str) -> list:
+    """H19-FIX2-1109: `url` and `mainEntityOfPage` (string or its @id/url) of the JSON-LD objects in the first 200 kB
+    (top level, lists and @graph; at most 50 objects). Unparseable blocks are skipped (signals only)."""
+    out, stack, seen = [], [], 0
+    for blk in _JSONLD.findall(html[:200000])[:10]:
+        try:
+            stack.append(json.loads(blk))
+        except (ValueError, RecursionError):
+            continue
+    while stack and seen < 50:
+        o = stack.pop(0)
+        if isinstance(o, list):
+            stack.extend(o[:50])
+            continue
+        if not isinstance(o, dict):
+            continue
+        seen += 1
+        for k in ("url", "mainEntityOfPage"):
+            v = o.get(k)
+            if isinstance(v, dict):
+                v = v.get("@id") or v.get("url")
+            if isinstance(v, list):
+                v = next((x for x in v if isinstance(x, str)), None)
+            if isinstance(v, str) and v.strip():
+                out.append(v.strip())
+        if isinstance(o.get("@graph"), list):
+            stack.extend(o["@graph"][:50])
+    return out
+
+
+def canonical_signals(html: str, base: str) -> list:
+    """H19-FIX2-1109 A8: every canonical-like signal as absolute http(s) URLs, in order, de-duplicated (max 10):
+    <link rel~=canonical>, <meta property|name=og:url>, <meta name|property=twitter:url>, JSON-LD url /
+    mainEntityOfPage, and <link rel~=amphtml> (a back-reference to an AMP copy). Signal strings only."""
+    out: list = []
+    links = _tags_attrs(html, _LINK_TAG)
+    metas = _tags_attrs(html, _META_TAG)
+    cands = [a.get("href") for a in links if "canonical" in set(a.get("rel", "").lower().split())]
+    for key in ("og:url", "twitter:url"):
+        cands += [a.get("content") for a in metas
+                  if key in (a.get("property", "").lower().strip(), a.get("name", "").lower().strip())]
+    cands += _jsonld_urls(html)
+    cands += [a.get("href") for a in links if "amphtml" in set(a.get("rel", "").lower().split())]
+    for c in cands:
+        u = _abs_http(base, c)
+        if u and u not in out:
+            out.append(u)
+    return out[:10]
+
+
 def _canonical_href(html: str, base: str) -> str:
-    """H19-FIX-1109 A8: the first <link rel~=canonical href> as an absolute http(s) URL (signal string), else ''."""
+    """H19-FIX-1109 A8: the first <link rel~=canonical href> as an absolute http(s) URL (signal string); when the page
+    has none, the first og:url, twitter:url or JSON-LD url/mainEntityOfPage (H19-FIX2-1109 G-a), else ''."""
+    sig = canonical_signals(html, base)
+    amp = {_abs_http(base, a.get("href")) for a in _tags_attrs(html, _LINK_TAG)
+           if "amphtml" in set(a.get("rel", "").lower().split())}
     for a in _tags_attrs(html, _LINK_TAG):
-        if "canonical" in set(a.get("rel", "").lower().split()) and a.get("href"):
-            u = urljoin(base, a["href"].strip())
-            if urlsplit(u).scheme in ("http", "https"):
-                return signal_value(u)
-    return ""
+        if "canonical" in set(a.get("rel", "").lower().split()) and _abs_http(base, a.get("href")):
+            return _abs_http(base, a.get("href"))
+    return next((u for u in sig if u not in amp), "")
 
 
 def third_party_segments(body: str, content_type: str = "text/html", clock=None, end=None) -> list:
@@ -642,7 +702,7 @@ def _tdm_purpose_shadow(rules, url: str) -> None:
 
 def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, clock=time.monotonic, hop_gate=None,
           robots_cache: dict | None = None, tdm_check: bool = False) -> dict:
-    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation", "canonical_url", "third_party_text"} (H19-FIX-1109: the last two feed vera.page_licence A8/A11; H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
+    """Returns {"text", "url", "content_type", "x_robots_tag", "content_signal", "meta_robots", "licence_href", "meta_author", "tdm_reservation", "canonical_url", "canonical_signals", "third_party_text"} (H19-FIX-1109: canonical_url and third_party_text feed vera.page_licence A8/A11; H19-FIX2-1109: canonical_signals lists og:url, twitter:url, JSON-LD and amphtml URLs too; H19: the last three are signal strings only; tdm_reservation is "", "1" or "unreadable" and the /.well-known/tdmrep.json fetch runs only when tdm_check=True; the three before are normalised no-AI signal strings only; content_signal joins the response header and the final host's robots.txt Content-Signal values, WP6-P2b D2) or raises FetchRefused. Nothing is written anywhere.
     `hop_gate(url) -> refusal code or None` is applied to every hop before any request to it (see _get).
     `robots_cache` (WP6-P2b M2): a caller-owned dict that keeps parsed robots.txt rules per host across the fetches of
     one request (rules only, never page text); default a fresh dict per call."""
@@ -685,7 +745,7 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
             "x_robots_tag": signal_value(sig.get("x-robots-tag")), "content_signal": signal_value(cs),
             "meta_robots": signal_value(", ".join(_meta_robots(decoded)) if ctype != "text/plain" else ""),
             "licence_href": _licence_href(html, final), "meta_author": _meta_author(html), "tdm_reservation": tdm,
-            "canonical_url": _canonical_href(html, final),
+            "canonical_url": _canonical_href(html, final), "canonical_signals": canonical_signals(html, final),
             "third_party_text": third_party_segments(decoded, ctype, clock, end) if html else []}
 
 

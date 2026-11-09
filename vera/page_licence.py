@@ -11,6 +11,11 @@ check(url, page) -> {"ok", "reasons", "text", "a11_dropped", "licence"}:
       e.g. an open-access paper with "originally published in" or a canonical DOI/PMC link, is not affected). On EVERY
       row: a canonical link to a restricted outlet row (ND access block or verdict not allow, subdomains included) or a
       republication cue naming a restricted outlet (name from the row host) -> acc_republished (no ND re-entry).
+      H19-FIX2-1109: canonical-like signals (og:url, twitter:url, JSON-LD url/mainEntityOfPage, rel=amphtml) count as
+      canonicals; a credit cue (provided by, source:, courtesy of, via, produced by, in partnership with, reprinted
+      from, a "By" line, copyright) directly followed by a restricted outlet's name or documented alias also counts.
+      A no-derivatives licence stated in the page text (CC BY-NC-ND, "Creative Commons ... NoDerivatives") counts as an
+      ND licence link (page_licence_reject) on rows without an access block.
   A10 item exclusion: the row's exclude_item_markers -> acc_item_excluded; for ND-outlet rows only, an "All Rights
       Reserved" notice with no explicit page licence link -> acc_item_excluded (re-verify F1: an explicit page licence
       link takes precedence over a generic footer). Elsewhere the notice only sets the shown licence when no licence
@@ -43,6 +48,22 @@ DEFAULTS = {
     "wire_credit_patterns": [r"\((?:ap|reuters|afp|upi|dpa|efe|ansa|xinhua)\)", r"\bassociated press\b",
                              r"\breuters\b", r"\bagence france[- ]presse\b", r"\bafp\b", r"\bunited press international\b",
                              r"\bap photo\b", r"\bgetty images\b", r"\bused with permission\b", r"\bcourtesy of\b"],
+    # H19-FIX2-1109 G-b/G-d: credit and attribution lines; each regex ends where the credited name begins. Only a
+    # restricted outlet named right after the cue (an optional "the" skipped) makes the page link-only.
+    "attribution_cue_patterns": [r"\bprovided\s+by\b", r"(?<![a-z0-9])sources?\s*:", r"\bcourtesy(?:\s+of)?\b",
+                                 r"\bvia\b", r"\b(?:co-?)?produced\s+by\b",
+                                 r"\bin\s+(?:partnership|collaboration|association)\s+with\b",
+                                 r"\b(?:reprinted|republished|reproduced|adapted|excerpted)\s+(?:from|by)\b",
+                                 r"\b(?:reprinted|republished|reproduced)\s+(?:with|by)\s+(?:the\s+)?(?:kind\s+)?"
+                                 r"permission\s+(?:of|from)\b",
+                                 r"\b(?:distributed|published|syndicated)\s+by\b", r"\bcredit\s*:", r"(?m)^\s*by\b",
+                                 r"(?:\bcopyright\b|©)\s*(?:©\s*)?(?:\d{4}(?:\s*[-–]\s*\d{4})?\s*,?\s*)?"],
+    # H19-FIX2-1109 G-e: a no-derivatives licence stated in the page text (no rel=license link needed) -> treated like
+    # an ND licence link (page_licence_reject) on rows without an access block.
+    "nd_licence_text_patterns": [r"\bcc[\s-]+by(?:[\s-]+nc)?(?:[\s-]+sa)?[\s-]+nd\b", r"\bby-nc-nd\b",
+                                 r"\bcreative\s+commons\s+(?:attribution[\s-]+)?(?:non-?\s?commercial[\s-]+)?"
+                                 r"no-?\s?deriv",
+                                 r"\bcreativecommons\.org/licen[cs]es/by(?:-nc)?-nd\b"],
 }
 _SENT = re.compile(r"(?<=[.!?])\s+")
 _CC_PATH = re.compile(r"/(licenses|publicdomain)/([a-z-]+)/(\d+(?:\.\d+)?)", re.I)
@@ -123,9 +144,15 @@ def _restricted_row(row) -> bool:
 
 def _restricted_labels(rcfg: dict) -> set:
     """Outlet names derived mechanically from the restricted rows' hosts ('votebeat.org' -> 'votebeat',
-    'kffhealthnews.org' -> 'kffhealthnews'); matched against words joined without spaces ("KFF Health News")."""
+    'kffhealthnews.org' -> 'kffhealthnews'), plus each row's documented `aliases` (H19-FIX2-1109 G-c: 'Kaiser Health
+    News' -> 'kaiserhealthnews'); matched against words joined without spaces ("KFF Health News")."""
     out = set()
     for o in (rcfg or {}).get("outlets") or []:
+        if _restricted_row(o):
+            for a in (o["aliases"] if isinstance(o.get("aliases"), list) else []):
+                lab = "".join(re.findall(r"[a-z0-9]+", str(a).lower())) if isinstance(a, str) else ""
+                if len(lab) >= 3:
+                    out.add(lab)
         if _restricted_row(o) and isinstance(o.get("host"), str):
             h = o["host"].lower().removeprefix("www.")
             parts = [x for x in h.split(".") if x]
@@ -136,11 +163,28 @@ def _restricted_labels(rcfg: dict) -> set:
     return out
 
 
-def _names_restricted(window: str, labels: set) -> bool:
+_MAXW = 6  # longest outlet name, in words, matched by joining words ("The New York Times" -> 4)
+
+
+def _names_restricted(window: str, labels: set, *, at_start: bool = False) -> bool:
+    """True when the window names a restricted outlet; with at_start, only a name that begins the window (after an
+    optional "the") counts (credit lines: "Provided by Votebeat", "Source: Common Dreams")."""
     words = re.findall(r"[a-z0-9]+", window.lower())
-    for i in range(len(words)):
-        for n in (1, 2, 3):
+    starts = ([0, 1] if words[:1] == ["the"] else [0]) if at_start else range(len(words))
+    for i in starts:
+        for n in range(1, _MAXW + 1):
             if "".join(words[i:i + n]) in labels:
+                return True
+    return False
+
+
+def _credit_names_restricted(text: str, pats, labels: set) -> bool:
+    """H19-FIX2-1109 G-b/G-d: an attribution or credit cue (regex) immediately followed by a restricted outlet name."""
+    for p in pats:
+        if p is None:
+            continue
+        for m in p.finditer(text):
+            if _names_restricted(text[m.end(): m.end() + 80].lstrip(" \t:-–—,"), labels, at_start=True):
                 return True
     return False
 
@@ -221,6 +265,12 @@ def check(url: str, page: dict, *, row: dict | None = None, cfg: dict | None = N
                 reasons.append("acc_licence_unset")
         elif href and licence_gate.reject_reason(None, href):
             reasons.append("page_licence_reject")
+        if not isinstance(acc, dict):  # H19-FIX2-1109 G-e: an ND licence stated in the text counts like an ND link
+            ndp = _compile(pc["nd_licence_text_patterns"])
+            if any(p is None for p in ndp):
+                reasons.append("acc_third_party_config")
+            if any(p is not None and p.search(text) for p in ndp):
+                reasons.append("page_licence_reject")
         nd_row = isinstance(acc, dict)
         # A8 (re-verify F2): the generic republication cues and the off-site canonical rule apply to ND-outlet rows
         # only (their licence covers the outlet's own items); any other row is checked only against its own explicit
@@ -235,9 +285,24 @@ def check(url: str, page: dict, *, row: dict | None = None, cfg: dict | None = N
         # bf66ade re-check: ND or restricted content re-entering through another host stays closed on every row: a
         # canonical link to a restricted outlet row (ND access block or any verdict but allow; subdomains included),
         # or a republication cue that names a restricted outlet (names derived from the row hosts, not topic lists).
-        canon_row = reporting_lane.outlet_row(str(page.get("canonical_url") or ""), rcfg) if canon else None
-        restricted_canon = bool(off_site and canon_row is not None and canon_row is not row and _restricted_row(canon_row))
-        named = _cue_names_restricted(low, pc["republished_markers"], _restricted_labels(rcfg))
+        # H19-FIX2-1109 G-a: every canonical-like signal (rel=canonical, og:url, twitter:url, JSON-LD url /
+        # mainEntityOfPage, rel=amphtml back-reference; public_fetch.canonical_signals) is checked the same way.
+        sigs = page.get("canonical_signals") if isinstance(page.get("canonical_signals"), list) else []
+        restricted_canon = False
+        for cu in [str(page.get("canonical_url") or "")] + [str(x) for x in sigs if isinstance(x, str)]:
+            ch = _host(cu)
+            if not ch or not here or ch == here or ch.endswith("." + here) or here.endswith("." + ch):
+                continue
+            crow = reporting_lane.outlet_row(cu, rcfg)
+            if crow is not None and crow is not row and _restricted_row(crow):
+                restricted_canon = True
+                break
+        labels = _restricted_labels(rcfg)
+        named = _cue_names_restricted(low, pc["republished_markers"], labels)
+        credit = _compile(pc["attribution_cue_patterns"])
+        if any(p is None for p in credit):
+            reasons.append("acc_third_party_config")
+        named = named or _credit_names_restricted(text, credit, labels)
         if any(_norm(m) in low for m in markers) or (nd_row and off_site) or restricted_canon or named:
             reasons.append("acc_republished")
         # A10 (re-verify F1): a row's explicit exclude_item_markers always apply. The generic "All Rights Reserved"
