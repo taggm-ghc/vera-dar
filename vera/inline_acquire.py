@@ -80,6 +80,7 @@ def _emit(stage: str, state: str, **counts) -> None:
 class Outcome:
     status: str
     corpus: object = None
+    guard: bool = False  # BATCH3-1109: "off" because the shared intent guard refused this question (not a config switch)
     stored: int = 0
     admitted: int = 0
     persist_failed: bool = False
@@ -383,7 +384,7 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
             return Outcome("off")
         from vera import scope_router  # SCOPE-1022: the shared intent rule also guards inline acquisition
         if not scope_router.intent_clean(str(question)):
-            return Outcome("off")
+            return Outcome("off", guard=True)
         disc = None
         if discovered is not None:
             from vera import acq_discovered

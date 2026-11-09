@@ -1770,6 +1770,8 @@ def _six_line(texts: dict, trig, o, acq, status=None) -> str:
         return ""
     key = {"rate": "rate", "daily_cap": "daily_cap", "busy": "busy", "off": "off", "budget_unknown": "no_time",
            "deadline": "no_time"}.get(st, "error")
+    if key == "off" and o is not None and getattr(o, "guard", False) is True and isinstance(nr.get("guard"), str):
+        key = "guard"  # BATCH3-1109: the intent guard refused this question; searching itself is not switched off
     t = nr.get(key) or nr.get("error")
     return t if isinstance(t, str) else ""
 

@@ -160,3 +160,20 @@ def test_hops_respect_the_per_question_page_cap(monkeypatch):
     monkeypatch.setattr(rp, "wikipedia_title_urls", lambda q, cc: [P1])
     rp.collect("What are zorblats?", cfg=c, deps=deps, hosts=_hosts(), clock=lambda: 0.0)
     assert len([u for u in calls if u in pages]) <= 2
+
+
+def test_intent_guard_refusal_does_not_say_searching_is_switched_off():
+    """BATCH3-1109: Outcome('off') from the shared intent guard gets its own accurate sentence."""
+    texts = ACQ["freshness"]["texts"]
+    g = _six_line(texts, [rr.TRIGGER_NEW], ia.Outcome("off", guard=True), ACQ)
+    assert g and "switched off" not in g and "automatic searches" in g and g == texts["new_documents_not_run"]["guard"]
+    plain = _six_line(texts, [rr.TRIGGER_NEW], ia.Outcome("off"), ACQ)
+    assert "switched off" in plain
+
+
+def test_acquire_marks_intent_guard_refusal(monkeypatch):
+    from vera import scope_router
+    monkeypatch.setattr(scope_router, "intent_clean", lambda q, cfg=None: False)
+    monkeypatch.setattr(ia, "inline_enabled", lambda acq, env=None: True)
+    o = ia.acquire("anything", ACQ)
+    assert o.status == "off" and o.guard is True
