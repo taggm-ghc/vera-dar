@@ -707,7 +707,10 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
         pass
     hon = _honest_counts_on(_cfg_h)  # A6-4 (D3): answer.inline_honest_counts (ships true)
     n_st, n_re, n_ad = (int(getattr(o, "stored", 0) or 0), int(getattr(o, "reused", 0) or 0), int(getattr(o, "admitted", 0) or 0))
-    counts = {"stored": n_st + n_re, "fetched": max(n_ad - n_st, 0)} if hon else None
+    # NOANSWER-1109: "stored" = held in the collection BEFORE this request (reused); "fetched" = read for this request,
+    # whether or not it was then saved. Documents fetched and saved (n_st) used to be counted as "stored", which gave
+    # "2 stored and 0 fetched" for two documents fetched for this question.
+    counts = {"stored": n_re, "fetched": max(n_ad - n_re, 0)} if hon else None
     tok_c = _INLINE_COUNTS.set(counts)
     tok_l = _LEDGER_EV.set(None)
     try:

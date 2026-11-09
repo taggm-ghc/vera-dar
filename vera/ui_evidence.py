@@ -347,6 +347,14 @@ def evidence_source_line(data: dict | None) -> str | None:
         held = _count(ia.get("reused")) + _count(ia.get("n_persisted"))
         admitted = _count(data.get("admitted_evidence")) > 0  # SEC U3: "used for this answer" needs admitted evidence
         t = trace_selected(data)  # SELFQ-RCA-1107 D2: passages of the fetched documents listed in the trace
+        if _no_answer(data) and not only:
+            # NOANSWER-1109: documents fetched for this request and saved are not "stored database" evidence; with no
+            # answer, the source is where the selected passages came from (none: no source line at all).
+            if t:
+                return ("Evidence source: documents fetched for this question; passages from them were selected as "
+                        "possible evidence but not used in an answer.")
+            if not admitted:
+                return None
         if only and not admitted and t:
             return ("Evidence source: documents fetched for this request (not saved); passages from them were selected "
                     "as possible evidence but not used in an answer.")
@@ -443,6 +451,8 @@ def inline_counts_line(data: dict | None) -> str | None:
     n, f = c.get("stored"), c.get("fetched")
     if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in (n, f)):
         return None
+    if _no_answer(data):  # NOANSWER-1109: nothing was used; stored = held before this request, fetched = read for it
+        return f"Sources checked for this question: {n} already stored, {f} newly fetched."
     return f"Sources used for this answer: {n} stored, {f} fetched for this request only."
 
 

@@ -110,7 +110,7 @@ def test_each_stop_has_its_own_sentence_and_never_says_budget(cand, phrase):
     r = rr.summarize(triggers=["insufficient"], inline={"status": "none", "portals": [
         {"portal": "openalex", "status": "completed", "results": 1}], "candidates": [cand]},
         used_new=False, older_available=False, fr_before=None)
-    assert phrase in r["user_text"] and "budget ran out" not in r["user_text"], r["user_text"]
+    assert phrase.lower() in r["user_text"].lower() and "budget ran out" not in r["user_text"], r["user_text"]
 
 
 def test_job_quota_refusal_is_an_explicit_quota_outcome():
@@ -265,7 +265,7 @@ def test_duplicate_has_its_own_terminal_reason_not_provenance():
 @pytest.mark.parametrize("st,phrase", [("busy", "service was busy"), ("budget_unknown", "could not be determined")])
 def test_busy_and_budget_unknown_have_truthful_sentences(st, phrase):
     r = rr.summarize(triggers=["insufficient"], inline={"status": st}, used_new=False, older_available=False, fr_before=None)
-    assert phrase in r["user_text"] and "budget ran out" not in r["user_text"], r["user_text"]
+    assert phrase.lower() in r["user_text"].lower() and "budget ran out" not in r["user_text"], r["user_text"]
 
 
 @pytest.mark.parametrize("cand", [{"outcome": "rejected", "reason": R["ft"]},

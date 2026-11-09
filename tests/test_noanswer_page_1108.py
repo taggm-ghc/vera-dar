@@ -215,8 +215,9 @@ def test_background_sentence_once_and_reasons_listed(monkeypatch):
     ro = research_outcome.summarize_outcome(att, cand, budget_exhausted=True, older_evidence_available=False,
                                             new_evidence_admitted=False, extra_causes=("crawl_delay",))
     assert " and the search budget ran out and " not in ro.user_text
-    assert ("because a search service's request limit was reached, the search budget ran out and a source asks "
-            "crawlers to wait longer than this search could, so") in ro.user_text
+    # NOANSWER-1109: one short sentence per cause
+    assert ("A search service's request limit was reached. The search budget ran out. A source asks "
+            "crawlers to wait longer than this search could.") in ro.user_text
     research = {"user_text": ro.user_text, "triggered": True}
     body = _body(monkeypatch, _result(_found_none_read(), 0, background=True, research=research))
     _at, elems = _page(monkeypatch, body)

@@ -43,13 +43,13 @@ def test_zero_passages_gives_honest_split_notice_no_writer(wired, monkeypatch):
     monkeypatch.setattr(fulldoc_admission, "admit", lambda q, c, cfg: Ev())
     wired["cfg"] = {**CFG, "retrieval": {}, "admission": {}}
     out = wired["run"](ask_service.__dict__["_fulldoc"])
-    assert out == "NOTICE:unanswered VERA-DAR used 3 stored and 3 fetched sources; no answer."
+    assert out == "NOTICE:unanswered VERA-DAR used 1 stored and 4 fetched sources; no answer."
     assert not called and "tried" not in out.lower() and "memory" not in out.lower().replace("answered from memory", "")
 
 
 def test_all_sentences_removed_gives_notice_with_counts_not_memory_answer(wired):
     out = wired["run"](lambda *a, **k: (None, "insufficient_full_document_evidence", 1, 0.0, "unsupported"))
-    assert out == "NOTICE:unanswered VERA-DAR used 3 stored and 3 fetched sources; no answer." and "tried" not in out.lower()
+    assert out == "NOTICE:unanswered VERA-DAR used 1 stored and 4 fetched sources; no answer." and "tried" not in out.lower()
 
 
 def test_checker_unavailable_keeps_its_own_text(wired):

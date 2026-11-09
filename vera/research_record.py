@@ -215,7 +215,7 @@ def summarize(*, triggers: list, inline: dict | None, used_new: bool, older_avai
     inline = inline if isinstance(inline, dict) else None
     status = (inline or {}).get("status")
     raw_portals = [p for p in ((inline or {}).get("portals") or []) if isinstance(p, dict)]
-    attempts = [ro.PortalAttempt(str(p.get("portal")), _PORTAL_STATUS.get(p.get("status"), "error"),
+    attempts = [ro.PortalAttempt(str(p.get("portal")), _PORTAL_STATUS.get(p.get("status"), "unknown"),
                                  int(p.get("results") or 0)) for p in raw_portals]
     cands = [c for c in ((inline or {}).get("candidates") or []) if isinstance(c, dict)]
     outs = [ro.CandidateOutcome(f"c{i + 1}", _ids(c), _terminal(c), str(c.get("reason") or ""))

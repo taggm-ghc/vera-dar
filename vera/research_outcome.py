@@ -231,10 +231,11 @@ class ResearchOutcome:
 _CAUSE_TEXT = {
     "timeout": "a search service timed out",
     "quota": "a search service's request limit was reached",
-    "paced": "VERA-DAR paced its requests to a source to respect that source's limits",  # F4a: our own limiter, not the source's
-    "own_cap": "VERA-DAR's daily search allowance for one search service was used up",  # OUTCOME-LABELS-1108: our own cap
+    "paced": "VERA-DAR skipped a call to a source because the wait needed to respect that source's rate limit was too long",  # F4a: our own limiter, not the source's
+    "own_cap": "VERA-DAR's daily search allowance for one search service had already been used up by earlier searches",  # OUTCOME-LABELS-1108: our own cap
     "robots": "VERA-DAR skipped a source because its robots rules do not permit it",  # OUTCOME-LABELS-1108: our own gate
     "error": "a search service had a failure",
+    "unknown": "a search service gave a status VERA-DAR could not interpret, so it is not known whether it failed",  # NOANSWER-1109 A4
     "budget": "the search budget ran out",
     "awaiting_route": "some sources found have no identifier VERA-DAR can fetch automatically yet",  # CONT-1023: URL-only, queued to follow
     "deadline_reached": "the time limit for this search was reached",
@@ -265,7 +266,7 @@ def _awaiting_route(candidates) -> bool:
 def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable: bool = False) -> list[str]:
     out: list[str] = []
     for a in attempts:
-        if a.status in ("timeout", "quota", "paced", "own_cap", "robots", "error") and a.status not in out:
+        if a.status in ("timeout", "quota", "paced", "own_cap", "robots", "error", "unknown") and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")
@@ -280,6 +281,11 @@ def _cause_phrase(causes: list[str]) -> str:
     """NOANSWER-PAGE-1108 D7: one plain list built from the cause codes ("a, b and c"), never "a and b and c"."""
     parts = [_CAUSE_TEXT[c] for c in causes]
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
+
+
+def _cause_sentences(causes) -> str:
+    """NOANSWER-1109: one short sentence per cause, never one run-on list."""
+    return " ".join(t[0].upper() + t[1:] + "." for t in (_CAUSE_TEXT[c] for c in causes))
 
 
 def _detail(attempts, candidates, kind, complete, causes) -> dict:
@@ -317,7 +323,7 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
         causes = ["none_searched"]
     # Passage-level only: a candidate that passed the initial relevance check is not evidence used in the answer.
     admitted = bool(new_evidence_admitted)
-    why = (" Coverage was incomplete because " + _cause_phrase([c for c in causes if c in _CAUSE_TEXT]) + "."
+    why = (" Coverage was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT])
            if causes and not complete and any(c in _CAUSE_TEXT for c in causes) else "")
 
     if admitted:
@@ -336,9 +342,8 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
     elif not complete:
         kind = "incomplete_search"
         if causes and causes != ["none_searched"]:
-            text = ("The search was incomplete because "
-                    + _cause_phrase([c for c in causes if c in _CAUSE_TEXT])
-                    + ", so no conclusion about available evidence can be drawn.")
+            text = ("The search was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT])
+                    + " No conclusion about available evidence can be drawn.")
         else:
             text = "No search could be run, so no conclusion about available evidence can be drawn."
     else:

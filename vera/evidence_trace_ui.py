@@ -37,8 +37,16 @@ def render_trace(st, trace, public=None, redact=None) -> bool:
         st.markdown("**How VERA-DAR chose the evidence**")
         if trace.get("origin") == "fetched":  # SELFQ-RCA-1107 D2: these are not the passages counted from the collection
             st.caption("Passages from documents fetched for this question:")
+        unc_p = [p for p in passages if not p.get("cited")]
+        reasons = {s(p.get("reason") or "") for p in unc_p}
+        collapse = len(unc_p) > 1 and len(reasons) == 1  # NOANSWER-1109: identical lines become one count line
+        if collapse:
+            st.caption(f"{len(unc_p)} passages were selected and none answered the question." if next(iter(reasons)).startswith("selected, but judged not")
+                       or not next(iter(reasons)) else f"{len(unc_p)} passages were selected, not cited: {next(iter(reasons))}")
         for p in passages:
             n = s(p.get("n"))
+            if collapse and not p.get("cited"):
+                continue
             if p.get("cited"):
                 sup = [x for x in p.get("supports") or () if not _BACKEND_WORDS.search(str(x))]
                 line = f"[{n}] " + (s(p.get("verdict")) if p.get("verdict") else "used")

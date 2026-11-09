@@ -56,7 +56,7 @@ def test_paced_cause_text_distinct():
     att = [ro.PortalAttempt("europepmc", "paced", 0)]
     assert ro._causes(att, False) == ["paced"]
     t = ro._CAUSE_TEXT["paced"]
-    assert "paced" in t and "limit was reached" not in t
+    assert "skipped a call" in t and "limit was reached" not in t  # NOANSWER-1109 A4: accurate wording
     assert ro._CAUSE_TEXT["quota"] != t
 
 

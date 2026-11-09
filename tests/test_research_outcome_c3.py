@@ -94,7 +94,7 @@ def test_all_portals_never_claimed_on_failure(status):
 def test_report_detail_json_and_user_text_rules():
     o = run([P("a", n=2), P("b", "error")], [C("x", "licence_rejected")], budget=True)
     json.dumps(o.report_detail)
-    assert len(re.findall(r"[.!?](?:\s|$)", o.user_text)) <= 2
+    assert len(re.findall(r"[.!?](?:\s|$)", o.user_text)) <= 4  # NOANSWER-1109: one short sentence per cause
     assert not re.search(r"R-[A-Z]+", o.user_text)
     assert len(o.report_detail["portal_attempts"]) == 2
 
