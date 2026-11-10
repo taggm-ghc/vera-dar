@@ -28,9 +28,6 @@ from tests._pipeline_support import PRICING, DiscSearch, h, rig  # noqa: F401  (
 from tests.test_dar_inline_acquire import GROUND
 from vera import acq_config, acq_discovered, arxiv_fulltext, ask_service, discovery_panel, scope_router
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
 REAL_ROUTE = scope_router.route  # captured before the rig replaces it with a fixed decision
@@ -252,6 +249,7 @@ def _p2_checks(acc, ia, rel_marks):
     return cands, fps, slots
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_p2_relevant_papers_outrank_lexical_false_positives_before_slots(acc):
     """P2 rule = ORCHESTRATOR DECISION 2026-10-23 (comment above _p2_checks), from the owner brief."""
     _r, _ds, ia = _mixed(acc)
@@ -264,6 +262,7 @@ REL_MANY = [(f"mas_many{i}", f"10.9999/ddfix.masmany{i}.z", f"PMC91002{i:02d}",
              "planner supervisor worker critic roles coordinate language model agents") for i in range(6)]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_p2_relevant_candidates_fill_every_slot_and_no_false_positive_is_selected(acc):
     """P2 rule = ORCHESTRATOR DECISION 2026-10-23: with relevant candidates >= the slot count, no false positive is selected."""
     acc.cfg["bounds"]["max_candidates_resolved"] = 6  # pinned: shipped ceiling is 31 (OD-1031-SHORTLIST31); REL_MANY has 6

@@ -15,9 +15,6 @@ from tests.test_route_ddg_first_r2 import (  # noqa: F401  (h, rig, clock, no_db
     ddg_row, epmc_row, h, no_db_no_socket, oa_rec, rig, world)
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 
 def _ft(body):
@@ -169,6 +166,7 @@ def _assert_arxiv_admitted_and_cited(world, body):
     assert _ro(body)["kind"] == "answered_with_new"
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_e2e_arxiv_html_cc_by_admitted_and_cited_in_same_request(world):
     # real v2 + F-1 v4 gate: CC BY arXiv HTML with valid route evidence (formerly R-ACQ-ARXIV_HTML_POLICY) is admitted
     world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
@@ -178,6 +176,7 @@ def test_e2e_arxiv_html_cc_by_admitted_and_cited_in_same_request(world):
     _assert_arxiv_admitted_and_cited(world, body)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("f1", [f"https://arxiv.org:443/html/{X.AID}{X.VER}", f"https://u@arxiv.org/html/{X.AID}{X.VER}",
                                 f"https://ArXiv.org/html/{X.AID}{X.VER}"], ids=["port-443", "userinfo", "mixed-case"])
 def test_e2e_arxiv_html_f1_host_spelling_is_refused(world, f1):
@@ -237,6 +236,7 @@ def test_e2e_recently_added_old_publication_is_fresh_but_labelled_older(world):
         assert s["source_authored_at"].startswith("2019-") and s["corpus_added_at"] != s["source_authored_at"]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_admitted_and_cited(world):
     # INTEG-1023 gap fix: an arXiv record returned by the ROUTING acquisition search (not the discovery panel) reaches
     # arxiv_fulltext (same hook as discovery) instead of Europe PMC / no_route; the real v2 + F-1 v4 gate admits it.

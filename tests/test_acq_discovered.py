@@ -14,9 +14,6 @@ from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from tests.test_dar_inline_acquire import rig  # noqa: F401  (fixture)
 from vera import acq_config, acq_discovered, ask_service, auto_acquire, inline_acquire
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 DOI = "10.9999/acq.epi4"
 PMC = "PMC1234567"
@@ -136,6 +133,7 @@ def test_t1_openalex_discovered_source_resolves_to_accessible_full_text():
 
 
 # ------------------------------------------------------------------------------------------------ test 2 (D1)
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_t2_arxiv_preprint_without_licence_route_keeps_link_with_explicit_reason():
     web, _raw = epmc_web()
     c = cfg_on()
@@ -396,6 +394,7 @@ def test_p2_untrusted_discovery_strings_are_bounded_and_control_free():
 
 
 # ------------------------------------------------------------------------------------------------ test 10
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_t10_unsuccessful_acquisition_cannot_generate_an_answer(rig):
     rig.cfg["inline"]["use_discovered"] = True
     rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour (route on: tests/test_arxiv_fulltext.py)
@@ -538,6 +537,7 @@ def test_provenance_gate_a_is_the_computed_decision():
     assert g["decision"] == "fetch" and "score" not in json.dumps(g)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_held_records_do_not_use_the_cap_and_records_past_it_are_deferred():
     c = cfg_on()
     c["inline"]["discovered_max"] = 1

@@ -15,9 +15,6 @@ from tests.test_p0dta_arxiv_ids import ROBOTS, _crawl_run, clk  # noqa: F401  (c
 from vera import acq_discovered, arxiv_fulltext, ask_service, inline_acquire
 from vera import memory_store as ms
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 
 class _SyncPool:
@@ -36,6 +33,7 @@ class _SyncPool:
 
 
 # ---------------------------------------------------------------------------------------------------- (a)
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_cold_tdmrep_arxiv_doc_finishing_inside_the_extra_window_is_admitted(clk, monkeypatch):
     """Clock 1000, Crawl-delay 15: tdmrep.json 1015, abs 1030, html 1045. Inline deadline 40 s -> 1040: the document
     finishes AFTER the inline deadline but inside deadline + one Crawl-delay (1055). Admitted only when (1) the
@@ -47,6 +45,7 @@ def test_cold_tdmrep_arxiv_doc_finishing_inside_the_extra_window_is_admitted(clk
     assert X.HTML_URL in [c[0] for c in web.calls]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_deadline_extension_is_one_crawl_delay_only_while_cold_and_only_with_the_route():
     acq = cfg_on()
     assert arxiv_fulltext.deadline_extension(acq) == float(acq["arxiv_route"]["max_crawl_delay_s"]) == 15.0
@@ -57,6 +56,7 @@ def test_deadline_extension_is_one_crawl_delay_only_while_cold_and_only_with_the
 
 
 # ---------------------------------------------------------------------------------------------------- (b)
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_inline_need_s_includes_the_cold_tdmrep_window():
     acq = cfg_on()
     cold = ask_service.inline_need_s(acq, None)

@@ -23,6 +23,15 @@ import time
 from typing import Callable
 
 logger = logging.getLogger("vera.auto_acquire")
+# The arXiv family: arxiv.org and every subdomain (export., ar5iv.labs., info., national mirrors such as de./in.), plus
+# known full-text mirrors and derivatives of arXiv e-prints. Never read as a source, on any route or redirect hop
+# (vera/web_route.make_hop_gate, is_web_candidate). Add a host here when another mirror is found.
+ARXIV_HOSTS = ("arxiv.org", "ar5iv.org", "arxiv-vanity.com", "alphaxiv.org", "xxx.lanl.gov")
+
+
+def is_arxiv_host(host) -> bool:
+    h = str(host or "").strip().lower().rstrip(".")
+    return bool(h) and any(h == d or h.endswith("." + d) for d in ARXIV_HOSTS)
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
 
 

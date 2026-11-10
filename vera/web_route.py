@@ -79,7 +79,8 @@ def is_web_candidate(c) -> bool:
     if any(c.get(k) for k in _ID_KEYS) or any((c.get("ids") or {}).get(k) for k in ("doi", "pmcid", "arxiv", "pmid")):
         return False
     h = _host(url)
-    return not any(h == d or h.endswith("." + d) for d in _NON_WEB_HOSTS)
+    from vera import arxiv_portal  # ARXIV-PORTAL-1110: arXiv and its mirrors are portals, never read (also answer-only)
+    return not any(h == d or h.endswith("." + d) for d in _NON_WEB_HOSTS) and not arxiv_portal.is_arxiv_host(h)
 
 
 def _topic_cfg(cfg) -> dict:
@@ -174,6 +175,9 @@ def make_hop_gate(start: str, *, registry=None, deny_list=None, cfg=None, hosts=
     cfg = cfg if cfg is not None else load_config()
 
     def gate(hop: str):
+        from vera import arxiv_portal
+        if arxiv_portal.is_arxiv_host(_host(hop)):  # ARXIV-PORTAL-1110 (R3): every hop, redirects included, before any request
+            return "read_arxiv_portal"
         g = sp.read_gate(hop, registry=registry, deny_list=deny_list)
         if not g.read:
             return g.read_reason

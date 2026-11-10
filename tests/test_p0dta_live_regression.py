@@ -18,9 +18,6 @@ from tests._pipeline_support import GROUND, PRICING, DiscSearch, Router, _decide
 from vera import acq_discovered, arxiv_fulltext, ask_service, inline_acquire, search_providers
 from vera import research_outcome as ro
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 Q_LIVE = "Which are the prevailing proven-useful archetypes for agentic AI orchestrated agents?"
 ROBOTS = "https://arxiv.org/robots.txt"
@@ -87,6 +84,7 @@ def _ask(rig):
     return r, web, before
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_live_question_acquires_versioned_arxiv_html_and_answers_with_that_citation(live):
     r, web, before = _ask(live)
     ia = (r.contract or {}).get("inline_acquisition") or {}

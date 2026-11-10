@@ -29,9 +29,6 @@ from tests._gap_support import http_ask
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 from vera import search_providers as sp
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 ROOT = Path(__file__).resolve().parent.parent
 Q = e2e.Q_EPI
@@ -420,6 +417,7 @@ def test_b_europepmc_pmc_url(world, spy):
 
 
 # ================================================================================================ (c) arXiv abs vN
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_c_arxiv_abs_versioned_cc_by(world, spy):
     world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
     world.p.beh[DDG] = ddg_rows([(X.ABS_URL, X.TITLE)])
@@ -436,6 +434,7 @@ def test_c_arxiv_abs_versioned_cc_by(world, spy):
     assert ap.grounded_failures(200, body) == [] and world.rig.store.plans
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_c_desired_version_bound_route(world, spy):
     world.web = Router(world.web.records, world.web.jats, X.routes(licence=X.CC_BY))
     world.p.beh[DDG] = ddg_rows([(X.ABS_URL, X.TITLE)])
@@ -560,6 +559,7 @@ def test_stale_corpus_added_30h_ddg_epmc_url(world, spy):
 
 
 # ================================================================================================ probes / controls
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_c2_arxiv_unversioned_abs_served(world, spy):
     """(c) with arxiv.org also answering the UNVERSIONED abs URL (live arXiv serves the latest version there)."""
     routes = X.routes(licence=X.CC_BY)
@@ -572,6 +572,7 @@ def test_c2_arxiv_unversioned_abs_served(world, spy):
     assert X.HTML_URL in world.rig.web.urls and ap.grounded_failures(200, body) == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_c3_control_versioned_arxiv_via_reading_list_discovery(world, spy):
     """Control: the SAME versioned abs URL reaching acquisition through the /ask reading-list discovery
     (use_discovered) keeps its version."""
@@ -630,6 +631,7 @@ def test_df1_negative_valid_dois_not_corrupted(raw):
     assert sp.normalise_doi(f"https://doi.org/{raw}") == exp
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("url,ver", [(f"https://arxiv.org/abs/{X.AID}v1", "v1"), (f"https://arxiv.org/pdf/{X.AID}v3", "v3"),
                                      (f"https://arxiv.org/html/{X.AID}v2", "v2"), (f"https://arxiv.org/abs/{X.AID}", None)])
 def test_df2_arxiv_version_kept_and_routed(url, ver):

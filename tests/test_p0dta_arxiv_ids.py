@@ -41,6 +41,7 @@ def test_parser_unversioned_old_style_and_rejects():
         assert arxiv_fulltext.parse_arxiv_url(bad) is None
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("u", SHAPES)
 def test_openalex_no_doi_shape_admitted_via_versioned_route(u):
     src = {"provider": "openalex", "url": u, "doi": None, "title": X.TITLE,
@@ -55,6 +56,7 @@ def test_openalex_no_doi_shape_admitted_via_versioned_route(u):
     assert store.plans[0]["source"]["provenance"]["acquisition"]["arxiv"]["html_url"] == X.HTML_URL
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("u", ["https://arxiv.org/html/2605.23989v1", "http://arxiv.org/html/2605.23989v1",
                                "https://arxiv.org/html/2605.23989v1?x=1"])
 def test_ddg_html_url_admitted(u):
@@ -65,6 +67,7 @@ def test_ddg_html_url_admitted(u):
     assert len(store.plans) == 1
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_id_candidate_field_is_string():
     o, _ = run(cfg_on(), [X.discovery_src()], Router({}, {}, X.routes()))
     ids = [c["arxiv_id"] for c in o.candidates]
@@ -76,9 +79,6 @@ def test_arxiv_id_candidate_field_is_string():
 # ---- defect C: robots Crawl-delay: 15, cold robots cache, fake clock (live case arXiv:2605.23989v1)
 from tests import acq_support as A  # noqa: E402
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 ROBOTS = "https://arxiv.org/robots.txt"
 
@@ -116,6 +116,7 @@ def clk(monkeypatch):
     acq_discovered._ROBOTS.clear()
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_cold_robots_crawl_delay_15_now_admitted_without_shortening_delay(clk):
     o, web, _ = _crawl_run(clk)
     assert disc(o)["outcome"] == "admitted", o.public()
@@ -124,6 +125,7 @@ def test_cold_robots_crawl_delay_15_now_admitted_without_shortening_delay(clk):
     assert X.ABS_URL in urls and X.HTML_URL in urls
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_warm_host_old_last_request_goes_out_immediately(clk):
     _crawl_run(clk)  # warms robots + records the last request time
     clk.waits.clear()
@@ -134,6 +136,7 @@ def test_warm_host_old_last_request_goes_out_immediately(clk):
     assert [round(w) for w in clk.waits] == [15]  # only abs->html spacing; first request not delayed
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_crawl_delay_not_fitting_budget_is_queued_with_distinct_code(clk):
     o, web, _ = _crawl_run(clk, inline_s=28)  # P0DTA-INTEG: >= per_doc_timeout_s (25) so PRIO D3 starts the fetch; 15+15 still exceeds it
     d = disc(o)

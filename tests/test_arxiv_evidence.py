@@ -15,9 +15,6 @@ from tests import arxiv_synth as X
 from tests.test_acq_discovered import Router, _direct, cfg_on, disc, redirect, run  # noqa: F401  (_direct: autouse)
 from vera import arxiv_fulltext, auto_acquire, fulldoc_db, fulltext_loader, licence_gate
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 ROBOTS = "https://arxiv.org/robots.txt"
 TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt
@@ -68,6 +65,7 @@ def _expected_evidence():
 
 
 # ------------------------------------------------------------------------------------------------ R2
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("final", [
     "https://arxiv.org/abs/2605.23989v2",          # another version
     "https://arxiv.org/abs/2605.23989",            # unversioned (= latest) when v1 was requested
@@ -85,6 +83,7 @@ def test_abs_final_url_must_be_the_requested_version(final):
     assert last["reason"] == "abs final URL is not the requested id/version abstract page" and last["final_url"] == final
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_abs_final_url_trailing_slash_is_accepted():
     final = X.ABS_URL + "/"
     web = Router({}, {}, {**X.routes(), X.ABS_URL: redirect(final), final: X.html_resp(X.abs_page())})
@@ -92,6 +91,7 @@ def test_abs_final_url_trailing_slash_is_accepted():
     assert disc(o)["outcome"] == "admitted"  # passes R2; admitted at the v2 gate
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_unversioned_record_requires_unversioned_abs_final():
     src = {**X.discovery_src(url="https://arxiv.org/abs/2605.23989"), "identifier": "arXiv:2605.23989"}
     unv = "https://arxiv.org/abs/2605.23989"
@@ -102,6 +102,7 @@ def test_unversioned_record_requires_unversioned_abs_final():
 
 
 # ------------------------------------------------------------------------------------------------ R1 route side
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_route_hands_the_version_bound_evidence_to_the_loader(spy_kwargs):
     o, _store = _go(Router({}, {}, X.routes()))
     assert disc(o)["outcome"] == "admitted"  # the v2 gate accepts the version-bound block
@@ -143,6 +144,7 @@ def test_manifest_item_or_conversion_record_never_produce_evidence():
     assert seen and all("arxiv_evidence" not in (c.get("licence") or {}) and "arxiv_evidence" not in c for c in seen)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_discovery_candidate_carries_no_evidence():
     c = arxiv_fulltext.discovered_candidate(X.discovery_src(), None, "preprint", {"epistemic": "x"}, cfg_on())
     assert c is not None and "arxiv_evidence" not in json.dumps(c)
@@ -153,6 +155,7 @@ def _rows(plans):
     return [{**s, "provenance": json.loads(s["provenance"])} for s in srcs], spans
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_stored_route_rows_carry_and_rederive_the_evidence(allow_arxiv_html):
     o, store = _go(Router({}, {}, X.routes()))
     assert disc(o)["outcome"] == "admitted"
@@ -164,6 +167,7 @@ def test_stored_route_rows_carry_and_rederive_the_evidence(allow_arxiv_html):
     assert c.status == "ok" and c.acquired
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("mutate", [
     lambda p: p["licence"]["arxiv_evidence"].update(version="v2"),
     lambda p: p["licence"]["arxiv_evidence"].update(id="2605.00001"),
@@ -190,6 +194,7 @@ def test_non_route_rows_never_get_evidence_even_if_stored():
 
 
 # ------------------------------------------------------------------------------------------------ R4
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_gate_family_list_narrows_the_route_list(monkeypatch):
     monkeypatch.setattr(arxiv_fulltext, "_gate_families", lambda: ("by",))
     o, store = _go(Router({}, {}, X.routes(licence="http://creativecommons.org/licenses/by-sa/4.0/")))

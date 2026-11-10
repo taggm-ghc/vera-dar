@@ -10,9 +10,6 @@ from tests import fulltext_synth as fs
 from tests.test_acq_discovered import Router, oa_src
 from vera import acq_config, arxiv_fulltext, auto_acquire, inline_acquire, search_providers
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 
 class Clock:
@@ -69,6 +66,7 @@ def test_D1_routable_fulltext_candidate_takes_a_slot_before_no_oa_records(env, k
     assert not [c for c in by.values() if c["reason"] == "R-ACQ-DEFER_CAP"]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_D1_sort_uses_only_existing_oa_signals(env):
     c = env
     cands = [A.cand("10.9999/p.none0"), A.cand("10.9999/p.none1"),
@@ -218,6 +216,7 @@ def test_D4_background_handoff_keeps_one_hourly_job_free(env):
 LIVE_Q = "Which are the prevailing proven-useful archetypes for agentic AI orchestrated agents?"
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_live_agentic_archetypes_question_selects_fetches_and_admits_the_routable_arxiv_candidate(env, monkeypatch):
     """The live case: 9 corpus documents, 0 admitted, freshness + insufficiency triggers (prefer_recent, the served
     keys of the 9 documents), 2 discovered candidates (one arXiv:2605.23989v1), one portal timing out. The routable

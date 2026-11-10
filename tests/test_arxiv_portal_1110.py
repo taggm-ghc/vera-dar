@@ -197,3 +197,36 @@ def test_reading_list_label_is_a_portal_entry():
     t = discovery_panel.REASON_TEXT[CODE]
     assert t.startswith("arXiv record:") and "published version" in t and "not used as evidence" in t
     assert "not in" not in t.lower()
+
+
+# ------------------------------------------------------------------------------------------------ R3: answer-only web route
+ARXIV_FAMILY = ["https://arxiv.org/html/2101.00001v1", "https://export.arxiv.org/abs/2101.00001",
+                "https://ar5iv.labs.arxiv.org/html/2101.00001", "https://ar5iv.org/abs/2101.00001",
+                "https://www.arxiv-vanity.com/papers/2101.00001/", "https://www.alphaxiv.org/abs/2101.00001",
+                "https://de.arxiv.org/abs/2101.00001", "https://xxx.lanl.gov/abs/hep-ph/9901001"]
+
+
+@pytest.mark.parametrize("url", ARXIV_FAMILY)
+def test_r3_arxiv_and_mirrors_are_never_web_candidates_nor_any_hop(url):
+    from vera import web_route
+    assert web_route.is_web_candidate({"url": url, "title": "t"}) is False
+    assert web_route.make_hop_gate("https://example.org/page", cfg={})(url) == "read_arxiv_portal"
+    assert web_route.make_hop_gate(url, cfg={})(url) == "read_arxiv_portal"  # also as the start URL
+
+
+def test_r3_redirect_hop_to_an_arxiv_mirror_is_refused_before_any_request():
+    from vera import public_fetch, web_route
+    sent = []
+
+    def fetch(url, hop_gate=None, robots_cache=None):  # a public_fetch stand-in: gate each hop, then "request" it
+        for hop in (url, "https://ar5iv.labs.arxiv.org/html/2101.00001"):  # the start URL redirects to a mirror
+            why = hop_gate(hop)
+            if why:
+                raise public_fetch.FetchRefused(why)
+            sent.append(hop)
+        raise AssertionError("the mirror hop was requested")
+    res = web_route.read_web("What are hadrons?", [{"url": "https://example.org/hadrons", "title": "Hadrons"}],
+                             fetch=fetch, cfg={**web_route.load_config(), "topic_order": {"enabled": False}})
+    assert sent == ["https://example.org/hadrons"] and res.pages == [] and len(res.listed) == 1
+    assert res.dev[0]["gate"]["read"] == "read_arxiv_portal"
+    assert "arXiv is used only to find original sources" in json.dumps(res.listed[0])

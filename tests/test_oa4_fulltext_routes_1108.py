@@ -16,9 +16,6 @@ from tests import acq_support as A
 from tests import arxiv_synth as X
 from vera import acq_config, arxiv_fulltext, auto_acquire
 
-# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
-# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
-pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -91,6 +88,7 @@ DISPATCH = [
 ]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("cid,cand,doi,arx_on,want", DISPATCH, ids=[d[0] for d in DISPATCH])
 def test_char_dispatch_unchanged(rec, cid, cand, doi, arx_on, want):
     cfg = A.cfg()
@@ -106,6 +104,7 @@ def test_char_known_stops_before_any_route(rec):
         assert _dispatch(cand, doi, cfg, known=True) == ("stop", {"code": acq_config.reason(cfg, "in_corpus")})
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_char_min_spans_passed_to_arxiv(rec):
     assert _dispatch(dict(ARX), X.DOI, A.cfg(), min_spans=1)[1]["min_spans"] == 1
 
@@ -134,6 +133,7 @@ ROUTABLE = [
 ]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("cid,cand,arx_on,want", ROUTABLE, ids=[r[0] for r in ROUTABLE])
 def test_char_routable_unchanged(cid, cand, arx_on, want):
     cfg = A.cfg()
@@ -172,6 +172,7 @@ def test_default_route_claims_everything():
         assert FR.EUROPEPMC.claims(c, A.cfg()) is True
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_select_does_not_mutate_candidate():
     c = dict(ARX)
     before = copy.deepcopy(c)
