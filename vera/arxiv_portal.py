@@ -93,13 +93,15 @@ def _doi_of(v) -> str | None:
 
 def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clock: Callable = time.monotonic,
                     provider=None, cache_ttl_s: float = 86400.0):
-    """OD-1110-ARXIV-OPENALEX (owner 2026-11-10, "Yes, targeted lookup"): for an arXiv record INSPIRE does not know,
-    ONE targeted OpenAlex metadata lookup of the work 10.48550/arXiv.<id> (filter doi:, select doi, locations,
-    referenced_works), then ONE call resolving at most max_refs referenced works to their DOIs (filter openalex_id:,
-    select doi). Both go through the shared /ask OpenAlex provider (OpenAlexProvider.metadata_get): its daily budget
-    with the visitor/seed split, the API allowlist and openalex rate portal, and the optional key. The process-wide
-    OpenAlex quota cooldown is honoured and started on a quota error; nothing is retried. -> ([published-version
-    DOIs], [reference DOIs]) or None. Never raises. The generic openalex_rw adapter stays off."""
+    """OD-1110-ARXIV-OPENALEX (owner 2026-11-10, "Yes, targeted lookup"; "one targeted OpenAlex lookup per arXiv
+    record"): for an arXiv record INSPIRE does not know, exactly ONE OpenAlex metadata call for the work
+    10.48550/arXiv.<id> (filter doi:, select id,doi,locations: identifiers only). Its published version is the work DOI
+    or a doi.org location that is not an arXiv DOI. referenced_works are OpenAlex W ids, not DOIs; resolving them would
+    need a second call, so with one call per record OpenAlex yields NO reference candidates (INSPIRE still does).
+    Through the shared /ask OpenAlex provider (OpenAlexProvider.metadata_get): its daily budget with the visitor/seed
+    split, the API allowlist and openalex rate portal, and the optional key. The process-wide quota cooldown is honoured,
+    and started only by a PROVIDER quota error, never by VERA-DAR's own refusal (seed share, own cap, pacing: review
+    D1). Nothing is retried. -> ([published-version DOI], []) or None. Never raises. openalex_rw stays off."""
     from vera import search_providers as sp
     now = clock()
     hit = _OA_CACHE.get(aid)
@@ -119,9 +121,10 @@ def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clo
     if p is None or not hasattr(p, "metadata_get"):
         counts["oa_no_provider"] = counts.get("oa_no_provider", 0) + 1
         return None
-
-    def get(params):
-        resp = p.metadata_get(params, float(timeout_s))
+    try:
+        counts["oa_calls"] = counts.get("oa_calls", 0) + 1
+        resp = p.metadata_get({"filter": f"doi:https://doi.org/10.48550/arxiv.{aid}", "per_page": 1,
+                               "select": "id,doi,locations"}, float(timeout_s))
         st = int(getattr(resp, "status_code", 200) or 200)
         if st == 429:
             raise sp.ProviderResponseError("openalex 429 quota")
@@ -129,33 +132,22 @@ def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clo
             raise sp.ProviderResponseError(f"openalex status {st}")
         doc = resp.json() if hasattr(resp, "json") else {}
         res = doc.get("results") if isinstance(doc, dict) else None
-        return [r for r in res if isinstance(r, dict)] if isinstance(res, list) else []
-    try:
-        counts["oa_calls"] = counts.get("oa_calls", 0) + 1
-        works = get({"filter": f"doi:https://doi.org/10.48550/arxiv.{aid}", "per_page": 1,
-                     "select": "id,doi,locations,referenced_works"})
-        if not works:
-            got = ([], [])
-        else:
+        works = [r for r in res if isinstance(r, dict)] if isinstance(res, list) else []
+        own: list = []
+        if works:
             w = works[0]
             own = [d for d in [_doi_of(w.get("doi"))] + [
                 _doi_of(x.get("landing_page_url")) for x in (w.get("locations") or ()) if isinstance(x, dict)] if d]
             own = list(dict.fromkeys(own))[:1]
-            wids = [str(x).rsplit("/", 1)[-1] for x in (w.get("referenced_works") or ()) if isinstance(x, str)]
-            wids = [x for x in wids if re.fullmatch(r"W\d{1,12}", x)][: max(0, int(max_refs))]
-            refs: list = []
-            if wids:
-                counts["oa_calls"] += 1
-                for r in get({"filter": "openalex_id:" + "|".join(wids), "per_page": len(wids), "select": "id,doi"}):
-                    d = _doi_of(r.get("doi"))
-                    if d and d not in refs and d not in own:
-                        refs.append(d)
-            got = (own, refs[: max(0, int(max_refs))])
+        got = (own, [])
     except Exception as e:  # noqa: BLE001  never retried
-        if sp._is_quota_error(e) and not sp._is_rate_skip(e):
+        own_why = sp._own_decision(e)
+        if own_why is None and sp._is_quota_error(e) and not sp._is_rate_skip(e):  # D1: a provider quota only
             from vera import reference_portal
             sp._QUOTA.block(clock(), float(reference_portal._openalex_cooldown()))
             counts["oa_429"] = counts.get("oa_429", 0) + 1
+        elif own_why is not None:
+            counts["oa_own_" + own_why] = counts.get("oa_own_" + own_why, 0) + 1
         else:
             counts["oa_failed"] = counts.get("oa_failed", 0) + 1
         return None

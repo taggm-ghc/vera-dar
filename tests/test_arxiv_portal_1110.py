@@ -300,20 +300,18 @@ WORK = {"id": "https://openalex.org/W1", "doi": f"https://doi.org/10.48550/arxiv
         "referenced_works": [f"https://openalex.org/W{i}" for i in range(20, 35)]}
 
 
-def test_openalex_targeted_lookup_published_version_and_capped_references(monkeypatch):
+def test_openalex_one_call_per_record_gives_the_published_version_only(monkeypatch):
     from vera import search_providers as sp
     monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: False)
-    p = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a", "https://doi.org/10.48550/arxiv.2101.1",
-                           "https://doi.org/10.9999/synth.ref.b"])
+    p = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a"])
     counts = {}
     own, refs = _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 0.0, provider=p)
-    assert own == ["10.9999/synth.cs.journal"] and refs == ["10.9999/synth.ref.a", "10.9999/synth.ref.b"]
+    assert own == ["10.9999/synth.cs.journal"] and refs == []  # W-id references would need a second call: not made
+    assert len(p.calls) == 1 and counts["oa_calls"] == 1  # owner: ONE targeted lookup per arXiv record
     assert p.calls[0]["filter"] == f"doi:https://doi.org/10.48550/arxiv.{AID}" and "api_key" not in p.calls[0]
-    assert set(p.calls[0]["select"].split(",")) == {"id", "doi", "locations", "referenced_works"}
-    assert p.calls[1]["filter"].count("|") == 9 and p.calls[1]["select"] == "id,doi"  # capped at max_refs (10)
-    assert len(p.calls) == 2 and counts["oa_calls"] == 2
+    assert set(p.calls[0]["select"].split(",")) == {"id", "doi", "locations"}  # identifiers only
     _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 1.0, provider=p)
-    assert len(p.calls) == 2  # cached
+    assert len(p.calls) == 1  # cached
 
 
 def test_openalex_quota_error_starts_the_shared_cooldown_and_unknown_work_yields_nothing(monkeypatch):
@@ -334,7 +332,9 @@ def test_openalex_runs_only_when_inspire_does_not_know_the_record(inspire, monke
     inspire["body"] = json.dumps({"hits": {"hits": []}}).encode()  # INSPIRE: unknown e-print
     monkeypatch.setattr(arxiv_portal, "openalex_lookup",
                         lambda aid, *a, **k: inspire["oa_calls"].append(aid) or (["10.9999/synth.cs.journal"], []))
-    out = arxiv_portal.extend("q", [seed], A.cfg(), clock=lambda: 0.0)
+    on = A.cfg()
+    on["arxiv_portal"]["openalex"]["enabled"] = True  # ships off (T1); the owner flips it after the terms review
+    out = arxiv_portal.extend("q", [seed], on, clock=lambda: 0.0)
     assert inspire["oa_calls"] == [AID] and len(inspire["calls"]) == 1
     new = out[1:]
     assert [(c["doi"], c["portal_kind"], c["portal_lookup"], c["portal_via"]) for c in new] == [
@@ -343,7 +343,7 @@ def test_openalex_runs_only_when_inspire_does_not_know_the_record(inspire, monke
     arxiv_portal.reset_for_tests()
     inspire["oa_calls"].clear()
     inspire["body"] = _inspire_body()  # INSPIRE knows it: no OpenAlex call
-    arxiv_portal.extend("q", [seed], A.cfg(), clock=lambda: 0.0)
+    arxiv_portal.extend("q", [seed], on, clock=lambda: 0.0)
     assert inspire["oa_calls"] == []
     off = A.cfg()
     off["arxiv_portal"]["openalex"]["enabled"] = False
@@ -374,3 +374,29 @@ def test_metadata_get_uses_the_shared_budget_split_and_optional_key(monkeypatch)
     prov._used = 10**6  # the seed share and the cap are the provider's own (_spend)
     with request_origin.scope(request_origin.SEED), pytest.raises(sp.ProviderUnavailable):
         prov.metadata_get({"filter": "doi:x"}, 1.0)
+
+
+def test_t1_openalex_lookup_ships_off():
+    assert A.cfg()["arxiv_portal"]["openalex"]["enabled"] is False
+
+
+def test_d1_own_seed_share_refusal_never_starts_the_cooldown_and_visitor_search_stays_available(monkeypatch):
+    """Review D1: VERA-DAR's own seed-share refusal is not a provider quota error: no process-wide cooldown, so a
+    visitor's OpenAlex search right after it still goes out."""
+    from tests.test_searchcaps_1110_openalex_key import CFG
+    from vera import request_origin, search_providers as sp
+    sent = []
+    prov = sp.OpenAlexProvider(CFG["openalex"], transport=lambda u, p, h, t: sent.append(dict(p)) or _OAResp({"results": []}))
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    prov._day, prov._used = prov._today(), request_origin.seed_cap(prov._budget, 0.5)  # the seed share is spent
+    blocked = []
+    real_block = sp._QUOTA.block
+    monkeypatch.setattr(sp._QUOTA, "block", lambda now, s: blocked.append(s) or real_block(now, s))
+    counts = {}
+    with request_origin.scope(request_origin.SEED):
+        assert _REAL_OA("2601.00011", 10, 5.0, counts, clock=lambda: 0.0, provider=prov) is None
+    assert blocked == [] and sent == [] and counts.get("oa_own_own_cap") == 1
+    assert sp._QUOTA.blocked(0.0) is False
+    with request_origin.scope(request_origin.VISITOR):  # the visitor reserve is untouched
+        prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
+    assert len(sent) == 1
