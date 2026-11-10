@@ -1458,7 +1458,9 @@ def _own_decision(e: Exception):
     else:
         m = _NOT_ATTEMPT.search(t)
         reason = m.group(1) if m else None
-    if reason in ("daily_cap", "seed_excluded"):  # SEARCHCAPS-1110: a seed refusal is our own allowance decision
+    if reason == "seed_excluded":  # POLISH-1110: an exclusion for seed runs, not a used-up allowance
+        return "seed_excluded"
+    if reason == "daily_cap":
         return "own_cap"
     if reason is not None:
         return None if reason in rate_limit.PROVIDER_BUSY_REASONS else "paced"
@@ -1764,7 +1766,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"
                 own = _own_decision(e)
-                if own in ("own_cap", "robots"):  # OUTCOME-LABELS-1108: our own decision, never "a search service failed"
+                if own in ("own_cap", "seed_excluded", "robots"):  # OUTCOME-LABELS-1108: our own decision, never "a search service failed"
                     st_oa = own
                 elif _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1

@@ -23,7 +23,7 @@ from vera import portal_store as ds
 logger = logging.getLogger("vera.discovery")
 
 # research_record._PORTAL_STATUS plus the raw search_providers statuses -> discovery_event.status
-_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "skipped", "own_cap": "skipped", "robots": "skipped",
+_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "skipped", "own_cap": "skipped", "seed_excluded": "skipped", "robots": "skipped",
            "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped"}
 _RELEVANT_OUTCOMES = ("admitted", "reused", "not_used")  # not_used = admitted but over the document budget
 _ATTEMPTED_OUTCOMES = ("admitted", "rejected", "not_used")

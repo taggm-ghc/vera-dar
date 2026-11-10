@@ -13,3 +13,22 @@ def test_landing_url_survives_retrieve_all():
     by = {s["url"]: s for s in out}
     assert by["https://example.org/a.pdf"]["landing_url"] == "https://example.org/a"
     assert "landing_url" not in by["https://example.org/b"]
+
+
+def test_seed_exclusion_is_not_a_used_up_allowance():
+    from vera import research_outcome as ro, search_providers as sp
+    assert sp._own_decision(RuntimeError("rate_limited (seed_excluded; not an attempt)")) == "seed_excluded"
+    assert sp._own_decision(RuntimeError("rate_limited (daily_cap; not an attempt)")) == "own_cap"
+    res = ro.summarize_outcome([ro.PortalAttempt("duckduckgo", "seed_excluded", 0)], [], budget_exhausted=False,
+                               older_evidence_available=False, new_evidence_admitted=False)
+    assert "ackground seeding does not use that search service" in res.user_text
+    assert "used up" not in res.user_text
+
+
+def test_wait_too_long_sentence_is_complete_as_rendered():
+    from vera import research_outcome as ro
+    c = ro.CandidateOutcome("c1", terminal_reason="queued_background", detail="R-ACQ-RATELIMITED-WAIT_TOO_LONG")
+    res = ro.summarize_outcome([ro.PortalAttempt("openalex", "completed", 2)], [c], budget_exhausted=False,
+                               older_evidence_available=False, new_evidence_admitted=False, source_unreachable=True)
+    assert ("A source found was not fetched because that site's rate limit required a longer wait than the time "
+            "left for this question.") in res.user_text
