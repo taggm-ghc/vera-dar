@@ -19,12 +19,14 @@ No LLM, no network. Document UNION is not stored (020 *_eff_v views); only VOTE 
 from __future__ import annotations
 
 import contextlib
+import gc
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -48,6 +50,32 @@ _ABBR = {"domain": "d", "topic": "t", "subtopic": "s"}
 _WORKING = ("scan", "build", "w_nodes", "w_links", "w_votes", "w_retire", "finish")
 TERMINAL = ("idle", "stopped")
 _LABEL_NORM = re.compile(r"\s+")
+
+
+_TRIM_WARNED = [False]
+
+
+def malloc_trim_release(enabled: bool = True) -> bool:
+    """Post-pass allocator release: gc.collect(), then glibc malloc_trim(0) (Linux/glibc only; a no-op elsewhere).
+    Returns True when malloc_trim ran. Never raises; a failure is logged once per process."""
+    try:
+        gc.collect()
+    except Exception:  # noqa: BLE001
+        pass
+    if not enabled or not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes  # noqa: PLC0415
+        import platform  # noqa: PLC0415
+        if platform.libc_ver()[0] != "glibc":
+            return False
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if not _TRIM_WARNED[0]:
+            _TRIM_WARNED[0] = True
+            log.info("chunk_taxo malloc_trim unavailable (%s); skipped", type(exc).__name__)
+        return False
 
 
 def _num(jcfg: dict, key: str):
@@ -144,6 +172,7 @@ class Job:
                     self.jcfg = dict(self.jcfg, **{key: float(env[var]) if "." in str(env[var]) else int(env[var])})
                 except ValueError:
                     pass
+        self.trim_on = self.jcfg.get("malloc_trim") is not False and str(env.get("CHUNK_TAXO_MALLOC_TRIM", "1")).lower() not in ("0", "false", "off", "no")
         self.core = core
         self._emb = embedder
         self._emb_injected = embedder is not None
@@ -198,6 +227,21 @@ class Job:
         """One bounded, resumable pass. Never raises. Returns {state, complete, rows_embedded, ...} (counts only)."""
         if not self.on:
             return {"state": "off", "complete": False, "rows_embedded": 0}
+        try:
+            return self._run_pass()
+        finally:
+            self._post_pass_release()  # every exit: normal, early stop, error
+
+    def _post_pass_release(self) -> None:
+        """Drop leftover per-pass references, then return freed allocator memory to the OS (RSS stays flat between passes)."""
+        try:
+            self._release_buffers()
+            self._vote_rows, self._retire_keys, self._fin = [], [], None
+        except Exception:  # noqa: BLE001
+            pass
+        malloc_trim_release(self.trim_on)
+
+    def _run_pass(self) -> dict:
         try:
             self._t0 = self._wall()
             self.rows_embedded, self._stop, self._phase, self._inert = 0, None, "start", None
