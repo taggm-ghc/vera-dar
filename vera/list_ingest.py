@@ -118,14 +118,23 @@ def _journal_doi(v) -> str | None:
     return d if d and not _ARXIV_DOI.match(d) else None
 
 
-def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
-    """The journal DOI of an arXiv id through INSPIRE, then OpenAlex (identifier lookups, gated by api_permissions)."""
-    import requests
+def _api_get(url: str, params: dict, timeout_s: float):
+    """The gated identifier lookup: vera.api_permissions.call (entry, conditions, rate portal, UA) over the pinned
+    public-only GET, purpose "metadata" (same pattern as vera.portal_inspire). Raises ApiDenied / RateLimited with
+    nothing sent when the entry is missing, denied or limited."""
     from vera import api_permissions
+    from vera import selective_fetch as sf
+    with api_permissions.purpose_scope("metadata", url):
+        return api_permissions.call(sf.pinned_get, url, params=params, timeout=timeout_s, purpose="metadata",
+                                    allow_redirects=False)
+
+
+def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
+    """The journal DOI of an arXiv id through INSPIRE, then OpenAlex (metadata-only identifier lookups through the
+    existing api_permissions entries; no search, no body text)."""
     t = float(cfg["lookup_timeout_s"])
     try:
-        r = api_permissions.call(requests.get, cfg["inspire"]["url"], params={"q": f"arxiv:{arxiv_id}", "fields": "dois",
-                                                                           "size": 1}, timeout=t, allow_redirects=False)
+        r = _api_get(cfg["inspire"]["url"], {"q": f"arxiv:{arxiv_id}", "fields": "dois", "size": 1}, t)
         if getattr(r, "status_code", 0) == 200:
             for h in (r.json().get("hits") or {}).get("hits") or ():
                 for d in (h.get("metadata") or {}).get("dois") or ():
@@ -134,12 +143,11 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
                         return j
     except Exception as e:  # noqa: BLE001
         logger.info("list-ingest inspire lookup failed (%s)", type(e).__name__)
-    r = api_permissions.call(requests.get, cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
-                             params={"select": "doi,locations"}, timeout=t, allow_redirects=False)
+    r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
+                 {"select": "doi,locations"}, t)
     if getattr(r, "status_code", 0) != 200:
         return None
-    w = r.json()
-    for loc in w.get("locations") or ():
+    for loc in r.json().get("locations") or ():
         j = _journal_doi((loc or {}).get("landing_page_url"))
         if j:
             return j

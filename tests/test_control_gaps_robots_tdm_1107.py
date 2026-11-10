@@ -371,6 +371,7 @@ REGISTRY: dict[str, tuple] = {
     "vera/search_providers.py:doaj_default_transport": (API_GATE, "vera/search_providers.py:doaj_default_transport", "api_permissions.call("),
     "vera/wiki_ref_portal.py:_api_get": (API_GATE, "vera/wiki_ref_portal.py:_api_get", "api_permissions.call("),  # SEARCHCAPS-1110 Wikipedia search API
     "vera/portal_inspire.py:_default_get": (API_GATE, "vera/portal_inspire.py:_default_get", "api_permissions.call("),  # ROUTES-1108 inspire (ships owner_switch deny)
+    "vera/list_ingest.py:_api_get": (API_GATE, "vera/list_ingest.py:_api_get", "api_permissions.call("),  # LIST-INGEST-1110 identifier-only metadata lookups
     "vera/source_resolver.py:_api_get": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:_s2": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:lookup_doi": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
@@ -604,5 +605,5 @@ def test_no_ungated_api_sites_remain():
     no entry may use any other class for an API site, and none may come back as ungated."""
     assert all(e[0] in (GATE, TRANSPORT, ROBOTS_FETCH, FIRST_PARTY, LLM_API, NO_REQUEST, API_GATE, TRACKED_GAP)
                for e in REGISTRY.values())
-    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 14  # SEARCHCAPS-1110: + wiki_ref_portal._api_get (Wikipedia search API)
+    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 15  # SEARCHCAPS-1110: + wiki_ref_portal._api_get (Wikipedia search API); LIST-INGEST-1110: + list_ingest._api_get
     assert sum(1 for e in REGISTRY.values() if e[0] == TRACKED_GAP) == 0  # Wikipedia portal gated since e87ef55
