@@ -34,6 +34,7 @@ This is the canonical list of the environment variables the serving code reads. 
 | `OPENAI_API_KEY` | Only if the OpenAI fallback is on | `openai_fallback.enabled` ships `false`: the API then makes no OpenAI call, and a set key is ignored. Turning it on is a reviewed config change plus a deploy, and needs a valid key. |
 | `VERA_DB_URL_RO` | Optional | Read-only database connection: aggregate corpus description, the database corpus source, and reading acquired documents. |
 | `VERA_DB_URL_WO` | Optional; needed for acquisition | Write-only application account that automatic acquisition uses to store acquired documents. Acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. It is also the INSERT-only connection for the request trace and the stored corpus digest (see "Request trace and stored digest" below). |
+| `OPENALEX_API_KEY` | Optional | OpenAlex API key. Set: the OpenAlex search cap is 1000/day, half reserved for visitor questions, paced at most 5 requests/second (`config/rate_limits.json`). Unset: keyless, 90/day. Never logged. |
 | `VERA_AUTOACQ_DISABLED` | Optional (kill switch) | When set to a true-like value (`true`, `1`, `yes`, `on`), automatic acquisition is off even though `config/auto_acquire.json` enables it. Leave unset for normal operation. |
 | `VERA_FULLDOC_BUNDLE_DIR` | Optional | Full-document corpus from a local bundle directory. |
 | `VERA_FULLDOC_DB_RUN_ID` | Optional | Full-document corpus from a pinned database run, read through `VERA_DB_URL_RO`. |
