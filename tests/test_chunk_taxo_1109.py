@@ -227,8 +227,19 @@ def test_numpy_fallback_parity(cfg, data):
     assert da["meta"].pop("numpy") is True and db["meta"].pop("numpy") is False
     for x, y in zip(da["nodes"], db["nodes"]):
         for c1, c2 in zip(x.pop("center"), y.pop("center")):
-            assert abs(c1 - c2) < 1e-7
-    assert da == db
+            assert abs(c1 - c2) < 1e-6
+    assert _close(da, db)  # numpy runs in float32 (TAXO-MEM2-1109), pure Python in float64: same structure, floats within 1e-5
+
+
+def _close(a, b, tol=1e-5):
+    """Equal structure and exactly equal non-floats; floats equal within tol."""
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_close(a[k], b[k], tol) for k in a)
+    if isinstance(a, (list, tuple)):
+        return len(a) == len(b) and all(_close(x, y, tol) for x, y in zip(a, b))
+    if isinstance(a, float) or isinstance(b, float):
+        return a is not None and b is not None and abs(a - b) <= tol
+    return a == b
 
 
 @pytest.mark.skipif(not ct.has_numpy(), reason="numpy not installed")

@@ -208,15 +208,22 @@ def _r(x, nd=9):
     return round(float(x), nd)
 
 
-def _prep(vecs):
-    """Validate and L2-normalise. Returns an opaque matrix handle (ndarray or list of lists) and its dimension."""
-    if _np is not None and isinstance(vecs, _np.ndarray):
+def _prep(vecs, owned=False):
+    """Validate and L2-normalise. Returns an opaque matrix handle (float32 ndarray, or list of lists) and its dimension.
+    numpy backend: ONE float32 copy (none when `owned` and the input is already float32, which is then normalised in place);
+    the norms come from einsum, so there is no squared-values temporary and no float64 copy."""
+    if _np is not None and (isinstance(vecs, _np.ndarray) or (_USE_NP and len(vecs) > 0)):
+        if not isinstance(vecs, _np.ndarray):
+            try:
+                vecs, owned = _np.asarray(vecs, dtype=_np.float32), True
+            except (ValueError, TypeError) as e:
+                raise ValueError("ragged or non-numeric vectors") from e
         if vecs.ndim != 2 or vecs.shape[0] == 0 or vecs.shape[1] == 0:
             raise ValueError("vectors must be a non-empty 2-D array")
-        if not _np.isfinite(vecs).all():
+        A = vecs.astype(_np.float32, copy=not owned)
+        nr = _np.sqrt(_np.einsum("ij,ij->i", A, A))
+        if not _np.isfinite(nr).all():
             raise ValueError("non-finite vector component")
-        A = vecs.astype(_np.float64)  # one float64 copy; float32 input is not routed through Python lists
-        nr = _np.sqrt((A * A).sum(axis=1))
         if (nr == 0).any():
             raise ValueError("zero vector")
         A /= nr[:, None]
@@ -238,8 +245,6 @@ def _prep(vecs):
         if nr == 0:
             raise ValueError("zero vector")
         rows.append([x / nr for x in vv])
-    if _USE_NP:
-        return _np.array(rows, dtype=_np.float64)
     return rows
 
 
@@ -251,22 +256,62 @@ def _row(X, i):
     return [float(x) for x in X[i]]
 
 
+_BLOCK = 512  # rows per batch in every n x k computation (numpy backend)
+
+
+def _ca(C):
+    """Centers as a float32 (d x k) matrix for X-block @ Ca."""
+    return _np.ascontiguousarray(_np.array(C, dtype=_np.float32).T)
+
+
+def _sim_block(Xb, Ca):
+    """Rounded dot products of one row batch with the centers, as float64 (batch x k)."""
+    return _np.round((Xb @ Ca).astype(_np.float64), 10)
+
+
 def _sims(X, C, block=1024):
-    """n x len(C) matrix of dot products (list of lists), rounded to 10 decimals."""
+    """n x len(C) matrix of dot products (list of lists), rounded to 10 decimals. For the numpy backend use only on small X."""
     if not C:
         return [[] for _ in range(len(X))]
     if _USE_NP:
-        Ca = _np.array(C, dtype=_np.float64).T
+        Ca = _ca(C)
         out = []
         for s in range(0, len(X), block):
-            out.extend(_np.round(X[s:s + block] @ Ca, 10).tolist())
+            out.extend(_sim_block(X[s:s + block], Ca).tolist())
         return out
     return [[round(math.sumprod(x, c), 10) for c in C] for x in X]
 
 
+def _col(X, c):
+    """Dot products of every row with ONE center (list of n floats, rounded to 10 decimals)."""
+    if _USE_NP:
+        return _np.round((X @ _np.array(c, dtype=_np.float32)).astype(_np.float64), 10).tolist()
+    return [s[0] for s in _sims(X, [c])]
+
+
+def _assign(X, centers):
+    """Nearest center per row: (labels, best rounded similarity per row). The numpy backend works in row batches."""
+    if _USE_NP:
+        Ca = _ca(centers)
+        lab, best = [], []
+        for s in range(0, len(X), _BLOCK):
+            S = _sim_block(X[s:s + _BLOCK], Ca)
+            a = S.argmax(axis=1)
+            lab.extend(a.tolist())
+            best.extend(S[_np.arange(len(a)), a].tolist())
+        return lab, best
+    S = _sims(X, centers)
+    lab = [_argmax(r) for r in S]
+    return lab, [S[i][lab[i]] for i in range(len(S))]
+
+
 def _msum(X, idx):
     if _USE_NP:
-        return X[list(idx)].sum(axis=0).tolist()
+        ix = _np.asarray(list(idx), dtype=_np.intp)
+        acc = _np.zeros(X.shape[1], dtype=_np.float64)
+        for s in range(0, len(ix), _BLOCK):
+            acc += X[ix[s:s + _BLOCK]].sum(axis=0, dtype=_np.float64)
+        return acc.tolist()
     d = len(X[0])
     acc = [0.0] * d
     for i in idx:
@@ -299,7 +344,7 @@ def _kmeans(X, k, seed, max_iter):
     rng = random.Random(seed)
     chosen = [rng.randrange(n)]
     centers = [_row(X, chosen[0])]
-    mind = [max(0.0, 1.0 - s[0]) for s in _sims(X, centers)]
+    mind = [max(0.0, 1.0 - s) for s in _col(X, centers[0])]
     while len(centers) < k:
         total = sum(m * m for m in mind)
         if total <= 1e-18:
@@ -314,19 +359,18 @@ def _kmeans(X, k, seed, max_iter):
         chosen.append(pick)
         c = _row(X, pick)
         centers.append(c)
-        col = _sims(X, [c])
-        mind = [min(m, max(0.0, 1.0 - s[0])) for m, s in zip(mind, col)]
+        mind = [min(m, max(0.0, 1.0 - s)) for m, s in zip(mind, _col(X, c))]
     labels = None
     for _ in range(max_iter):
-        S = _sims(X, centers)
-        new = [_argmax(r) for r in S]
+        new, best = _assign(X, centers)
         # an empty cluster is re-seeded with the point that fits its own center worst
         sizes = Counter(new)
         for c in range(k):
             if sizes.get(c, 0) == 0:
-                worst = min((i for i in range(n) if sizes[new[i]] > 1), key=lambda i: (S[i][new[i]], i))
+                worst = min((i for i in range(n) if sizes[new[i]] > 1), key=lambda i: (best[i], i))
                 sizes[new[worst]] -= 1
                 new[worst] = c
+                best[worst] = _sims(X[worst:worst + 1], [centers[c]])[0][0]
                 sizes[c] = 1
         if new == labels:
             break
@@ -335,7 +379,7 @@ def _kmeans(X, k, seed, max_iter):
         for i, l in enumerate(labels):
             groups[l].append(i)
         centers = [_unit(_msum(X, g)) for g in groups]
-    return _canon(labels, X), sum(S[i][labels[i]] for i in range(n))
+    return _canon(labels, X), sum(best)
 
 
 def _kmeans_best(X, k, seeds, max_iter):
@@ -367,8 +411,26 @@ def _silhouette(X, labels):
     for i, l in enumerate(labels):
         groups[l].append(i)
     sums = [_msum(X, groups[c]) for c in ks]
-    S = _sims(X, sums)
     pos = {c: j for j, c in enumerate(ks)}
+    if _USE_NP:
+        sizes = _np.array([len(groups[c]) for c in ks], dtype=_np.float64)
+        own = _np.array([pos[l] for l in labels], dtype=_np.intp)
+        Sa, tot = _ca(sums), 0.0
+        for s in range(0, len(labels), _BLOCK):
+            S = _sim_block(X[s:s + _BLOCK], Sa)
+            o = own[s:s + _BLOCK]
+            r = _np.arange(len(o))
+            na = sizes[o]
+            ok = na >= 2
+            a = (na - S[r, o]) / _np.maximum(na - 1, 1)
+            other = 1.0 - S / sizes[None, :]
+            other[r, o] = _np.inf
+            b = other.min(axis=1)
+            den = _np.maximum(a, b)
+            term = _np.where(den > 0, (b - a) / _np.where(den > 0, den, 1.0), 0.0)
+            tot += float(term[ok].sum())
+        return tot / len(labels)
+    S = _sims(X, sums)
     tot = 0.0
     for i, l in enumerate(labels):
         na = len(groups[l])
@@ -499,19 +561,19 @@ def _tokens(text, minlen):
 
 def _node_terms(texts, member_groups, p):
     """c-TF-IDF terms. member_groups: list of index lists (one class each). Returns list of term lists."""
-    docs = [set(_tokens(t, p["term_min_len"])) for t in texts]
-    counts_doc = [Counter(_tokens(t, p["term_min_len"])) for t in texts]
     n = max(1, len(texts))
-    df = Counter()
-    for d in docs:
-        df.update(d)
-    banned = {t for t, c in df.items() if c / n > p["term_max_df"]}
-    classes = []
-    for g in member_groups:
-        c = Counter()
+    classes_of = [[] for _ in texts]  # streaming: one Counter per text at a time, never held for all texts
+    for ci, g in enumerate(member_groups):
         for i in g:
-            c.update(counts_doc[i])
-        classes.append(c)
+            classes_of[i].append(ci)
+    classes = [Counter() for _ in member_groups]
+    df = Counter()
+    for i, t in enumerate(texts):
+        c = Counter(_tokens(t, p["term_min_len"]))
+        df.update(c.keys())
+        for ci in classes_of[i]:
+            classes[ci].update(c)
+    banned = {t for t, c in df.items() if c / n > p["term_max_df"]}
     total = Counter()
     for c in classes:
         total.update(c)
@@ -562,17 +624,33 @@ def _level_null(X, labels, k, p):
         keep = [j for j in range(g) if groups[j]]
         centers = [_unit(_msum(X, groups[j])) for j in keep]
         pos = {j: t for t, j in enumerate(keep)}
-        S = _sims(X, centers)
         ds = []
-        for i in range(n):
-            own = pos.get(lab[i])
-            row = [s for t, s in enumerate(S[i]) if t != own]
-            if not row:
-                continue
-            row.sort(reverse=True)
-            ds.append(round(1.0 - row[0], 10))
-            if len(row) >= 2:
-                all_m.append(round(row[0] - row[1], 10))
+        if _USE_NP:
+            g1 = len(centers) - 1
+            if g1 >= 1:
+                Ca = _ca(centers)
+                own = _np.array([pos[l] for l in lab], dtype=_np.intp)
+                for s in range(0, n, _BLOCK):
+                    S = _sim_block(X[s:s + _BLOCK], Ca)
+                    S[_np.arange(len(S)), own[s:s + _BLOCK]] = -_np.inf
+                    if g1 >= 2:
+                        part = _np.partition(S, g1 - 1, axis=1)
+                        top1, top2 = part[:, -1], part[:, -2]
+                        all_m.extend(_np.round(top1 - top2, 10).tolist())
+                    else:
+                        top1 = S.max(axis=1)
+                    ds.extend(_np.round(1.0 - top1, 10).tolist())
+        else:
+            S = _sims(X, centers)
+            for i in range(n):
+                own = pos.get(lab[i])
+                row = [s for t, s in enumerate(S[i]) if t != own]
+                if not row:
+                    continue
+                row.sort(reverse=True)
+                ds.append(round(1.0 - row[0], 10))
+                if len(row) >= 2:
+                    all_m.append(round(row[0] - row[1], 10))
         per_seed_d.append(_quantile(ds, p["null_q_dist"]))
         all_d.extend(ds)
     pv = [x for x in per_seed_d if x is not None]
@@ -704,6 +782,16 @@ def _level_info(model):
     return info
 
 
+def estimate_build_bytes(n, d, k_max=40, text_bytes=0):
+    """Upper-bound estimate of the EXTRA memory (bytes) build() + quality() need on top of the caller's own n x d float32
+    matrix and texts: the normalised float32 copy plus one more matrix-sized slack (a reorder copy when the input is not
+    sorted, or the quality() copy), per-row bookkeeping (assoc entries, label lists), c-TF-IDF counters (about half the text
+    size) and the Python-float center lists (about (2*k_max + 40) centers of d floats at 32 bytes per float).
+    Checked against the real measurement by tests/test_chunk_taxo_mem_1109.py."""
+    n, d, k_max, text_bytes = int(n), int(d), int(k_max), int(text_bytes)
+    return 8 * n * d + 2048 * n + text_bytes // 2 + (2 * k_max + 40) * d * 32
+
+
 def build(chunks, vecs, params, prior=None):
     """Derive the model. chunks: [(span_id, source_id, text)], vecs: aligned vectors. See module docstring."""
     p = copy.deepcopy(params)
@@ -716,7 +804,13 @@ def build(chunks, vecs, params, prior=None):
     if len(set(span_ids)) != len(span_ids):
         raise ValueError("duplicate span_id")
     texts = [chunks[i][2] for i in order]
-    X = _prep(vecs[order] if (_np is not None and isinstance(vecs, _np.ndarray)) else [vecs[i] for i in order])
+    if _np is not None and isinstance(vecs, _np.ndarray):
+        if order == list(range(len(order))):
+            X = _prep(vecs)  # already sorted: no reorder copy
+        else:
+            X = _prep(vecs[order], owned=True)  # the fancy-index copy is normalised in place
+    else:
+        X = _prep([vecs[i] for i in order])
     n = len(span_ids)
 
     k, sub_lab, sil = _choose_k(X, p)
@@ -805,9 +899,16 @@ def build(chunks, vecs, params, prior=None):
                   meta={"n": n, "k": k, "silhouette_k": sil, "levels": {lv: max(level_labels[lv]) + 1 for lv in LEVELS},
                         "numpy": bool(_USE_NP)})
     info = _level_info(model)
-    sims = {lv: _sims(X, info[lv]["centers"]) for lv in LEVELS}
-    for i, sid in enumerate(span_ids):
-        model.assoc[sid] = _decide(info, {lv: sims[lv][i] for lv in LEVELS}, p)
+    if _USE_NP:
+        cas = {lv: _ca(info[lv]["centers"]) for lv in LEVELS}
+        for s in range(0, n, _BLOCK):  # nearest-center per row batch: no n x k temporary
+            blk = {lv: _sim_block(X[s:s + _BLOCK], cas[lv]) for lv in LEVELS}
+            for r in range(min(_BLOCK, n - s)):
+                model.assoc[span_ids[s + r]] = _decide(info, {lv: blk[lv][r].tolist() for lv in LEVELS}, p)
+    else:
+        sims = {lv: _sims(X, info[lv]["centers"]) for lv in LEVELS}
+        for i, sid in enumerate(span_ids):
+            model.assoc[sid] = _decide(info, {lv: sims[lv][i] for lv in LEVELS}, p)
     return model
 
 

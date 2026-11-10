@@ -166,6 +166,7 @@ class Job:
         self.engines_created = 0
         self.rows_embedded = 0
         self.peak_rss = 0.0
+        self.build_estimate_mb = 0.0
         self._t0 = 0.0
         self._stop = None
         self._lock = threading.Lock()
@@ -303,6 +304,26 @@ class Job:
         if self._read_rss() > self.rss_hard:
             self._stop = "rss_hard"
             self._release_buffers()
+            return True
+        return False
+
+    def _headroom_short(self) -> bool:
+        """Pre-build headroom: stop (partial, reason rss_build, buffers released) when current RSS + the core's estimate of the
+        build's extra memory would exceed rss_hard_mb. The estimate comes from n, d, k_max and the text size."""
+        n = len(self._chunks)
+        d = int(self._vecs[0].shape[1]) if self._vecs else 0
+        params = self.cfg.get("params") if isinstance(self.cfg.get("params"), dict) else {}
+        est_fn = getattr(self.core, "estimate_build_bytes", None)
+        if est_fn is None:
+            from vera import chunk_taxo as _ct  # noqa: PLC0415
+            est_fn = _ct.estimate_build_bytes
+        k_max = min(int(params.get("k_max", 40)), max(1, n // max(1, int(params.get("min_cluster_size", 3)))))
+        est_mb = est_fn(n, d, k_max, sum(len(c["text"]) for c in self._chunks)) / 1048576
+        self.build_estimate_mb = round(est_mb, 1)
+        if self._read_rss() + est_mb > self.rss_hard:
+            self._stop = "rss_build"
+            self._release_buffers()
+            log.info("chunk_taxo build deferred: rss + estimate %.0f MB over limit %.0f MB (n=%d d=%d)", est_mb, self.rss_hard, n, d)
             return True
         return False
 
@@ -449,6 +470,8 @@ class Job:
     def _do_build(self):
         core = self.core
         if self._guard():  # before the clustering step
+            return 0.0
+        if self._headroom_short():  # the build adds about 8*n*d bytes more: do not start it without room (rss_hard_mb)
             return 0.0
         vecs = self._matrix()
         prior = self._load_prior() if self._mode in ("write", "curator") else None
