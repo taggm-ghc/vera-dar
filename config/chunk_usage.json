@@ -1,0 +1,18 @@
+{
+  "_note": "CHUNK-USAGE-1110 (WP11, work/CHUNK-VALUE-1110/plan.md section 6b). Per-chunk match-to-use counters in vera_vjay.chunk_use (migration 025, owner-run). Counts and UTC dates only; no question text. Best-effort: increments are queued in memory, flushed in bounded batches by a background thread, and dropped on any error; /ask is never slowed or failed. The writer also stays off until the table is detected (to_regclass probe, re-probed every probe_s), so shipping this code before the migration is inert.",
+  "enabled": true,
+  "queue_max": 2000,
+  "batch_max": 200,
+  "flush_s": 5.0,
+  "probe_s": 600.0,
+  "connect_timeout_s": 3,
+  "statement_timeout_ms": 3000,
+  "demote": {
+    "_note": "Selection-time score demotion. weight 0 = OFF (shipped). When weight > 0, a chunk with matched_count >= k_min and used_count = 0 has its admission relevance sort key multiplied by 1 / (1 + weight * max(0, ln((matched_count + 1) / (used_count + 1)) - threshold)). Rank change only: no candidate is removed, no floor is changed. Raise weight only after enough observations exist (plan 6b-3) and the offline guard and live Ask checks pass. Reversible by setting weight back to 0.",
+    "weight": 0,
+    "k_min": 50,
+    "threshold": 0.0,
+    "refresh_s": 900.0,
+    "max_rows": 50000
+  }
+}

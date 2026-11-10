@@ -215,6 +215,15 @@ def _trace_sent(sources) -> None:
                      "relevance": [s.get("relevance") for s in sources][:20]})
 
 
+def _note_used(ev, citations) -> None:
+    """CHUNK-USAGE-1110: count the chunks behind the delivered citations (best-effort, counts only, never raises)."""
+    try:
+        from vera import chunk_usage
+        chunk_usage.note_used(ev, citations)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _trace_cited(citations) -> None:
     rt.event("passages", "evidence_trace",
              detail={"cited_span_ids": sorted({str(c.get("span_id")) for c in citations if c.get("span_id")})[:20]})
@@ -733,6 +742,7 @@ def _answer_parts(question, res, ev, sources, cfg, grounding_cfg, cc, check_call
                      _subqueries(question, final, sources, resp_partial))
     trace = _trace(ev, records, citations, adequacy, sources)
     _trace_cited(citations)
+    _note_used(ev, citations)
     tokens, cost = totals()
     result = AskResult(answer=text, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind=kind,
@@ -921,6 +931,7 @@ def _answer(question: str, ev, model: str, pricing, *, chained: dict, grounding_
                      _subqueries(question, kept, sources, _resp_partial(kept, rcfg)))
     trace = _trace(ev, records, citations, adequacy, sources)
     _trace_cited(citations)
+    _note_used(ev, citations)
     result = AskResult(answer=checked, tokens_used=tokens, cost_usd=round(cost, 6), sources=tuple(sources),
                        claim_check=summary, accepted=True, claims=tuple(records), result_kind="answer",
                        contract=({"trace": trace} if trace else None), evidence=ev, citations=tuple(citations),

@@ -735,6 +735,13 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         k_r = str(t[3]["document_id"])
         n_rel[k_r] = n_rel.get(k_r, 0) + 1
     scored.sort(key=lambda t: t[:3])
+    try:  # CHUNK-USAGE-1110: rank-only demotion of often-matched, never-used chunks (weight 0 = off => dem is None)
+        from vera import chunk_usage as _cu
+        dem = _cu.demoter(_stamp_holder, corpus)
+        if dem is not None and scored:
+            scored.sort(key=lambda t: (t[0] * dem(t[3]), t[1], t[2]))
+    except Exception:  # noqa: BLE001
+        pass
     if hy is not None and any(t[3].get("vec_sim") is not None for t in scored):
         # HYBRID-1109: admission order = RRF of the lexical order and the vector order (rank only); the tuples are
         # re-keyed by fused position so every later sort on t[:3] keeps it.
@@ -911,6 +918,11 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             "admitted_spans": per_doc.get(did_s, 0),
             "corpus_added_at": _stamp_holder(corpus, did_s).get("corpus_added_at"),
             "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), None, None)})
+    try:  # CHUNK-USAGE-1110: best-effort counters (matched = cleared the relevance rules, selected = admitted)
+        from vera import chunk_usage as _cu2
+        _cu2.note_admission(corpus, [t[3] for t in scored], admitted, _stamp_holder)
+    except Exception:  # noqa: BLE001
+        pass
     by_reason: dict = {}
     for r in rejected:
         by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
