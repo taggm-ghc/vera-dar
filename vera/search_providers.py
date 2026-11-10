@@ -455,17 +455,31 @@ class OpenAlexProvider:
         self.last_query: dict | None = None
         self.relaxed = False       # set by search_and_fetch for the single zero-hit retry (R72-e)
         self.last_relaxed = False
-        self._budget = int(settings["daily_search_budget"])
+        self._settings_budget = int(settings["daily_search_budget"])
         self._today = today or (lambda: datetime.now(timezone.utc).date().isoformat())
         self._day, self._used = None, 0
 
+    @property
+    def _budget(self) -> int:
+        """SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): config/rate_limits.json portals.openalex.search_daily_cap (its
+        with_key value when OPENALEX_API_KEY is set) when present, else search.openalex.daily_search_budget."""
+        from vera import request_origin
+        v = request_origin.policy("openalex").get("search_daily_cap")
+        return int(v) if isinstance(v, int) and not isinstance(v, bool) and v > 0 else self._settings_budget
+
     def _spend(self) -> None:
+        from vera import request_origin
         day = self._today()
         if day != self._day:
             self._day, self._used = day, 0
-        if self._used >= self._budget:
-            raise ProviderUnavailable(f"openalex daily search budget of {self._budget} spent for {day} "
+        cap = self._budget
+        why = request_origin.refusal("openalex", self._used, cap)
+        if why == "cap":
+            raise ProviderUnavailable(f"openalex daily search budget of {cap} spent for {day} "
                                       "(per-process guard; non-retryable)")
+        if why:  # SEARCHCAPS-1110: a seed request reached its share; the rest is reserved for visitors
+            raise ProviderUnavailable(f"openalex daily search budget (seed share of {cap}) spent for {day} "
+                                      "(visitor reserve; non-retryable)")
         self._used += 1
 
     def can_relax(self, query: str) -> bool:
@@ -1412,7 +1426,7 @@ def _own_decision(e: Exception):
     else:
         m = _NOT_ATTEMPT.search(t)
         reason = m.group(1) if m else None
-    if reason == "daily_cap":
+    if reason in ("daily_cap", "seed_excluded"):  # SEARCHCAPS-1110: a seed refusal is our own allowance decision
         return "own_cap"
     if reason is not None:
         return None if reason in rate_limit.PROVIDER_BUSY_REASONS else "paced"
@@ -1576,6 +1590,9 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         b = _budget(cap, n_parts)
         if SCHOLARLY_ONLY.get():  # NONASK-1103 N3: variant rounds never call DDG, its id lookup or Wikipedia
             b = dict(b, ddg=False, wiki=False, lookup=0)
+        from vera import request_origin
+        if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
+            b = dict(b, ddg=False)  # SEARCHCAPS-1110: seed requests never call DuckDuckGo (OD-1110-SEARCHCAPS)
         return b
 
     def _budget(cap: int, n_parts: int = 1) -> dict:
@@ -1631,7 +1648,9 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         # NONASK-1103 S3: with several sub-queries the budget is re-planned for this call (question-level slots first)
         parts = list(SUBQUERIES.get() or ())
         multi = len(parts) > 1 and (s.get("subquery") or {}).get("enabled") is True
-        B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else (budget(cap0) if SCHOLARLY_ONLY.get() else B0)
+        from vera import request_origin
+        B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else \
+            (budget(cap0) if SCHOLARLY_ONLY.get() or request_origin.is_seed() else B0)
         use_ddg, use_epmc, use_wiki, use_arxiv, lookup_left = B["ddg"], B["epmc"], B["wiki"], B["arxiv"], B["lookup"]
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
@@ -2131,6 +2150,11 @@ class _DdgParts:
         self.status_code, self.text, self.headers, self.parts = 200, "", {}, parts
 
 
+# SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): "seeding never uses DuckDuckGo". Matches _OWN_CAP (our own decision).
+SEED_NO_DDG = ("duckduckgo_lite daily query cap is reserved for visitor questions; spent for seed requests "
+               "(origin=seed never uses DuckDuckGo)")
+
+
 class DuckDuckGoLiteProvider:
     """DuckDuckGo Lite as a DISCOVERY provider. `settings` is config search.duckduckgo_lite."""
     name = DDG_NAME
@@ -2173,12 +2197,16 @@ class DuckDuckGoLiteProvider:
             return False
 
     def _spend(self) -> None:
+        from vera import request_origin
         day = self._today()
         if day != self._day:
             self._day, self._used = day, 0
-        if self._used >= self._cap:
+        why = request_origin.refusal("duckduckgo", self._used, self._cap)
+        if why == "cap":
             raise ProviderUnavailable(f"duckduckgo_lite daily query cap (quota) of {self._cap} spent for {day} "
                                       "(per-process guard; non-retryable)")
+        if why:  # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): DuckDuckGo is reserved for visitor questions
+            raise ProviderUnavailable(SEED_NO_DDG)
         self._used += 1
 
     # ---- per-question, per-site-group cache (item #71 R11-b). Key = sha256 of the query string; value = a list of
@@ -2249,6 +2277,10 @@ class DuckDuckGoLiteProvider:
         # it goes through the same cache, daily cap, rate gate and transport as every other call.
         queries = list(queries) if queries else build_ddg_queries(query, self.query_terms, self.s)
         self.last_query = {"query": [q["query"] for q in queries], "mode": "site_groups"}
+        from vera import request_origin
+        if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
+            self.last_query["cause"] = "seed_excluded"  # SEARCHCAPS-1110: no request, no cache read, no robots fetch
+            raise ProviderUnavailable(SEED_NO_DDG)
         tx = self._transport or ddg_default_transport
         headers = {"User-Agent": self.s["user_agent"]}  # never altered, even after a challenge
         if self._robots_check is not None and any(self._cache_get(q) is None for q in queries):

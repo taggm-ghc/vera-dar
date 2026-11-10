@@ -349,7 +349,9 @@ def _stop_code(should_stop) -> str:
 
 def _ddg_site_search(host: str, terms: list) -> list:
     """The shared /ask DuckDuckGo Lite instance (vera.search_and_fetch.cached_chain): one explicit site: query."""
-    from vera import search_and_fetch, search_providers as sp
+    from vera import request_origin, search_and_fetch, search_providers as sp
+    if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
+        return []  # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): seed requests never use DuckDuckGo
     chain, _m, _mode = search_and_fetch.cached_chain()
     ddg = next((p for p in chain if getattr(p, "name", None) == sp.DDG_NAME), None)
     if ddg is None:

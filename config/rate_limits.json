@@ -43,6 +43,8 @@
       ],
       "key_env": "OPENALEX_API_KEY",
       "with_key": {"rate_per_s": 2.0, "burst": 4},
+      "origin": {"seed_allowed": true, "visitor_reserve_frac": 0.5},
+      "_searchcaps_1110_note": "OD-1110-SEARCHCAPS (owner 2026-11-10): origin.visitor_reserve_frac 0.5 = owner 'reserve half for visitors': a request marked origin=seed stops at floor(cap x 0.5) of the OpenAlex search cap (45 of the keyless 90); visitors may use the whole cap. Owner-decided value, not a calibrated threshold; what would change it: the per-day OpenAlex spend split by origin.",
       "contact_param": null,
       "sources": [
         {"url": "https://help.openalex.org/how-to-use-the-api/rate-limits-and-authentication", "read": "2026-10-21", "inspection": "summarizing fetch (docs.openalex.org 301-redirects here)",
@@ -71,6 +73,8 @@
       "burst": 1,
       "max_concurrency": 1,
       "daily_cap": 8,
+      "origin": {"seed_allowed": false, "visitor_reserve_frac": 1.0},
+      "_searchcaps_1110_note": "OD-1110-SEARCHCAPS (owner 2026-11-10, 'Keep low, use it better'): the low daily cap stays (the DuckDuckGo params page describes individual use; lite.duckduckgo.com robots.txt is Allow: /) and the whole cap is reserved for visitor questions: a request marked origin=seed never uses DuckDuckGo (seed_allowed false, visitor_reserve_frac 1.0; enforced here and in DuckDuckGoLiteProvider). Owner-decided values, not calibrated thresholds.",
       "throttle_statuses": [429, 503, 202],
       "breaker_failures": 2,
       "base_cooldown_s": 900.0,
