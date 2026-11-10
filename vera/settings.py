@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import os
 import threading
 import time
@@ -30,12 +31,14 @@ _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 CONFIG_PATH = _CONFIG_DIR / "settings.json"
 REGISTRY_PATH = _CONFIG_DIR / "settings_registry.json"
 # Pin of the registry `keys` object (canonical JSON). Regenerate the registry and change this in the same release.
-REGISTRY_SHA256 = "2b11abf2232e4bd8dc08776afd4ca46c40b7db6691ddc7a91372c3aea0308216"
+REGISTRY_SHA256 = "49979b1e40bd768b2c3de1290ce14a93031c32061a417617f0c6e8ae04963206"
 # Second layer: never DB-eligible, whatever the registry says.
 REFUSED_STEMS = frozenset({"api_permissions", "licence_rules", "licence_allowlist", "fair_use", "purpose_grants",
                            "robots_ai", "source_permissions", "source_withdrawals", "us_federal_pd",
                            "us_gov_domains_federal", "env_precedence"})
 REFUSED_PREFIXES = ("auto_acquire.landing_route.", "crawl_delay.")
+# Key-level refusal, identical to migration 026 set_keys_policy_prefix_chk (second layer).
+REFUSED_KEY_RE = re.compile(r"^((api_permissions|licence_rules|fair_use|purpose_grants|robots_ai|source_permissions|us_federal_pd|env_precedence|licence_allowlist|source_withdrawals|crawl_delay)\.|auto_acquire\.landing_route\.|reference_portals\.(adapters\.|(.*\.)?(enabled|owner_switch|mode)$|(.*\.)?[a-z0-9_-]*(hosts|allow)[a-z0-9_-]*(\.|$)))")
 # Column names match migration 026 (branch settings-mig026-1110): set_settings JOIN set_keys; view set_deny_active.
 SQL_SETTINGS = ("SELECT s.key, s.value, s.version FROM vera_vjay.set_settings s "
                 "JOIN vera_vjay.set_keys k ON k.key = s.key WHERE s.state = 'active'")
@@ -82,7 +85,7 @@ def load_registry(path: Path | None = None, pin: str | None = None) -> dict:
             return {}
         return {k: v for k, v in keys.items()
                 if isinstance(v, dict) and v.get("module") not in REFUSED_STEMS
-                and not k.startswith(REFUSED_PREFIXES)}
+                and not k.startswith(REFUSED_PREFIXES) and not REFUSED_KEY_RE.match(k)}
     except Exception as exc:  # noqa: BLE001
         _warn_once("registry", "SET_REGISTRY_ERROR " + type(exc).__name__)
         return {}

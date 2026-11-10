@@ -243,3 +243,14 @@ def test_sql_matches_migration_026_shapes():
     assert "set_settings" in st.SQL_SETTINGS and "set_keys" in st.SQL_SETTINGS and "'active'" in st.SQL_SETTINGS
     assert "set_deny_active" in st.SQL_DENY and "wildcard_confirmed" in st.SQL_DENY
     assert st._CFG is not None and json.loads((ROOT / "config" / "settings.json").read_text())["deny_max_ttl_days"] == 90
+
+
+def test_key_level_refusal_mirrors_026():
+    keys = json.loads((ROOT / "config" / "settings_registry.json").read_text())["keys"]
+    assert len(keys) == 153 and not any(st.REFUSED_KEY_RE.match(k) for k in keys)
+    for bad in ("reference_portals.adapters.x.timeout_s", "reference_portals.mode", "reference_portals.a.enabled",
+                "reference_portals.x.allowed_hosts", "reference_portals.x.allow_list", "crawl_delay.a"):
+        assert st.REFUSED_KEY_RE.match(bad), bad
+    reg = dict(keys); reg["reference_portals.adapters.z.n"] = {"module": "reference_portals", "path": "adapters.z.n", "type": "bool", "allowed": [True]}
+    import tempfile, os
+    assert "reference_portals.adapters.z.n" not in {k for k in reg if not st.REFUSED_KEY_RE.match(k)}
