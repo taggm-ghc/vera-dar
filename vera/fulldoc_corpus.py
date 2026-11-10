@@ -173,6 +173,11 @@ class FullDocCorpus:
                         "in_evidence": self._in_evidence(did, s, e)})
             if sim_of is not None:  # HYBRID-1109: the passage's partition cosine (None = no stored vector)
                 ch = dar._by_span.get(c["span_id"])
+                try:  # TAXO-ROUTE-1110 (shadow only): remember whether this candidate is inside the routed set
+                    from vera import taxo_router
+                    taxo_router.note_candidate(out[-1]["span_id"], None if ch is None else ch.idx)
+                except Exception:  # noqa: BLE001
+                    pass
                 out[-1]["vec_sim"] = None if ch is None or sim_of(ch.idx) is None else round(sim_of(ch.idx), 6)
                 ps = getattr(sim_of, "psg", None)
                 if ps is not None and ch is not None and ps(ch.idx) is not None:  # stage 2 re-ranked passages only

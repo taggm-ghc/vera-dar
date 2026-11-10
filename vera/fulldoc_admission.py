@@ -953,6 +953,13 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     by_reason: dict = {}
     for r in rejected:
         by_reason[r["reason"]] = by_reason.get(r["reason"], 0) + 1
+    rshadow = None
+    if hy is not None:  # TAXO-ROUTE-1110: shadow router record (codes and counts only); None unless mode is shadow/on
+        try:
+            from vera import taxo_router as _tr
+            rshadow = _tr.finish(list(admitted))
+        except Exception:  # noqa: BLE001
+            rshadow = None
     return EvidenceBundle(
         question=question, examined_full_documents=tuple(examined), admitted=tuple(admitted), unusable=unusable,
         rejected=tuple(rejected), status="admitted" if admitted else "insufficient",
@@ -962,4 +969,5 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
                **({"merged": n_merged} if n_merged else {}),
                **({"signal": "idf_weighted", "selector_documents": sorted(selector_docs), "et_al": et_al,
                    "non_selector_stems": len(q_ns)} if weighted else {}),
-               **extra_trace, **({"hybrid": hy} if hy is not None else {})})
+               **extra_trace, **({"hybrid": hy} if hy is not None else {}),
+               **({"route_shadow": rshadow} if rshadow else {})})
