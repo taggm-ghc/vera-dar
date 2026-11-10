@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parent.parent
 CONTRACT_2C0A323_COUNT = 158
 CONTRACT_2C0A323_FROZEN_SHA256 = "84d028093cc8e770d732a2c7ad3095313e50a6295582709b2555a28fad511e73"  # old collector at 2c0a323
 N024 = 17  # tax_chunk_vectors, tax_job_runs pairs proven by the 024 draft (CHUNK-TAXO-INT-1109)
+N025 = 7  # chunk_use_assoc pairs proven by the 025 draft and used by vera/chunk_usage.py (CHUNK-USAGE-1110)
 N020 = 28  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108)
 
 
@@ -168,14 +169,14 @@ def test_real_tree_exemptions_are_exactly_016_017_020_022_024_and_reported():
     ex = sc.pending_exemptions()
     assert set(sc.PENDING_DRAFT_ALLOWLIST) == {"016-DRAFT-lists-to-db.sql.draft", "017-DRAFT-topic-tags.sql.draft",
                                                "020-DRAFT-taxonomy.sql.draft", "022-DRAFT-taxonomy-extensible.sql.draft",
-                                               "024-DRAFT-chunk-vectors.sql.draft"}
+                                               "024-DRAFT-chunk-vectors.sql.draft", "025-DRAFT-chunk-use.sql.draft"}
     assert {t for t, _ in ex} == {"lstreg_active_lists_v", "lstreg_active_items_v", "toptag_document_topics",
                                   "tax_domains", "tax_topics", "tax_subtopics", "tax_domain_topic", "tax_topic_subtopic",
                                   "tax_anchors", "tax_registry_active_v", "tax_registry_eval_v", "tax_chunk_vectors",
-                                  "tax_job_runs"}
-    assert len(ex) == 54 + N020 + N024
+                                  "tax_job_runs", "chunk_use_assoc"}
+    assert len(ex) == 54 + N020 + N024 + N025
     report = sc.exemption_report()
-    assert report.startswith(f"SQL contract pending-migration EXEMPTION: {54 + N020 + N024} (table, column) pairs exempt")
+    assert report.startswith(f"SQL contract pending-migration EXEMPTION: {54 + N020 + N024 + N025} (table, column) pairs exempt")
     assert all(f"exempt: {t}.{c} ({d})" in report for (t, c), d in ex.items())
     warnings.warn(report, UserWarning)  # loud on every suite run (shown in the pytest warnings summary)
 

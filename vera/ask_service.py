@@ -404,8 +404,11 @@ def _corpus_best_relevance(question: str):
         if not corpora:
             return None
         best = 0.0
+        from vera import chunk_usage
         for c in corpora:
-            for a in getattr(admit(question, c, cfg), "admitted", ()) or ():
+            with chunk_usage.suppressed():  # CHUNK-USAGE-1110: a relevance probe is not a retrieval for an answer
+                adm = getattr(admit(question, c, cfg), "admitted", ()) or ()
+            for a in adm:
                 best = max(best, float(a.get("relevance") or 0.0))
         return best
     except Exception:  # noqa: BLE001
