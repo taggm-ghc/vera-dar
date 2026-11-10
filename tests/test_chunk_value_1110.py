@@ -72,8 +72,9 @@ def test_low_info_and_near_dup():
     text = good + "\n\n" + low.strip()
     r = cv.evaluate_chunks(text, None, CFG, CH)
     assert cv.C5 in {c["rule"] for c in r["chunks"]}
-    one = para(5, 70)
-    text = para(1) + "\n\n" + one + "\n\n" + para(2) + "\n\n" + one
+    def lw(seed, n=70):
+        return " ".join("".join(chr(97 + (i * seed + j * 3) % 26) for j in range(5)) for i in range(n))
+    text = lw(5, 400)  # periodic text: interior chunks repeat one another
     r = cv.evaluate_chunks(text, None, CFG, CH)
     assert cv.C6 in {c["rule"] for c in r["chunks"]}
 
@@ -150,7 +151,7 @@ def test_document_flags_garbled():
     words_text = "model forecast evidence data " * 100
     d3 = dict(d, text=words_text, provenance=dict(d["provenance"], text_sha256=cv._sha(words_text)))
     assert not any(r.startswith(cv.D2) for r in cv.document_flags(d3, CFG, WORDS)["reasons"])
-    gib = "qzxv lkjw mnbp rtyu " * 100
+    gib = "the of and qzxv lkjw mnbp rtyu is that " * 100
     d4 = dict(d, text=gib, provenance=dict(d["provenance"], text_sha256=cv._sha(gib)))
     assert "D2_incomprehensible:dictionary_word_share" in cv.document_flags(d4, CFG, WORDS)["reasons"]
     assert cv.d2_metrics(gib, CFG, None)["dictionary_word_share"] is None
@@ -228,3 +229,65 @@ def test_d3_chunk_thresholds_short_docs_not_flagged():
     assert f"{cv.D3}:too_few_substantive_chunks" not in cv.document_flags(d, CFG, None, short)["reasons"]
     many = {"substantive_chunks": 4, "chunks_before": 12}
     assert f"{cv.D3}:too_few_substantive_chunks" in cv.document_flags(d, CFG, None, many)["reasons"]
+
+
+ES = ("La estimación del modelo se realizó con los datos de la población y los resultados muestran una variación importante "
+      "entre las regiones durante el período considerado por el estudio ")
+DE = ("Die Schätzung des Modells wurde mit den Daten der Bevölkerung durchgeführt und die Ergebnisse zeigen eine erhebliche "
+      "Variation zwischen den Regionen im untersuchten Zeitraum der Studie ")
+RU = ("Оценка модели была выполнена по данным о населении, и результаты показывают значительные различия между регионами "
+      "в течение рассматриваемого периода исследования ")
+MATH = " ".join("$\\sum_{i=1}^{%d}\\alpha_i^2+\\beta_{%d}/\\gamma$ (%d) = [%d]" % (i, i, i, i * 7) for i in range(400))
+TABLE = "\n".join("| %d | %.2f | %.3f | %d%% | %.1f |" % (i, i / 7, i / 13, i % 100, i * 1.5) for i in range(500))
+
+
+def varied(s, n=60):
+    return " ".join(f"{s} r{i}x{i * 7}" for i in range(n))
+
+
+def _plain(text):
+    d = good_doc()
+    d.update(text=text, provenance=dict(d["provenance"], text_sha256=cv._sha(text)), sections=None, body_chars=None)
+    return d
+
+
+def test_non_english_math_table_never_purge_flagged():
+    words = {"the"}  # an English-only list: foreign text would fail it if the metric ran
+    for name, txt in (("es", varied(ES)), ("de", varied(DE)), ("ru", varied(RU)), ("math", MATH), ("table", TABLE)):
+        f = cv.document_flags(_plain(txt), CFG, words)
+        assert f["purge"] is False, (name, f["reasons"], f["metrics"])
+        assert f["metrics"].get("dictionary_word_share") is None or f["metrics"]["is_english"]
+        meta = {"host": "europepmc.org", "licence_id": "x", "title_present": True, "text_sha256": cv._sha(txt)}
+        parts = [(f"s{i}", i * 1000, min((i + 1) * 1000, len(txt)), txt[i * 1000:(i + 1) * 1000]) for i in range((len(txt) + 999) // 1000)]
+        out = cv.audit_document(meta, parts, CFG, words)
+        assert all(x["severity"] == "review" for x in out["d_flags"]) or not out["d_flags"], (name, out["d_flags"])
+
+
+def test_c5_unicode_and_math_table_exempt():
+    for txt in (varied(RU), varied(ES), MATH, TABLE):
+        r = cv.evaluate_chunks(txt, None, CFG, CH)
+        assert sum(1 for c in r["chunks"] if c["rule"] == cv.C5) <= 1, txt[:20]  # at most a short tail chunk
+        assert r["chunks_after"] >= 0.9 * r["chunks_before"], txt[:20]
+    assert cv.C5 in {c["rule"] for c in cv.evaluate_chunks(("the of and " * 60).strip(), None, CFG, CH)["chunks"]}
+
+
+def test_d3_review_when_c5_dominant_and_english_purge_garble():
+    low = ("the of and " * 400).strip()
+    cr = cv.evaluate_chunks(low, None, CFG, CH)
+    f = cv.document_flags(good_doc(), CFG, None, cr)
+    assert f["severity"][f"{cv.D3}:too_few_substantive_chunks"] == "review" and f["purge"] is False
+    cr2 = {"substantive_chunks": 0, "chunks_before": 20, "rule_chunks_pre_cap": {cv.C4: 20}}
+    assert cv.document_flags(good_doc(), CFG, None, cr2)["purge"] is True
+    en = ("the model of the data is that results are " * 120)
+    junk = en + "\ufffd" * 400
+    assert cv.document_flags(_plain(junk), CFG)["purge"] is True
+
+
+def test_d1_arxiv_via_provenance_fields():
+    d = good_doc()
+    for k, v in (("fulltext_url", "https://export.arxiv.org/pdf/1"), ("repository", "arXiv"), ("identifiers", ["10.48550/arXiv.2301.1"])):
+        r = cv.document_flags(dict(d, **{k: v}), CFG)
+        assert r["reasons"][0].startswith(cv.D1) and r["severity"][r["reasons"][0]] == "purge", k
+    meta = {"host": "europepmc.org", "licence_id": "x", "title_present": True, "text_sha256": None, "fulltext_url": "https://arxiv.org/pdf/1"}
+    out = cv.audit_document(meta, [("a", 0, 5, "hello")], CFG)
+    assert out["d_flags"][0] == {"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}}

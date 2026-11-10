@@ -196,9 +196,13 @@ def evaluate_chunks(text: str, sections, cfg: dict, chunking: dict, fmt: str | N
             why = C3
         else:
             toks = _content_tokens(t, cc, stop)
-            if cc["C5_low_info"].get("enabled") and len(set(toks)) < int(cc["C5_low_info"]["min_distinct_content_tokens"]):
+            nsp = [ch for ch in t if not ch.isspace()]
+            symdig = (sum(1 for ch in nsp if not ch.isalpha()) / len(nsp)) if nsp else 0.0
+            exempt = symdig >= float(cc["C5_low_info"]["exempt_symbol_digit_share_min"])  # math/table chunk: C5 and C6 skip it
+            if (cc["C5_low_info"].get("enabled") and not exempt
+                    and len(set(toks)) < int(cc["C5_low_info"]["min_distinct_content_tokens"])):
                 why = C5
-            elif cc["C6_near_dup"].get("enabled"):
+            elif cc["C6_near_dup"].get("enabled") and not exempt:
                 sh = {" ".join(toks[i:i + shn]) for i in range(max(len(toks) - shn + 1, 1))} if toks else set()
                 if sh:
                     cand = {j for g in sh for j in inv.get(g, ())}
@@ -213,6 +217,7 @@ def evaluate_chunks(text: str, sections, cfg: dict, chunking: dict, fmt: str | N
     rec = {"version": cfg.get("version"), "config_sha256": config_sha256(cfg), "chars": n,
            "chunks_before": len(spans), "capped": False}
     rec["substantive_chunks"] = sum(1 for w in reasons if w is None)
+    rec["rule_chunks_pre_cap"] = {w: reasons.count(w) for w in set(reasons) if w}
     cover = bytearray(n)
     for (a, b), w in zip(spans, reasons):
         if w is None:
@@ -300,8 +305,11 @@ def d1_arxiv(doc: dict, cfg: dict) -> list:
     if not c.get("enabled"):
         return []
     hosts = {h.lower() for h in c["hosts"]}
-    urls = list(doc.get("urls") or ())
+    urls = list(doc.get("urls") or ()) + [u for u in (doc.get("fulltext_url"), doc.get("orig_url")) if u]
     idents = [str(x).lower() for x in list(doc.get("identifiers") or ()) + [doc.get("doi")] + urls if x]
+    repo = str(doc.get("repository") or "").lower()
+    if repo and any(x.lower() in repo for x in c.get("repository_substrings", ())):
+        return [D1 + ":repository"]
     if _hosts_hit(urls, hosts):
         return [D1 + ":host"]
     if any(sub.lower() in i for sub in c["identifier_substrings"] for i in idents):
@@ -333,7 +341,12 @@ def d2_metrics(text: str, cfg: dict, words=None) -> dict:
     m["repeat_line_share"] = rep / len(lines) if lines else 0.0
     toks = re.findall(c["token_regex"], text)
     m["n_alpha_tokens"] = len(toks)
-    if words is not None and len(toks) >= int(c["min_tokens_for_dictionary"]):
+    allw = re.findall(r"[^\W\d_]+", text.casefold())
+    mk = {w.casefold() for w in c["english_marker_words"]}
+    m["english_marker_share"] = (sum(1 for w in allw if w in mk) / len(allw)) if allw else 0.0
+    m["is_english"] = int(m["english_marker_share"] >= float(c["english_marker_share_min"]))
+    m["math_heavy"] = int(m["non_alnum_share"] >= float(c["math_heavy_non_alnum_share_min"]))
+    if words is not None and m["is_english"] and len(toks) >= int(c["min_tokens_for_dictionary"]):
         m["dictionary_word_share"] = sum(1 for t in toks if t.lower() in words) / len(toks)
     else:
         m["dictionary_word_share"] = None  # not evaluated (no word list, or too few tokens)
@@ -357,6 +370,22 @@ def d2_incomprehensible(text: str, cfg: dict, words=None) -> tuple:
     if m["n_lines"] >= int(c["min_lines_for_line_metrics"]) and m["mean_line_chars"] < float(c["mean_line_chars_min"]):
         hits.append("mean_line_chars")
     return [f"{D2}:{h}" for h in hits], m
+
+
+def d2_severity(metrics: dict) -> str:
+    """'purge' only for detected-English, not math-heavy text; any other D2 hit is 'review' (never purged)."""
+    return "purge" if metrics.get("is_english") and not metrics.get("math_heavy") else "review"
+
+
+def d3_severity(code_list: list, chunk_result: dict | None, cfg: dict) -> str:
+    """D3 is 'review' when its only hit is too_few_substantive_chunks that follows from the configured dominant rule
+    (C5 low-info); every other D3 sub-code is 'purge'."""
+    other = [x for x in code_list if not x.endswith("too_few_substantive_chunks")]
+    if other:
+        return "purge"
+    rc = (chunk_result or {}).get("rule_chunks_pre_cap") or {}
+    dom = max(rc, key=rc.get) if rc else None
+    return "review" if dom == cfg["document"][D3]["review_when_dominant_drop_rule"] else "purge"
 
 
 def d3_incomplete(doc: dict, cfg: dict, chunk_result: dict | None = None) -> list:
@@ -396,8 +425,13 @@ def document_flags(doc: dict, cfg: dict, words=None, chunk_result: dict | None =
           body_chars, has_body, rebuild_ok}. Returns {known_bad, reasons, metrics}."""
     reasons = d1_arxiv(doc, cfg)
     r2, metrics = d2_incomprehensible(doc.get("text") or "", cfg, words)
-    reasons += r2 + d3_incomplete(doc, cfg, chunk_result)
-    return {"known_bad": bool(reasons), "reasons": reasons, "metrics": metrics}
+    r3 = d3_incomplete(doc, cfg, chunk_result)
+    reasons += r2 + r3
+    sev = {}
+    for r in reasons:
+        sev[r] = "purge" if r.startswith(D1) else (d2_severity(metrics) if r.startswith(D2) else d3_severity(r3, chunk_result, cfg))
+    return {"known_bad": bool(reasons), "reasons": reasons, "severity": sev,
+            "purge": any(v == "purge" for v in sev.values()), "metrics": metrics}
 
 
 def _sketch(text: str, dcfg: dict) -> tuple:
@@ -504,17 +538,20 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
     cr = evaluate_chunks(text, None, cfg, cfg["audit"]["chunking"], fmt=None)
     d_flags = []
     doc = {"text": text, "urls": ["https://%s/" % meta["host"]] if meta.get("host") else [], "doi": meta.get("doi"),
+           "fulltext_url": meta.get("fulltext_url"), "orig_url": meta.get("orig_url"), "repository": meta.get("repository"),
+           "identifiers": [meta.get("identifier")] if meta.get("identifier") else [],
            "provenance": {"licence_id": meta.get("licence_id"), "canonical_url": "x", "title": "x" if meta.get("title_present") else None,
                           "text_sha256": meta.get("text_sha256")},
            "rebuild_ok": mismatch == 0 and gaps == 0 and base == 0}
     if d1_arxiv(doc, cfg):
-        d_flags.append({"rule": "D1", "metrics": {"arxiv": 1}})
+        d_flags.append({"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}})
     hits, m = d2_incomprehensible(text, cfg, words)
     if hits:
-        d_flags.append({"rule": "D2", "metrics": {k: float(m[k]) for k in (h.split(":", 1)[1] for h in hits)}})
+        d_flags.append({"rule": "D2", "severity": d2_severity(m),
+                        "metrics": {k: float(m[k]) for k in [h.split(":", 1)[1] for h in hits] + ["is_english", "math_heavy"]}})
     r3 = d3_incomplete(doc, cfg, cr)
     if r3:
-        d_flags.append({"rule": "D3", "metrics": {"substantive_chunks": cr["substantive_chunks"], "n_hits": len(r3),
+        d_flags.append({"rule": "D3", "severity": d3_severity(r3, cr, cfg), "metrics": {"substantive_chunks": cr["substantive_chunks"], "n_hits": len(r3),
                                                   "sha_mismatch": int(any(x.endswith("sha_mismatch") for x in r3)),
                                                   "rebuild_failed": int(any(x.endswith("rebuild_failed") for x in r3)),
                                                   "length_mismatch_spans": mismatch, "index_gaps": gaps}})
