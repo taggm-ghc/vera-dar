@@ -49,7 +49,9 @@ def test_loader_level_refusal_codes_emitted_by_acquisition_have_plain_text():
 @pytest.mark.parametrize("entry,want", [
     ({"outcome": "rejected", "reason": CODES["no_licence"]}, "Full text not openly licensed."),
     ({"outcome": "rejected", "reason": CODES["unreachable"]}, "Source unreachable."),
-    ({"outcome": "rejected", "reason": CODES["host"]}, "Blocked by network safety check."),
+    ({"outcome": "rejected", "reason": CODES["host"]}, "no cleared route to this site"),
+    ({"outcome": "rejected", "reason": CODES["robots"]}, "the site's robots rules do not permit automated reading"),
+    ({"outcome": "rejected", "reason": CODES["cycle"]}, "Blocked by network safety check."),
     ({"outcome": "rejected", "reason": CODES["irrelevant"]}, "Not relevant enough to your question."),
     ({"outcome": "link_only", "reason": CODES["no_doi"]}, dp.REASON_TEXT[CODES["no_doi"]]),
     ({"outcome": "rejected", "reason": "R-ZZZ-NEW"}, dp.REASON_GENERIC),
@@ -154,3 +156,30 @@ def test_banner_is_truthful_for_every_row_combination(n_obt, n_stored, n_none):
         assert "obtained or stored" in low or "obtained the full text" in low, banner
     assert "evidence-grounded answer" in low
     assert not INTERNAL.search(banner)
+
+
+def test_safety_label_split_per_code_1110():
+    """WORDING-LABELS-1110 (c): only CYCLE keeps the network-safety wording; HOST and ROBOTS are policy refusals."""
+    t = {k: dp._reason_line({"outcome": "rejected", "reason": CODES[k]}) for k in ("host", "robots", "cycle")}
+    assert "network safety" in t["cycle"]
+    assert "network safety" not in t["host"] and "network safety" not in t["robots"]
+    assert len(set(t.values())) == 3
+
+
+def test_settled_cut_record_never_shows_too_many_candidates_1110():
+    """WORDING-LABELS-1110 (b): a record cut by the shortlist (deferred) and later settled keeps the reading-list entry
+    in step: no-progress stop -> the no-progress label; evaluated -> its real reason."""
+    from vera import inline_acquire as ia
+    for settle, want in (("stop", "R-ACQ-NO_PROGRESS"), ("rejected", CODES["not_oa"])):
+        cand = {"title": "t", "url": "https://x.org/0"}
+        entry = {"url": "https://x.org/0", "outcome": "deferred", "reason": CODES["defer_cap"]}
+        rec = {"outcome": "dropped", "reason": CODES["defer_cap"]}
+        st = {"cands": [cand], "recs": [rec], "entries": {id(cand): entry}}
+        if settle == "stop":
+            ia._relabel_left({"reason_codes": CODES}, None, st, cand, "no_progress")
+        else:
+            ia._settle(st, id(cand), "rejected", want)
+        assert entry["reason"] == want and rec["reason"] == want
+        line = dp._reason_line(entry)
+        assert "too many candidates" not in line
+        assert "too many candidates" not in dp._reasons_by_url(data_for([entry]))["https://x.org/0"]

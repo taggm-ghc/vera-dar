@@ -438,9 +438,9 @@ def _nat(x) -> bool:
 def acquisition_notice_line(data: dict | None) -> str | None:
     """OD-1031-P1 item 4: plain notice when a live search found fewer sources than targeted. Counts only; no
     titles, hosts, URLs or provider names. None when the target was met or the block is absent or malformed.
-    MIDTERMS-WP10-1106 (owner D3): with a valid examined-source ledger summary, "Read N of the T sources targeted"
+    MIDTERMS-WP10-1106 (owner D3): with a valid examined-source ledger summary, "VERA-DAR obtained N documents for this question (aim: at least T)"
     counts only qualifying full- or partial-text sources actually examined (deduplicated; news, official and web pages
-    included); otherwise the legacy "Found N of the T new sources targeted" (stored) text. WP8 appends the stop clause."""
+    included); otherwise the legacy "VERA-DAR obtained N new full documents ... (aim: at least T)" (stored) text. WP8 appends the stop clause."""
     data = data if isinstance(data, dict) else {}
     contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
     ia = contract.get("inline_acquisition") if isinstance(contract.get("inline_acquisition"), dict) else {}
@@ -453,7 +453,7 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         c = led["counted"]
         if c >= t:
             return None
-        head = f"Read {c} of the {t} sources targeted"
+        head = f"VERA-DAR obtained {c} documents for this question (aim: at least {t})"
         if aq.get("status") == "relevance_rejected":
             # NOANSWER-PAGE-1108 D3: the status also counts documents judged not relevant from their title or abstract
             # BEFORE any fetch (inline_acquire._supply_status), so the "fetched" clause is stated only for documents
@@ -480,7 +480,7 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         return None
     if clause is None:  # review F2
         return _stop_clause(aq).strip() or None
-    return f"Found {n} of the {t} new sources targeted; {clause}{_stop_clause(aq)}"
+    return f"VERA-DAR obtained {n} new full documents for this question (aim: at least {t}); {clause}{_stop_clause(aq)}"
 
 
 def inline_counts_line(data: dict | None) -> str | None:

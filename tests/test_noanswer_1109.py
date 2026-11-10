@@ -58,7 +58,7 @@ def test_midterms_source_attribution_is_consistent():
     assert src.startswith("Evidence source: documents already stored, checked for this question")
     assert "stored database" not in src
     assert "2 already stored" in cnt and "0 newly fetched" in cnt and "used for this answer" not in cnt
-    assert note.startswith("Read 2 of the 6 sources targeted; 9 other documents fetched did not have enough relevant passages to keep")
+    assert note.startswith("VERA-DAR obtained 2 documents for this question (aim: at least 6); 9 other documents fetched did not have enough relevant passages to keep")
     assert "saved to VERA-DAR" not in note
 
 
@@ -73,7 +73,7 @@ def test_hadrons_no_stored_database_source_when_nothing_was_used():
     assert "no passages selected" in u.evidence_scope_line(d)
     assert u.evidence_source_line(d) is None
     d["contract"]["inline_acquisition"]["ledger"].update(counted=0, full_text=0)
-    assert u.acquisition_notice_line(d).startswith("Read 0 of the 6 sources targeted")
+    assert u.acquisition_notice_line(d).startswith("VERA-DAR obtained 0 documents for this question (aim: at least 6)")
     assert u.stored_checked(d) == 0
 
 
@@ -206,4 +206,4 @@ def test_wording_singular_scope_and_no_other_when_none_read():
     led = d["contract"]["inline_acquisition"]["ledger"]
     led.update(counted=0, full_text=0, scholarly=0)
     note = u.acquisition_notice_line(d)
-    assert note.startswith("Read 0 of the 6 sources targeted; 9 documents fetched did not have") and "other" not in note
+    assert note.startswith("VERA-DAR obtained 0 documents for this question (aim: at least 6); 9 documents fetched did not have") and "other" not in note

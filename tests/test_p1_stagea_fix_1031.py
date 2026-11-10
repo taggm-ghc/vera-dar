@@ -61,7 +61,7 @@ def test_resource_limited_only_with_full_budget_and_working_search():
 def test_notice_states_each_cause_counts_only(status, words):
     line = ue.acquisition_notice_line({"contract": {"inline_acquisition": {"acquisition": {
         "status": status, "stored": 1, "target": 6}}}})
-    assert line.startswith("Found 1 of the 6") and words in line
+    assert line.startswith("VERA-DAR obtained 1 new full documents for this question (aim: at least 6)") and words in line
     for bad in ("http", "openalex", "europe", "duckduckgo", "arxiv", "kill", "switch", "R-ACQ"):
         assert bad not in line.lower()
 
@@ -81,7 +81,7 @@ def test_notice_shown_on_plain_reading_list_non_answer():
     st = _St()
     ue.render_fallback_reason(st, {"contract": {"inline_acquisition": {"acquisition": {
         "status": "search_failed", "stored": 0, "target": 6}}}})
-    assert len(st.out) == 1 and st.out[0][0] == "caption" and "Found 0 of the 6" in st.out[0][1]
+    assert len(st.out) == 1 and st.out[0][0] == "caption" and "VERA-DAR obtained 0 new full documents for this question (aim: at least 6)" in st.out[0][1]
     st2 = _St()
     ue.render_fallback_reason(st2, {})
     assert st2.out == []

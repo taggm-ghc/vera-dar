@@ -198,7 +198,7 @@ def test_counts_agree_with_one_attempt_record(monkeypatch, case):
     if found is not None:
         assert found == truth["found"]
         assert _nums(page, r"(\d+) judged not relevant") == truth["irrelevant"]
-    assert _nums(page, r"Read (\d+) of the 6 sources targeted") == truth["read"]
+    assert _nums(page, r"obtained (\d+) documents for this question \(aim: at least 6\)") == truth["read"]
     n_f = _nums(page, r"(?:none of the|the|; )(\d+) (?:other )?documents? fetched")
     if truth["fetched"]:
         assert n_f == truth["fetched"]
