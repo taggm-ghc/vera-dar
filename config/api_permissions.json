@@ -128,12 +128,14 @@
     },
     "inspire_literature": {
       "host": "inspirehep.net", "path_prefix": "/api/literature",
-      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "deny", "owner_decision": "OD-1108-SRC (cleared for metadata; shipped denied, owner flips to permit at activation)",
+      "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "permit", "owner_decision": "OD-1108-DISPOSITIONS-2",
+      "_owner_decision_note": "PHYS-SUPPLY-1110: OD-1108-SRC item 2 cleared the API for metadata and references only; OD-1108-DISPOSITIONS-2 H9 (b), verbatim \"Approve (b). Enable INSPIRE-HEP independently of Wikipedia portal activation.\", activates it. Was owner_switch deny until this activation.",
       "conditions": {"rate_portal": "inspire", "max_rate_per_s": 3.0, "max_concurrency": 1, "respect_429": true,
                      "user_agent": "VERA-DAR/1.0 (+https://github.com/taggm-ghc/vera-dar)", "send_email": false, "content_scope": ["metadata"],
                      "_note": "metadata and references only, 15 req/5 s, CC0 metadata; fields= lists identifier paths only; no full text from INSPIRE (full text only via arXiv CC route or SCOAP3)."},
       "evidence": [{"url": "https://raw.githubusercontent.com/inspirehep/rest-api-doc/master/README.md", "read_level": "summarizer", "read": "2026-11-08", "provenance": "GENSCI-SOURCES-1108 I2"},
-                   {"url": "https://help.inspirehep.net/knowledge-base/terms-of-use", "read_level": "summarizer", "read": "2026-11-08", "provenance": "GENSCI-SOURCES-1108 I3"}],
+                   {"url": "https://help.inspirehep.net/knowledge-base/terms-of-use", "read_level": "summarizer", "read": "2026-11-08", "provenance": "GENSCI-SOURCES-1108 I3"},
+                   {"url": "https://inspirehep.net/robots.txt", "read_level": "summarizer", "read": "2026-11-09", "provenance": "PHYS-SUPPLY-1110 (README, terms and robots re-read; /api/literature not disallowed for *)"}],
       "read_level": "summarizer", "read": "2026-11-08", "review_by": "2026-12-08"
     }
   }

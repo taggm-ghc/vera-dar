@@ -142,6 +142,8 @@ class Net:
 
 
 def _run(c, net, base=None):
+    c = copy.deepcopy(c)
+    c["adapters"]["inspire_refs"]["enabled"] = False  # PHYS-SUPPLY-1110: INSPIRE ships on; these tests cover the Wikipedia route
     return rp.collect(Q, base=base, ddg_raw=[{"url": "https://other.example.org/p", "title": "t"}], cfg=c,
                       deps=net.deps(), hosts=rp.load_hosts(c), clock=lambda: 0.0)
 
@@ -149,7 +151,8 @@ def _run(c, net, base=None):
 def test_portal_ships_on_with_wikipedia_title_only_and_host_row_permits():
     c = rp.validate(_cfg("reference_portals.json"))
     assert c["mode"] == "on"
-    assert [k for k, v in c["adapters"].items() if v.get("enabled") is True] == ["wikipedia_title"]
+    # PHYS-SUPPLY-1110: INSPIRE on per owner H9 (b) (OD-1108-DISPOSITIONS-2), independently of the Wikipedia route
+    assert [k for k, v in c["adapters"].items() if v.get("enabled") is True] == ["wikipedia_title", "inspire_refs"]
     row = next(r for r in _cfg("portal_hosts.json")["entries"] if r["host"] == "en.wikipedia.org")
     assert row["status"] == "active" and row["terms"] == "permit" and row["rate_portal"] == "wikipedia"
     old = _cfg("wiki_ref_portal.json")

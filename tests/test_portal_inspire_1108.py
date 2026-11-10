@@ -178,8 +178,7 @@ def test_default_get_passes_the_transport_regate_with_purpose_metadata(monkeypat
     import vera.selective_fetch as sf
     raw = json.loads((ROOT / "config" / "api_permissions.json").read_text(encoding="utf-8"))
     e = raw["entries"]["inspire_literature"]
-    assert e["owner_switch"] == "deny"  # shipped denied
-    e["owner_switch"], e["owner_decision"] = "permit", "OD-1108-SRC"
+    assert e["owner_switch"] == "permit"  # PHYS-SUPPLY-1110: shipped permitted (owner H9 (b))
     ap.set_policy_for_tests(ap._validate(raw))
     monkeypatch.setattr(sf, "is_public_url", lambda u: (False, "stub"))
     try:
@@ -211,7 +210,25 @@ def test_inspire_called_only_when_mode_on_and_enabled_and_owner_permit(monkeypat
     assert len(n) == calls
 
 
-def test_shipped_inspire_is_off_and_denied():
+def test_shipped_inspire_is_on_and_permitted_with_terms_conditions():
+    """PHYS-SUPPLY-1110: owner OD-1108-DISPOSITIONS-2 H9 (b) "Enable INSPIRE-HEP independently of Wikipedia portal
+    activation." The terms conditions stay pinned: metadata scope only, no email, the inspire rate portal at or below
+    the documented 15 requests / 5 s, serial, 429 respected with the documented 5 s wait."""
     c = json.loads((ROOT / "config" / "reference_portals.json").read_text(encoding="utf-8"))
-    assert c["mode"] == "on" and c["adapters"]["inspire_refs"]["enabled"] is False  # H-3: portal on, inspire adapter off
-    assert rp.inspire_permitted() is False
+    a = c["adapters"]["inspire_refs"]
+    assert c["mode"] == "on" and a["enabled"] is True and a["cooldown_min_s"] >= 5
+    assert not any(k in f for f in a["fields"] for k in ("email", "author", "abstract", "title", "fulltext", "documents"))
+    assert rp.inspire_permitted() is True
+    raw = json.loads((ROOT / "config" / "api_permissions.json").read_text(encoding="utf-8"))
+    e = raw["entries"]["inspire_literature"]
+    assert e["owner_switch"] == "permit" and e["owner_decision"] == "OD-1108-DISPOSITIONS-2"
+    assert e["path_prefix"] == "/api/literature" and e["conditions"]["content_scope"] == ["metadata"]
+    assert e["conditions"]["send_email"] is False and e["conditions"]["max_concurrency"] == 1
+    assert e["conditions"]["max_rate_per_s"] <= 3.0 and e["conditions"]["respect_429"] is True
+    rl = json.loads((ROOT / "config" / "rate_limits.json").read_text(encoding="utf-8"))["portals"]["inspire"]
+    assert rl["hosts"] == ["inspirehep.net"] and rl["rate_per_s"] <= 3.0 and rl["max_concurrency"] == 1
+    assert 429 in rl["throttle_statuses"] and rl["base_cooldown_s"] >= 5
+    from vera import api_permissions as ap
+    assert ap.decide("https://inspirehep.net/api/literature", purpose="metadata").allowed is True
+    assert ap.decide("https://inspirehep.net/api/literature", purpose="fulltext").allowed is False
+    assert ap.decide("https://inspirehep.net/api/accounts", purpose="metadata").allowed is False
