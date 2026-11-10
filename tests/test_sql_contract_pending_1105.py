@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parent.parent
 CONTRACT_2C0A323_COUNT = 158
 CONTRACT_2C0A323_FROZEN_SHA256 = "84d028093cc8e770d732a2c7ad3095313e50a6295582709b2555a28fad511e73"  # old collector at 2c0a323
 N024 = 17  # tax_chunk_vectors, tax_job_runs pairs proven by the 024 draft (CHUNK-TAXO-INT-1109)
+N026 = 10  # set_deny_active 5, set_keys 1, set_settings 4: vera/settings.py reads migration 026 tables (not applied; draft lives on the owner-kit branch, SETTINGS-MIG026-1110)
 N020 = 28  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108)
 
 
@@ -193,6 +194,10 @@ def test_016_drafts_byte_identical_to_reviewed_staged_copies():
 def test_required_contract_equals_2c0a323():
     req = sc.collect_required()
     assert sc.collect() == req
-    assert len(req) == CONTRACT_2C0A323_COUNT
-    assert _sha(req) == CONTRACT_2C0A323_FROZEN_SHA256
+    base = {p for p in req if not p[0].startswith("set_")}   # SETTINGS-CONTRACT-1110: 026 settings tables
+    assert len(base) == CONTRACT_2C0A323_COUNT
+    assert _sha(base) == CONTRACT_2C0A323_FROZEN_SHA256
+    assert {t for t, _ in req if t.startswith("set_")} == {"set_deny_active", "set_keys", "set_settings"}
+    assert len(req) - len(base) == N026
+    assert _sha(req) == "72f89c2c940d7cbf0234755a98cf7429eb6d7cea7be70c6f8850a77ace639424"
     assert set(req) | set(sc.pending_exemptions()) == set(sc.collect_all())

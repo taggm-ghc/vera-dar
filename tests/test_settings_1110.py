@@ -268,3 +268,22 @@ def test_stem_floor_placeholder_never_usable_and_db_override_numeric():
     assert st.validate_value(e, "FILL_FROM_CALIBRATION", "FILL_FROM_CALIBRATION") == (False, None)
     assert st.validate_value(e, 2.0, "FILL_FROM_CALIBRATION") == (False, None)
     assert st.validate_value(e, 0.5, "FILL_FROM_CALIBRATION") == (True, 0.5)
+
+
+def test_missing_026_relation_falls_back_to_file_quietly(env, caplog):
+    """Migration 026 not applied: the DB raises 'relation does not exist'. File values, one warning per 60 s, a retry
+    at most every 15 s (background, never per request)."""
+    env["err"] = RuntimeError('(psycopg2.errors.UndefinedTable) relation "vera_vjay.set_settings" does not exist')
+    with caplog.at_level(logging.WARNING):
+        for i in range(200):  # 200 requests inside 14 s
+            env["clk"].t = i * 0.07
+            assert st.get("m", "cap", 10) == 10
+            assert st.filter_allow("m.hosts", FILE["hosts"], "m") is FILE["hosts"]
+        assert env["calls"] == 1
+        env["clk"].t = 16
+        st.get("m", "cap", 10)
+        assert env["calls"] == 2
+        env["clk"].t = 40
+        st.get("m", "cap", 10)
+    assert len([r for r in caplog.records if "SET_DB_ERROR" in r.message]) == 1
+    assert "set_settings" not in caplog.text
