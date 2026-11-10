@@ -85,18 +85,24 @@ def test_canonical_url_prefers_doi():
     assert ca.canonical_url({"url": "https://arxiv.org/abs/1/"}) == "https://arxiv.org/abs/1"
 
 
-def test_resolver_licence_follows_abstract_origin():
-    oa = sr._record("10.1/a", "T", None, "openalex abstract")
-    assert oa["licence"] == CC0 and oa["stored_text_kind"] == "abstract_metadata"
+def test_resolver_records_carry_no_portal_abstract():
+    # PORTAL-WIRE-B-1110 (OD-1110-PORTALS-ALL): an index's abstract (OpenAlex, Semantic Scholar) is never evidence, so
+    # the resolver neither requests nor returns one
+    rec = sr._record("10.1/a", "T", None)
+    assert rec["snippet"] == "" and rec["evidence_eligible"] is False and rec["stored_text_kind"] == "metadata_only"
+    assert "abstract_inverted_index" not in sr.OPENALEX_FIELDS and not hasattr(sr, "with_abstract")
+    seen = []
 
     class R:
         status_code = 200
 
         @staticmethod
         def json():
-            return {"abstract": "s2 abstract"}
-    s2 = sr.with_abstract(sr._record("10.1/b", "T", None, ""), 1, http_get=lambda *a, **k: R)
-    assert s2["snippet"] == "s2 abstract" and s2["licence"] is None
+            return {"title": "T", "abstract": "s2 abstract", "publicationDate": "2020-01-01"}
+    got = sr.lookup_doi("10.1/b", 1, http_get=lambda url, **k: seen.append((url, k.get("params"))) or
+                        (type("N", (), {"status_code": 404})() if "openalex" in url else R))
+    assert got["snippet"] == "" and "s2 abstract" not in str(got)
+    assert all("abstract" not in str(p) for _, p in seen)
 
 
 def test_ask_schedules_admission_only_with_a_store(monkeypatch):

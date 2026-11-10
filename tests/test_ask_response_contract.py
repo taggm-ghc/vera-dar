@@ -18,7 +18,7 @@ STORE_CFG = CFG_CHAIN["memory"]["store"]
 SENT = "SENTINEL-ABSTRACT-TEXT"
 SRC = [{"n": 1, "title": "Paper One", "url": "https://arxiv.org/abs/2401.00001", "published": "2025-01-01",
         "snippet": SENT, "identifier": "arXiv:2401.00001", "provider": "arxiv", "licence_decision": "allow",
-        "retrieved_at": "2026-10-01"}]
+        "retrieved_at": "2026-10-01", "evidence_eligible": True}]  # PORTAL-WIRE-B-1110: an eligible (stored) source
 CAND = public_candidates(SRC)
 GROUNDING_CFG = {"insufficient_text": "INSUFFICIENT", "removed_citation_note": "NOTE", "no_sources_text": "NO SOURCES",
                  "claim_check": {"enabled": True, "unavailable_text": "UNAVAILABLE"}}

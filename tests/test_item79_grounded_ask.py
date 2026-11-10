@@ -50,9 +50,12 @@ def test_retrieve_keeps_abstracts_resolves_links_and_lists_traced_originals():
                  "discovered_via": "news.example"}]
 
     sources, unused = ga.retrieve_all("q", CFG, search=lambda q: results, resolver=resolver)
-    assert [s["title"] for s in sources] == ["Direct", "Original"] and [s["n"] for s in sources] == [1, 2]
+    # V5 F1: the abstract-less traced original is listed too (and still handed to acquisition via unused)
+    assert [s["title"] for s in sources] == ["Direct", "Original", "No abstract"] and [s["n"] for s in sources] == [1, 2, 3]
     assert sources[0]["published"] == "2025-01-02" and sources[1]["discovered_via"] == "news.example"
     assert [u["title"] for u in unused] == ["No abstract"]
+    # PORTAL-WIRE-B-1110: every search/index record is a listed discovery entry, never evidence
+    assert [s["evidence_eligible"] for s in sources] == [False] * 3 and ga.grounding_sources(sources) == []
 
 
 def test_retrieve_search_failure_returns_nothing():
@@ -132,10 +135,39 @@ def test_grounded_path_answers_from_sources_and_checks_citations(monkeypatch):
         return AskResult("Claim [1]. Bogus [4].", 100, 0.0)
 
     monkeypatch.setattr(ask_service, "complete", fake_complete)
-    src = [{"n": 1, "title": "T", "url": "https://arxiv.org/abs/1", "published": None, "snippet": "abstract"}]
+    # PORTAL-WIRE-B-1110: only an evidence_eligible source (a stored full-document chunk) grounds; a portal abstract
+    # listed next to it never reaches the prompt
+    portal = {"n": 1, "title": "P", "url": "https://doi.org/10.1/p", "published": None, "snippet": "portal abstract",
+              "evidence_eligible": False}
+    src = [portal, {"n": 2, "title": "T", "url": "https://journal.example/1", "published": None, "snippet": "full text",
+                    "evidence_eligible": True}]
     r = ask_service.answer_in_scope("Do AI assistants help?", "m", PRICING, grounding=(lambda: src, CFG))
     assert "[1] T" in seen["system"] and "Use ONLY the numbered sources" in seen["system"]
-    assert r.answer == "Claim [1]. Bogus .\n\nNOTE" and r.sources == tuple(src)
+    assert "portal abstract" not in seen["system"]
+    assert r.answer == "Claim [1]. Bogus .\n\nNOTE" and [s["title"] for s in r.sources] == ["T"]
+
+
+def test_openalex_only_question_never_grounds_on_the_abstract(monkeypatch):
+    # PORTAL-WIRE-B-1110 (OD-1110-PORTALS-ALL): an OpenAlex abstract is a portal's text: listed, never grounded on
+    _no_router(monkeypatch)
+    monkeypatch.setattr(ask_service, "complete", lambda *a, **k: (_ for _ in ()).throw(AssertionError("model called")))
+    rec = {"url": "https://doi.org/10.9999/oa.1", "doi": "10.9999/oa.1", "title": "Assistants and productivity",
+           "snippet": "OpenAlex reconstructed abstract", "provider": "openalex", "evidence_eligible": False}
+    sources, _ = ga.retrieve_all("assistants productivity", CFG, search=lambda q: [rec])
+    assert sources and sources[0]["evidence_eligible"] is False and ga.grounding_sources(sources) == []
+    assert "OpenAlex reconstructed abstract" not in str(ga.messages_for("q", sources))
+    r = ask_service.answer_in_scope("Do assistants help productivity?", "m", PRICING, grounding=(lambda: sources, CFG))
+    assert r.result_kind == "reading_list" and r.claims == ()
+    assert [c["title"] for c in r.candidates] == ["Assistants and productivity"]  # still listed as discovery
+
+
+def test_only_stored_non_portal_chunks_are_evidence_eligible():
+    span = {"start": 0, "end": 5}
+    assert ga.evidence_eligible({"url": "https://journal.example/x", "dar_span": span}) is True
+    assert ga.evidence_eligible({"url": "https://arxiv.org/abs/2101.00001", "dar_span": span}) is False  # portal host
+    assert ga.evidence_eligible({"url": "https://x.example", "doi": "10.48550/arXiv.2101.00001", "dar_span": span}) is False
+    assert ga.evidence_eligible({"url": "https://journal.example/x", "snippet": "abstract"}) is False  # search record
+    assert ga.evidence_eligible({"url": "https://journal.example/x", "dar_span": span, "evidence_eligible": False}) is False
 
 
 def test_grounded_path_never_answers_from_memory(monkeypatch):
@@ -189,3 +221,21 @@ def _legacy_concatenated_notes(monkeypatch):
     tests/test_ans_layers_s1.py."""
     from vera import answer_contract
     monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
+
+
+def test_resolved_original_with_the_real_record_shape_is_listed_and_never_grounds():
+    """PORTAL-WIRE-B-V5 F1: source_resolver._record (empty snippet, evidence_eligible False) is what the resolver returns;
+    the stub elsewhere returns an abstract and hid the loss of the reading list entry."""
+    from vera import answer_contract as contract
+    orig = sr._record("10.1234/orig", "Quark confinement on the lattice", "2024-05-01")
+    assert orig["snippet"] == "" and orig["evidence_eligible"] is False
+    linked = [{"url": "https://news.example/a", "title": "News", "snippet": ""}]
+    sources, unused = ga.retrieve_all("quark confinement lattice", CFG, search=lambda q: linked,
+                                      resolver=lambda r, c, d: [dict(orig, discovered_via="news.example")])
+    assert [s["title"] for s in sources] == ["Quark confinement on the lattice"] and len(unused) == 1  # acquisition keeps it
+    assert sources[0]["evidence_eligible"] is False and sources[0]["snippet"] == ""
+    assert ga.grounding_sources(sources) == [] and "Quark" not in str(ga.messages_for("quark confinement lattice", sources))
+    cands = ga.public_candidates(sources)
+    assert contract.result_kind_for(cands) != "answer"
+    res = contract.reading_list_result(cands, 0, 0, sources=sources)
+    assert "Quark confinement on the lattice" in str(res) and "orig" in str(res)

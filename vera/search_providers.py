@@ -591,6 +591,9 @@ class OpenAlexProvider:
                 "openalex_id": (w.get("id") or "").strip() or None,
                 "licence": licence_record(metadata=OPENALEX_METADATA_LICENCE),
                 "stored_text_kind": "abstract_metadata",
+                # PORTAL-WIRE-B-1110 (OD-1110-PORTALS-ALL): OpenAlex is a portal; the abstract above is for relevance
+                # judgement and ranking only, never evidence (grounded_ask.evidence_eligible, portal_follow)
+                "evidence_eligible": False,
                 "provider_endpoint": self.endpoint,
                 **({"oa": oa} if (oa := openalex_oa_info(w)) is not None else {}),
             })

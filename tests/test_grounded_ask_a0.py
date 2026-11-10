@@ -109,7 +109,10 @@ def test_answer_reachable_only_through_l3_seam(monkeypatch):
     monkeypatch.setattr(ask_service, "complete", lambda *a, **k: AskResult("Claim [1].", 5, 0.0))
     from vera import claim_check
     monkeypatch.setattr(claim_check, "check_answer", lambda t, s, c: (t, {"outcome": "checked", "checked": 1}))
-    assert _ask((lambda: SRC, CFG)).result_kind == "answer"
+    # PORTAL-WIRE-B-1110: SRC holds arXiv abstracts (portal text): even through the seam they never ground
+    assert _ask((lambda: SRC, CFG)).result_kind == "reading_list"
+    stored = [dict(SRC[0], url="https://journal.example/a", evidence_eligible=True)]  # an eligible (stored) source
+    assert _ask((lambda: stored, CFG)).result_kind == "answer"
 
 
 # ---- V9 source guards (AST) ----

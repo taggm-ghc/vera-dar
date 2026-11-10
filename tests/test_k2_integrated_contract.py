@@ -34,7 +34,8 @@ RECALL = "SENTINEL-K2T-RECALLED"       # evidence recall rows: never returned (V
 TRACED = "SENTINEL-K2T-TRACED"         # traced (unused) source title: only in the answer body
 SRC = [{"n": 1, "title": "Paper One", "url": "https://example.org/papers/one", "published": "2025-01-01",
         "snippet": ABS, "abstract": ABS, "identifier": "10.1234/one", "provider": "arxiv",
-        "licence_decision": "allow", "retrieved_at": "2026-10-01"}]
+        "licence_decision": "allow", "retrieved_at": "2026-10-01",
+        "evidence_eligible": True}]  # PORTAL-WIRE-B-1110: stands for an eligible (stored) source so the seam grounds
 UNUSED = [{"title": TRACED, "url": "https://doi.org/10.1/t", "published": None, "discovered_via": "x"}]
 GROUNDING_CFG = {"insufficient_text": "INSUFFICIENT", "removed_citation_note": "NOTE", "no_sources_text": "NO SOURCES",
                  "claim_check": {"enabled": True, "unavailable_text": "UNAVAILABLE"}}

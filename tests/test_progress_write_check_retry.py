@@ -106,7 +106,7 @@ def test_legacy_answer_grounded_points(rec, monkeypatch):
     monkeypatch.setattr(grounded_ask, "messages_for", lambda q, s: [])
     monkeypatch.setattr(claim_check, "check_answer", lambda text, sources, cc: (text, {"outcome": "ok"}))
     dec = AskResult(answer="", tokens_used=0, cost_usd=0.0)
-    out = ask_service._answer_grounded("q", "m", None, [{"title": "t"}], {"removed_citation_note": "n", "claim_check": {"enabled": True}},
+    out = ask_service._answer_grounded("q", "m", None, [{"title": "t", "evidence_eligible": True}], {"removed_citation_note": "n", "claim_check": {"enabled": True}},
                                        dec, {})
     assert out.result_kind == "answer"
     assert seq(rec) == [("write", "start"), ("write", "done"), ("check", "start"), ("check", "done")]
@@ -123,7 +123,7 @@ def test_legacy_check_raises_no_done(rec, monkeypatch):
 
     monkeypatch.setattr(claim_check, "check_answer", boom)
     with pytest.raises(RuntimeError):
-        ask_service._answer_grounded("q", "m", None, [{"title": "t"}], {"removed_citation_note": "n", "claim_check": {"enabled": True}},
+        ask_service._answer_grounded("q", "m", None, [{"title": "t", "evidence_eligible": True}], {"removed_citation_note": "n", "claim_check": {"enabled": True}},
                                      AskResult(answer="", tokens_used=0, cost_usd=0.0), {})
     assert seq(rec) == [("write", "start"), ("write", "done"), ("check", "start")]
 

@@ -3,10 +3,16 @@
 A result with no abstract (DuckDuckGo, news, portals, OpenAlex records without an abstract) is followed:
 its page is fetched under selective_fetch's guards, scholarly identifiers are read from it (the page's own
 citation DOI first, then arXiv links, then DOIs it links to), and each identifier is resolved through
-OpenAlex to a title, date and abstract. A page with no identifier is followed one more hop through its
+OpenAlex to a title and date (metadata only). A page with no identifier is followed one more hop through its
 links to known scholarly hosts. If that finds nothing (for example a portal that refuses the fetch), the result's
 title is looked up in OpenAlex and accepted only on a close title match. Every count, hop and time limit comes from the `resolve` settings in
 config/ask-provider-chain.json; the work stops at the deadline and reports what it skipped.
+
+PORTAL-WIRE-B-1110 (owner 2026-11-10, OD-1110-PORTALS-ALL): OpenAlex and Semantic Scholar are PORTALS (indexes). Their
+abstracts are never evidence, stored or answer-only, so this module neither requests nor returns one: the OpenAlex
+select omits abstract_inverted_index, Semantic Scholar is asked for title and date only, and every record has an empty
+snippet. A record is a discovery entry (title, link, identifier) that grounded_ask lists and hands to acquisition; the
+original's own text is obtained, if at all, by the acquisition routes on the original host.
 """
 import logging
 import re
@@ -17,7 +23,7 @@ import requests
 from vera import strict_json
 
 from vera.selective_fetch import fetch_html
-from vera.search_providers import OPENALEX_METADATA_LICENCE, USER_AGENT, licence_record, reconstruct_abstract
+from vera.search_providers import USER_AGENT
 from vera import api_permissions
 from vera.api_permissions import ApiDenied
 
@@ -35,7 +41,7 @@ _MISS = (requests.RequestException, ValueError, ApiDenied)  # API-ALLOW-1107: a 
 logger = logging.getLogger("vera")
 
 OPENALEX_WORK = "https://api.openalex.org/works/doi:{doi}"
-OPENALEX_FIELDS = "id,doi,title,publication_date,abstract_inverted_index,type"
+OPENALEX_FIELDS = "id,doi,title,publication_date,type"  # PORTAL-WIRE-B-1110: no abstract_inverted_index (portal text)
 _META_DOI = re.compile(r"<meta[^>]+name=[\"'](?:citation_doi|dc\.identifier|prism\.doi|DC\.Identifier)[\"'][^>]*"
                        r"content=[\"']\s*(?:doi:|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\"'\s<>]+)", re.I)
 _META_DOI_REV = re.compile(r"<meta[^>]+content=[\"']\s*(?:doi:|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\"'\s<>]+)"
@@ -79,36 +85,25 @@ S2_PAPER = "https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
 
 
 def _s2(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict:
-    """Semantic Scholar record (keyless; may rate-limit, which counts as a miss)."""
+    """Semantic Scholar record, title and date only (keyless; may rate-limit, which counts as a miss)."""
     try:
-        r = http_get(S2_PAPER.format(doi=doi), params={"fields": "title,abstract,publicationDate"},
+        r = http_get(S2_PAPER.format(doi=doi), params={"fields": "title,publicationDate"},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
         return strict_json.response_json(r) if r.status_code == 200 else {}
     except _MISS:
         return {}
 
 
-def _record(doi: str, title, published, abstract: str) -> dict:
-    """An OpenAlex abstract carries OpenAlex's CC0 metadata licence; any other origin is set by the caller."""
-    rec = {"title": title or doi, "url": f"https://doi.org/{doi}", "published": published,
-           "snippet": abstract or "", "source_type": "scholarly", "doi": doi, "stored_text_kind": "abstract_metadata"}
-    if abstract:
-        rec["licence"] = licence_record(metadata=OPENALEX_METADATA_LICENCE)
-    return rec
-
-
-def with_abstract(rec: dict, timeout_s: float, http_get=_LIMITED_GET) -> dict:
-    """Fill a missing abstract from Semantic Scholar; the record keeps an empty snippet if none is found."""
-    if rec.get("snippet") or not rec.get("doi"):
-        return rec
-    s2 = _s2(rec["doi"], timeout_s, http_get)
-    # Semantic Scholar's abstract licence is not declared per record: licence None, so the licence gate holds it
-    return dict(rec, snippet=s2["abstract"], licence=None, abstract_source="semanticscholar") if s2.get("abstract") else rec
+def _record(doi: str, title, published) -> dict:
+    """A discovery record: metadata only, never text. PORTAL-WIRE-B-1110: the snippet is always empty (an index's
+    abstract is never evidence) and evidence_eligible is False."""
+    return {"title": title or doi, "url": f"https://doi.org/{doi}", "published": published, "snippet": "",
+            "source_type": "scholarly", "doi": doi, "stored_text_kind": "metadata_only", "evidence_eligible": False}
 
 
 def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None:
-    """Original source for a DOI: OpenAlex metadata, abstract from OpenAlex or Semantic Scholar.
-    None when neither index knows the DOI; an empty snippet means the original has no free abstract."""
+    """Original source for a DOI: OpenAlex metadata (title, date), else Semantic Scholar's. None when neither index
+    knows the DOI. Never an abstract (PORTAL-WIRE-B-1110)."""
     try:
         r = http_get(OPENALEX_WORK.format(doi=doi), params={"select": OPENALEX_FIELDS},
                      headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
@@ -116,14 +111,11 @@ def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None
     except _MISS:
         w = None
     if w:
-        rec = _record(doi, w.get("title"), w.get("publication_date"),
-                      reconstruct_abstract(w.get("abstract_inverted_index"), 4000))
-        return with_abstract(rec, timeout_s, http_get)
+        return _record(doi, w.get("title"), w.get("publication_date"))
     s2 = _s2(doi, timeout_s, http_get)
     if not s2:
         return None
-    rec = _record(doi, s2.get("title"), s2.get("publicationDate"), "")
-    return dict(rec, snippet=s2.get("abstract") or "", licence=None, abstract_source="semanticscholar")
+    return dict(_record(doi, s2.get("title"), s2.get("publicationDate")), metadata_source="semanticscholar")
 
 
 def _words(t: str) -> set[str]:
@@ -146,11 +138,10 @@ def lookup_title(title: str, timeout_s: float, min_match: float, http_get=_LIMIT
     for w in items:
         got = _words(w.get("title"))
         if got and len(want & got) / len(want | got) >= min_match:
-            abstract = reconstruct_abstract(w.get("abstract_inverted_index"), 4000)
             doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(w.get("doi") or ""), flags=re.I).lower() or None
             if not doi:
                 continue
-            return with_abstract(_record(doi, w.get("title"), w.get("publication_date"), abstract), timeout_s, http_get)
+            return _record(doi, w.get("title"), w.get("publication_date"))
     return None
 
 

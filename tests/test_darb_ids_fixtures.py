@@ -259,7 +259,7 @@ def test_flow_abstractless_original_keeps_ids_in_unused():
     linked = [{"title": "L", "url": "https://example.org/l", "snippet": ""}]  # a link-only hit whose resolution traces the original
     cfg = {**RCFG, "resolve": {"enabled": True, "max_results_to_resolve": 4, "deadline_s": 5}}
     out, unused = grounded_ask.retrieve_all("q", cfg, search=lambda q: linked, resolver=lambda r, c, d: [dict(rec)])
-    assert out == [] and unused[0]["doi"] == "10.9999/darb.all3" and unused[0]["pmcid"] == "PMC9000001"
+    assert len(out) == 1 and out[0]["evidence_eligible"] is False and unused[0]["doi"] == "10.9999/darb.all3" and unused[0]["pmcid"] == "PMC9000001"
     assert unused[0]["openalex_id"] == "https://openalex.org/W9000001" and unused[0]["provider"] == "openalex"
     cands, _ = acq_discovered.discovered_candidates(unused, acq_cfg())
     assert cands[0]["discovery"]["record_id"] == "https://openalex.org/W9000001"

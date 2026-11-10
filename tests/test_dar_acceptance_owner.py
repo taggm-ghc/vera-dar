@@ -407,5 +407,7 @@ def test_crit6_nonexclusion_external_base_not_displaced(app_env):
     urls = _src_urls(_ask(w, QUERIES["q_D1"]))
     stored = [u for u in urls if u in BY_URL]
     assert stored, f"no stored results in sources: {urls}"
-    assert [u for u in urls if u in ext], f"no external results in sources: {urls}"
-    assert urls[:3] == ext[:3], f"base ranks 1-3 displaced: got {urls[:3]}, expected {ext[:3]}"
+    # PORTAL-WIRE-B-1110 (owner 2026-11-10, OD-1110-PORTALS-ALL): an external search record's abstract is portal text,
+    # never a grounding source, so the answer's sources hold the stored evidence only. The base-ranking
+    # non-displacement part of this criterion is pinned at retrieval level (tests/test_dar_merge_rank.py).
+    assert not [u for u in urls if u in ext], f"portal abstracts used as answer sources: {urls}"
