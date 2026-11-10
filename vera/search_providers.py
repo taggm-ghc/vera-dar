@@ -438,8 +438,10 @@ def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: 
 
 
 class OpenAlexProvider:
-    """OpenAlex works search, keyless, metadata + reconstructed abstract only. `settings` is config
-    search.openalex; `query_terms` is config search.query_terms. No `mailto` is sent (none is approved)."""
+    """OpenAlex works search, metadata + reconstructed abstract only. `settings` is config search.openalex;
+    `query_terms` is config search.query_terms. No `mailto` is sent (none is approved). Keyless unless the env var
+    OPENALEX_API_KEY is set (SEARCHCAPS-1110, OD-1110-SEARCHCAPS): then the key goes as the api_key parameter (never
+    logged) and the daily cap is config/rate_limits.json portals.openalex.with_key.search_daily_cap."""
     name = "openalex"
     required_env: tuple[str, ...] = ()
 
