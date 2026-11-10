@@ -182,7 +182,7 @@ class APIModel(BaseModel):
 
 
 class AskRequest(APIModel):
-    question: str = Field(..., max_length=4000)
+    question: str = Field(..., max_length=_scope_router.API_QUESTION_MAX_CHARS)  # SCOPE-LEN-1110: one constant with the classifier window
     mode: Literal["normal"] = "normal"  # single-valued; kept for API compatibility, anything else is a 422
     # SELFQ-RELEVANCE-1108: false = "search as typed" after a clarification round (per request only; never stored)
     spell_check: bool = True

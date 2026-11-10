@@ -79,6 +79,11 @@ def _compile(patterns: list[str], where: str) -> tuple[re.Pattern, ...]:
         raise ScopeConfigError(f"scope_router.json: bad regex in {where}: {exc}") from exc
 
 
+# SCOPE-LEN-1110: the longest question the API accepts (main.py AskRequest.question max_length). The layer-2
+# classifier window (layer2.max_question_chars, also read by catstep) must cover all of it, or the tail is unclassified.
+API_QUESTION_MAX_CHARS = 4000
+
+
 def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
     try:
         mode = layer2_mode or raw["layer2_mode"]
@@ -93,6 +98,10 @@ def parse_config(raw: dict, layer2_mode: str | None = None) -> RouterConfig:
         mr = raw["layer2"].get("malformed_retry", 1)
         if isinstance(mr, bool) or mr not in (0, 1):  # PATHA-1028 Q2: a bound, clamped to 0/1; fail verbose
             raise ScopeConfigError(f"scope_router.json: layer2.malformed_retry {mr!r} must be 0 or 1")
+        win = raw["layer2"].get("max_question_chars")
+        if isinstance(win, bool) or not isinstance(win, int) or win < API_QUESTION_MAX_CHARS:  # SCOPE-LEN-1110: fail closed at load
+            raise ScopeConfigError(f"scope_router.json: layer2.max_question_chars {win!r} must be an int >= "
+                                   f"{API_QUESTION_MAX_CHARS} (the API's maximum question length)")
         return RouterConfig(
             raw=raw,
             layer2_mode=mode,
@@ -951,6 +960,9 @@ def route(question: str, model: str, pricing=None, cfg: RouterConfig | None = No
         return ScopeDecision(False, "layer1", "deny:injection_marker")
     if cfg.layer2_mode == "none":
         return ScopeDecision(cfg.none_mode_unsure_action == ACCEPT, "layer2_none", "unsure:" + cfg.none_mode_unsure_action)
+    win = cfg.layer2.get("max_question_chars")
+    if isinstance(win, bool) or not isinstance(win, int) or len(question) > win:  # SCOPE-LEN-1110: the classifier would
+        return ScopeDecision(False, "layer1", "deny:classifier_window")  # not see all of it: fixed decline, no call
     return _classify(question, model, pricing, cfg, chat)
 
 
