@@ -166,6 +166,8 @@
         "using"
       ],
       "stem_len": 5,
+      "question_structural_terms": ["components", "component", "parts", "elements", "types", "kinds"],
+      "_question_structural_terms_note": "RAG-ADMIT-1109 (orchestrator decision 2026-11-10): admission-only list of structure nouns that a general answer expresses with other words (RAG: retriever, index, generator). Unlike question_generic_terms they stay in the retrieval query and in the question's content stems (the one-stem rule and coverage count them); they are only not REQUIRED for the matched-stem floor, which counts the remaining content stems (at least one must remain, else no change). A list rule, not a threshold. Remove the key to restore the previous behaviour.",
       "question_generic_terms": ["his", "her", "him", "she", "hers", "did", "does", "doing", "done", "key", "main", "major", "types", "type", "kinds", "kind", "different", "differences", "difference", "best", "better", "good", "bad", "common", "important", "explain", "describe", "tell", "give", "make", "get", "know", "versus", "similar", "similarities", "really", "much", "many", "exactly", "come", "comes", "came", "coming", "go", "goes", "went", "gone", "going"],
       "question_lead_verbs": ["explain", "describe", "tell", "give", "make", "get", "know", "did", "does", "do", "done", "doing"],
       "_question_lead_verbs_note": "FILLER-CLEANUP-1109: a capitalised first word of the question or of a later sentence/sub-question that is listed here is not name evidence in retrieval_kept_words (vera.fulldoc_admission); moved from code. Remove the key to treat every capitalised word as evidence.",

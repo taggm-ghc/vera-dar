@@ -591,6 +591,19 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         except (KeyError, TypeError, ValueError):
             anchors = set()  # no usable threshold: the rule is inactive (fail open to current behaviour)
 
+    # RAG-ADMIT-1109: question stems of relevance.question_structural_terms ("components", "parts", ...): still content
+    # stems (one-stem rule, coverage, retrieval query) but not required by the matched-stem floor below.
+    sx: set = set()
+    if icfg and not weighted:
+        try:
+            st = {str(g).casefold() for g in (icfg.get("question_structural_terms") or []) if isinstance(g, str)}
+            if st:
+                from vera.search_query import drop_generic as _dg
+                qt = tokenize(_canon(_dg(question), tg) if tg is not None else _dg(question), icfg)
+                sx = {_cut(t, stem_n, tg) for t in qt if t in st} & _q_stems(question, icfg, stem_n, tg)
+        except Exception:
+            sx = set()
+
     # NONASK-1103 A6-3 (D2): seeded combined re-admission. Only for the ephemeral (inline) corpus (flagged by
     # inline_acquire.ephemeral_corpus) and only with admission.seed_per_doc_spans exactly true: every document
     # contributes its OWN top candidates (k per document), ranked by the combined score against the original question,
@@ -690,7 +703,14 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         # is min(min_matched_stems, the question's content stems), never below 1, and only in the legacy signal (the
         # weighted signal keeps its fixed MIN_MATCHED_STEMS_FLOOR).
         need = max(1, min(min_hits, q_n)) if (adaptive and not weighted) else min_hits
-        if rel < min_rel or hits < need or q_n == 0:
+        f_hits, f_need = hits, need
+        if sx and q_n - len(sx) >= 1:
+            # RAG-ADMIT-1109: the floor never exceeds the non-structural content stems, and at least one of those must
+            # match (a passage with only "components" is not evidence); a matched structural stem still counts.
+            f_need = max(1, min(need, q_n - len(sx)))
+            if not (_stems(text, icfg, stem_n, tg) & (q_ns if weighted else _q_stems(question, icfg, stem_n, tg)) - sx):
+                f_hits = 0
+        if rel < min_rel or f_hits < f_need or q_n == 0:
             # HYBRID-1109 vector stem-floor rule: a passage whose stored partition is close to the question
             # (cosine >= stem_floor_sim; null = rule off) passes the two lexical floors if it still matches at least
             # stem_floor_min_hits question content stems. Every other rule below still applies.
