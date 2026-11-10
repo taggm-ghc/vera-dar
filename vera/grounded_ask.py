@@ -70,13 +70,24 @@ def _trace_counts(trace: dict) -> dict:
     return out
 
 
-def _mark_in_corpus(results: list, dar_corpus) -> list:
+def _acquired_keys() -> frozenset:
+    """ARCH-FIX-1110 A: keys of the acquired full documents (the set R-ACQ-KNOWN is decided from); empty when none or
+    on any error. Never waits on the DB (get_acquired_corpus probes in the background)."""
+    try:
+        from vera import fulldoc_corpus
+        dar = getattr(fulldoc_corpus.get_acquired_corpus(), "_dar", None)
+        return frozenset(dar.doc_keys()) if dar is not None and hasattr(dar, "doc_keys") else frozenset()
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def _mark_in_corpus(results: list, dar_corpus, extra_keys=None) -> list:
     """Copy of `results` with in_corpus=True on every result whose DOI or URL (normalised, either direction) is that of
     any stored document (DarCorpus.doc_keys). The input list is returned unchanged when nothing matches."""
     from vera.dar_corpus import doc_key_set
 
     keys_fn = getattr(dar_corpus, "doc_keys", None)  # duck-typed corpora without it: no corpus-wide check
-    held = keys_fn() if callable(keys_fn) else ()
+    held = frozenset(keys_fn() if callable(keys_fn) else ()) | frozenset(_acquired_keys() if extra_keys is None else extra_keys)
     if not held:
         return results
     out, hit = [], False

@@ -203,6 +203,11 @@ def render_discovery(st, data: dict) -> None:
     if cands:
         whys = [why.get(c["url"].rstrip("/")) if c["acquisition"] == answer_contract.ACQ_NOT_ACQUIRED else None
                 for c in cands]
+        # ARCH-FIX-1110 A: R-ACQ-KNOWN is decided from the stored set, so that row is in the collection (one label, never two)
+        cands = [dict(c, acquisition=answer_contract.ACQ_IN_CORPUS) if w == REASON_TEXT["R-ACQ-KNOWN"] else c
+                 for c, w in zip(cands, whys)]
+        whys = [None if c["acquisition"] == answer_contract.ACQ_IN_CORPUS and w == REASON_TEXT["R-ACQ-KNOWN"] else w
+                for c, w in zip(cands, whys)]
         used = _passage_keys(data)
         whys = [OBTAINED_CONSIDERED_TEXT if w == OBTAINED_TEXT and (_key(c["url"]) in used or _key(c["identifier"]) in used)
                 else w for c, w in zip(cands, whys)]
