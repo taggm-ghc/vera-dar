@@ -1458,6 +1458,8 @@ def _own_decision(e: Exception):
     else:
         m = _NOT_ATTEMPT.search(t)
         reason = m.group(1) if m else None
+    if SEED_NO_DDG in t:  # POLISH-1110: the seed refusal text mentions a "spent" cap but is an exclusion, never an allowance
+        return "seed_excluded"
     if reason == "seed_excluded":  # POLISH-1110: an exclusion for seed runs, not a used-up allowance
         return "seed_excluded"
     if reason == "daily_cap":

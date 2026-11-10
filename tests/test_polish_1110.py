@@ -32,3 +32,37 @@ def test_wait_too_long_sentence_is_complete_as_rendered():
                                older_evidence_available=False, new_evidence_admitted=False, source_unreachable=True)
     assert ("A source found was not fetched because that site's rate limit required a longer wait than the time "
             "left for this question.") in res.user_text
+
+
+# Replicated from work/SEED-SCI-1110/scripts/seed_run.py CAP_RE (the seeder's cap-notice classifier; a match stops the run and backs off to 00:00 UTC)
+import re
+_SEED_CAP_RE = re.compile(
+    r"its hourly or daily search limit has been reached; no background search was started"
+    r"|daily search allowance for [^.\n]{1,160}? had already been used up"
+    r"|The current search limit was reached; try again later\.")
+
+
+def test_seed_ddg_refusal_end_to_end_is_not_a_cap_notice():
+    import json
+    from vera import rate_limit, request_origin, research_outcome as ro, search_providers as sp
+    rate_limit.set_registry_for_tests(rate_limit.Registry(rate_limit.load_config(env={})))
+    try:
+        from vera.eval_config import load_eval_config
+        sent = []
+        p = sp.DuckDuckGoLiteProvider(load_eval_config().search["duckduckgo_lite"], transport=lambda *a: sent.append(1),
+                                      today=lambda: "2026-11-10", sleep=lambda s: None, robots_check=lambda u, ua: True)
+        with request_origin.scope("seed"):
+            try:
+                p.call("coral reef bleaching", 5, 5.0)
+                raise AssertionError("seed call to DuckDuckGo was not refused")
+            except sp.ProviderUnavailable as e:
+                status = sp._own_decision(e)
+    finally:
+        rate_limit.set_registry_for_tests(None)
+    assert status == "seed_excluded" and sent == []
+    res = ro.summarize_outcome([ro.PortalAttempt("duckduckgo", status, 0)], [], budget_exhausted=False,
+                               older_evidence_available=False, new_evidence_admitted=False)
+    text = res.user_text + json.dumps(res.report_detail)
+    assert "ackground seeding does not use that search service" in text
+    assert "allowance" not in text and "used up" not in text
+    assert not _SEED_CAP_RE.search(res.user_text)
