@@ -1,5 +1,6 @@
 """RAG-ADMIT-1109: "What are the components of RAG?" must not need the word "component" in every passage.
-question_generic_terms gains component(s), parts, elements (whole-token list rule, like types/kinds). Offline: synthetic
+admission.relevance.question_structural_terms (component(s), parts, elements, types, kinds): kept in the retrieval query
+and in the content stems, not required by the matched-stem floor. Offline: synthetic
 documents, fake embedder, no network, no DB. Hybrid-on cases use tests/test_hybrid_retrieval_1109 helpers."""
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from vera.fulldoc_corpus import FullDocCorpus, _routing_cfg, load_config
 from tests.test_hybrid_retrieval_1109 import MODEL, Loader, _reset, setup_hybrid  # noqa: F401  (_reset: autouse)
 
 Q = "What are the components of RAG?"
-NEW_TERMS = ("component", "components", "parts", "elements")
+NEW_TERMS = ("component", "components", "parts", "elements")  # in question_structural_terms
 
 RAG_TEXT = [
     "Retrieval-augmented generation (RAG) pairs a retriever over a vector index with a generator. The retriever fetches "
@@ -62,16 +63,23 @@ def _corpus(paras, title="Doc"):
 
 
 def _prefix_cfg():
-    """The shipped config as it was before RAG-ADMIT-1109 (the four terms removed)."""
+    """The shipped config without the structural list (the behaviour before RAG-ADMIT-1109)."""
     cfg = copy.deepcopy(load_config())
-    rel = cfg["admission"]["relevance"]
-    rel["question_generic_terms"] = [t for t in rel["question_generic_terms"] if t not in NEW_TERMS]
+    del cfg["admission"]["relevance"]["question_structural_terms"]
     return cfg
 
 
 def test_shipped_config_lists_the_terms():
-    gen = load_config()["admission"]["relevance"]["question_generic_terms"]
-    assert all(t in gen for t in NEW_TERMS) and "types" in gen and "kinds" in gen
+    rel = load_config()["admission"]["relevance"]
+    assert all(t in rel["question_structural_terms"] for t in NEW_TERMS)
+    assert not any(t in rel["question_generic_terms"] for t in NEW_TERMS)  # not generic: they stay content stems
+
+
+def test_structural_terms_stay_in_the_retrieval_query_and_the_content_stems():
+    from vera.search_query import drop_generic
+    rel = load_config()["admission"]["relevance"]
+    assert "components" in drop_generic(Q).lower()
+    assert "compo" in fa._q_stems(Q, rel, int(rel["stem_len"])) and len(fa._q_stems(Q, rel, int(rel["stem_len"]))) == 2
 
 
 def test_rag_passage_without_the_word_component_is_admitted_hybrid_off():
@@ -107,7 +115,7 @@ def test_hybrid_on_similarity_rule_admits_with_one_word_overlap(monkeypatch):
     assert on.trace["hybrid"]["floor_by_vector"] >= 1 and on.admitted, on.trace
 
 
-def test_hybrid_on_with_null_floor_relies_on_the_generic_terms(monkeypatch):
+def test_hybrid_on_with_null_floor_relies_on_the_structural_list(monkeypatch):
     c, table = _corpus(RAG_TEXT)
     setup_hybrid(monkeypatch, c, table, chunks_per_partition=4, vector_k=4, stem_floor_sim=None)
     assert fa.admit(Q, c, _prefix_cfg()).admitted == ()
@@ -128,10 +136,10 @@ CHEM_ON = ["Group 1 of the periodic table holds lithium, sodium and potassium; e
 CHEM_OFF = ["Group dynamics in small teams depend on trust, and a group that meets weekly settles disputes faster. "]
 
 
-def test_elements_generic_but_other_content_word_still_drives_admission():
+def test_elements_structural_but_other_content_word_still_drives_admission():
     icfg = load_config()["admission"]["relevance"]
     stems = fa._q_stems(QCHEM, icfg, int(icfg.get("stem_len", 5)))
-    assert "eleme" not in stems and "group" in stems
+    assert "eleme" in stems and "group" in stems  # still a content stem; only the floor stops requiring it
     c, _t = _corpus(CHEM_ON)
     before = fa.admit(QCHEM, c, _prefix_cfg())
     after = fa.admit(QCHEM, c, load_config())
