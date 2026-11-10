@@ -78,7 +78,7 @@ def test_4_news_question_counts_examined_reporting_pages_not_zero():
     assert s["counted"] == 2 and s["examined_unqualified"] == 1 and s["metadata_only"] == 3 and s["news"] == 2
     pub = ask_service._with_ledger(o.public(), led, {})
     line = ui_evidence.acquisition_notice_line({"contract": {"inline_acquisition": pub}})
-    assert line.startswith("Read 2 of the 6 sources targeted;") and "0 of 6" not in line
+    assert line.startswith("VERA-DAR obtained 2 documents for this question (aim: at least 6);") and "0 of 6" not in line
 
 
 def test_5_candidates_and_discovered_only_count_zero():
@@ -128,14 +128,14 @@ def test_7_notice_ledger_goldens_and_legacy():
         return ui_evidence.acquisition_notice_line({"contract": {"inline_acquisition": {"acquisition": aq,
                                                                                        **({"ledger": led} if led else {})}}})
     z = {k: 0 for k in el.SUMMARY_KEYS}
-    assert line({**z, "counted": 3, "full_text": 3, "scholarly": 3}) == "Read 3 of the 6 sources targeted; supply was limited."
+    assert line({**z, "counted": 3, "full_text": 3, "scholarly": 3}) == "VERA-DAR obtained 3 documents for this question (aim: at least 6); supply was limited."
     assert line({**z, "counted": 3, "full_text": 2, "partial_text": 1, "scholarly": 3, "stored": 1}) == (
-        "Read 3 of the 6 sources targeted (2 in full, 1 in part), 1 saved to VERA-DAR's collection; supply was limited.")
+        "VERA-DAR obtained 3 documents for this question (aim: at least 6) (2 in full, 1 in part), 1 saved to VERA-DAR's collection; supply was limited.")
     assert line({**z, "counted": 3, "full_text": 3, "scholarly": 1, "news": 2}) == (
-        "Read 3 of the 6 sources targeted (scholarly 1, news 2); supply was limited.")
+        "VERA-DAR obtained 3 documents for this question (aim: at least 6) (scholarly 1, news 2); supply was limited.")
     assert line({**z, "counted": 6, "full_text": 6, "news": 6}) is None
-    assert line(None) == "Found 1 of the 6 new sources targeted; supply was limited."
-    assert line({"counted": "x"}) == "Found 1 of the 6 new sources targeted; supply was limited."
+    assert line(None) == "VERA-DAR obtained 1 new full documents for this question (aim: at least 6); supply was limited."
+    assert line({"counted": "x"}) == "VERA-DAR obtained 1 new full documents for this question (aim: at least 6); supply was limited."
 
 
 def test_8_need_to_know_public_summary_and_trace():

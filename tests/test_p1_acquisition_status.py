@@ -72,9 +72,9 @@ def _data(status, stored, target=6):
 
 def test_ui_notice_per_status():
     assert ue.acquisition_notice_line(_data("resource_limited", 2)) == \
-        "Found 2 of the 6 new sources targeted; supply was limited."
+        "VERA-DAR obtained 2 new full documents for this question (aim: at least 6); supply was limited."
     assert ue.acquisition_notice_line(_data("incomplete_deadline", 0)) == \
-        "Found 0 of the 6 new sources targeted; the search stopped at the time limit."
+        "VERA-DAR obtained 0 new full documents for this question (aim: at least 6); the search stopped at the time limit."
     assert ue.acquisition_notice_line(_data("met", 6)) is None
     assert ue.acquisition_notice_line(_data("resource_limited", 6)) is None
     for bad in (None, {}, {"contract": {"inline_acquisition": {"acquisition": {"status": "resource_limited", "stored": "x", "target": 6}}}},

@@ -1020,7 +1020,7 @@ def _inline(question, model, pricing, decision, chained, grounding, acq, tried=N
 def _with_ledger(pub: dict, ledger, acq) -> dict:
     """MIDTERMS-WP10-1106 (owner D3): a COPY of a public inline outcome with the ledger summary (counts only) and
     acquisition.counted; status becomes "met" when the counted examined sources reach the target, so the status and the
-    "Read N of the T sources targeted" line agree. The (possibly cached) Outcome is never mutated."""
+    "obtained N documents ... (aim: at least T)" line agree. The (possibly cached) Outcome is never mutated."""
     if ledger is None or not isinstance(pub, dict):
         return pub
     summ = ledger.summary()
