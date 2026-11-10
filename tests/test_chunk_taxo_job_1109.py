@@ -747,6 +747,20 @@ def test_startup_logs_delay_and_missing_cred_names_only(caplog):
     assert len(warn) == 1 and "CLOUDFLARE_ACCOUNT_ID" in warn[0] and "CLOUDFLARE_API_TOKEN" in warn[0] and sentinel not in warn[0]
 
 
+def test_startup_warning_never_logs_a_present_credential_value(caplog):
+    """Non-vacuous redaction check: the token is SET to a sentinel and only the account id is missing; the warning
+    names the missing variable and no log record carries the token's value."""
+    caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+    sentinel = "placeholder-not-a-credential"
+    c = dict(cfg(initial_delay_s=10**6), embedder="cloudflare")
+    assert job.start(c, env={"CLOUDFLARE_API_TOKEN": sentinel}) is True
+    job.reset_for_tests()
+    msgs = [(r.levelno, r.getMessage()) for r in caplog.records]
+    warn = [m for lv, m in msgs if lv == logging.WARNING and "credentials_missing" in m]
+    assert len(warn) == 1 and "CLOUDFLARE_ACCOUNT_ID" in warn[0] and "CLOUDFLARE_API_TOKEN" not in warn[0]
+    assert not [m for _, m in msgs if sentinel in m]
+
+
 def test_startup_no_warning_when_creds_present(caplog):
     caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
     c = dict(cfg(initial_delay_s=10**6), embedder="cloudflare")

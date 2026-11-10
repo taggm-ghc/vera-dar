@@ -232,6 +232,12 @@ class HostRoleTests(unittest.TestCase):
     def test_bare_host_and_userinfo(self):
         self.assertEqual(role("arxiv.org/abs/1"), P)
         self.assertEqual(role("https://arxiv.org:443/abs/1"), P)
+        # userinfo against the shipped registry (production hosts): colon in userinfo, and userinfo naming an
+        # ORIGINAL host in both directions. Empty password: urlsplit().hostname takes the text after the last "@",
+        # so a non-empty password parses identically, and a user:password URL is a release-scan HIT.
+        self.assertEqual(role("https://user:@arxiv.org/abs/1"), P)
+        self.assertEqual(role("https://www.nature.com:@arxiv.org/"), P)
+        self.assertEqual(role("https://arxiv.org:@www.nature.com/"), O)
         # userinfo: RFC 2606 .invalid hosts in a synthetic registry (no real host, mailbox or credential in fixtures)
         hr.set_registry_for_tests(hr.Registry({"hosts": [
             {"match": "portal.example.invalid", "role": "PORTAL", "kind": "x"},
