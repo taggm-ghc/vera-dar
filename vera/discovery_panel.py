@@ -52,8 +52,8 @@ REASON_TEXT = {
     "R-ACQ-FETCH_TIMEOUT": "Source unreachable.",  # P0DTA-DIAG: the per-fetch wall clock
     "R-ACQ-DOC_BUDGET": "Not checked: the limit on documents read for one request was reached.",
     "R-ACQ-CRAWL_DELAY": "Not checked in time: the source asks crawlers to wait.",
-    "R-ACQ-HOST": "Blocked by network safety check.",
-    "R-ACQ-ROBOTS": "Blocked by network safety check.",
+    "R-ACQ-HOST": "Not read: VERA-DAR has no cleared route to this site.",  # WORDING-LABELS-1110 (c): a policy refusal, not an SSRF check
+    "R-ACQ-ROBOTS": "Not read: the site's robots rules do not permit automated reading.",
     "R-ACQ-TDM": "Not used: the publisher reserves text and data mining rights.",  # CONTROL-GAPS-1107
     "R-API-DENIED": "Not read: this source's API is not cleared for use.",  # API-ALLOW-1107
     "R-API-COND": "Not read: this source's API is not cleared for use.",

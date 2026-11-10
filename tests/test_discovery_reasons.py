@@ -49,7 +49,9 @@ def test_loader_level_refusal_codes_emitted_by_acquisition_have_plain_text():
 @pytest.mark.parametrize("entry,want", [
     ({"outcome": "rejected", "reason": CODES["no_licence"]}, "Full text not openly licensed."),
     ({"outcome": "rejected", "reason": CODES["unreachable"]}, "Source unreachable."),
-    ({"outcome": "rejected", "reason": CODES["host"]}, "Blocked by network safety check."),
+    ({"outcome": "rejected", "reason": CODES["host"]}, "no cleared route to this site"),
+    ({"outcome": "rejected", "reason": CODES["robots"]}, "the site's robots rules do not permit automated reading"),
+    ({"outcome": "rejected", "reason": CODES["cycle"]}, "Blocked by network safety check."),
     ({"outcome": "rejected", "reason": CODES["irrelevant"]}, "Not relevant enough to your question."),
     ({"outcome": "link_only", "reason": CODES["no_doi"]}, dp.REASON_TEXT[CODES["no_doi"]]),
     ({"outcome": "rejected", "reason": "R-ZZZ-NEW"}, dp.REASON_GENERIC),
@@ -154,3 +156,12 @@ def test_banner_is_truthful_for_every_row_combination(n_obt, n_stored, n_none):
         assert "obtained or stored" in low or "obtained the full text" in low, banner
     assert "evidence-grounded answer" in low
     assert not INTERNAL.search(banner)
+
+
+def test_safety_label_split_per_code_1110():
+    """WORDING-LABELS-1110 (c): only CYCLE keeps the network-safety wording; HOST and ROBOTS are policy refusals."""
+    t = {k: dp._reason_line({"outcome": "rejected", "reason": CODES[k]}) for k in ("host", "robots", "cycle")}
+    assert "network safety" in t["cycle"]
+    assert "network safety" not in t["host"] and "network safety" not in t["robots"]
+    assert len(set(t.values())) == 3
+
