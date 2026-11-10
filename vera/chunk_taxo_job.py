@@ -687,6 +687,19 @@ class Job:
         eid = ids[lvl].get(key) if key is not None else None
         return (kind, eid) if eid is not None else None
 
+    def _extra_link_rows(self, assoc_item, ids):
+        """Routing-only generous links: [(table kind, id, cosine, score_kind)] (score = raw chunk-to-node cosine)."""
+        out = []
+        if not isinstance(assoc_item, dict):
+            return out
+        for ent in assoc_item.get("multi") or ():
+            lvl, key, sim, sk = ent
+            kind = {"subtopic": "chunk_subtopic", "topic": "chunk_topic"}.get(lvl)
+            eid = ids.get(lvl, {}).get(key) if kind else None
+            if eid is not None and isinstance(sim, (int, float)) and math.isfinite(sim) and re.match(r"^cosine_[a-z0-9]+$", str(sk)):
+                out.append((kind, eid, round(float(sim), 6), str(sk)))
+        return out
+
     def _write_chunk_page(self, conn, spans, assoc, ids, version):
         for kind in store.CHUNK_LINKS:
             store.run_sql(conn, f"link_retire_{kind}", {"version": version, "ids": list(spans)})
@@ -694,10 +707,15 @@ class Job:
         for sid in spans:
             item = assoc.get(sid)
             lr = self._link_rows(item, ids)
-            if lr is None:
-                continue
-            sim = _similarity(item.get("distance"))
-            by_kind[lr[0]].append({"a": sid, "b": lr[1], "version": version, "score": sim, "score_kind": "cosine" if sim is not None else None})
+            seen = set()
+            if lr is not None:
+                sim = _similarity(item.get("distance"))
+                by_kind[lr[0]].append({"a": sid, "b": lr[1], "version": version, "score": sim, "score_kind": "cosine" if sim is not None else None})
+                seen.add(lr)
+            for kind, eid, sim, sk in self._extra_link_rows(item, ids):  # unique per (span, node): no duplicate rows
+                if (kind, eid) not in seen:
+                    seen.add((kind, eid))
+                    by_kind[kind].append({"a": sid, "b": eid, "version": version, "score": sim, "score_kind": sk})
         for kind, rows in by_kind.items():
             store.run_sql(conn, f"link_insert_{kind}", rows)
 

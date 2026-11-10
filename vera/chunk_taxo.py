@@ -64,7 +64,11 @@ DEFAULT_PARAMS = {
     "domain_range": {"min_count": 2, "max_count": 8, "max_frac": 0.5},
     "null_seeds": [101, 102, 103], "null_q_dist": 0.05, "null_q_margin": 0.25, "min_support": 3,
     "identity_jaccard": 0.5, "term_count": 8, "label_terms": 3, "term_max_df": 0.5, "term_min_len": 3,
-    "vote_min_share": 0.4, "vote_min_lead": 0.1, "stability_match_cos": 0.9}
+    "vote_min_share": 0.4, "vote_min_lead": 0.1, "stability_match_cos": 0.9,
+    # TAXO-ROUTE-R1-1110 generous multi-membership (routing links; display metrics stay strict). rel_margin / abs_floor None =
+    # derived per level: rel_margin_mult x margin_q (0.05 if margin_q is null), 1 - abs_floor_mult x dist_q. PENDING CAL.
+    "multi": {"enabled": True, "rel_margin": None, "rel_margin_mult": 2.0, "abs_floor": None, "abs_floor_mult": 1.25,
+              "max_links": {"subtopic": 4, "topic": 3, "domain": 3}, "soft_outliers": True}}
 DEFAULT_GATE = {
     "min_silhouette_subtopic": 0.1, "min_silhouette_topic": 0.05, "min_silhouette_domain": 0.0,
     "min_stability_ari": 0.6, "min_center_match_rate": 0.7, "min_coverage_subtopic": 0.5, "min_coverage_domain": 0.8,
@@ -119,6 +123,15 @@ def _validate_params(p):
     for k in ("null_q_dist", "null_q_margin", "identity_jaccard", "term_max_df", "vote_min_share", "vote_min_lead"):
         _chk(0 <= p[k] <= 1, k + " must be in [0,1]")
     _chk(-1 <= p["stability_match_cos"] <= 1 and p["gain_epsilon"] >= 0, "stability_match_cos/gain_epsilon range")
+    m = p["multi"]
+    _chk(isinstance(m["enabled"], bool) and isinstance(m["soft_outliers"], bool), "multi.enabled/soft_outliers must be bool")
+    for k in ("rel_margin", "abs_floor"):
+        _chk(m[k] is None or (_is_num(m[k]) and -1 <= m[k] <= 1), "multi.%s must be null or in [-1,1]" % k)
+    for k in ("rel_margin_mult", "abs_floor_mult"):
+        _chk(_is_num(m[k]) and 0 <= m[k] <= 10, "multi.%s must be in [0,10]" % k)
+    _chk(isinstance(m["max_links"], dict) and set(m["max_links"]) == set(LEVELS) and all(
+        isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 10 for v in m["max_links"].values()),
+        "multi.max_links needs int 1..10 for each level")
     for k in ("topic_range", "domain_range"):
         r = p[k]
         _chk(all(isinstance(r[x], int) and r[x] >= 1 for x in ("min_count", "max_count")) and _is_num(r["max_frac"])
@@ -725,8 +738,54 @@ def _match_prior(new_nodes, prior_nodes, thr):
     return out, used
 
 
+_MULTI_LEVELS = ("subtopic", "topic")  # chunk links exist for these; a chunk's domains derive from its topic links
+
+
+def _multi(info, sims_by_level, p, strict):
+    """Generous multi-membership (TAXO-ROUTE-R1-1110). Returns [(level, key, cosine, kind)] EXCLUDING the strict link.
+    Per level: every node with s >= s_best - rel_margin, s >= abs_floor and count >= min_support, best first, at most
+    max_links; kind 'cosine_r<rank>'. A chunk with no strict link and nothing within the rule gets its nearest node as
+    'cosine_soft'. Only kind 'cosine' (the strict link) feeds display metrics; the others are routing-only."""
+    m = p.get("multi") or {}
+    if not m.get("enabled"):
+        return []
+    out = []
+    for lv in _MULTI_LEVELS:
+        lvinfo = info[lv]
+        if not lvinfo["keys"]:
+            continue
+        s = sims_by_level[lv]
+        bi = _argmax(s)
+        nl = lvinfo["null"] or {}
+        mq = nl.get("margin_q")
+        rel = m["rel_margin"] if m.get("rel_margin") is not None else (m["rel_margin_mult"] * mq if mq is not None else 0.05)
+        dq = nl.get("dist_q")
+        floor = m["abs_floor"] if m.get("abs_floor") is not None else (1.0 - m["abs_floor_mult"] * dq if dq is not None else -1.0)
+        best = s[bi]
+        cand = [(-s[j], j) for j in range(len(s)) if s[j] >= best - rel and s[j] >= floor and lvinfo["counts"][j] >= p["min_support"]]
+        cand.sort()
+        got = False
+        for rank, (_neg, j) in enumerate(cand[:m["max_links"][lv]], 1):
+            got = True
+            if strict.get("level") == lv and lvinfo["keys"][j] == strict.get(lv):
+                continue
+            out.append((lv, lvinfo["keys"][j], round(float(s[j]), 6), "cosine_r%d" % rank))
+        if not got and strict.get("level") is None and m.get("soft_outliers"):
+            out.append((lv, lvinfo["keys"][bi], round(float(best), 6), "cosine_soft"))
+    return out
+
+
 def _decide(info, sims_by_level, p):
-    """Association decision for one chunk. info: model level data; sims_by_level: {level: [sim per node]}."""
+    """Association decision for one chunk (strict decision plus optional generous 'multi' routing links)."""
+    a = _decide_strict(info, sims_by_level, p)
+    mu = _multi(info, sims_by_level, p, a)
+    if mu:
+        a["multi"] = mu
+    return a
+
+
+def _decide_strict(info, sims_by_level, p):
+    """Strict association decision for one chunk. info: model level data; sims_by_level: {level: [sim per node]}."""
     first_reason, first = None, None
     for lv in LEVELS:
         lvinfo = info[lv]
@@ -789,7 +848,7 @@ def estimate_build_bytes(n, d, k_max=40, text_bytes=0):
     size) and the Python-float center lists (about (2*k_max + 40) centers of d floats at 32 bytes per float).
     Checked against the real measurement by tests/test_chunk_taxo_mem_1109.py."""
     n, d, k_max, text_bytes = int(n), int(d), int(k_max), int(text_bytes)
-    return 8 * n * d + 2048 * n + text_bytes // 2 + (2 * k_max + 40) * d * 32
+    return 8 * n * d + 3072 * n + text_bytes // 2 + (2 * k_max + 40) * d * 32
 
 
 def build(chunks, vecs, params, prior=None):
