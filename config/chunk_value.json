@@ -201,13 +201,16 @@
         "text_sha256"
       ],
       "body_chars_min": 3000,
-      "doc_min_chunks": 2,
+      "doc_min_chunks": 1,
       "check_sha": true,
       "truncation_check": true,
       "sentence_end_chars": ".!?)\"'\u201d\u2019]",
       "back_section_kinds": [
         "back"
-      ]
+      ],
+      "share_check_min_chunks": 10,
+      "doc_min_substantive_share": 0.5,
+      "_note": "too-few-spans: fires when no substantive chunk remains (doc_min_chunks=1), or, for documents of >= share_check_min_chunks chunks, when fewer than doc_min_substantive_share of them survive the C rules. Short legitimate documents (1-9 chunks) are judged by body_chars_min instead."
     },
     "D4_duplicate": {
       "enabled": true,

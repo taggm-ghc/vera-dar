@@ -378,8 +378,11 @@ def d3_incomplete(doc: dict, cfg: dict, chunk_result: dict | None = None) -> lis
     bc = doc.get("body_chars")
     if bc is not None and int(bc) < int(c["body_chars_min"]):
         out.append(D3 + ":body_chars_below_floor")
-    if chunk_result is not None and chunk_result["substantive_chunks"] < int(c["doc_min_chunks"]):
-        out.append(D3 + ":too_few_substantive_chunks")
+    if chunk_result is not None:
+        sub, before = chunk_result["substantive_chunks"], chunk_result["chunks_before"]
+        if sub < int(c["doc_min_chunks"]) or (before >= int(c["share_check_min_chunks"])
+                                              and sub / before < float(c["doc_min_substantive_share"])):
+            out.append(D3 + ":too_few_substantive_chunks")
     if c.get("truncation_check") and text and bc is not None and len(text) < int(bc):
         has_back = any(s.get("kind") in set(c["back_section_kinds"]) for s in doc.get("sections") or () if isinstance(s, dict))
         if not has_back and text.rstrip()[-1:] not in c["sentence_end_chars"]:
@@ -494,15 +497,16 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
     words = words if words is not None else WORDS
     parts = sorted(chunks, key=lambda c: int(c[1]))
     text = "".join(c[3] for c in parts)
-    contiguous = all(int(parts[i][1]) + len(parts[i][3]) == int(parts[i][2]) and (i == 0 or int(parts[i][1]) == int(parts[i - 1][2]))
-                     for i in range(len(parts)))
+    # offsets come from the text actually received, never from the declared indices (stored spans may disagree)
+    mismatch = sum(1 for c in parts if int(c[2]) - int(c[1]) != len(c[3]))
+    gaps = sum(1 for i in range(1, len(parts)) if int(parts[i][1]) != int(parts[i - 1][2]))
     base = int(parts[0][1]) if parts else 0
     cr = evaluate_chunks(text, None, cfg, cfg["audit"]["chunking"], fmt=None)
     d_flags = []
     doc = {"text": text, "urls": ["https://%s/" % meta["host"]] if meta.get("host") else [], "doi": meta.get("doi"),
            "provenance": {"licence_id": meta.get("licence_id"), "canonical_url": "x", "title": "x" if meta.get("title_present") else None,
                           "text_sha256": meta.get("text_sha256")},
-           "rebuild_ok": contiguous and (not parts or base == 0)}
+           "rebuild_ok": mismatch == 0 and gaps == 0 and base == 0}
     if d1_arxiv(doc, cfg):
         d_flags.append({"rule": "D1", "metrics": {"arxiv": 1}})
     hits, m = d2_incomprehensible(text, cfg, words)
@@ -512,10 +516,11 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
     if r3:
         d_flags.append({"rule": "D3", "metrics": {"substantive_chunks": cr["substantive_chunks"], "n_hits": len(r3),
                                                   "sha_mismatch": int(any(x.endswith("sha_mismatch") for x in r3)),
-                                                  "rebuild_failed": int(any(x.endswith("rebuild_failed") for x in r3))}})
-    dropped = {}
-    for sid, s, e, t in parts:
-        lo, hi = int(s) - base, int(e) - base
+                                                  "rebuild_failed": int(any(x.endswith("rebuild_failed") for x in r3)),
+                                                  "length_mismatch_spans": mismatch, "index_gaps": gaps}})
+    dropped, lo = {}, 0
+    for sid, _s, _e, t in parts:
+        hi = lo + len(t)
         cover: dict = {}
         for d in cr["dropped"]:
             ov = min(d["end"], hi) - max(d["start"], lo)
@@ -524,4 +529,5 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
         if cover and all(any(d["start"] <= i < d["end"] for d in cr["dropped"])
                          for i in range(lo, hi) if not text[i].isspace()):
             dropped[sid] = max(cover, key=cover.get)
+        lo = hi
     return {"d_flags": d_flags, "dropped": dropped}

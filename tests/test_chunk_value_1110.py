@@ -209,3 +209,22 @@ def test_audit_document_contract_and_no_text():
 def test_audit_chunking_matches_routing_config():
     r = json.loads((ROOT / "config" / "domain_routing.json").read_text(encoding="utf-8"))["corpus"]
     assert CFG["audit"]["chunking"] == {k: r[k] for k in CH}
+
+
+def test_audit_tolerates_length_mismatch_and_gaps():
+    text = para(1, 80) + "\n\n" + ("the of and the of and the of and " * 80)
+    parts = [("a", 0, 5, text[:1000]), ("b", 5, 2000, text[1000:2000]), ("c", 9999, 9999, text[2000:])]
+    meta = {"host": "europepmc.org", "licence_id": "x", "title_present": True, "text_sha256": None}
+    out = cv.audit_document(meta, parts, CFG)
+    d3 = [f for f in out["d_flags"] if f["rule"] == "D3"][0]["metrics"]
+    assert d3["length_mismatch_spans"] == 3 and d3["rebuild_failed"] == 1 and d3["index_gaps"] >= 1
+    assert cv.audit_document(meta, [], CFG)["dropped"] == {}
+
+
+def test_d3_chunk_thresholds_short_docs_not_flagged():
+    d = good_doc()
+    short = cv.evaluate_chunks(para(1, 40), None, CFG, CH)
+    assert short["chunks_before"] < CFG["document"]["D3_incomplete"]["share_check_min_chunks"]
+    assert f"{cv.D3}:too_few_substantive_chunks" not in cv.document_flags(d, CFG, None, short)["reasons"]
+    many = {"substantive_chunks": 4, "chunks_before": 12}
+    assert f"{cv.D3}:too_few_substantive_chunks" in cv.document_flags(d, CFG, None, many)["reasons"]
