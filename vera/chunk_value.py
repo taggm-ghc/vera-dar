@@ -387,6 +387,8 @@ def d2_severity(metrics: dict, hits=None) -> str:
     hyphen-break hit alone (readable text with PDF line-break hyphens) is review too."""
     if hits is not None and all(str(h).split(":")[-1] == "hyphen_break_per_1000" for h in hits):
         return "review"
+    if hits is not None and hits and all(str(h).split(":")[-1] == "dictionary_word_share" for h in hits):
+        return "review"  # a dictionary-only hit (no other signal) is weak: dense domain vocabulary is not garble
     return "purge" if metrics.get("is_english") and not metrics.get("math_heavy") else "review"
 
 
@@ -501,12 +503,13 @@ def find_duplicates(docs: list, cfg: dict) -> dict:
                 else:
                     seen[v] = d["id"]
     k, jm = int(c["minhash_k"]), float(c["jaccard_min"])
+    min_sh = int(c.get("minhash_min_shingles", 0))  # sparse/short texts: only hash, DOI or PMCID matches apply
     sk = {d["id"]: _sketch(d.get("text") or "", c) for d in docs if d.get("text")}
     keys = list(sk)
     for i, a in enumerate(keys):
         for b in keys[i + 1:]:
             na, nb = sk[a][1], sk[b][1]
-            if not na or not nb or min(na, nb) / max(na, nb) < jm or find(a) == find(b):
+            if not na or not nb or min(na, nb) < min_sh or min(na, nb) / max(na, nb) < jm or find(a) == find(b):
                 continue
             if _jaccard_est(sk[a][0], sk[b][0], k) >= jm:
                 union(a, b, "minhash")

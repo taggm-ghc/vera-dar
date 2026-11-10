@@ -1,7 +1,7 @@
 {
-  "_doc": "CHUNK-VALUE-1110 WP1: thresholds, heading lists and word lists for vera/chunk_value.py (pure rules module shared by the ingest filter and the known-bad audit). Every value that decides keep/drop lives here; the module holds only rule-id names. 'enabled' is read by the caller (WP2), not by the module. Thresholds in 'document.incomprehensible' were calibrated on the 11 local real JATS documents (work/CHUNK-VALUE-1110/measure.md): each sits beyond the worst known-good value plus a margin; recalibrate on the audit's own distribution before any purge.",
+  "_doc": "CHUNK-VALUE-1110 WP1: thresholds, heading lists and word lists for vera/chunk_value.py (pure rules module shared by the ingest filter and the known-bad audit). Every value that decides keep/drop lives here; the module holds only rule-id names. 'enabled' is read by the caller (WP2), not by the module; it ships false (V2: the owner turns ingest filtering on). Thresholds in 'document.incomprehensible' were calibrated on the 11 local real JATS documents (work/CHUNK-VALUE-1110/measure.md): each sits beyond the worst known-good value plus a margin; recalibrate on the audit's own distribution before any purge.",
   "version": 1,
-  "enabled": true,
+  "enabled": false,
   "chunk": {
     "section_gap_chars": 2,
     "max_evidence_drop_share": 0.05,
@@ -144,7 +144,7 @@
     },
     "C4_reference_list": {
       "enabled": true,
-      "line_regex": "^\\s*(\\[\\d+\\]|\\d+\\.\\s+[A-Z][a-z]+,? [A-Z])",
+      "line_regex": "^\\s*(?:\\[\\d+\\]\\s*|\\d+\\.\\s+)?[A-Z][\\w'\u2019-]+,?\\s+(?:[A-Z]\\.?\\s?){1,3}\\b.*?(?:\\b(?:19|20)\\d{2}\\b|10\\.\\d{4,}/)",
       "min_lines": 3
     },
     "C5_low_info": {
@@ -248,7 +248,8 @@
       "minhash_k": 128,
       "shingle_words": 5,
       "jaccard_min": 0.9,
-      "token_regex": "[a-z0-9]+"
+      "token_regex": "[^\\W_]+",
+      "minhash_min_shingles": 50
     }
   },
   "audit": {

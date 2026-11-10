@@ -320,3 +320,40 @@ def test_d3_missing_title_alone_is_review():
     assert [(f["rule"], f["severity"]) for f in out["d_flags"] if f["rule"] == "D3"] == [("D3", "review")]
     d2 = [f for f in out["d_flags"] if f["rule"] == "D2"]
     assert all({"is_english", "math_heavy"} <= set(f["metrics"]) for f in d2)
+
+
+def _ru(a, b):  # distinct Russian-like docs sharing only the ASCII tokens "1 2 2020"
+    return " ".join(f"{a}{i % 37}слово{b}{i % 11}" for i in range(300)) + " 1 2 2020"
+
+
+def test_d4_non_english_unrelated_not_duplicates_and_true_dup_is():
+    ru1 = "альфа бета гамма " * 5 + "1 2 2020"
+    ru2 = "дельта эпсилон зета " * 5 + "1 2 2020"
+    zh1 = "天气预报模型的准确性评估 1 2 2020"
+    zh2 = "海洋生物多样性调查报告 1 2 2020"
+    docs = [{"id": i, "text": t} for i, t in enumerate((ru1, ru2, zh1, zh2))]
+    assert cv.find_duplicates(docs, CFG) == {}
+    long_a = " ".join(f"слово{i}фраза{(i * 7) % 13}" for i in range(400))
+    long_b = " ".join(f"другое{i}текст{(i * 5) % 17}" for i in range(400))
+    out = cv.find_duplicates([{"id": "a", "text": long_a}, {"id": "b", "text": long_a + " хвост"}, {"id": "c", "text": long_b}], CFG)
+    assert set(out) == {"b"} and out["b"]["of"] == "a" and out["b"]["basis"] == "minhash"
+    assert cv.find_duplicates([{"id": "x", "text": ru1, "doi": "10.1/q"}, {"id": "y", "text": ru2, "doi": "10.1/Q"}], CFG)["y"]["basis"] == "doi"
+
+
+def test_c4_numbered_protocol_kept_real_reference_list_matches():
+    proto = "\n".join(f"{i}. Mix Buffer A with Solution B and incubate sample {i} for ten minutes." for i in range(1, 12))
+    r = cv.evaluate_chunks(para(1) + "\n\n" + proto, None, CFG, CH)
+    assert cv.C4 not in {c["rule"] for c in r["chunks"]}
+    refs = "\n".join(f"{i}. Smith AB, Jones K. Title of paper {i}. J Stuff. 2020;1:{i}." for i in range(1, 12))
+    assert cv.C4 in {c["rule"] for c in cv.evaluate_chunks(para(1) + "\n\n" + refs, None, CFG, CH)["chunks"]}
+    doi = "\n".join(f"[{i}] Garcia-Lopez, M. Another title {i}. doi:10.1234/abc{i}" for i in range(1, 8))
+    assert cv.C4 in {c["rule"] for c in cv.evaluate_chunks(para(1) + "\n\n" + doi, None, CFG, CH)["chunks"]}
+
+
+def test_d2_dictionary_only_hit_is_review_and_shipped_disabled():
+    assert CFG["enabled"] is False
+    txt = "the of and cytokine phosphorylation kinase receptor ligand mitochondrial apoptosis " * 60
+    f = cv.document_flags(_plain(txt), CFG, WORDS)
+    assert f["reasons"] == ["D2_incomprehensible:dictionary_word_share"], f["reasons"]
+    assert f["metrics"]["is_english"] == 1 and f["purge"] is False
+    assert f["severity"]["D2_incomprehensible:dictionary_word_share"] == "review"
