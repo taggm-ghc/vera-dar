@@ -82,6 +82,93 @@ def is_seed(c, acq) -> bool:
     return arxiv_fulltext.PORTAL_ONLY and seed_id(c) is not None
 
 
+_OA_CACHE: dict = {}
+
+
+def _doi_of(v) -> str | None:
+    from vera.search_providers import normalise_doi
+    d = normalise_doi(v)
+    return d if d and not _ARXIV_DOI.match(d) else None
+
+
+def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clock: Callable = time.monotonic,
+                    provider=None, cache_ttl_s: float = 86400.0):
+    """OD-1110-ARXIV-OPENALEX (owner 2026-11-10, "Yes, targeted lookup"): for an arXiv record INSPIRE does not know,
+    ONE targeted OpenAlex metadata lookup of the work 10.48550/arXiv.<id> (filter doi:, select doi, locations,
+    referenced_works), then ONE call resolving at most max_refs referenced works to their DOIs (filter openalex_id:,
+    select doi). Both go through the shared /ask OpenAlex provider (OpenAlexProvider.metadata_get): its daily budget
+    with the visitor/seed split, the API allowlist and openalex rate portal, and the optional key. The process-wide
+    OpenAlex quota cooldown is honoured and started on a quota error; nothing is retried. -> ([published-version
+    DOIs], [reference DOIs]) or None. Never raises. The generic openalex_rw adapter stays off."""
+    from vera import search_providers as sp
+    now = clock()
+    hit = _OA_CACHE.get(aid)
+    if hit is not None and now - hit[0] < cache_ttl_s:
+        counts["oa_cache_hit"] = counts.get("oa_cache_hit", 0) + 1
+        return hit[1]
+    if sp._QUOTA.blocked(now):
+        counts["oa_quota_cooldown"] = counts.get("oa_quota_cooldown", 0) + 1
+        return None
+    if timeout_s <= 0.5:
+        counts["oa_deadline"] = counts.get("oa_deadline", 0) + 1
+        return None
+    p = provider
+    if p is None:
+        from vera import search_and_fetch
+        p = next((x for x in search_and_fetch.cached_chain()[0] if getattr(x, "name", None) == "openalex"), None)
+    if p is None or not hasattr(p, "metadata_get"):
+        counts["oa_no_provider"] = counts.get("oa_no_provider", 0) + 1
+        return None
+
+    def get(params):
+        resp = p.metadata_get(params, float(timeout_s))
+        st = int(getattr(resp, "status_code", 200) or 200)
+        if st == 429:
+            raise sp.ProviderResponseError("openalex 429 quota")
+        if st != 200:
+            raise sp.ProviderResponseError(f"openalex status {st}")
+        doc = resp.json() if hasattr(resp, "json") else {}
+        res = doc.get("results") if isinstance(doc, dict) else None
+        return [r for r in res if isinstance(r, dict)] if isinstance(res, list) else []
+    try:
+        counts["oa_calls"] = counts.get("oa_calls", 0) + 1
+        works = get({"filter": f"doi:https://doi.org/10.48550/arxiv.{aid}", "per_page": 1,
+                     "select": "id,doi,locations,referenced_works"})
+        if not works:
+            got = ([], [])
+        else:
+            w = works[0]
+            own = [d for d in [_doi_of(w.get("doi"))] + [
+                _doi_of(x.get("landing_page_url")) for x in (w.get("locations") or ()) if isinstance(x, dict)] if d]
+            own = list(dict.fromkeys(own))[:1]
+            wids = [str(x).rsplit("/", 1)[-1] for x in (w.get("referenced_works") or ()) if isinstance(x, str)]
+            wids = [x for x in wids if re.fullmatch(r"W\d{1,12}", x)][: max(0, int(max_refs))]
+            refs: list = []
+            if wids:
+                counts["oa_calls"] += 1
+                for r in get({"filter": "openalex_id:" + "|".join(wids), "per_page": len(wids), "select": "id,doi"}):
+                    d = _doi_of(r.get("doi"))
+                    if d and d not in refs and d not in own:
+                        refs.append(d)
+            got = (own, refs[: max(0, int(max_refs))])
+    except Exception as e:  # noqa: BLE001  never retried
+        if sp._is_quota_error(e) and not sp._is_rate_skip(e):
+            from vera import reference_portal
+            sp._QUOTA.block(clock(), float(reference_portal._openalex_cooldown()))
+            counts["oa_429"] = counts.get("oa_429", 0) + 1
+        else:
+            counts["oa_failed"] = counts.get("oa_failed", 0) + 1
+        return None
+    _OA_CACHE[aid] = (now, got)
+    while len(_OA_CACHE) > 512:
+        _OA_CACHE.pop(next(iter(_OA_CACHE)))
+    return got
+
+
+def reset_for_tests() -> None:
+    _OA_CACHE.clear()
+
+
 def _cand(doi: str, aid: str, kind: str, rank: int) -> dict:
     return {"doi": doi, "url": f"https://doi.org/{doi}", "title": "", "snippet": "", "provider": "portal:arxiv",
             "acq_source": "arxiv_portal", "portal": "arxiv", "portal_via": f"via arXiv {aid}", "portal_kind": kind,
@@ -89,18 +176,24 @@ def _cand(doi: str, aid: str, kind: str, rank: int) -> dict:
 
 
 def extend(question: str, cands: list, acq: dict | None = None, *, clock: Callable = time.monotonic,
-           deadline: float | None = None, get: Callable | None = None) -> list:
+           deadline: float | None = None, get: Callable | None = None, openalex_provider=None) -> list:
     """cands + the published-version and reference candidates of every arXiv seed (seeds stay in the list; ranking
-    drops them as portal entries). Never raises; any failure returns cands unchanged."""
+    drops them as portal entries). INSPIRE first (when its portal adapter is on and permitted); a seed INSPIRE does not
+    know (no DOI, no reference DOI, or no INSPIRE) gets ONE targeted OpenAlex lookup when arxiv_portal.openalex is on
+    (OD-1110-ARXIV-OPENALEX). Both need reference_portals mode "on". Never raises; any failure returns cands unchanged."""
     try:
         pc = cfg_of(acq)
         from vera import arxiv_fulltext, reference_portal
-        if pc.get("enabled") is not True or not arxiv_fulltext.PORTAL_ONLY or not reference_portal.inspire_permitted():
+        if pc.get("enabled") is not True or not arxiv_fulltext.PORTAL_ONLY:
+            return list(cands or ())
+        rcfg = reference_portal.load_config()
+        insp = (rcfg.get("mode") == "on" and reference_portal.adapter_on(rcfg, "inspire_refs")
+                and reference_portal.inspire_permitted())
+        # the reference-portal subsystem's master mode governs both lookups (off = no portal request at all)
+        oa_on = rcfg.get("mode") == "on" and (pc.get("openalex") or {}).get("enabled") is True
+        if not insp and not oa_on:
             return list(cands or ())
         from vera import portal_inspire
-        rcfg = reference_portal.load_config()
-        if rcfg.get("mode") != "on" or not reference_portal.adapter_on(rcfg, "inspire_refs"):
-            return list(cands or ())  # the same INSPIRE switches as the portal adapter (OD-1108-DISPOSITIONS-2 H9 (b))
         icfg = rcfg["adapters"]["inspire_refs"]
         seeds: list = []
         for c in cands or ():
@@ -110,12 +203,21 @@ def extend(question: str, cands: list, acq: dict | None = None, *, clock: Callab
         counts: dict = {"seeds": len(seeds)}
         out = list(cands or ())
         have = {str(c.get("doi") or "").lower() for c in out if isinstance(c, dict)}
+        max_refs = int(pc.get("max_refs_per_record", 10))
         for aid in seeds[: int(pc.get("max_records_per_call", 3))]:
             left = float(rcfg["caps"]["timeout_s"]) if deadline is None else min(float(rcfg["caps"]["timeout_s"]),
                                                                                   deadline - clock())
-            got = portal_inspire.lookup_arxiv(aid, str(icfg["endpoint"]), int(pc.get("max_refs_per_record", 10)), left,
-                                              counts, clock=clock, get=get, cache_ttl_s=float(icfg["cache_ttl_s"]),
-                                              max_bytes=int(icfg["max_response_bytes"]))
+            got = None
+            if insp:
+                got = portal_inspire.lookup_arxiv(aid, str(icfg["endpoint"]), max_refs, left, counts, clock=clock,
+                                                  get=get, cache_ttl_s=float(icfg["cache_ttl_s"]),
+                                                  max_bytes=int(icfg["max_response_bytes"]))
+            via = "inspire"
+            if not (got and (got[0] or got[1])) and oa_on:  # INSPIRE does not know it (or is off): OpenAlex once
+                left = left if deadline is None else min(left, deadline - clock())
+                got = openalex_lookup(aid, max_refs, left, counts, clock=clock, provider=openalex_provider,
+                                      cache_ttl_s=float((pc.get("openalex") or {}).get("cache_ttl_s", 86400)))
+                via = "openalex"
             if not got:
                 continue
             own, refs = got
@@ -124,8 +226,10 @@ def extend(question: str, cands: list, acq: dict | None = None, *, clock: Callab
                     if d.lower() in have:
                         continue
                     have.add(d.lower())
-                    out.append(_cand(d, aid, kind, i))
-                    counts[kind] = counts.get(kind, 0) + 1
+                    c = _cand(d, aid, kind, i)
+                    c["portal_lookup"] = via
+                    out.append(c)
+                    counts[f"{kind}_{via}"] = counts.get(f"{kind}_{via}", 0) + 1
         logger.info("autoacq arxivportal %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
         return out
     except Exception:  # noqa: BLE001  the portal never breaks the search

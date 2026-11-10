@@ -513,6 +513,29 @@ class OpenAlexProvider:
                 err = ProviderUnavailable(msg)
             raise err from None
 
+    def metadata_get(self, params: dict, timeout_s: float):
+        """ARXIV-PORTAL-1110 (OD-1110-ARXIV-OPENALEX): ONE targeted metadata call (filter + select, no search text)
+        through the same daily budget and visitor/seed split (_spend), transport (API allowlist + openalex rate portal)
+        and optional OPENALEX_API_KEY as call(). The key is never logged."""
+        self._spend()
+        tx = self._transport or openalex_default_transport
+        key = openalex_api_key(self.s)
+        if not key:
+            return tx(self.endpoint, dict(params), {"User-Agent": USER_AGENT}, timeout_s)
+        from vera import acq_urls
+        try:
+            with acq_urls.quiet_urllib3([key]):
+                resp = tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+            _scrub_resp_url(resp, key)
+            return resp
+        except Exception as e:  # noqa: BLE001
+            msg = acq_urls.redact_text(str(e), [key])
+            try:
+                err = type(e)(msg)
+            except Exception:  # noqa: BLE001
+                err = ProviderUnavailable(msg)
+            raise err from None
+
     def parse(self, resp, n: int) -> list[dict]:
         body = resp.text or ""
         if len(body.encode("utf-8", "ignore")) > self.max_bytes:

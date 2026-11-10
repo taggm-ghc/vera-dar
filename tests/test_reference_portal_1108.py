@@ -357,6 +357,8 @@ def test_portal_text_never_reaches_the_merged_acquisition_candidates(monkeypatch
     ref = {"doi": "10.9999/synth.ref.9", "url": "https://doi.org/10.9999/synth.ref.9", "title": "OpenAlex ref",
            "openalex_id": "https://openalex.org/W9", "snippet": ""}
     monkeypatch.setattr(rp, "_default_deps", lambda c, d: net.deps(openalex_lookup=lambda s, n, t: [ref]))
+    from vera import arxiv_portal  # OD-1110-ARXIV-OPENALEX: the arXiv-seed OpenAlex lookup is offline here (no socket)
+    monkeypatch.setattr(arxiv_portal, "openalex_lookup", lambda *a, **k: None)
     scfg = {"search": {"openalex_profile": False, "europepmc": {"enabled": False}, "ddg_first": {"enabled": False}},
             "bounds": {"max_search_calls_per_job": 1}}
     s = sp.acquisition_search(lambda q, n, t: [{"doi": "10.1/seed", "openalex_id": "https://openalex.org/W1"}], scfg)

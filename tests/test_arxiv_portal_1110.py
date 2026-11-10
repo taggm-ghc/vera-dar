@@ -24,6 +24,7 @@ from vera import wiki_ref_portal as w
 
 AID = X.AID
 CODE = "R-ACQ-ARXIV_PORTAL"
+_REAL_OA = arxiv_portal.openalex_lookup  # captured before the autouse fixture replaces it with a fake
 
 
 class _Resp:
@@ -54,6 +55,10 @@ def inspire(monkeypatch):
         calls.append((url, dict(params)))
         return _Resp(st["status"], st["body"])
     monkeypatch.setattr(portal_inspire, "_default_get", fake)
+    oa_calls = []  # OD-1110-ARXIV-OPENALEX: the default OpenAlex fallback is a recording fake (no socket)
+    monkeypatch.setattr(arxiv_portal, "openalex_lookup", lambda aid, *a, **k: oa_calls.append(aid) or None)
+    st["oa_calls"] = oa_calls
+    arxiv_portal.reset_for_tests()
     rc = copy.deepcopy(rp.load_config())
     rc["mode"] = "on"  # the shipped mode (the test session forces the portal off by default)
     monkeypatch.setattr(rp, "load_config", lambda path=None: rc)
@@ -260,3 +265,112 @@ def test_is_arxiv_only_work():
     assert arxiv_portal.is_arxiv_only_work(_rec(doi="https://doi.org/10.48550/ARXIV.2101.00001")) is True
     assert arxiv_portal.is_arxiv_only_work(_rec(doi="10.1103/PhysRevD.1.1", url="https://arxiv.org/abs/2101.1")) is False
     assert arxiv_portal.is_arxiv_only_work(_rec(url="https://example.org/paper")) is False
+
+
+# ------------------------------------------------------------------------------------------------ OD-1110-ARXIV-OPENALEX
+class _OAResp:
+    status_code = 200
+
+    def __init__(self, doc, status=200):
+        self._d, self.status_code = doc, status
+
+    def json(self):
+        return self._d
+
+
+class _OAProvider:
+    """Stands in for the shared /ask OpenAlexProvider: records metadata_get params and budget spends."""
+    name = "openalex"
+
+    def __init__(self, work, refs, status=200):
+        self.work, self.refs, self.status, self.calls = work, refs, status, []
+
+    def metadata_get(self, params, timeout_s):
+        self.calls.append(dict(params))
+        if self.status != 200:
+            return _OAResp({}, self.status)
+        if params["filter"].startswith("doi:"):
+            return _OAResp({"results": [self.work] if self.work else []})
+        return _OAResp({"results": [{"id": f"https://openalex.org/W{i}", "doi": d} for i, d in enumerate(self.refs)]})
+
+
+WORK = {"id": "https://openalex.org/W1", "doi": f"https://doi.org/10.48550/arxiv.{AID}",
+        "locations": [{"landing_page_url": f"https://arxiv.org/abs/{AID}"},
+                      {"landing_page_url": "https://doi.org/10.9999/synth.cs.journal"}],
+        "referenced_works": [f"https://openalex.org/W{i}" for i in range(20, 35)]}
+
+
+def test_openalex_targeted_lookup_published_version_and_capped_references(monkeypatch):
+    from vera import search_providers as sp
+    monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: False)
+    p = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a", "https://doi.org/10.48550/arxiv.2101.1",
+                           "https://doi.org/10.9999/synth.ref.b"])
+    counts = {}
+    own, refs = _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 0.0, provider=p)
+    assert own == ["10.9999/synth.cs.journal"] and refs == ["10.9999/synth.ref.a", "10.9999/synth.ref.b"]
+    assert p.calls[0]["filter"] == f"doi:https://doi.org/10.48550/arxiv.{AID}" and "api_key" not in p.calls[0]
+    assert set(p.calls[0]["select"].split(",")) == {"id", "doi", "locations", "referenced_works"}
+    assert p.calls[1]["filter"].count("|") == 9 and p.calls[1]["select"] == "id,doi"  # capped at max_refs (10)
+    assert len(p.calls) == 2 and counts["oa_calls"] == 2
+    _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 1.0, provider=p)
+    assert len(p.calls) == 2  # cached
+
+
+def test_openalex_quota_error_starts_the_shared_cooldown_and_unknown_work_yields_nothing(monkeypatch):
+    from vera import search_providers as sp
+    blocked = []
+    monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: False)
+    monkeypatch.setattr(sp._QUOTA, "block", lambda now, s: blocked.append(s))
+    assert _REAL_OA("2601.00009", 10, 5.0, {}, clock=lambda: 0.0, provider=_OAProvider(WORK, [], status=429)) is None
+    assert blocked
+    assert _REAL_OA("2601.00008", 10, 5.0, {}, clock=lambda: 0.0, provider=_OAProvider(None, [])) == ([], [])
+    monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: True)
+    p = _OAProvider(WORK, [])
+    assert _REAL_OA("2601.00007", 10, 5.0, {}, clock=lambda: 0.0, provider=p) is None and p.calls == []
+
+
+def test_openalex_runs_only_when_inspire_does_not_know_the_record(inspire, monkeypatch):
+    seed = _ddg()
+    inspire["body"] = json.dumps({"hits": {"hits": []}}).encode()  # INSPIRE: unknown e-print
+    monkeypatch.setattr(arxiv_portal, "openalex_lookup",
+                        lambda aid, *a, **k: inspire["oa_calls"].append(aid) or (["10.9999/synth.cs.journal"], []))
+    out = arxiv_portal.extend("q", [seed], A.cfg(), clock=lambda: 0.0)
+    assert inspire["oa_calls"] == [AID] and len(inspire["calls"]) == 1
+    new = out[1:]
+    assert [(c["doi"], c["portal_kind"], c["portal_lookup"], c["portal_via"]) for c in new] == [
+        ("10.9999/synth.cs.journal", "published_version", "openalex", f"via arXiv {AID}")]
+    portal_inspire.reset_for_tests()
+    arxiv_portal.reset_for_tests()
+    inspire["oa_calls"].clear()
+    inspire["body"] = _inspire_body()  # INSPIRE knows it: no OpenAlex call
+    arxiv_portal.extend("q", [seed], A.cfg(), clock=lambda: 0.0)
+    assert inspire["oa_calls"] == []
+    off = A.cfg()
+    off["arxiv_portal"]["openalex"]["enabled"] = False
+    portal_inspire.reset_for_tests()
+    inspire["body"] = json.dumps({"hits": {"hits": []}}).encode()
+    arxiv_portal.extend("q", [seed], off, clock=lambda: 0.0)
+    assert inspire["oa_calls"] == []
+
+
+def test_generic_openalex_rw_adapter_stays_off():
+    import json as _j
+    from pathlib import Path
+    c = _j.loads((Path(__file__).resolve().parents[1] / "config" / "reference_portals.json").read_text())
+    assert c["adapters"]["openalex_rw"]["enabled"] is False
+
+
+def test_metadata_get_uses_the_shared_budget_split_and_optional_key(monkeypatch):
+    from vera import request_origin, search_providers as sp
+    sent = []
+    from tests.test_searchcaps_1110_openalex_key import CFG
+    prov = sp.OpenAlexProvider(CFG["openalex"], transport=lambda u, p, h, t: sent.append(dict(p)) or _OAResp({"results": []}))
+    monkeypatch.setenv("OPENALEX_API_KEY", "synthetic-test-key-000")
+    prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
+    assert sent[-1]["api_key"] == "synthetic-test-key-000" and prov._used == 1
+    monkeypatch.delenv("OPENALEX_API_KEY")
+    prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
+    assert "api_key" not in sent[-1] and prov._used == 2
+    prov._used = 10**6  # the seed share and the cap are the provider's own (_spend)
+    with request_origin.scope(request_origin.SEED), pytest.raises(sp.ProviderUnavailable):
+        prov.metadata_get({"filter": "doi:x"}, 1.0)
