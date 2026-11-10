@@ -203,7 +203,8 @@ def _pkey(k: str) -> str:
 
 
 def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, env=os.environ,
-                       clock=time.monotonic, start_worker: bool = True, deps_factory=None) -> dict:
+                       clock=time.monotonic, start_worker: bool = True, deps_factory=None,
+                       trigger: str = "continue") -> dict:
     """CONT-1023: hand candidates a request found but could not finish to the EXISTING background queue and worker, so
     returned search results do not end the acquisition effort. Never raises, never blocks.
 
@@ -263,7 +264,7 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
                     why = acq_config.reason(cfg, "rate")
                 else:
                     try:
-                        _S.queue.put_nowait(Job(question=str(question), trigger="continue", created=now,
+                        _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now,
                                                 cands=[cands[i] for i in part], origin=origin))
                         why = None
                     except queue.Full:
@@ -294,6 +295,7 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
         return out
 
 
+LIST_TRIGGER = "list"  # LIST-INGEST-1110: a job queued by vera.list_ingest (identifiers only; no search, no question)
 BG_MIN_FREE_HOURLY_JOBS = 2  # P0DTA-PRIO D4: background hand-off needs >= 2 free hourly jobs (leaves >= 1 for search)
 
 
@@ -323,7 +325,14 @@ def _defer_seed(q, job) -> bool:
 def _run_in_origin(job: Job, cfg, deps, clock, env) -> dict:
     from vera import request_origin
     with request_origin.scope(job.origin if job.origin in request_origin.ORIGINS else request_origin.SEED):
-        return run_job(job, cfg, deps, clock=clock, env=env)
+        res = run_job(job, cfg, deps, clock=clock, env=env)
+    if job.trigger == LIST_TRIGGER:  # LIST-INGEST-1110: record the item's outcome code (memory only; never raises)
+        try:
+            from vera import list_ingest
+            list_ingest.record_outcome(job.cands, res)
+        except Exception:  # noqa: BLE001
+            logger.warning("list-ingest outcome not recorded")
+    return res
 
 
 def _worker_loop(cfg, env, clock, deps_factory) -> None:
@@ -1272,7 +1281,9 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     plan = build_plan(rec, item, meta, cfg, job, score, value, isbn, now_iso)
     if disc is not None:
         acq_discovered.annotate(plan, cand, res, route, chain, cfg)
-    n_adm = relevance_gate(job.question, plan, cfg, icfg, fdcfg)
+    # LIST-INGEST-1110: a list job has no question; the content check runs against the document's own title (the
+    # converter's body/span thresholds and every filter above still apply)
+    n_adm = relevance_gate((item.get("title") or "") if job.trigger == LIST_TRIGGER else job.question, plan, cfg, icfg, fdcfg)
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
@@ -1422,7 +1433,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         icfg = acq_config.ingest_cfg(fl.load_config(), cfg)
         served = set(deps.corpus_keys() or ())
         from vera.dar_corpus import doc_key_set
-        ranked = rank_candidates(job.question, cands, cfg, served, fdcfg, count)
+        ranked = rank_candidates("" if job.trigger == LIST_TRIGGER else job.question, cands, cfg, served, fdcfg, count)
         searched = True  # ROUNDS-1028: the search ran, so this job counts toward its topic's round
         for score, doi, cand, isbn in ranked:
             if stored >= budget:
@@ -1463,7 +1474,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 logger.warning("autoacq refresh failed (%s)", type(e).__name__)
     except Exception as e:  # noqa: BLE001
         count(f"R-ACQ-ERR-{type(e).__name__}"[:40])
-    if searched:  # ROUNDS-1028 (observational; never raises): job result -> per-topic round
+    if searched and job.trigger != LIST_TRIGGER:  # ROUNDS-1028 (observational; never raises): job result -> per-topic round
         from vera import acq_rounds
         acq_rounds.observe(job.question, cfg, stored, not left_over and stored < budget, "background")  # a filled job budget is not exhaustion
     return done()

@@ -814,6 +814,37 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, re
         request_trace.end_context()
 
 
+# ------------------------------------------------------------------------------------------------ LIST-INGEST-1110
+class ListIngestRequest(APIModel):
+    """LIST-INGEST-1110: identifiers only (DOI, PMCID, "pmid:N", arXiv id, https URL). There is deliberately no origin
+    field: the route is seed-only and the origin is forced server-side (vera/list_ingest.py)."""
+    identifiers: list[str] = Field(..., min_length=1, max_length=500)
+
+
+@app.post("/ingest/list", dependencies=[Depends(verify_api_key)])
+def ingest_list(req: ListIngestRequest):
+    """Search-free list ingest (SEED-SCI-1110 S10, CHUNK-VALUE-1110 H.8). Same X-API-Key auth as POST /ask; never used by
+    the public UI. Each identifier is queued through the existing acquisition gates at seed priority; the response has one
+    result code per item (queued, duplicate-already-stored, no-route, ...). More than max_items_per_call = 413."""
+    from vera import list_ingest
+    try:
+        return list_ingest.ingest(req.identifiers)
+    except ValueError as e:
+        if str(e) == "too_many":
+            raise HTTPException(status_code=413, detail="Too many identifiers in one call") from None
+        raise
+    except list_ingest.ListIngestConfigError:
+        logger.error("list ingest config unusable")
+        raise HTTPException(status_code=500, detail="Server misconfigured") from None
+
+
+@app.get("/ingest/list/outcomes", dependencies=[Depends(verify_api_key)])
+def ingest_list_outcomes(limit: int = 200):
+    """Final job codes recorded in memory for queued list items (best effort; lost on restart)."""
+    from vera import list_ingest
+    return {"outcomes": list_ingest.outcomes(max(1, min(int(limit), 2000)))}
+
+
 # ------------------------------------------------------------------------------------------------ RENDER-XFF-1031 echo
 from pathlib import Path as _PathE  # noqa: E402
 _HEADER_ECHO_CFG = _PathE(__file__).resolve().parent / "config" / "header_echo.json"

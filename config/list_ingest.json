@@ -1,0 +1,24 @@
+{
+  "_doc": "LIST-INGEST-1110 (SEED-SCI-1110 S10 and CHUNK-VALUE-1110 H.8): the search-free list-ingest route, POST /ingest/list (X-API-Key). Read by vera/list_ingest.py. Every identifier goes through the existing acquisition gates (Europe PMC OA resolve, licence, injection, content/relevance, robots/rates); no web search of any kind is made. Origin is forced to seed (low priority behind visitor jobs, seed share of the acquisition queue caps).",
+  "enabled": true,
+  "max_items_per_call": 25,
+  "max_items_per_hour": 60,
+  "max_items_per_day": 300,
+  "_caps_note": "Planner priors, uncalibrated. These count items accepted into the queue by this route; the shared auto_acquire jobs_per_hour / jobs_per_day / queue_max caps and BG_MIN_FREE_HOURLY_JOBS apply on top (one job per item).",
+  "lookup_timeout_s": 10,
+  "outcomes_kept": 2000,
+  "inspire": {"url": "https://inspirehep.net/api/literature", "timeout_s": 10},
+  "openalex": {"url": "https://api.openalex.org/works/", "timeout_s": 10},
+  "result_codes": {
+    "queued": "queued",
+    "duplicate_stored": "duplicate-already-stored",
+    "duplicate_queued": "duplicate-already-queued",
+    "duplicate_in_call": "duplicate-in-call",
+    "invalid": "invalid-identifier",
+    "no_route": "no-route",
+    "arxiv_no_original": "no-route-arxiv-original-not-found",
+    "rate_limited": "rate-limited",
+    "queue_full": "queue-full",
+    "disabled": "disabled"
+  }
+}
