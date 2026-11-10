@@ -294,7 +294,7 @@ def test_c1_c2_c3_cumulative_posts_per_question(rig, monkeypatch):
 
 
 # ------------------------------------------------------------------------------------------------------------- C4
-def _freshness_attempt(rig, monkeypatch, question):
+def _freshness_attempt(rig, monkeypatch, question, triggers=("new_documents",)):
     """ask_service._research_attempt (the OD-1109-SIX search on an answered question) with only the guards stubbed and
     inline_acquire.acquire replaced by a round-0 search through the REAL provider (acquisition_search)."""
     import time
@@ -319,7 +319,7 @@ def _freshness_attempt(rig, monkeypatch, question):
     corpus = SimpleNamespace(registry=FakeRegistry("photonics", "genomics", "quantum"), cfg={})
     grounding = (lambda restricted=False: grounded_ask.retrieve_all(question, GROUNDING, dar_corpus=corpus)[0],)
     return ask_service._research_attempt(question, grounding, {"x": 1}, {}, {}, SimpleNamespace(
-        inline_used=False, deadline=time.monotonic() + 100))
+        inline_used=False, deadline=time.monotonic() + 100), list(triggers))
 
 
 @pytest.mark.parametrize("question,before", [(Q_PLAIN, 2), (Q_ONE, 4), (Q_TWO, 6)])

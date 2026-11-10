@@ -1773,8 +1773,10 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         if use_ddg and "ddg" not in futs and ddg_reduce.fallback_only():
             # DDG-REDUCE-1110 C6 (owner 2026-11-10 "make DDG a fallback now"): DuckDuckGo runs only when the other routes
             # returned fewer than ddg_fallback_min_results usable candidates (and the deadline allows it).
-            usable = len(base) + len(got.get("epmc") or ()) + len(got.get("wiki") or ())
-            if usable < ddg_reduce.fallback_min() and t_end - clock() > 1:
+            # v3 F2: only candidates that pass the existing pre-filters count (ddg_reduce.usable_count)
+            usable = ddg_reduce.usable_count(question, [*base, *(got.get("epmc") or ()), *(got.get("wiki") or ())],
+                                             (s.get("openalex_profile") or {}).get("generic_terms") or ())
+            if usable < ddg_reduce.fallback_min() and t_end - clock() > ddg_reduce.fallback_min_remaining_s():
                 futs["ddg"] = _submit_in_order(pool2 := cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="acq-ddg"),
                                                ddg_search or _default_ddg_search(cfg), question, n, max(1.0, t_end - clock()))
                 pool2.shutdown(wait=False)

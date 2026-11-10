@@ -700,7 +700,7 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
         # DDG-REDUCE-1110 C6 (owner 2026-11-10 "make DDG a fallback now"): the other routes first; DuckDuckGo only when they
         # return fewer than ddg_fallback_min_results candidates. Never for a seed request (the provider refuses it).
         run([p for p in live if p.name != DDG_NAME])
-        if sum(len(v) for v in per.values()) < ddg_reduce.fallback_min():
+        if ddg_reduce.usable_count(question, [x for v in per.values() for x in v]) < ddg_reduce.fallback_min():
             run(ddg_p)
         else:
             tried.append({"provider": DDG_NAME, "outcome": "skipped", "status": "not_attempted"})
