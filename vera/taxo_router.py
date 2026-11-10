@@ -38,14 +38,21 @@ _BOUNDS = {"route_rel_margin": (0.0, 2.0), "route_abs_floor": (-1.0, 1.0), "neig
            "min_routed_scored": (0, 100000), "time_budget_ms": (1, 10000)}
 MAX_DOMAINS = 32
 
+# One row per (span, domain): the best link cosine. Chunk links of kind 'cosine%' (strict 'cosine', generous 'cosine_r<n>', and
+# routing-only 'cosine_soft') and legacy NULL-kind rows count; any other kind never does. Domains come from topic links (no
+# chunk-domain table). Subtopic links reach their topic through tax_topic_subtopic. Only active entities and links.
 SQL_DOMAIN_LINKS = (
-    "SELECT DISTINCT cl.span_id, dt.domain_id FROM ("
-    "SELECT ct.span_id, ct.topic_id FROM vera_vjay.tax_chunk_topic ct WHERE ct.state = 'active' "
-    "UNION SELECT cs.span_id, st.topic_id FROM vera_vjay.tax_chunk_subtopic cs "
-    "JOIN vera_vjay.tax_subtopics st ON st.subtopic_id = cs.subtopic_id AND st.state = 'active' "
-    "WHERE cs.state = 'active') cl "
-    "JOIN vera_vjay.tax_domain_topic dt ON dt.topic_id = cl.topic_id AND dt.state = 'active' "
-    "WHERE cl.span_id = ANY(:ids)")
+    "SELECT l.span_id, dt.domain_id, max(l.score) FROM ("
+    "SELECT ct.span_id, ct.topic_id, ct.score FROM vera_vjay.tax_chunk_topic ct "
+    "WHERE ct.state = 'active' AND (ct.score_kind IS NULL OR ct.score_kind LIKE 'cosine%') "
+    "UNION ALL SELECT cs.span_id, ts.topic_id, cs.score FROM vera_vjay.tax_chunk_subtopic cs "
+    "JOIN vera_vjay.tax_topic_subtopic ts ON ts.subtopic_id = cs.subtopic_id AND ts.state = 'active' "
+    "JOIN vera_vjay.tax_subtopics sb ON sb.subtopic_id = cs.subtopic_id AND sb.state = 'active' "
+    "WHERE cs.state = 'active' AND (cs.score_kind IS NULL OR cs.score_kind LIKE 'cosine%')) l "
+    "JOIN vera_vjay.tax_topics t ON t.topic_id = l.topic_id AND t.state = 'active' "
+    "JOIN vera_vjay.tax_domain_topic dt ON dt.topic_id = l.topic_id AND dt.state = 'active' "
+    "JOIN vera_vjay.tax_domains d ON d.domain_id = dt.domain_id AND d.state = 'active' "
+    "WHERE l.span_id = ANY(:ids) GROUP BY l.span_id, dt.domain_id")
 
 _STATE: dict = {"cfg": None}
 _TL = threading.local()
@@ -89,31 +96,36 @@ def set_config_for_tests(raw: dict | None) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ usage hook
-def assoc_hook(span_id: int, domain_key) -> tuple:
+def assoc_hook(span_id: int, domain_key, similarity: float) -> tuple:
     """=== USAGE-DECAY INTEGRATION HOOK (owner rule 2026-11-10; CHUNK-USAGE branch chunk-usage-1110) ===
-    Returns (weight, removed) for one (chunk partition, domain) association. Frequently matched but unused associations
-    decay in weight and, below a threshold, are soft-removed; the chunk itself stays globally searchable (it is still in the
-    always-global fallback and the lexical walk). Default: weight 1.0, nothing removed. Replace the body with a read of the
-    chunk_usage API later; do not import chunk_usage here until then. Applied at router build time only."""
-    return 1.0, False
+    Returns (weight, removed) for one (chunk partition, domain) association. `similarity` is the stored link cosine (the
+    initial weight, owner rule); 1.0 when the link has no score. Frequently matched but unused associations decay in weight
+    and, below a threshold, are soft-removed; the chunk itself stays globally searchable (it falls into the always-in set U and
+    the lexical walk). Default: weight = similarity, nothing removed. Replace the body with a read of the chunk_usage API
+    later; do not import chunk_usage here until then. Applied at router build time only."""
+    return similarity, False
 
 
 # ------------------------------------------------------------------------------------------------ build
 class Router:
     """Immutable after build. Tied to one VectorIndex (checked by identity and size)."""
 
-    def __init__(self, idx, domains, centers, part_mask, neighbour_mask, n_links):
+    def __init__(self, idx, domains, centers, part_mask, neighbour_mask, n_links, job_state):
         self.idx_id, self.n_rows = id(idx), len(idx)
         self.domains, self.centers, self.part_mask, self.neighbour_mask = domains, centers, part_mask, neighbour_mask
         self.n_links = n_links
+        js = job_state if isinstance(job_state, dict) else {}
+        self.job_version = js.get("version")
+        self.display_ok = js.get("display_ok") is True  # the taxonomy display gate of the job run the links came from
 
     def nbytes(self) -> int:
         return int(self.centers.nbytes + self.part_mask.nbytes)
 
 
-def build(idx, links, cfg: dict | None = None):
-    """Router | None. links: iterable of (span_id, domain_key). Needs idx.span_ids (parallel to idx.rows). Returns None when
-    there is nothing usable (no links, over MAX_DOMAINS)."""
+def build(idx, links, cfg: dict | None = None, job_state: dict | None = None):
+    """Router | None. links: iterable of (span_id, domain_key[, link_cosine]). Needs idx.span_ids (parallel to idx.rows).
+    job_state: {"version", "display_ok"} of the job run the links belong to. Returns None when there is nothing usable
+    (no links, over MAX_DOMAINS). Centers are weighted by the link cosine, via a dense weight vector (no row copies)."""
     import numpy as np
     cfg = cfg or config()
     sids = getattr(idx, "span_ids", None)
@@ -122,17 +134,20 @@ def build(idx, links, cfg: dict | None = None):
     row_of = {int(s): i for i, s in enumerate(sids)}
     dom_ids, per_dom = {}, {}
     n_links = 0
-    for sid, dk in links:
+    for item in links:
+        sid, dk = item[0], item[1]
+        sim = item[2] if len(item) > 2 else None
         i = row_of.get(int(sid))
         if i is None:
             continue
-        w, removed = assoc_hook(int(sid), dk)
-        if removed or not (w > 0):
+        sim = float(sim) if isinstance(sim, (int, float)) and not isinstance(sim, bool) and math.isfinite(sim) else 1.0
+        w, removed = assoc_hook(int(sid), dk, sim)
+        if removed:
             continue
         j = dom_ids.setdefault(dk, len(dom_ids))
         if j >= MAX_DOMAINS:
             return None
-        per_dom.setdefault(j, {})[i] = float(w)
+        per_dom.setdefault(j, {})[i] = max(float(w), 1e-3)  # a link always counts as membership; weight only shapes the center
         n_links += 1
     if not per_dom:
         return None
@@ -141,8 +156,9 @@ def build(idx, links, cfg: dict | None = None):
     part_mask = np.zeros(len(idx), dtype=np.uint32)
     for j, members in per_dom.items():
         rows = np.fromiter(members.keys(), dtype=np.int64, count=len(members))
-        w = np.fromiter(members.values(), dtype=np.float32, count=len(members))
-        c = (idx.mat[rows] * w[:, None]).sum(axis=0)
+        wvec = np.zeros(len(idx), dtype=np.float32)
+        wvec[rows] = np.fromiter(members.values(), dtype=np.float32, count=len(members))
+        c = wvec @ idx.mat
         nrm = float(np.linalg.norm(c))
         if nrm > 0:
             centers[j] = c / nrm
@@ -156,7 +172,7 @@ def build(idx, links, cfg: dict | None = None):
     keys = [None] * nd
     for k, j in dom_ids.items():
         keys[j] = k
-    return Router(idx, keys, centers, part_mask, nb, n_links)
+    return Router(idx, keys, centers, part_mask, nb, n_links, job_state)
 
 
 # ------------------------------------------------------------------------------------------------ route
@@ -165,13 +181,19 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
     "n_domains", "n_selected", "n_routed", "n_chunks"}. Never raises."""
     import numpy as np
     cfg = cfg or config()
-    out = {"route": "global:error", "R": None, "n_domains": 0, "n_selected": 0, "n_routed": 0, "n_chunks": 0}
+    out = {"route": "global:error", "R": None, "n_domains": 0, "n_selected": 0, "n_routed": 0, "n_chunks": 0, "n_unlinked": 0}
     try:
         if router is None:
             out["route"] = "global:router_not_loaded"
             return out
         if router.idx_id != id(idx) or router.n_rows != len(idx):
             out["route"] = "global:version_mismatch"
+            return out
+        if router.job_version is None:
+            out["route"] = "global:job_version_unknown"
+            return out
+        if not router.display_ok:
+            out["route"] = "global:display_gate_failed"
             return out
         if q is None:
             out["route"] = "global:no_vector"
@@ -190,9 +212,6 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
                 sel |= int(router.neighbour_mask[j])
         n_sel = bin(sel).count("1")
         out["n_selected"] = n_sel
-        if n_sel >= nd:
-            out["route"] = "global:no_domain_excluded"
-            return out
         # partition in R: matches a selected domain, or has no link (always-in set U)
         pm = router.part_mask
         part_in = ((pm & np.uint32(sel)) != 0) | (pm == 0)
@@ -201,11 +220,16 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
         has = pidx >= 0
         R[has] = part_in[pidx[has]]
         out["n_chunks"], out["n_routed"] = n, int(R.sum())
+        out["n_unlinked"] = int((~has).sum() + (pm[pidx[has]] == 0).sum())  # |U|: no vector, or no link
+        out["R"] = R  # kept for the counterfactual even when the route falls back to global
+        if n_sel >= nd:
+            out["route"] = "global:no_domain_excluded"
+            return out
         scored_in = sum(1 for i in scores if i < n and R[i])
         if scored_in < int(cfg["min_routed_scored"]):
             out["route"] = "global:few_routed_scored"
             return out
-        out["route"], out["R"] = "routed", R
+        out["route"] = "routed"
         return out
     except Exception as exc:  # noqa: BLE001
         out["route"] = "global:error"
@@ -215,6 +239,7 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ shadow
+# Per-thread (per-ask) record. Cleared at ask start (hybrid_retrieval.clear_status). Codes and counts only: no question text.
 def last_shadow() -> dict | None:
     s = getattr(_TL, "shadow", None)
     return dict(s) if isinstance(s, dict) else None
@@ -222,30 +247,77 @@ def last_shadow() -> dict | None:
 
 def clear_shadow() -> None:
     _TL.shadow = None
+    _TL.R = None
+    _TL.cand = None
+
+
+def note_candidate(span_id, chunk_idx) -> None:
+    """Called by the retrieval path for each returned candidate: remembers whether the chunk is inside the routed set R
+    (shadow only; no effect on results). Never raises."""
+    try:
+        R, cand = getattr(_TL, "R", None), getattr(_TL, "cand", None)
+        if R is None or cand is None or chunk_idx is None or not (0 <= chunk_idx < len(R)):
+            return
+        cand[span_id] = bool(R[chunk_idx])
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def finish(admitted_span_ids) -> dict | None:
+    """End of ask: count admitted evidence that falls outside the routed set (plan gate Q1). Returns the record for the ask
+    trace (codes and counts only), or None when shadow did not run. Never raises."""
+    try:
+        rec = getattr(_TL, "shadow", None)
+        if not isinstance(rec, dict):
+            return None
+        cand = getattr(_TL, "cand", None)
+        ids = list(admitted_span_ids or ())
+        if cand is not None and getattr(_TL, "R", None) is not None:
+            known = [i for i in ids if i in cand]
+            rec["admitted_total"] = len(ids)
+            rec["admitted_unmapped"] = len(ids) - len(known)
+            rec["missed_admitted"] = sum(1 for i in known if not cand[i])
+        else:
+            rec["admitted_total"], rec["admitted_unmapped"], rec["missed_admitted"] = len(ids), len(ids), None
+        log.info("taxo router shadow: route=%s selected=%s/%s routed=%s/%s missed_admitted=%s", rec.get("route"),
+                 rec.get("n_selected"), rec.get("n_domains"), rec.get("n_routed"), rec.get("n_chunks"),
+                 rec.get("missed_admitted"))
+        return dict(rec)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def shadow(router, idx, q, pidx, scores: dict, global_idx, branch_k: int) -> None:
-    """Compute the routed set and record counts and recall against the global candidates (the top branch_k keyword chunks
-    plus the vector list, as chunk indexes). Never changes anything the caller returns; never raises."""
+    """Compute the routed set and record counts. Never changes anything the caller returns; never raises.
+    recall_candidates (top branch_k keyword chunks + the vector list found outside R) is secondary and only for asks that
+    would have been routed; a fallback or over-budget ask has recall None plus the reason and, when R was computed, the
+    counterfactual missed_candidates. Uses thread CPU time, not process time."""
     try:
         cfg = config()
         if cfg["mode"] == "off":
             return
-        t0 = time.process_time()
+        clear_shadow()
+        t0 = time.thread_time()
         dec = route(router, idx, q, pidx, scores, cfg)
         R = dec.pop("R")
-        top = heapq.nlargest(int(branch_k), scores.items(), key=lambda kv: kv[1])
-        glob = {int(i) for i, _ in top} | {int(i) for i in (global_idx or ())}
-        n = len(pidx)
-        missed = 0
+        dt = time.thread_time() - t0
         if R is not None:
+            top = heapq.nlargest(int(branch_k), scores.items(), key=lambda kv: kv[1])
+            glob = {int(i) for i, _ in top} | {int(i) for i in (global_idx or ())}
+            n = len(pidx)
             missed = sum(1 for i in glob if i < n and not R[i])
-        dt = time.process_time() - t0
-        if R is not None and dt * 1000.0 > float(cfg["time_budget_ms"]):
-            dec["route"] = "global:over_budget"
-            missed = 0
-        dec.update(mode=cfg["mode"], global_candidates=len(glob), missed=missed,
-                   recall=(1.0 if not glob else round(1.0 - missed / len(glob), 4)), process_time_s=round(dt, 6))
-        _TL.shadow = dec
+        else:
+            glob, missed = set(), None
+        route_code = dec["route"]
+        if route_code == "routed" and dt * 1000.0 > float(cfg["time_budget_ms"]):
+            route_code = dec["route"] = "global:over_budget"
+        dec.update(mode=cfg["mode"], effective="shadow", global_candidates=len(glob), missed_candidates=missed,
+                   recall_candidates=(None if route_code != "routed" or missed is None
+                                      else (1.0 if not glob else round(1.0 - missed / len(glob), 4))),
+                   recall_none_reason=(None if route_code == "routed" else route_code),
+                   cpu_thread_s=round(dt, 6))
+        _TL.shadow, _TL.R, _TL.cand = dec, R, {}
     except Exception:  # noqa: BLE001
-        _TL.shadow = {"route": "global:error", "mode": "shadow"}
+        _TL.shadow = {"route": "global:error", "mode": "shadow", "effective": "shadow", "recall_candidates": None,
+                      "recall_none_reason": "global:error"}
+        _TL.R, _TL.cand = None, None

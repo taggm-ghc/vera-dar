@@ -232,6 +232,11 @@ def _set_status(**kw) -> None:
 
 def clear_status() -> None:
     _TL.status = None
+    try:  # TAXO-ROUTE-1110: the shadow router record is per ask, cleared where the ask's hybrid status is
+        from vera import taxo_router
+        taxo_router.clear_shadow()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def last_status() -> dict | None:
@@ -501,11 +506,17 @@ class _DbLoader:
         for r in self._rows(SQL_VECTORS, {"model": model, "ids": [int(i) for i in ids]}):
             yield int(r[0]), str(r[1]), r[2]
 
+    def job_state(self) -> dict:
+        """TAXO-ROUTE-1110: {version, display_ok} of the latest finished taxonomy job run (cached reader; build thread only)."""
+        from vera import chunk_taxo_status
+        st = chunk_taxo_status.status()
+        return {"version": st.get("version"), "display_ok": st.get("display_ok") is True and st.get("state") == "ok"}
+
     def links(self, ids):
         """TAXO-ROUTE-1110: (span_id, domain_id) active links, via topics, for the router (one RO SELECT per page)."""
         from vera import taxo_router
         for r in self._rows(taxo_router.SQL_DOMAIN_LINKS, {"ids": [int(i) for i in ids]}):
-            yield int(r[0]), r[1]
+            yield int(r[0]), r[1], (None if r[2] is None else float(r[2]))
 
     def neurons_today(self) -> float:
         rows = self._rows(SQL_NEURONS_TODAY, {})
@@ -652,10 +663,15 @@ def _build_router(idx, loader) -> None:
         from vera import taxo_router
         if taxo_router.mode() == "off" or not hasattr(loader, "links"):
             return
+        js = loader.job_state() if hasattr(loader, "job_state") else {}
         page, links = int(config()["page_ids"]), []
         for lo in range(0, len(idx.span_ids), page):
             links.extend(loader.links(idx.span_ids[lo:lo + page]))
-        idx.router = taxo_router.build(idx, links)
+        js2 = loader.job_state() if hasattr(loader, "job_state") else {}
+        if (js or {}).get("version") != (js2 or {}).get("version"):  # a job pass finished while reading: links may be mixed
+            idx.router = None
+            return
+        idx.router = taxo_router.build(idx, links, job_state=js)
     except Exception as exc:  # noqa: BLE001
         idx.router = None
         log.info("taxo router build failed (%s)", type(exc).__name__)

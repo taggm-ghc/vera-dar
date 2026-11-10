@@ -14,7 +14,7 @@ REPO = Path(__file__).resolve().parent.parent
 CONTRACT_2C0A323_COUNT = 158
 CONTRACT_2C0A323_FROZEN_SHA256 = "84d028093cc8e770d732a2c7ad3095313e50a6295582709b2555a28fad511e73"  # old collector at 2c0a323
 N024 = 17  # tax_chunk_vectors, tax_job_runs pairs proven by the 024 draft (CHUNK-TAXO-INT-1109)
-N020 = 28  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108)
+N020 = 40  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108) + 12 pairs of tax_chunk_topic/tax_chunk_subtopic and entity state columns read by the router SQL (TAXO-ROUTE-1110)
 
 
 def _sha(pairs) -> str:
@@ -171,6 +171,7 @@ def test_real_tree_exemptions_are_exactly_016_017_020_022_024_and_reported():
                                                "024-DRAFT-chunk-vectors.sql.draft"}
     assert {t for t, _ in ex} == {"lstreg_active_lists_v", "lstreg_active_items_v", "toptag_document_topics",
                                   "tax_domains", "tax_topics", "tax_subtopics", "tax_domain_topic", "tax_topic_subtopic",
+                                  "tax_chunk_topic", "tax_chunk_subtopic",
                                   "tax_anchors", "tax_registry_active_v", "tax_registry_eval_v", "tax_chunk_vectors",
                                   "tax_job_runs"}
     assert len(ex) == 54 + N020 + N024
