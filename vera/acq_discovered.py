@@ -209,6 +209,20 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
                 "outcome": "dropped", "reason": acq_config.reason(acq, "irrelevant")})
             continue
         from vera import arxiv_fulltext  # ARX-A2: arXiv records (no journal DOI) -> arXiv route when enabled
+        aid = arxiv_fulltext.arxiv_ident(s) if arxiv_fulltext.PORTAL_ONLY else None
+        if aid is not None and (not doi or arxiv_fulltext._ARXIV_DOI.match(doi)):
+            # ARXIV-PORTAL-1110: an arXiv record without a journal DOI is a PORTAL seed (vera/arxiv_portal.py): followed
+            # to its published version and references, never read; ranking drops it with R-ACQ-ARXIV_PORTAL
+            # (a held portal entry, not a candidate: nothing is read; `_portal_seed` is taken off by inline_acquire and
+            # handed to arxiv_portal.extend, never shown)
+            seed = {"doi": f"10.48550/arxiv.{aid[0]}", "url": f"https://arxiv.org/abs/{aid[0]}{aid[1] or ''}",
+                    "arxiv_id": aid[0], "title": " ".join(str(s.get("title") or "").split()),
+                    "snippet": " ".join(str(s.get("snippet") or "").split()), "acq_source": "discovered"}
+            held.append({**e, "gate_a": {"decision": "portal", "factors": {
+                "identifier": "arxiv", "portal": "arXiv record: followed to its published version and its references; "
+                                                 "never read"}, "uncertainty": []},
+                "outcome": "portal", "reason": acq_config.reason(acq, "arxiv_portal"), "_portal_seed": seed})
+            continue
         ac = arxiv_fulltext.discovered_candidate(s, doi, kind, e, acq)
         if ac is None and (kind == "record" or (kind == "arxiv" and not doi)):  # D1: no route reads the paper's own licence
             held.append({**e, "gate_a": {"decision": "reject", "factors": {"identifier": "doi" if doi else "none",
@@ -275,6 +289,11 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         elif (drops or {}).get(id(c)) == irrelevant:  # DDFIX-1023/REL: off-topic before the cut (title + abstract)
             f["relevance"] = "no key concept of the question in the title or abstract (deterministic, lexical)"
             dec, reason = "reject", irrelevant
+        elif (drops or {}).get(id(c)) == acq_config.reason(acq, "arxiv_portal"):
+            # ARXIV-PORTAL-1110: an arXiv record is a portal entry (followed to its published version and references by
+            # vera/arxiv_portal.py), never a source to acquire
+            f["portal"] = "arXiv record: followed to its published version and its references; never read"
+            dec, reason = "portal", drops[id(c)]
         elif (drops or {}).get(id(c)) in (acq_config.reason(acq, "duplicate"), acq_config.reason(acq, "no_doi")):
             # WP7 (MIDTERMS-WP7-1106 c): the ranking stage's own reason (an in-request duplicate, no identifier) is
             # reported as it is, not folded into the candidate-cut label below
@@ -291,7 +310,7 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         e = {**c["discovery"], "gate_a": {"decision": dec, "factors": f, "uncertainty": unc}}
         c["_gate_a"] = {"decision": dec, "factors": copy.deepcopy(f), "uncertainty": list(unc)}  # for provenance
         if reason:
-            e["outcome"], e["reason"] = ("deferred" if dec == "defer" else "rejected"), reason
+            e["outcome"], e["reason"] = ({"defer": "deferred", "portal": "portal"}.get(dec, "rejected")), reason
         out[id(c)] = e
     return out
 
@@ -414,6 +433,9 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                                                  else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
         if not _host_ok(cur, hosts):
             raise aa._Stop(acq_config.reason(acq, "host"))
+        from vera import host_role  # PORTAL-RULE-1110 CP3: every landing / full-text hop is ORIGINAL / RoR / a resolver
+        if robots and not host_role.is_hop_allowed(cur, "store"):  # robots.txt / tdmrep.json reads are not documents
+            raise aa._Stop(acq_config.reason(acq, "portal"))
         ok = check(cur)
         if not (ok[0] if isinstance(ok, tuple) else ok):
             raise aa._Stop(acq_config.reason(acq, "host"))
@@ -807,6 +829,9 @@ def landing_fetch(doi: str, cand: dict, acq: dict, deps, icfg: dict, clock=time.
     raw, got, _st = _b_get(xml_url, ft, {str(c).lower() for c in (acq.get("fetch") or {}).get("content_types") or ()},
                            int(acq_config.bound(acq, "max_fetch_bytes")), int(lc.get("landing_max_redirects", 2)),
                            deps, acq, clock, deadline, chain, timeout_s=float(acq_config.bound(acq, "fetch_timeout_s")))
+    from vera import host_role  # PORTAL-RULE-1110: the text's own final host must be ORIGINAL / RoR (landing hops were checked per hop)
+    if not host_role.is_evidence_allowed(got, "store"):
+        raise aa._Stop(acq_config.reason(acq, "portal"))
     # X1: the converter's guards accept these exact bytes BEFORE any other parse (jats_licences, article-type)
     try:
         conv = jats_text.convert(raw, (acq.get("fetch") or {}).get("fulltext_format", "jats-xml"), icfg["converter"])

@@ -24,7 +24,9 @@ from vera.official_lane import LanePage
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "web_route.json"
 LANE = "web"
-_NON_WEB_HOSTS = ("doi.org", "dx.doi.org", "arxiv.org", "ncbi.nlm.nih.gov", "europepmc.org")
+# PORTAL-WIRE-A-1110 (WP3): arXiv and its mirrors left this list; vera.host_role is the one source for portal hosts. These
+# remain "not the general web" because dedicated routes (DOI / PMC) handle them, not because of their role.
+_NON_WEB_HOSTS = ("doi.org", "dx.doi.org", "ncbi.nlm.nih.gov", "europepmc.org")
 _ID_KEYS = ("doi", "DOI", "pmcid", "PMCID", "arxiv_id", "arxiv", "pmid", "PMID")
 
 
@@ -79,7 +81,9 @@ def is_web_candidate(c) -> bool:
     if any(c.get(k) for k in _ID_KEYS) or any((c.get("ids") or {}).get(k) for k in ("doi", "pmcid", "arxiv", "pmid")):
         return False
     h = _host(url)
-    return not any(h == d or h.endswith("." + d) for d in _NON_WEB_HOSTS)
+    from vera import host_role  # PORTAL-RULE-1110: a portal (arXiv and mirrors, Wikipedia, ...) is never read, also answer-only
+    return (not any(h == d or h.endswith("." + d) for d in _NON_WEB_HOSTS)
+            and host_role.is_hop_allowed(url, "answer") and host_role.is_evidence_allowed(url, "answer"))
 
 
 def _topic_cfg(cfg) -> dict:
@@ -174,6 +178,11 @@ def make_hop_gate(start: str, *, registry=None, deny_list=None, cfg=None, hosts=
     cfg = cfg if cfg is not None else load_config()
 
     def gate(hop: str):
+        from vera import arxiv_portal, host_role
+        if arxiv_portal.is_arxiv_host(_host(hop)):  # ARXIV-PORTAL-1110 (R3): every hop, redirects included, before any request
+            return "read_arxiv_portal"
+        if not host_role.is_hop_allowed(hop, "answer"):  # PORTAL-RULE-1110 CP1: any portal / excluded hop, before robots.txt
+            return "read_portal"
         g = sp.read_gate(hop, registry=registry, deny_list=deny_list)
         if not g.read:
             return g.read_reason
@@ -359,6 +368,11 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 out.listed.append(_listed(c, url, title, cfg, phrase, qmax))
                 continue
             final = str(got.get("url") or url)
+            from vera import host_role
+            if not host_role.is_evidence_allowed(final, "answer"):  # PORTAL-RULE-1110: the final URL is re-checked
+                dev["gate"]["read"] = "read_portal"
+                out.listed.append(_listed(c, url, title, cfg, _read_phrase("read_portal", ph), qmax))
+                continue
             text = str(got.get("text") or "")
             origin = c.get("portal_origin") is True  # OD-1109-ORIGIN: the page's own licence link is gated too
             post = evaluate_fetched(final, got, registry=registry, deny_list=deny_list, cfg=cfg,

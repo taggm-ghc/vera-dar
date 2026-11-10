@@ -10,6 +10,7 @@ from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, inline_acquire
 from vera.dar_corpus import doc_key_set
 
+
 DOI = "10.9999/acq.epi4"
 
 

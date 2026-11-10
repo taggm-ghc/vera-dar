@@ -4,7 +4,7 @@
  "_kill_switch_note": "No switch lives here. The web-read kill switch is inline.web_read_enabled (ships true); this file only defines permissions. Emptying deny_hosts and loosening registry verdicts are the owner's levers.",
  "deny_hosts": [],
  "reason_codes": {
-  "read": ["read_ok", "read_robots_disallow", "read_registry_forbid", "read_deny_list", "read_login_paywall", "read_no_crawl"],
+  "read": ["read_ok", "read_robots_disallow", "read_registry_forbid", "read_deny_list", "read_login_paywall", "read_no_crawl", "read_arxiv_portal", "read_portal"],
   "use_for_answer": ["use_ok", "use_ok_nd_news", "use_tdm_reserved", "use_nd_licence", "use_no_ai_signal", "use_registry_forbid"],
   "ingest": ["ingest_ok", "ingest_no_storage_licence", "ingest_registry_forbid", "ingest_not_readable", "ingest_not_usable", "ingest_unevaluated"]
  },
@@ -15,7 +15,9 @@
    "read_registry_forbid": "not read: the site does not permit automated access",
    "read_deny_list": "not read: the site does not permit automated access",
    "read_login_paywall": "not read: the page requires a login or payment",
-   "read_no_crawl": "not read: the site does not permit automated access"
+   "read_no_crawl": "not read: the site does not permit automated access",
+   "read_arxiv_portal": "not read: arXiv is used only to find original sources",
+   "read_portal": "not read: this site is used only to find original sources"
   },
   "use_for_answer": {
    "use_ok": "",

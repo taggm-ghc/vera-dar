@@ -14,6 +14,7 @@ from tests import fulltext_synth as fs
 from vera import acq_config, acq_discovered, arxiv_fulltext, auto_acquire, inline_acquire, search_providers as sp
 from vera import search_query, wiki_ref_portal
 
+
 ROOT = Path(__file__).resolve().parent.parent
 Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
 RUN = json.loads((ROOT / "config" / "vera_eval_run.json").read_text())["search"]
@@ -126,6 +127,7 @@ def test_covid_contact_tracing_record_is_never_dropped():
     assert search_query.relevance_tiers(kc, pool) == [0, 0, 2]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_relevant_candidates_outrank_lexical_false_positives_before_the_cut():
     acq = A.cfg()
     disc, _held = acq_discovered.discovered_candidates(LIVE_FP + REL_OA, {**acq, "inline": {
@@ -142,6 +144,7 @@ def test_relevant_candidates_outrank_lexical_false_positives_before_the_cut():
     assert not rel & cut
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_off_topic_records_go_last_before_the_discovered_max_cut():
     acq = A.cfg()
     acq.setdefault("inline", {})["discovered_max"] = 2

@@ -11,6 +11,7 @@ from tests import arxiv_synth as X
 from tests.test_acq_discovered import Router, _direct, cfg_on, disc, run  # noqa: F401  (_direct: autouse)
 from vera import arxiv_fulltext, auto_acquire, fair_use, fulldoc_db, fulltext_loader, licence_gate
 
+
 SHIPPED = fair_use.load()
 ON = {**SHIPPED, "enabled": True}
 ARR, ARX = "LicenseRef-all-rights-reserved", "LicenseRef-arxiv-nonexclusive-distrib-1.0"
@@ -174,11 +175,13 @@ def _go(lic):
     return run(cfg_on(), [X.discovery_src()], Router({}, {}, X.routes(licence=lic)))
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_default_held_while_flag_off():
     o, store = _go(X.ARXIV_DEFAULT)
     assert disc(o)["reason"] == "R-ACQ-ARXIV_LICENCE_HOLD" and store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_default_admitted_with_basis_when_on_and_kill_switch_at_read(monkeypatch):
     monkeypatch.setattr(fair_use, "load", lambda path=None: copy.deepcopy(ON))
     o, store = _go(X.ARXIV_DEFAULT)
@@ -199,11 +202,13 @@ def test_arxiv_default_admitted_with_basis_when_on_and_kill_switch_at_read(monke
     assert not c.acquired  # flag off: stored fair-use rows are unusable (kill switch)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_default_with_other_url_spelling_is_still_held(on):
     o, store = _go("http://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html")
     assert disc(o)["reason"] == "R-ACQ-ARXIV_LICENCE_HOLD" and store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("lic", [X.CC_BY_ND, "https://example.org/some-licence", None])
 def test_arxiv_other_licences_unchanged_when_on(on, lic):
     o, store = _go(lic)
@@ -211,6 +216,7 @@ def test_arxiv_other_licences_unchanged_when_on(on, lic):
     assert store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_robots_disallow_still_refuses_when_on(on):
     web = Router({}, {}, {**X.routes(licence=X.ARXIV_DEFAULT),
                           "https://arxiv.org/robots.txt": A.Resp(body=b"User-agent: *\nDisallow: /html/\n",

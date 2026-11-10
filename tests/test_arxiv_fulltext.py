@@ -19,6 +19,7 @@ from tests.test_acq_serve import _decide, h  # noqa: F401  (h is a fixture)
 from tests.test_dar_inline_acquire import OFF_Q, rig  # noqa: F401  (rig is a fixture)
 from vera import acq_config, arxiv_fulltext, fulltext_loader, licence_gate
 
+
 _REAL_DECISION = licence_gate.licence_decision
 ROBOTS = "https://arxiv.org/robots.txt"
 TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt
@@ -67,6 +68,7 @@ def _attempts():
 
 
 # ------------------------------------------------------------------------------------------------ route + gate
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_html_attempted_through_safe_route_and_admitted_at_the_licence_gate():
     web = _go_web = _web()
     o, store = _go(web)
@@ -83,6 +85,7 @@ def test_html_attempted_through_safe_route_and_admitted_at_the_licence_gate():
     assert "europepmc" not in " ".join(urls) and "ebi.ac.uk" not in " ".join(urls)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_route_off_keeps_the_d1_hold():
     c = cfg_on()
     c["arxiv_route"]["enabled"] = False
@@ -99,6 +102,7 @@ def test_non_arxiv_preprint_hold_unchanged():
     assert disc(o)["reason"] == "R-ACQ-PREPRINT_LICENCE_UNVERIFIED" and web.calls == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_openalex_record_with_arxiv_datacite_doi_is_routed():
     src = {"provider": "openalex", "doi": X.DOI, "url": X.ABS_URL, "title": X.TITLE, "openalex_id": "https://openalex.org/W8"}
     web = _web()
@@ -107,6 +111,7 @@ def test_openalex_record_with_arxiv_datacite_doi_is_routed():
 
 
 # ------------------------------------------------------------------------------------------------ licence
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_arxiv_default_licence_is_held_with_precise_reason_and_no_content_fetch():
     web = _web(licence=X.ARXIV_DEFAULT)
     o, store = _go(web)
@@ -114,11 +119,13 @@ def test_arxiv_default_licence_is_held_with_precise_reason_and_no_content_fetch(
     assert [u for u, _h, _k in web.calls] == [ROBOTS, TDMREP, X.ABS_URL]  # the HTML is never fetched for a held licence
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_missing_licence_link_is_held():
     o, store = _go(_web(licence=None))
     assert disc(o)["reason"] == "R-ACQ-LICENCE_ABSENT" and store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_nd_licence_is_rejected():
     web = _web(licence=X.CC_BY_ND)
     o, store = _go(web)
@@ -127,6 +134,7 @@ def test_nd_licence_is_rejected():
 
 
 # ------------------------------------------------------------------------------------------------ abstract-only
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_html_missing_means_abstract_only_never_full_text(spy_prepare):
     o, store = _go(_web(html=A.Resp(status=404, ctype="text/html")))
     assert disc(o)["reason"] == "R-ABSTRACT" and store.plans == [] and spy_prepare == []
@@ -134,18 +142,21 @@ def test_html_missing_means_abstract_only_never_full_text(spy_prepare):
     assert reps == [("abs", "fetched"), ("html", "refused"), ("pdf", "not_attempted")]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_html_redirect_to_abstract_page_is_not_full_text(spy_prepare):
     web = Router({}, {}, {**X.routes(), X.HTML_URL: redirect(X.ABS_URL)})
     o, store = _go(web)
     assert disc(o)["reason"] == "R-ABSTRACT" and store.plans == [] and spy_prepare == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_abstract_page_served_at_html_url_is_not_full_text(spy_prepare):
     o, store = _go(_web(html=X.html_resp(X.abs_page())))
     assert disc(o)["reason"] == "R-ABSTRACT" and store.plans == [] and spy_prepare == []
 
 
 # ------------------------------------------------------------------------------------------------ fetch safety
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_redirect_to_non_arxiv_host_is_refused():
     web = Router({}, {}, {**X.routes(), X.HTML_URL: redirect("https://evil.example.net/html/2605.23989v1")})
     o, store = _go(web)
@@ -153,17 +164,20 @@ def test_redirect_to_non_arxiv_host_is_refused():
     assert "https://evil.example.net/html/2605.23989v1" not in [u for u, _h, _k in web.calls]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_http_redirect_is_refused():
     web = Router({}, {}, {**X.routes(), X.HTML_URL: redirect("http://arxiv.org/html/2605.23989v1")})
     o, _store = _go(web)
     assert disc(o)["reason"] == "R-ACQ-HOST"
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_wrong_content_type_is_refused():
     o, store = _go(_web(html=X.html_resp(X.latexml_html(), ctype="application/pdf")))
     assert disc(o)["reason"] == "R-ACQ-CONVERT" and store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_other_version_in_final_url_is_refused():
     v2 = "https://arxiv.org/html/2605.23989v2"
     web = Router({}, {}, {**X.routes(), X.HTML_URL: redirect(v2), v2: X.html_resp(X.latexml_html())})
@@ -171,11 +185,13 @@ def test_other_version_in_final_url_is_refused():
     assert disc(o)["reason"] == "R-ACQ-IDENTITY_MISMATCH"
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_abs_page_for_another_paper_is_refused():
     o, _store = _go(_web(abs_body=X.abs_page(arxiv_id="2605.00001")))
     assert disc(o)["reason"] == "R-ACQ-IDENTITY_MISMATCH"
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_public_address_check_runs_on_every_hop():
     seen = []
     web = _web()
@@ -188,6 +204,7 @@ def test_public_address_check_runs_on_every_hop():
     assert seen == [ROBOTS, TDMREP, X.ABS_URL, X.HTML_URL]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_production_transport_is_the_pinned_public_only_getter(monkeypatch):
     """default_deps wiring: arxiv.org requests go through selective_fetch.pinned_get (rate-limited arxiv_web portal)
     and the real is_public_url (resolved address must be public)."""
@@ -226,6 +243,7 @@ def test_production_transport_is_the_pinned_public_only_getter(monkeypatch):
 
 
 # ------------------------------------------------------------------------------------------------ admitted (simulated rule)
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_cc_by_admitted_with_identity_attribution_and_clean_body(allow_arxiv_html):
     o, store = _go(_web())
     assert o.status == "ok" and disc(o)["outcome"] == "admitted", o.public()
@@ -248,6 +266,7 @@ def test_cc_by_admitted_with_identity_attribution_and_clean_body(allow_arxiv_htm
     assert "SYNTHETIC sentence" in body and "Introduction" in body
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_cc_by_chunks_answer_the_same_post_ask_request(rig, monkeypatch, allow_arxiv_html):
     """POST /ask (TestClient, main:app): the discovered arXiv record is acquired inline and its admitted passages are
     the evidence of the SAME response (stubbed answer model + claim checker)."""
@@ -273,6 +292,7 @@ def test_cc_by_chunks_answer_the_same_post_ask_request(rig, monkeypatch, allow_a
     assert len(rig.h.answer_calls) == 1 and len(rig.h.check_calls) == 1
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_reader_redecides_licence_from_the_stored_abs_licence(allow_arxiv_html):
     from vera import fulldoc_db
     o, store = _go(_web())
@@ -289,6 +309,7 @@ def test_reader_redecides_licence_from_the_stored_abs_licence(allow_arxiv_html):
     assert not c.acquired
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_shipped_config_route_and_codes():
     c = acq_config.load_config()
     r = c["arxiv_route"]
@@ -301,29 +322,34 @@ def test_shipped_config_route_and_codes():
 
 
 # ------------------------------------------------------------------------------------------------ robots + pacing
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_requests_are_spaced_by_min_interval(_no_wait):
     _go(_web())
     assert len(_no_wait) == 3 and all(0 < w <= 3.0 for w in _no_wait)  # robots -> tdmrep -> abs -> html, one at a time (CONTROL-GAPS-1107 r2)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_robots_disallow_refuses_before_any_content_fetch():
     web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(body=b"User-agent: *\nDisallow: /html/\n", ctype="text/plain")})
     o, store = _go(web)
     assert disc(o)["reason"] == "R-ACQ-ROBOTS" and X.HTML_URL not in [u for u, _h, _k in web.calls]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_long_crawl_delay_is_refused_not_ignored():
     web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(body=b"User-agent: *\nCrawl-delay: 60\n", ctype="text/plain")})
     o, _store = _go(web)
     assert disc(o)["reason"] == "R-ACQ-ROBOTS" and [u for u, _h, _k in web.calls] == [ROBOTS]  # refused before tdmrep.json
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_crawl_delay_within_limit_is_honoured(_no_wait):
     web = Router({}, {}, {**X.routes(), ROBOTS: A.Resp(body=b"User-agent: *\nCrawl-delay: 10\n", ctype="text/plain")})
     _go(web)
     assert _no_wait and max(_no_wait) > 3.0
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("status,code", [(500, "R-ACQ-ROBOTS"), (503, "R-ACQ-RATELIMITED")])
 def test_robots_server_error_fails_closed(status, code):
     # CONTROL-GAPS-1107 r2: 503 is in the arxiv_web portal's throttle_statuses: a rate limit (not cached, not an
@@ -334,6 +360,7 @@ def test_robots_server_error_fails_closed(status, code):
 
 
 # ------------------------------------------------------------------------------------------------ every CC variant
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("lic,current,simulated", [
     ("http://creativecommons.org/licenses/by/4.0/", "admitted", "admitted"),
     ("http://creativecommons.org/licenses/by-sa/4.0/", "admitted", "admitted"),
@@ -356,6 +383,7 @@ def test_each_licence_variant(monkeypatch, lic, current, simulated):
     assert (e.get("reason") or e["outcome"]) == simulated, e
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_cc0_index_metadata_licence_never_counts():
     """The discovery record carries CC0 METADATA; with no licence link on the abs page the record is held."""
     src = X.discovery_src()

@@ -710,7 +710,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             o.candidates = (o.candidates or []) + held
         if disc is not None:
             o.discovered = [entries.get(id(c)) or {**c["discovery"], "outcome": "not_reached"} for c in disc[0]] + \
-                [dict(h) for h in disc[1]]
+                [{k: v for k, v in h.items() if k != "_portal_seed"} for h in disc[1]]  # ARXIV-PORTAL-1110: internal
             if disc[1]:
                 for h in disc[1]:
                     count(h["reason"])
@@ -824,7 +824,10 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         if disc is not None:  # P0-5: discovered first (merge keeps the first occurrence; DOI/PMCID de-duplication)
             from vera import acq_discovered
             from vera.search_providers import merge_sources
-            cands = merge_sources(list(disc[0]), cands)
+            from vera import arxiv_portal  # ARXIV-PORTAL-1110: discovered arXiv records are followed, never read
+            seeds = [h.pop("_portal_seed") for h in disc[1] if isinstance(h, dict) and "_portal_seed" in h]
+            ext = arxiv_portal.extend(question, list(disc[0]) + seeds, acq, clock=clock, deadline=deadline)
+            cands = merge_sources([c for c in ext if not any(c is x for x in seeds)], cands)
         if prefer_recent:  # FRESH-1023 C3: stable, newest first, unknown year last (ties then break toward recent)
             cands = sorted(cands, key=lambda c: (1, 0) if not isinstance(c, dict) or _cand_year(c) is None
                            else (0, -_cand_year(c)))

@@ -142,10 +142,10 @@ def test_i2_rebind_landing_doi_connects_to_first_validated_ip_and_never_resolves
 @needs_u3
 def test_i2_rebind_guarded_get_connects_to_first_validated_ip(net):
     net.answers["www.ebi.ac.uk"] = [["193.62.193.80"], ["127.0.0.1"]]
-    net.routes[("www.ebi.ac.uk", "/x.xml")] = _ok_body(b"<article/>", ctype="application/xml")
+    net.routes[("www.ebi.ac.uk", "/europepmc/webservices/rest/PMC1/fullTextXML")] = _ok_body(b"<article/>", ctype="application/xml")
     deps = SimpleNamespace(http_get=selective_fetch.pinned_get, url_check=selective_fetch.is_public_url)
     A.seed_access("www.ebi.ac.uk", time.monotonic())  # CONTROL-GAPS-1107: robots/TDM tested elsewhere; pinning only here
-    raw, final = auto_acquire._guarded_get("https://www.ebi.ac.uk/x.xml", A.cfg(), deps, 100_000, 5.0, False)
+    raw, final = auto_acquire._guarded_get("https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1/fullTextXML", A.cfg(), deps, 100_000, 5.0, False)
     assert raw == b"<article/>" and net.connects == [("193.62.193.80", 443)]
     assert net.dns_calls == ["www.ebi.ac.uk"]
 

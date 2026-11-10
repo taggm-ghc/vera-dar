@@ -18,6 +18,7 @@ from tests.test_acq_serve import _decide, h  # noqa: F401  (h is a fixture)
 from tests.test_dar_inline_acquire import OFF_Q, rig  # noqa: F401  (rig is a fixture)
 from vera import arxiv_fulltext, auto_acquire, fulldoc_db, licence_gate
 
+
 HTML = "https://arxiv.org/html/2605.23989v1"
 CC = "https://creativecommons.org/licenses/{}/4.0/"
 
@@ -165,6 +166,7 @@ def _go(web):
     return run(cfg_on(), [X.discovery_src()], web)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_2605_23989v1_admitted_through_the_real_gate():
     o, store = _go(Router({}, {}, X.routes()))
     assert o.status == "ok" and disc(o)["outcome"] == "admitted", o.public()
@@ -183,6 +185,7 @@ def test_2605_23989v1_admitted_through_the_real_gate():
     assert not c.acquired
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 @pytest.mark.parametrize("lic,reason", [(X.CC_BY_ND, "R-LIC-REJECT"), (X.ARXIV_DEFAULT, "R-ACQ-ARXIV_LICENCE_HOLD"),
                                         (None, "R-ACQ-LICENCE_ABSENT")])
 def test_route_refusals_unchanged_through_the_real_gate(lic, reason):
@@ -190,6 +193,7 @@ def test_route_refusals_unchanged_through_the_real_gate(lic, reason):
     assert disc(o)["reason"] == reason and store.plans == []
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_2605_23989v1_answers_the_same_post_ask_request(rig, monkeypatch):
     import main
     web = Router({}, {}, X.routes())

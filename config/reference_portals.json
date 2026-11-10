@@ -82,7 +82,8 @@
     "arxiv_html_refs": {"enabled": false, "_note": "slice 2: shares the arXiv Crawl-delay 15 budget with the full-text route"},
     "crossref_refs": {"enabled": false, "_note": "slice 2"},
     "inspire_refs": {
-      "enabled": false,
+      "enabled": true,
+      "_enabled_doc": "PHYS-SUPPLY-1110: on per owner OD-1108-DISPOSITIONS-2 H9 (b), verbatim \"Approve (b). Enable INSPIRE-HEP independently of Wikipedia portal activation.\" (records/decisions.md). Runs only with mode on AND api_permissions inspire_literature owner_switch permit (vera.reference_portal.inspire_permitted). Terms re-read 2026-11-09 (research-reader, summarizer level; work/PHYS-SUPPLY-1110/notes.md): 15 requests / 5 s per IP, 429 when exceeded, wait at least 5 s; metadata mostly CC0; email download not permitted; no full text reconstructed from snippets; robots.txt disallows /api/literature/import but not /api/literature for *. false switches it off.",
       "endpoint": "https://inspirehep.net/api/literature",
       "size": 3,
       "sort": "mostcited",

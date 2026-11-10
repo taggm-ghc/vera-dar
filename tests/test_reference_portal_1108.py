@@ -102,6 +102,7 @@ def cfg(**over):
     c["mode"] = "on"
     c["adapters"]["openalex_rw"]["enabled"] = False
     c["adapters"]["generic_page"]["enabled"] = False
+    c["adapters"]["inspire_refs"]["enabled"] = False  # PHYS-SUPPLY-1110: ships on; covered by tests/test_portal_inspire_1108.py
     for k, v in over.items():
         c[k] = v
     return c
@@ -122,8 +123,8 @@ def run(c=None, net=None, base=None, ddg=None, q=Q):
 @pytest.mark.reference_portal
 def test_shipped_config_is_valid_on_wikipedia_only_and_strict():
     c = rp.load_config()
-    assert c["mode"] == "on"  # RETRIEVAL-1109 H-3 (owner): on, wikipedia_title only
-    assert [k for k, v in c["adapters"].items() if v.get("enabled") is True] == ["wikipedia_title"]
+    assert c["mode"] == "on"  # RETRIEVAL-1109 H-3 (owner): on, wikipedia_title; PHYS-SUPPLY-1110: + inspire_refs (H9 (b))
+    assert [k for k, v in c["adapters"].items() if v.get("enabled") is True] == ["wikipedia_title", "inspire_refs"]
     assert all(c["exclusion_signals"][k] is True for k in rp.MUST_EXCLUDE)
     assert "ai_train_no_only" not in c["exclusion_signals"]  # H7: D-P1 owner-confirmed, no switch
     assert "confirmed" in c["_dp1_note"].lower() and "h7" in c["_dp1_note"].lower()
@@ -356,6 +357,8 @@ def test_portal_text_never_reaches_the_merged_acquisition_candidates(monkeypatch
     ref = {"doi": "10.9999/synth.ref.9", "url": "https://doi.org/10.9999/synth.ref.9", "title": "OpenAlex ref",
            "openalex_id": "https://openalex.org/W9", "snippet": ""}
     monkeypatch.setattr(rp, "_default_deps", lambda c, d: net.deps(openalex_lookup=lambda s, n, t: [ref]))
+    from vera import arxiv_portal  # OD-1110-ARXIV-OPENALEX: the arXiv-seed OpenAlex lookup is offline here (no socket)
+    monkeypatch.setattr(arxiv_portal, "openalex_lookup", lambda *a, **k: None)
     scfg = {"search": {"openalex_profile": False, "europepmc": {"enabled": False}, "ddg_first": {"enabled": False}},
             "bounds": {"max_search_calls_per_job": 1}}
     s = sp.acquisition_search(lambda q, n, t: [{"doi": "10.1/seed", "openalex_id": "https://openalex.org/W1"}], scfg)
@@ -529,9 +532,9 @@ def test_unknown_adapters_in_config_are_ignored_and_disabled_inspire_never_impor
 
 
 @pytest.mark.reference_portal
-def test_inspire_adapter_ships_disabled_in_slice_1():
-    a = rp.load_config()["adapters"]["inspire_refs"]
-    assert a["enabled"] is False and "module" not in a
+def test_inspire_adapter_ships_enabled_per_owner_h9b():
+    a = rp.load_config()["adapters"]["inspire_refs"]  # PHYS-SUPPLY-1110 (was: ships disabled in slice 1)
+    assert a["enabled"] is True and "module" not in a and "H9 (b)" in a["_enabled_doc"]
 
 
 # ------------------------------------------------------------------------------------------------ security review fixes

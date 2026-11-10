@@ -9,6 +9,7 @@ from tests import acq_support as A
 from tests import arxiv_synth as X
 from vera import arxiv_fulltext, auto_acquire, search_providers, work_key
 
+
 PMC = "PMC7300031"
 E1 = {"title": "SYNTHETIC alpha", "doi": "10.9999/oa3c.a", "pmcid": PMC, "provider": "europepmc",
       "acq_source": "europepmc", "url": "https://doi.org/10.9999/oa3c.a"}
@@ -71,17 +72,19 @@ def test_annotate_provenance_single_event_and_no_link():
 
 @pytest.mark.parametrize("m,annotated", [("on", True), ("shadow", False), ("off", False)])
 def test_evaluate_candidate_annotates_only_when_on(monkeypatch, mode, m, annotated):
+    """ARXIV-PORTAL-1110 (review R2): re-based on a Europe PMC candidate (the live route); was an arXiv candidate."""
     mode(m)
-    monkeypatch.setattr(arxiv_fulltext, "evaluate", lambda *a: (_plan(), None))
+    monkeypatch.setattr(auto_acquire, "_evaluate_europepmc", lambda *a: (_plan(), None))
     deps = types.SimpleNamespace(lookup=types.SimpleNamespace(known=lambda *a, **k: False))
-    cand = {"url": X.ABS_URL, "doi": X.DOI, "identifier": f"arXiv:{X.AID}{X.VER}", "title": "SYNTHETIC preprint",
+    doi = "10.9999/oa3c.epmc"
+    cand = {"url": f"https://doi.org/{doi}", "doi": doi, "pmcid": "PMC7300321", "title": "SYNTHETIC article",
             "acq_source": "openalex"}
-    plan, _ = auto_acquire.evaluate_candidate(auto_acquire.Job(A.Q_EPI, "test"), 0.5, X.DOI, cand, None, A.cfg(), deps,
+    plan, _ = auto_acquire.evaluate_candidate(auto_acquire.Job(A.Q_EPI, "test"), 0.5, doi, cand, None, A.cfg(), deps,
                                               {}, {}, clock=lambda: 0.0)
     p = plan["source"]["provenance"]["acquisition"]
     assert ("discovered_by" in p) is annotated
     if annotated:
-        assert p["work_key"] == f"arxiv:{X.AID}" and p["discovered_by"][0]["provider"] == "openalex"
+        assert p["work_key"] == f"doi:{doi}" and p["discovered_by"][0]["provider"] == "openalex"
 
 
 def test_new_keys_stay_inside_reader_ignored_acquisition_record():

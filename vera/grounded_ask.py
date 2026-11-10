@@ -208,12 +208,15 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
         if on_topic is not None and not on_topic(f"{r.get('title') or ''} {snippet or ''}"):
             n_off += 1
             continue
-        if not snippet:
-            if r.get("discovered_via"):  # a traced original without a free abstract: show it, never ground on it
+        from vera import arxiv_portal
+        arxiv_only = not isinstance(r.get("dar_span"), dict) and arxiv_portal.is_arxiv_only_work(r)
+        # OD-1110-ARXIV-ABSTRACT: an arXiv-only work's abstract is never grounding (arXiv is a portal to sources)
+        if not snippet or arxiv_only:
+            if r.get("discovered_via") or arxiv_only:  # listed (and handed to acquisition), never grounded on
                 seen.add(key)
                 unused.append({"title": clean_text(r.get("title"), 300) or url, "url": url,
                                "published": (str(r.get("published"))[:10] if r.get("published") else None),
-                               "discovered_via": str(r["discovered_via"]),
+                               "discovered_via": str(r.get("discovered_via") or "arXiv portal"),
                                **{k: r[k] for k in ("doi", "pmcid", "openalex_id", "doaj_id", "provider") if r.get(k)}})  # identifiers for acquisition only; traced_sources shows title/url/published
             continue
         seen.add(key)

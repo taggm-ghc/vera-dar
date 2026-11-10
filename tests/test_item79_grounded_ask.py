@@ -37,7 +37,8 @@ def test_fix_citations(answer, n, expected, removed):
 
 
 def test_retrieve_keeps_abstracts_resolves_links_and_lists_traced_originals():
-    results = [{"url": "https://arxiv.org/abs/1", "title": "Direct", "snippet": "abstract text", "published": "2025-01-02T00"},
+    # OD-1110-ARXIV-ABSTRACT: was an arxiv.org abstract; an arXiv-only work is never grounding now (portal only)
+    results = [{"url": "https://journal.example/abs/1", "title": "Direct", "snippet": "abstract text", "published": "2025-01-02T00"},
                {"url": "https://news.example/a", "title": "News", "snippet": ""},
                {"url": "https://news.example/b", "title": "News 2", "snippet": ""}]
 

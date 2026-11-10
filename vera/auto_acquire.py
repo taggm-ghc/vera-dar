@@ -675,6 +675,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             from vera import acq_discovered
             if not acq_discovered._host_ok(current, allowed):  # CONTROL-GAPS-1107 r2: every path (userinfo, port)
                 raise _Stop(acq_config.reason(cfg, "host"))
+            if not want_json:  # PORTAL-RULE-1110 CP3: a full-text hop must be ORIGINAL / RoR / a resolver (metadata calls are identifiers only)
+                from vera import host_role
+                if not host_role.is_hop_allowed(current, "store"):
+                    raise _Stop(acq_config.reason(cfg, "portal"))
             if chain is not None:  # P0-5 (new path only)
                 if acq_discovered._norm(current) in visited:
                     raise _Stop(acq_config.reason(cfg, "cycle"))
@@ -737,6 +741,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 resp = None
                 continue
             break
+        if not want_json:  # PORTAL-RULE-1110: the final host must itself be ORIGINAL / RoR (plus the allowlist above)
+            from vera import host_role
+            if not host_role.is_evidence_allowed(current, "store"):
+                raise _Stop(acq_config.reason(cfg, "portal"))
         if resp.status_code != 200:
             if resp.status_code == 429:
                 # H5-CRAWL-1107: a server 429 is a rate limit, not a failed attempt (owner rule: 429/cooldown tries
@@ -1108,6 +1116,12 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
                 drops[id(c)] = why_no
             continue
         ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
+        from vera import arxiv_portal
+        if arxiv_portal.is_seed(c, cfg):  # ARXIV-PORTAL-1110: an arXiv record is a portal entry, never read
+            count(acq_config.reason(cfg, "arxiv_portal"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "arxiv_portal")
+            continue
         why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
         if why:
             count(acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence"))
@@ -1212,6 +1226,16 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     return cut
 
 
+def portal_meta(cand: dict, doi) -> dict:
+    """PORTAL-RULE-1110: the record-level fields host_role.role_for_record reads (DOI, source flag, type, pub types).
+    No URL: a candidate's own url may be a portal id (an OpenAlex work) that is only how it was found."""
+    c = cand if isinstance(cand, dict) else {}
+    oa = c.get("oa") if isinstance(c.get("oa"), dict) else {}
+    return {"doi": doi or c.get("doi") or "", "source": c.get("source") or oa.get("source") or "",
+            "source_type": c.get("source_type") or c.get("type") or "", "pub_types": c.get("pub_types") or c.get("pubTypeList") or [],
+            "is_preprint": c.get("is_preprint")}
+
+
 def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: dict, deps: Deps, icfg: dict,
                        fdcfg: dict, clock=time.monotonic, deadline: float | None = None, dur: dict | None = None,
                        min_spans: int | None = None):
@@ -1222,9 +1246,17 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     dur = {} if dur is None else dur
     if deps.lookup.known(doi, cand.get("url"), (isbn or {}).get("isbn")):
         raise _Stop(acq_config.reason(cfg, "in_corpus"))
+    from vera import host_role  # PORTAL-RULE-1110 CP3b: record-level role (preprint DOI prefix, Europe PMC PPR, preprint type), no request
+    if host_role.role_for_record(portal_meta(cand, doi)).role in ("PORTAL", "EXCLUDED"):
+        raise _Stop(acq_config.reason(cfg, "portal"))
     from vera import fulltext_routes  # OA-4: route registry (arXiv first, Europe PMC the default; unchanged order)
     route, cand, doi = fulltext_routes.select(cand, doi, cfg)
     plan, isbn = route.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur, min_spans)
+    if cand.get("portal_via"):  # ARXIV-PORTAL-1110: found through an arXiv record ("via arXiv <id>"), read on its own host
+        try:
+            plan["source"]["provenance"]["acquisition"]["portal_via"] = str(cand["portal_via"])
+        except Exception:  # noqa: BLE001  (a label never blocks an acquisition)
+            logger.warning("portal_via provenance label skipped")
     from vera import work_key  # OA-3c: discovery events + version link in the provenance JSON (mode "on" only)
     if work_key.mode() == "on":
         try:

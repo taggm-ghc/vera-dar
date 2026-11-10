@@ -380,6 +380,7 @@ def test_3b_ddg_pmc_link_is_mapped_to_doi_and_merged_with_openalex(world):
 
 
 # ============================================================================================================ 4
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins ranking with the dormant arXiv route on
 def test_4_source_diversity_under_candidate_caps_arxiv_does_not_crowd_out_others(world):
     cap = int(world.rig.cfg["bounds"]["max_candidates_resolved"])
     world.p.beh[AX] = [ax_rec(i) for i in range(1, cap + 4)]  # arXiv answers first and has more than the cap

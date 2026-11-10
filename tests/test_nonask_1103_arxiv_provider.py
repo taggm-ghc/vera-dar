@@ -4,6 +4,9 @@ import copy
 from tests import acq_support as A
 from vera import acq_config, auto_acquire, search_providers as sp
 
+import pytest
+
+
 Q = "llm multi agent orchestration frameworks"
 
 
@@ -193,6 +196,7 @@ def _pool(arxiv_route, ax):
     return cfg, oa + ep + [ax]
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_full_pool_arxiv_candidate_is_fetched_when_route_on_and_not_when_off():
     ax = {"provider": "arxiv", "arxiv_id": "2401.00001", "doi": "10.48550/arxiv.2401.00001",
           "title": "LLM multi agent orchestration frameworks", "snippet": "multi agent orchestration with LLM",

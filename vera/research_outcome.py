@@ -20,6 +20,7 @@ TERMINAL_REASONS = (
     "deadline_reached", "candidate_cap", "doc_budget_reached", "quota", "fetch_timeout", "unreachable",
     "duplicate",  # P0DTA-DIAG: an in-request duplicate of another candidate (R-ACQ-DUPLICATE)
     "crawl_delay",  # P0DTA-ARXFIX C: an arXiv crawl-delay wait did not fit the remaining time (queued, not a budget stop)
+    "portal",  # ARXIV-PORTAL-1110: a portal record (arXiv), followed to original sources, never read: not a failure
 )
 # Unfinished-candidate classes that were budget/limit stops of this request (not source failures).
 LIMIT_REASONS = ("budget_exhausted", "deadline_reached", "candidate_cap", "doc_budget_reached")
@@ -52,6 +53,8 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
     "R-ACQ-TDM": "no_route",  # CONTROL-GAPS-1107: TDM reservation (tdmrep.json, header or meta)
+    "R-ACQ-PORTAL": "portal",  # PORTAL-RULE-1110: any portal host or record (host_role), never stored or read as a source
+    "R-ACQ-ARXIV_PORTAL": "portal",  # ARXIV-PORTAL-1110: an arXiv record is a portal, never read as a source
     # API-ALLOW-1107: the API is not permitted (config/api_permissions.json); nothing was sent
     "R-API-DENIED": "no_route", "R-API-COND": "no_route", "R-API-SCOPE": "no_route",
     # fetch/transport failures

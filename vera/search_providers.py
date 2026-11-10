@@ -529,6 +529,29 @@ class OpenAlexProvider:
                 err = ProviderUnavailable(msg)
             raise err from None
 
+    def metadata_get(self, params: dict, timeout_s: float):
+        """ARXIV-PORTAL-1110 (OD-1110-ARXIV-OPENALEX): ONE targeted metadata call (filter + select, no search text)
+        through the same daily budget and visitor/seed split (_spend), transport (API allowlist + openalex rate portal)
+        and optional OPENALEX_API_KEY as call(). The key is never logged."""
+        self._spend()
+        tx = self._transport or openalex_default_transport
+        key = openalex_api_key(self.s)
+        if not key:
+            return tx(self.endpoint, dict(params), {"User-Agent": USER_AGENT}, timeout_s)
+        from vera import acq_urls
+        try:
+            with acq_urls.quiet_urllib3([key]):
+                resp = tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+            _scrub_resp_url(resp, key)
+            return resp
+        except Exception as e:  # noqa: BLE001
+            msg = acq_urls.redact_text(str(e), [key])
+            try:
+                err = type(e)(msg)
+            except Exception:  # noqa: BLE001
+                err = ProviderUnavailable(msg)
+            raise err from None
+
     def parse(self, resp, n: int) -> list[dict]:
         body = resp.text or ""
         if len(body.encode("utf-8", "ignore")) > self.max_bytes:
@@ -842,9 +865,13 @@ _WIKI_HOST = re.compile(r"(?:^|\.)(?:wikipedia|wikimedia|wikidata)\.org$", re.I)
 def _is_wikipedia(url: str) -> bool:
     """Wikipedia is a portal only (owner 2026-10-22): its pages are never fetched, followed or used as evidence here."""
     try:
-        return bool(_WIKI_HOST.search(urlsplit(str(url or "")).hostname or ""))
+        if _WIKI_HOST.search(urlsplit(str(url or "")).hostname or ""):
+            return True
     except ValueError:
         return False
+    from vera import host_role  # PORTAL-RULE-1110: wiki-family portals the regex does not name (e.g. wikinews, mirrors)
+    hr = host_role.role_for_url(url)
+    return hr.role == "PORTAL" and "wik" in hr.rule_id
 
 
 def _landing_url_ok(u: str) -> bool:
@@ -1811,6 +1838,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             from vera import reference_portal  # off = no work; shadow = background, logs only; on = merged last
             merged = reference_portal.extend(question, merged, base=base, ddg_raw=got.get("ddg"), clock=clock,
                                              deadline=t_end)
+        from vera import arxiv_portal  # ARXIV-PORTAL-1110: arXiv seeds -> published version + references (metadata only)
+        merged = arxiv_portal.extend(question, merged, clock=clock, deadline=t_end)
         by = {}
         for c in merged:
             by[acq_source(c)] = by.get(acq_source(c), 0) + 1

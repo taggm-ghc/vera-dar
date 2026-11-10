@@ -25,6 +25,7 @@ from tests._pipeline_support import (ABSTRACT_SENTINEL, DOI, PMC, PRIVATE_IP, Q_
                                      passages_sent_to_model, reason_code, rig, stored_text, GROUND, PRICING)
 from vera import acq_config, acq_discovered, ask_service, auto_acquire, grounded_ask, inline_acquire, selective_fetch
 
+
 EPMC_SEARCH = "/rest/search"
 EPMC_FULLTEXT = f"/{PMC}/fullTextXML"
 
@@ -92,6 +93,7 @@ def test_B_neg_nd_licensed_record_is_not_admitted_and_says_why(rig):
     assert e and e["outcome"] != "admitted" and e.get("reason", "").startswith(("R-ACQ-", "R-LIC-"))  # 7da574a ND refusal code is R-LIC-REJECT
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_B_neg_preprint_without_licence_route_is_link_only_not_fetched(rig):
     web, _ = epmc_web()
     rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour (route on: tests/test_arxiv_fulltext.py)

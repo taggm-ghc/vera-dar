@@ -14,9 +14,18 @@ from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from tests.test_dar_inline_acquire import rig  # noqa: F401  (fixture)
 from vera import acq_config, acq_discovered, ask_service, auto_acquire, inline_acquire
 
+
 DOI = "10.9999/acq.epi4"
 PMC = "PMC1234567"
 PUB = "pub.example.org"  # test-only publisher host
+
+
+@pytest.fixture(autouse=True)
+def _pub_is_original():  # PORTAL-RULE-1110: the store lanes deny unknown hosts, so the test publisher is a listed ORIGINAL
+    from tests import host_role_support as HR
+    HR.install(original=(PUB,))
+    yield
+    HR.reset()
 W1 = "https://openalex.org/W111"
 CC0 = {"metadata": {"id": "CC0-1.0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}}
 
@@ -132,6 +141,7 @@ def test_t1_openalex_discovered_source_resolves_to_accessible_full_text():
 
 
 # ------------------------------------------------------------------------------------------------ test 2 (D1)
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_t2_arxiv_preprint_without_licence_route_keeps_link_with_explicit_reason():
     web, _raw = epmc_web()
     c = cfg_on()
@@ -321,7 +331,7 @@ def test_t7_unsafe_urls_are_rejected_before_any_request(url):
 
 
 def test_t7_private_address_and_offlist_redirect_are_rejected():
-    a = "https://www.ebi.ac.uk/x"
+    a = "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1/fullTextXML"  # a real full-text path (host_role: RoR)
     web = Router({}, {}, {a: redirect("https://evil.example.net/y")})
     with pytest.raises(auto_acquire._Stop) as e:
         _gg(web, a, chain=[])
@@ -392,6 +402,7 @@ def test_p2_untrusted_discovery_strings_are_bounded_and_control_free():
 
 
 # ------------------------------------------------------------------------------------------------ test 10
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_t10_unsuccessful_acquisition_cannot_generate_an_answer(rig):
     rig.cfg["inline"]["use_discovered"] = True
     rig.cfg["arxiv_route"]["enabled"] = False  # ARX-A2: route-off behaviour (route on: tests/test_arxiv_fulltext.py)
@@ -534,6 +545,7 @@ def test_provenance_gate_a_is_the_computed_decision():
     assert g["decision"] == "fetch" and "score" not in json.dumps(g)
 
 
+@pytest.mark.usefixtures("legacy_arxiv_route")  # ARXIV-PORTAL-1110: pins the dormant arXiv evidence route
 def test_held_records_do_not_use_the_cap_and_records_past_it_are_deferred():
     c = cfg_on()
     c["inline"]["discovered_max"] = 1
