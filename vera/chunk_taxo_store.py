@@ -155,10 +155,13 @@ def probe_schema(conn) -> tuple[bool, bool, bool]:
     return bool(row[0]), bool(row[1]), bool(row[2])
 
 
-def fetch_vectors(conn, ids: list[int]) -> dict[int, tuple[str, str, list[float]]]:
+def fetch_vectors(conn, ids: list[int]) -> dict[int, tuple[str, str, "np.ndarray"]]:
+    """One page of stored vectors as compact float32 arrays (4 bytes per value, never Python float lists). Callers pass a
+    bounded page of ids; the whole set is never decoded at once."""
+    import numpy as np  # noqa: PLC0415
     if not ids:
         return {}
-    return {int(r[0]): (str(r[1]), str(r[2]), [float(x) for x in r[3]])
+    return {int(r[0]): (str(r[1]), str(r[2]), np.asarray(r[3], dtype=np.float32))
             for r in run_sql(conn, "vectors_select", {"ids": list(ids)}).fetchall()}
 
 

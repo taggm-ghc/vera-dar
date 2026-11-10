@@ -213,12 +213,14 @@ class Job:
                     break
                 except Exception as exc:  # noqa: BLE001
                     self._close_run("failed")
+                    self._release_buffers()
                     self._drop_engine()
                     self._set(state="error")
                     log.warning("chunk_taxo job failed: CT_JOB_ERROR (%s)", type(exc).__name__)
                     return {"state": "error", "complete": False, "rows_embedded": self.rows_embedded}
             if self._run_id is not None:
                 self._close_run("deferred")
+            self._release_buffers()  # early stop or end of pass: no chunk or vector buffer survives it
             self._drop_engine()
             self._release_embedder()
             if self._stop == "deferred":
@@ -291,8 +293,21 @@ class Job:
             self.engines_created += 1
         return self._eng
 
+    def _release_buffers(self) -> None:
+        """Drop chunk texts, vector blocks and the pending model: nothing large stays on self between passes."""
+        self._chunks, self._vecs, self._pending = [], [], None
+        self._dims = set()
+
+    def _guard(self) -> bool:
+        """RSS hard guard. On a trip: stop the pass cleanly (run() then releases every buffer) and report True."""
+        if self._read_rss() > self.rss_hard:
+            self._stop = "rss_hard"
+            self._release_buffers()
+            return True
+        return False
+
     def _reset_run(self) -> None:
-        self._chunks, self._vecs = [], []
+        self._release_buffers()
         self._cursor = 0
         self._scan_done = False
         self._w_pos = 0
@@ -357,9 +372,12 @@ class Job:
     def _do_scan(self):
         """Read a page of spans, reuse stored vectors whose text sha256 and model match, embed the rest in small batches and
         commit each batch (progress = rows in tax_chunk_vectors). Stops cleanly on the row, time or RSS bounds."""
+        import numpy as np  # noqa: PLC0415
         model_name = str(getattr(self._emb, "name", None) or self.cfg.get("embedder_model") or "embedder")
         read = 0
         while read < self.cap:
+            if self._guard():  # per page, so the reuse path (all vectors stored) is guarded too
+                return
             lim = min(self.page, self.cap - read)
             with self._engine().connect() as conn:
                 rows = store.fetch_spans(conn, self._cursor, lim, self.chars)
@@ -372,10 +390,9 @@ class Job:
                 if self.rows_embedded >= self.max_rows:
                     self._stop = "max_rows"
                     return
-                rss = self._read_rss()
-                if rss > self.rss_hard:
-                    self._stop = "rss_hard"
+                if self._guard():
                     return
+                rss = self._read_rss()
                 if rss > self.rss_soft and self.batch > 1:
                     self.batch = max(1, self.batch // 2)
                 part = todo[i:i + min(self.batch, self.max_rows - self.rows_embedded)]
@@ -393,13 +410,22 @@ class Job:
                     if self._run_id is not None:
                         store.run_sql(conn, "job_run_neurons", {"run_id": self._run_id, "neurons": _ceil_int(self._pass_neurons)})
                 for rec in recs:
-                    fresh[rec["span_id"]] = rec["vec"]
+                    fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
+                del recs, vecs
                 self.rows_embedded += len(part)
                 i += len(part)
                 self._read_rss()
-            for sid, src, txt in rows:
-                self._chunks.append({"span_id": sid, "source_id": src, "text": txt})
-                self._vecs.append(fresh[sid] if sid in fresh else have[sid][2])
+            if rows:  # one float32 block per page; the whole set is joined once at build (never a list of float lists)
+                first = fresh[rows[0][0]] if rows[0][0] in fresh else have[rows[0][0]][2]
+                blk = np.zeros((len(rows), len(first)), dtype=np.float32)
+                for k, (sid, src, txt) in enumerate(rows):
+                    self._chunks.append({"span_id": sid, "source_id": src, "text": txt})
+                    v = fresh[sid] if sid in fresh else have[sid][2]
+                    self._dims.add(len(v))
+                    if len(v) == blk.shape[1]:
+                        blk[k] = v
+                self._vecs.append(blk)
+            del have, fresh
             if rows:
                 self._cursor = rows[-1][0]
                 read += len(rows)
@@ -407,7 +433,7 @@ class Job:
                 self._scan_done = True
                 break
         if self._scan_done:
-            if len({len(v) for v in self._vecs}) > 1:
+            if len(self._dims) > 1:
                 raise RuntimeError("dim_mismatch")  # a model/dim change leaves mixed vectors: refuse, re-embed on the next pass
             if not self._chunks:
                 self._set(state="idle", reasons=["no_chunks"], last_run=self._wall())
@@ -416,14 +442,14 @@ class Job:
             self._phase = "build"
 
     def _matrix(self):
-        try:
-            import numpy as np  # noqa: PLC0415
-            return np.asarray(self._vecs, dtype="float32")
-        except Exception:  # noqa: BLE001
-            return self._vecs
+        import numpy as np  # noqa: PLC0415
+        blocks, self._vecs = self._vecs, []  # blocks are freed as soon as they are joined
+        return blocks[0] if len(blocks) == 1 else np.concatenate(blocks, axis=0)
 
     def _do_build(self):
         core = self.core
+        if self._guard():  # before the clustering step
+            return 0.0
         vecs = self._matrix()
         prior = self._load_prior() if self._mode in ("write", "curator") else None
         params = self.cfg.get("params") if isinstance(self.cfg.get("params"), dict) else self.cfg
@@ -713,7 +739,7 @@ class Job:
         self._run_id = None
         self.fails = 0
         self._drop_engine()
-        self._chunks, self._vecs = [], []  # texts and vectors are not kept after a run
+        self._release_buffers()  # texts and vectors are not kept after a run
         self._phase = "idle"
         self._set(state=getattr(self, "_pending_done", None) or "complete", last_run=self._wall(), metrics=metrics)
         log.info("chunk_taxo run complete version=%s rows_embedded=%d peak_rss_mb=%.0f", version[:32], self.rows_embedded, self.peak_rss)
