@@ -50,11 +50,12 @@ def test_retrieve_keeps_abstracts_resolves_links_and_lists_traced_originals():
                  "discovered_via": "news.example"}]
 
     sources, unused = ga.retrieve_all("q", CFG, search=lambda q: results, resolver=resolver)
-    assert [s["title"] for s in sources] == ["Direct", "Original"] and [s["n"] for s in sources] == [1, 2]
+    # V5 F1: the abstract-less traced original is listed too (and still handed to acquisition via unused)
+    assert [s["title"] for s in sources] == ["Direct", "Original", "No abstract"] and [s["n"] for s in sources] == [1, 2, 3]
     assert sources[0]["published"] == "2025-01-02" and sources[1]["discovered_via"] == "news.example"
     assert [u["title"] for u in unused] == ["No abstract"]
     # PORTAL-WIRE-B-1110: every search/index record is a listed discovery entry, never evidence
-    assert [s["evidence_eligible"] for s in sources] == [False, False] and ga.grounding_sources(sources) == []
+    assert [s["evidence_eligible"] for s in sources] == [False] * 3 and ga.grounding_sources(sources) == []
 
 
 def test_retrieve_search_failure_returns_nothing():
@@ -220,3 +221,21 @@ def _legacy_concatenated_notes(monkeypatch):
     tests/test_ans_layers_s1.py."""
     from vera import answer_contract
     monkeypatch.setattr(answer_contract, "notes_separate", lambda *a, **k: False)
+
+
+def test_resolved_original_with_the_real_record_shape_is_listed_and_never_grounds():
+    """PORTAL-WIRE-B-V5 F1: source_resolver._record (empty snippet, evidence_eligible False) is what the resolver returns;
+    the stub elsewhere returns an abstract and hid the loss of the reading list entry."""
+    from vera import answer_contract as contract
+    orig = sr._record("10.1234/orig", "Quark confinement on the lattice", "2024-05-01")
+    assert orig["snippet"] == "" and orig["evidence_eligible"] is False
+    linked = [{"url": "https://news.example/a", "title": "News", "snippet": ""}]
+    sources, unused = ga.retrieve_all("quark confinement lattice", CFG, search=lambda q: linked,
+                                      resolver=lambda r, c, d: [dict(orig, discovered_via="news.example")])
+    assert [s["title"] for s in sources] == ["Quark confinement on the lattice"] and len(unused) == 1  # acquisition keeps it
+    assert sources[0]["evidence_eligible"] is False and sources[0]["snippet"] == ""
+    assert ga.grounding_sources(sources) == [] and "Quark" not in str(ga.messages_for("quark confinement lattice", sources))
+    cands = ga.public_candidates(sources)
+    assert contract.result_kind_for(cands) != "answer"
+    res = contract.reading_list_result(cands, 0, 0, sources=sources)
+    assert "Quark confinement on the lattice" in str(res) and "orig" in str(res)

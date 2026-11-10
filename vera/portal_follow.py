@@ -157,8 +157,17 @@ class Lookups:
     (None, via); openalex(flt, counts, deadline, max_refs) -> {"doi", "locations", "refs"} | None, or None when no
     OpenAlex lookup is allowed."""
 
-    def __init__(self, arxiv: Callable | None, openalex: Callable | None):
+    def __init__(self, arxiv: Callable | None, openalex: Callable | None, cost: Callable | None = None):
         self.arxiv, self.openalex = arxiv, openalex
+        # cost(kind, refs_on) -> worst-case HTTP calls of one lookup (kind "arxiv" | "openalex"); default: OpenAlex 1 (+1 for
+        # the references batch), arXiv 1
+        self.cost = cost or (lambda kind, refs_on: (1 + int(refs_on)) if kind == "openalex" else 1)
+
+
+def http_calls(counts: dict) -> int:
+    """Actual metadata HTTP requests counted so far: OpenAlex (oa_calls, both calls of a work) + the INSPIRE arXiv lookup
+    (arxivportal_calls). Cache hits and cooldown skips are not requests and are not counted."""
+    return int(counts.get("oa_calls", 0)) + int(counts.get("arxivportal_calls", 0))
 
 
 def default_lookups(acq=None, *, clock: Callable = time.monotonic, get=None, openalex_provider=None) -> Lookups:
@@ -183,7 +192,12 @@ def default_lookups(acq=None, *, clock: Callable = time.monotonic, get=None, ope
                 left = min(left, deadline - clock())
             return arxiv_portal.openalex_work(flt, max_refs, left, counts, clock=clock, provider=openalex_provider,
                                               cache_ttl_s=ttl, deadline=deadline)
-    return Lookups(ax, oa)
+    def cost(kind, refs_on):
+        oa_cost = 1 + int(refs_on)
+        if kind == "openalex":
+            return oa_cost
+        return int(bool(sw["insp"])) + (oa_cost if sw["oa_on"] else 0)  # INSPIRE, then OpenAlex when it does not know it
+    return Lookups(ax, oa, cost)
 
 
 def _bump(counts: dict, k: str, n: int = 1) -> None:
@@ -205,13 +219,13 @@ def follow(question: str, records, cfg: dict | None = None, *, lookups: Lookups 
     end = end if deadline is None else min(end, deadline)
     have = set(have or ())
     seen: set = set()  # per question: cycle detection and de-duplication across records
-    lookups_used = [0]
+    base_calls = http_calls(counts)  # the cap counts actual HTTP requests (INSPIRE + OpenAlex), not expander calls
 
-    def budget_ok() -> bool:
+    def budget_ok(kind: str, refs_on: bool) -> bool:
         if clock() >= end:
             _bump(counts, "deadline")
             return False
-        if lookups_used[0] >= cfg["max_lookups_per_question"]:
+        if http_calls(counts) - base_calls + lookups.cost(kind, refs_on) > cfg["max_lookups_per_question"]:
             _bump(counts, "lookup_cap")
             return False
         return True
@@ -295,8 +309,7 @@ def follow(question: str, records, cfg: dict | None = None, *, lookups: Lookups 
                             _bump(counts, "dead_preprint_doi")  # no route for non-arXiv preprints yet (plan D-b)
                         continue
                     got = None
-                    if lookups.openalex is not None and budget_ok():
-                        lookups_used[0] += 1
+                    if lookups.openalex is not None and budget_ok("openalex", refs_ok):
                         got = lookups.openalex(f"doi:https://doi.org/{val}", counts, end,
                                                cfg["max_refs_per_record"] if refs_ok else 0)
                     if got and got.get("locations"):
@@ -310,10 +323,9 @@ def follow(question: str, records, cfg: dict | None = None, *, lookups: Lookups 
                                 break
                             push("doi", d, "reference", "reference", False)
                 elif kind == "arxiv":
-                    if lookups.arxiv is None or not budget_ok():
+                    if lookups.arxiv is None or not budget_ok("arxiv", refs_ok):
                         _bump(counts, "dead_arxiv_no_lookup")
                         continue
-                    lookups_used[0] += 1
                     got, lk = lookups.arxiv(val, counts, end, cfg["max_refs_per_record"] if refs_ok else 0)
                     if not got:
                         _bump(counts, "dead_arxiv_unknown")
@@ -325,10 +337,9 @@ def follow(question: str, records, cfg: dict | None = None, *, lookups: Lookups 
                         for d in list(refs)[: cfg["max_refs_per_record"]]:
                             push("doi", d, f"arXiv {val} reference ({lk})", "reference", False)
                 elif kind == "openalex":
-                    if lookups.openalex is None or not budget_ok():
+                    if lookups.openalex is None or not budget_ok("openalex", refs_ok):
                         _bump(counts, "dead_openalex_no_lookup")
                         continue
-                    lookups_used[0] += 1
                     got = lookups.openalex(f"openalex:{val}", counts, end,
                                            cfg["max_refs_per_record"] if refs_ok else 0)
                     if not got:

@@ -22,12 +22,16 @@ class Fake:
 
     def arxiv(self, aid, counts, deadline, max_refs):
         self.calls.append(("arxiv", aid))
+        counts["arxivportal_calls"] = counts.get("arxivportal_calls", 0) + 1  # one INSPIRE request (as the real lookup counts)
         got = self.arxiv_map.get(aid)
         return (got[0], list(got[1])[:max_refs]) if got else None, "inspire"
 
     def openalex(self, flt, counts, deadline, max_refs):
         self.calls.append(("openalex", flt))
         w = self.works.get(flt)
+        counts["oa_calls"] = counts.get("oa_calls", 0) + 1  # as openalex_work: 1 request, +1 for a references batch
+        if w is not None and max_refs and w.get("refs"):
+            counts["oa_calls"] += 1
         return None if w is None else {**w, "refs": list(w.get("refs") or ())[:max_refs]}
 
 
@@ -118,7 +122,7 @@ def test_budgets_records_lookups_handoffs_and_deadline():
                                                           lookups=fake.lookups, clock=lambda: 0.0)[0]]  # not relevant
     fake = Fake(works={f"doi:https://doi.org/10.1000/q{i}": {"doi": f"10.1000/q{i}", "locations": [], "refs": []}
                        for i in range(3)})
-    _, counts = run(recs[:3], fake, max_lookups_per_question=2)
+    _, counts = run(recs[:3], fake, max_lookups_per_question=3)  # HTTP-call cap: each lookup reserves its worst case (2 with references): 2 fit
     assert len([c for c in fake.calls if c[0] == "openalex"]) == 2 and counts["lookup_cap"] == 1
     fake = Fake(works={"doi:https://doi.org/10.1000/top": {"doi": "10.1000/top", "locations": [],
                                                        "refs": [f"10.1000/r{i}" for i in range(9)]}}, openalex=True)
@@ -177,3 +181,27 @@ def test_extend_never_follows_arxiv_seeds_twice(monkeypatch):
 ])
 def test_ids_in_link(url, ids):
     assert pf.ids_in_link(url) == ids
+
+
+def test_lookup_cap_counts_http_calls_not_expander_calls():
+    """Review F2: three records whose works have references made 7 HTTP calls under the old expander-call cap of 6."""
+    recs = [rec(doi=f"10.1000/q{i}", title=f"Quark paper {i}") for i in range(3)]
+    for cap in range(1, 9):
+        fake = Fake(works={f"doi:https://doi.org/10.1000/q{i}": {"doi": f"10.1000/q{i}", "locations": [],
+                                                                "refs": [f"10.1000/r{i}"]} for i in range(3)})
+        out, counts = run(recs, fake, max_lookups_per_question=cap)
+        assert pf.http_calls(counts) <= cap, (cap, counts)  # actual requests (fake counts like the real lookups)
+    fake = Fake(works={f"doi:https://doi.org/10.1000/q{i}": {"doi": f"10.1000/q{i}", "locations": [],
+                                                            "refs": [f"10.1000/r{i}"]} for i in range(3)})
+    out, counts = run(recs, fake)  # shipped cap 6
+    assert pf.http_calls(counts) <= 6 and counts["lookup_cap"] >= 1
+    assert {c["doi"] for c in out} >= {"10.1000/q2"}  # records past the cap are still handed off as identifiers
+
+
+def test_default_lookups_cost_models_inspire_plus_openalex(monkeypatch):
+    sw = {"insp": True, "oa_on": True, "pc": {}, "rcfg": {"caps": {"timeout_s": 5}}}
+    monkeypatch.setattr(arxiv_portal, "switches", lambda acq=None: sw)
+    lk = pf.default_lookups()
+    assert lk.cost("arxiv", True) == 3 and lk.cost("arxiv", False) == 2 and lk.cost("openalex", True) == 2
+    sw.update(oa_on=False)
+    assert pf.default_lookups().cost("arxiv", True) == 1

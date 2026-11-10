@@ -448,3 +448,15 @@ def test_s2_preprint_prefixes_excluded_even_when_marked_published(monkeypatch, d
 
 def test_s2_prefixes_live_in_config():
     assert "10.1101/" in arxiv_portal._preprint_prefixes() and "10.2139/" in arxiv_portal._preprint_prefixes()
+
+
+def test_preprint_doi_prefixes_agree_between_config_and_host_roles():
+    """Review F3: one list. Every arxiv_portal preprint prefix (auto_acquire.json) must be a PORTAL DOI in host_roles.json."""
+    from vera import host_role
+    sample = {"10.1101/": "2020.01.01.123456", "10.48550/": "arXiv.2101.00001", "10.21203/": "rs.3.rs-1/v1",
+              "10.20944/": "preprints202001.0001.v1", "10.31219/": "osf.io/abc", "10.31234/": "osf.io/abc",
+              "10.31235/": "osf.io/abc", "10.2139/": "ssrn.1", "10.26434/": "chemrxiv-1"}
+    prefixes = arxiv_portal._preprint_prefixes()
+    assert prefixes and set(prefixes) == set(sample), "update this test and host_roles.json together"
+    for p in prefixes:
+        assert host_role.role_for_record({"doi": p + sample[p]}).role == "PORTAL", p

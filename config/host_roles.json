@@ -1422,7 +1422,7 @@
   {
    "id": "doi-preprint",
    "role": "PORTAL",
-   "regex": "^(?:10\\.48550/|10\\.1101/(?:\\d{4}\\.\\d{2}\\.\\d{2}\\.)?\\d{6,}(?:v\\d+)?$|10\\.2139/ssrn|10\\.21203/rs\\.|10\\.20944/preprints|10\\.31219/osf|10\\.31234/osf|10\\.26434/chemrxiv)",
+   "regex": "^(?:10\\.48550/|10\\.1101/(?:\\d{4}\\.\\d{2}\\.\\d{2}\\.)?\\d{6,}(?:v\\d+)?$|10\\.2139/ssrn|10\\.21203/rs\\.|10\\.20944/preprints|10\\.31219/osf|10\\.31234/osf|10\\.31235/osf|10\\.26434/chemrxiv)",
    "basis": "preprint-server DOI prefixes (moved from acq_discovered._PREPRINT_DOI)"
   }
  ],

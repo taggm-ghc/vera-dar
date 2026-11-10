@@ -32,7 +32,7 @@ def test_unused_entry_without_abstract_carries_identifiers_only_internally():
     cfg = {"num_results": 5, "snippet_max_chars": 1500, "providers": [], "deadline_s": 10,
            "resolve": {"enabled": True, "max_results_to_resolve": 4, "deadline_s": 5}}
     out, unused = grounded_ask.retrieve_all("q", cfg, search=lambda q: linked, resolver=lambda r, c, d: orig)
-    assert out == [] and unused[0]["doi"] == "10.1/abc" and unused[0]["pmcid"] == "PMC123456"
+    assert len(out) == 1 and out[0]["evidence_eligible"] is False and unused[0]["doi"] == "10.1/abc" and unused[0]["pmcid"] == "PMC123456"
 
 
 def test_pmcid_is_copied_to_the_numbered_source_and_to_the_public_candidate():

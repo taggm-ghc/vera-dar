@@ -236,13 +236,16 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
         arxiv_only = not isinstance(r.get("dar_span"), dict) and arxiv_portal.is_arxiv_only_work(r)
         # OD-1110-ARXIV-ABSTRACT: an arXiv-only work's abstract is never grounding (arXiv is a portal to sources)
         if not snippet or arxiv_only:
-            if r.get("discovered_via") or arxiv_only:  # listed (and handed to acquisition), never grounded on
+            if r.get("discovered_via") or arxiv_only:  # handed to acquisition; a traced original is also listed (below)
                 seen.add(key)
                 unused.append({"title": clean_text(r.get("title"), 300) or url, "url": url,
                                "published": (str(r.get("published"))[:10] if r.get("published") else None),
                                "discovered_via": str(r.get("discovered_via") or "arXiv portal"),
                                **{k: r[k] for k in ("doi", "pmcid", "openalex_id", "doaj_id", "provider") if r.get(k)}})  # identifiers for acquisition only; traced_sources shows title/url/published
-            continue
+            # PORTAL-WIRE-B-V5 (review F1): a resolved original (metadata only, empty snippet) is ALSO listed in the reading
+            # list, evidence_eligible False (never answer evidence); an arXiv-only work stays unlisted (portal)
+            if not r.get("discovered_via") or arxiv_only:
+                continue
         seen.add(key)
         src = {"n": len(out) + 1, "title": clean_text(r.get("title"), 300) or url, "url": url,
                "published": (str(r.get("published"))[:10] if r.get("published") else None),

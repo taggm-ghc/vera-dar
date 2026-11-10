@@ -30,7 +30,7 @@ def test_doaj_id_and_other_identifiers_kept_for_traced_original_without_abstract
            "discovered_via": "reference", "doi": "10.1234/abc", "pmcid": "PMC123", "openalex_id": "https://openalex.org/W9",
            "doaj_id": "doajABC123", "provider": "doaj"}
     out, unused = grounded_ask.retrieve_all("q", cfg, search=lambda q: [rec], resolver=lambda r, rc, d: [dict(r)])  # link-only record, resolved to itself
-    assert out == [] and len(unused) == 1                     # shown, never grounded on
+    assert len(out) == 1 and out[0]["evidence_eligible"] is False and len(unused) == 1                     # shown, never grounded on
     u = unused[0]
     assert u["doaj_id"] == "doajABC123", f"doaj_id dropped on the no-abstract branch; keys={sorted(u)}"
     assert (u["doi"], u["pmcid"], u["openalex_id"], u["provider"]) == ("10.1234/abc", "PMC123", "https://openalex.org/W9", "doaj")
