@@ -30,7 +30,8 @@ ARXIV_HOSTS = ("arxiv.org", "ar5iv.org", "arxiv-vanity.com", "alphaxiv.org", "xx
 
 
 def is_arxiv_host(host) -> bool:
-    h = str(host or "").strip().lower().rstrip(".")
+    from vera import host_role  # S1: one normalisation (Unicode dots, fullwidth, case, trailing dot, IDNA), not a copy
+    h, _path, _problem = host_role._split("//" + str(host or "").strip())
     return bool(h) and any(h == d or h.endswith("." + d) for d in ARXIV_HOSTS)
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
 
@@ -91,6 +92,15 @@ def _doi_of(v) -> str | None:
     return d if d and not _ARXIV_DOI.match(d) else None
 
 
+def _preprint_prefixes() -> tuple:
+    """DOI prefixes of preprint servers (config arxiv_portal.openalex.preprint_doi_prefixes), lowercased, "10.x/" form."""
+    try:
+        v = (cfg_of().get("openalex") or {}).get("preprint_doi_prefixes")
+    except Exception:  # noqa: BLE001
+        v = None
+    return tuple(p.strip().lower().rstrip("/") + "/" for p in (v or ()) if isinstance(p, str) and p.strip())
+
+
 def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clock: Callable = time.monotonic,
                     provider=None, cache_ttl_s: float = 86400.0):
     """OD-1110-ARXIV-OPENALEX (owner 2026-11-10, "Yes, targeted lookup"; "one targeted OpenAlex lookup per arXiv
@@ -136,8 +146,12 @@ def openalex_lookup(aid: str, max_refs: int, timeout_s: float, counts: dict, clo
         own: list = []
         if works:
             w = works[0]
-            own = [d for d in [_doi_of(w.get("doi"))] + [
-                _doi_of(x.get("landing_page_url")) for x in (w.get("locations") or ()) if isinstance(x, dict)] if d]
+            # S2: only a location OpenAlex marks version == "publishedVersion"; the work DOI itself is the arXiv DOI
+            # (or a preprint's) and is never taken. Preprint-server DOI prefixes (config) are excluded on top.
+            pre = _preprint_prefixes()
+            own = [d for d in (_doi_of(x.get("landing_page_url")) for x in (w.get("locations") or ())
+                               if isinstance(x, dict) and x.get("version") == "publishedVersion")
+                   if d and not d.lower().startswith(pre)]
             own = list(dict.fromkeys(own))[:1]
         got = (own, [])
     except Exception as e:  # noqa: BLE001  never retried
