@@ -35,6 +35,40 @@ _ET_AL = re.compile(r"\bet\.?\s+al\b\.?", re.IGNORECASE)
 
 
 
+# FILLER-PROPER-1109: sentence-initial imperative/auxiliary fillers: a capitalised first word of this kind is not evidence of a name.
+_LEAD_VERBS = frozenset({"explain", "describe", "tell", "give", "make", "get", "know", "did", "does", "do", "done", "doing"})
+_CAP = re.compile(r"[\"'(\[]*[A-Z][\w'-]*[\"')\].,;:?!]*$")
+_QUOTED = re.compile(r"[\"\u201c][^\"\u201d]+[\"\u201d]")
+
+
+def _name_protected(words: list) -> set:
+    """Indexes of words inside a proper-name run (>= 2 consecutive capitalised words, joined by lowercase connectors
+    of/the/and/for/de etc. is NOT done: only adjacent capitals) or inside double quotes. A sentence-initial first word
+    counts as capitalised only if it is not in _LEAD_VERBS (question words/imperatives are capitalised by position)."""
+    prot, n = set(), len(words)
+    inq = False
+    for i, w in enumerate(words):
+        if w[:1] in "\"\u201c":
+            inq = True
+        if inq:
+            prot.add(i)
+        if w[-1:] in "\"\u201d" and (len(w) > 1 or not w[:1] in "\"\u201c"):
+            inq = False
+    caps = [bool(_CAP.match(w)) and not (i == 0 and w.strip("\"'(").casefold() in _LEAD_VERBS) for i, w in enumerate(words)]
+    i = 0
+    while i < n:
+        if caps[i]:
+            j = i
+            while j < n and caps[j]:
+                j += 1
+            if j - i >= 2:
+                prot.update(range(i, j))
+            i = j
+        else:
+            i += 1
+    return prot
+
+
 def retrieval_kept_words(question: str, icfg: dict) -> list:
     """RETR-MECH-1109: the question's words for the retrieval query: generic idioms removed (search_query.drop_generic) and
     words in icfg["question_generic_terms"] removed. WHOLE words only (casefolded; a plain plural of a listed word also
@@ -45,7 +79,9 @@ def retrieval_kept_words(question: str, icfg: dict) -> list:
 
     def generic(t):
         return t in gset or (t.endswith("s") and t[:-1] in gset)
-    kept = [w for w in drop_generic(question).split() if not any(generic(t) for t in tokenize(w, icfg))]
+    words = drop_generic(question).split()
+    prot = _name_protected(words)
+    kept = [w for i, w in enumerate(words) if i in prot or not any(generic(t) for t in tokenize(w, icfg))]
     return kept if any(tokenize(w, icfg) for w in kept) else []
 
 

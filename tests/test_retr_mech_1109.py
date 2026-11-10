@@ -76,3 +76,18 @@ def test_retrieval_drop_matches_whole_words_not_prefixes():
     out = _kept("What are the de facto status quo best practices?")
     assert "facto" not in out and "best" not in out and "practices" not in out
     assert "important" not in _kept("What is important about tariffs?").split()
+
+
+def test_filler_inside_proper_name_or_quotes_is_kept():  # FILLER-PROPER-1109
+    assert "Major League Baseball" in _kept("Who runs Major League Baseball?")
+    assert "Major" in _kept("Major League Baseball history").split()
+    assert "Key" in _kept("When did the Key Bridge collapse?").split()
+    assert "Going" in _kept("What is the Going Concern doctrine?").split()
+    assert "Best" in _kept("Where is Best Buy headquartered?").split()
+    for q, w in (("Is Bank of America open?", "Bank"), ("Who is Will Smith?", "Will"),
+                 ("What is May Day?", "May")):
+        assert w in _kept(q).replace("?", "").split()
+    assert '"key signature"' in _kept('What does "key signature" mean?')
+    out = _kept("Explain Photosynthesis in the main types of plants").split()
+    assert "Explain" not in out and "main" not in out and "types" not in out and "Photosynthesis" in out
+    assert "best" not in _kept("What are the best practices for pruning?").split()
