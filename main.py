@@ -186,6 +186,19 @@ class AskRequest(APIModel):
     mode: Literal["normal"] = "normal"  # single-valued; kept for API compatibility, anything else is a 422
     # SELFQ-RELEVANCE-1108: false = "search as typed" after a clarification round (per request only; never stored)
     spell_check: bool = True
+    # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): "seed" marks a proactive seeding question sent by an authenticated API
+    # caller (X-API-Key) to POST /ask. Seed requests use only the seed share of each search service and never
+    # DuckDuckGo, and their background jobs run at low priority (vera/request_origin.py, vera/auto_acquire.py). The
+    # public UI never sends it (vera.public_mode._ask_body), and POST /ask/stream refuses it. Per request only: never
+    # stored, never tied to a caller.
+    origin: Literal["visitor", "seed"] = "visitor"
+
+
+def _req_origin(req) -> str:
+    """SEARCHCAPS-1110: the validated AskRequest.origin; anything that is not an AskRequest value (internal callers,
+    test doubles) is a visitor request."""
+    v = getattr(req, "origin", "visitor")
+    return v if isinstance(v, str) and v in ("visitor", "seed") else "visitor"
 
 
 class AskSource(BaseModel):
@@ -778,7 +791,9 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, re
             token = progress.SINK.set(rec)
             progress.emit(progress.Stage.RECEIVED, progress.State.DONE)
         _t0 = time.monotonic()
-        resp = _ask_impl(req, request, background_tasks)
+        from vera import request_origin
+        with request_origin.scope(_req_origin(req)):  # SEARCHCAPS-1110: covers the whole request
+            resp = _ask_impl(req, request, background_tasks)
         if rec is not None:
             st = progress.outcome(resp)
             progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, rec))
@@ -1023,6 +1038,8 @@ async def ask_stream(req: AskRequest, request: Request):
     run as dependencies, before any streaming; one POST = one cap slot. Nothing about the question or answer is stored; when the owner-gated live-stats flag is on,
     one anonymous aggregate row (enums and counts only) is written after a successful result."""
     from vera import stream_ctx
+    if _req_origin(req) != "visitor":  # SEARCHCAPS-1110: origin=seed is accepted on POST /ask only (the UI's path is this one)
+        raise HTTPException(status_code=422, detail="origin is accepted on POST /ask only")
     try:
         ctx = stream_ctx.StreamCtx(stall_s=_stream_stall_s())
     except Exception as exc:  # noqa: BLE001

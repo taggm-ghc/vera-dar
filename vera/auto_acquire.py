@@ -52,6 +52,9 @@ class Job:
     # CONT-1023: candidates a request found but could not finish (inline deadline / candidate cut / transient
     # failure). None = the ordinary job (it searches); a list = evaluate exactly these, no search (memory only).
     cands: list | None = None
+    # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): the origin of the request that queued the job ("visitor" or "seed"). A seed
+    # job runs under request_origin.scope("seed") (seed share only, never DuckDuckGo) and at low priority (_worker_loop).
+    origin: str = "visitor"
 
 
 class _State:
@@ -120,10 +123,14 @@ def enqueue(question: str, trigger: str, *, cfg: dict | None = None, env=os.envi
             if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
                     len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
                 return acq_config.reason(cfg, "rate")
+            origin = _origin()
+            if origin != "visitor" and \
+                    int(acq_config.bound(cfg, "jobs_per_hour")) - len(_S.jobs_hour) < BG_MIN_FREE_HOURLY_JOBS:
+                return acq_config.reason(cfg, "rate")  # SEARCHCAPS-1110: a seed job never takes the last hourly slots
             if _S.queue is None:
                 _S.queue = queue.Queue(maxsize=int(acq_config.bound(cfg, "queue_max")))
             try:
-                _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now))
+                _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now, origin=origin))
             except queue.Full:
                 return acq_config.reason(cfg, "queue_full")
             _S.recent[key] = now
@@ -229,6 +236,7 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
             out["status"], out["refused"] = acq_config.reason(cfg, "intent_denied"), idx
             return out
         now = clock()
+        origin = _origin()
         per_job = max(1, int(acq_config.bound(cfg, "max_docs_per_job")))
         with _S.lock:
             win = float(acq_config.bound(cfg, "dedupe_window_s"))
@@ -256,7 +264,7 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
                 else:
                     try:
                         _S.queue.put_nowait(Job(question=str(question), trigger="continue", created=now,
-                                                cands=[cands[i] for i in part]))
+                                                cands=[cands[i] for i in part], origin=origin))
                         why = None
                     except queue.Full:
                         why = acq_config.reason(cfg, "queue_full")
@@ -289,6 +297,35 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
 BG_MIN_FREE_HOURLY_JOBS = 2  # P0DTA-PRIO D4: background hand-off needs >= 2 free hourly jobs (leaves >= 1 for search)
 
 
+def _origin() -> str:
+    from vera import request_origin
+    return request_origin.current()
+
+
+def _visitor_waiting(q) -> bool:
+    """SEARCHCAPS-1110: True when a visitor job is waiting in q (read under the queue's own lock; nothing is removed)."""
+    with q.mutex:
+        return any(getattr(j, "origin", "visitor") == "visitor" for j in q.queue)
+
+
+def _defer_seed(q, job) -> bool:
+    """SEARCHCAPS-1110 low priority: a seed job taken while a visitor job waits goes back to the END of the queue (True).
+    Visitor jobs therefore always run first; a seed job runs once no visitor job waits. A full queue runs it now."""
+    if getattr(job, "origin", "visitor") == "visitor" or not _visitor_waiting(q):
+        return False
+    try:
+        q.put_nowait(job)
+    except queue.Full:
+        return False
+    return True
+
+
+def _run_in_origin(job: Job, cfg, deps, clock, env) -> dict:
+    from vera import request_origin
+    with request_origin.scope(job.origin if job.origin in request_origin.ORIGINS else request_origin.SEED):
+        return run_job(job, cfg, deps, clock=clock, env=env)
+
+
 def _worker_loop(cfg, env, clock, deps_factory) -> None:
     q = _S.queue
     while True:
@@ -300,10 +337,13 @@ def _worker_loop(cfg, env, clock, deps_factory) -> None:
                     _S.worker = None
                     return
             continue
+        if _defer_seed(q, job):
+            q.task_done()  # the same job object is queued again; it is counted again there
+            continue
         deps = None
         try:
             deps = (deps_factory or default_deps)(cfg, env)
-            run_job(job, cfg, deps, clock=clock, env=env)
+            _run_in_origin(job, cfg, deps, clock, env)
         except Exception as e:  # noqa: BLE001  (class only: never the message, which may quote a URL)
             logger.warning("autoacq job failed (%s)", type(e).__name__)
         finally:
@@ -322,8 +362,11 @@ def drain_for_tests(cfg, deps, clock=time.monotonic, env=None) -> list:
     q = _S.queue
     while q is not None and not q.empty():
         job = q.get_nowait()
+        if _defer_seed(q, job):
+            q.task_done()
+            continue
         try:
-            out.append(run_job(job, cfg, deps, clock=clock, env=env))
+            out.append(_run_in_origin(job, cfg, deps, clock, env))
         finally:
             job.question, job.cands = "", None
             q.task_done()
