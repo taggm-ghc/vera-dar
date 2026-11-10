@@ -111,6 +111,8 @@ class WoCorpusStore:
 
     def admit(self, cand: dict) -> str:
         """Record one scored candidate; store it as a source if admitted. Returns the outcome label."""
+        if _not_eligible(cand):  # E6: store-level backstop, before any DB access
+            return "skipped_not_evidence_eligible"
         rid = self.run_id()
         with self.engine.begin() as c:
             cid = self._insert_new(c, "INSERT INTO {S}.candidates (run_id, source_url, title, snippet, search_rank, "
@@ -170,13 +172,21 @@ def is_stored_document_source(src: dict) -> bool:
     return acquisition_state({"stored_text_kind": src.get("stored_text_kind"), "admission_passed": True}) == ACQ_ACQUIRED
 
 
+def _not_eligible(src) -> bool:
+    """E6 (fail-closed): a source that carries an evidence_eligible key which is not True (portal-derived, index or
+    metadata-only entries are False) is never admitted. A source without the key is unchanged."""
+    return isinstance(src, dict) and "evidence_eligible" in src and src["evidence_eligible"] is not True
+
+
 def gauntlet(question: str, sources: list[dict], llm_call, cfg: dict) -> list[dict]:
     """Gate A then the licence gate; returns scored candidates (copies), each with a final gate_a_decision."""
-    sources = [s for s in sources if not is_stored_document_source(s)]
+    sources = [s for s in sources if not is_stored_document_source(s) and not _not_eligible(s)]
     cands = [{"url": s["url"], "title": s.get("title"), "snippet": s.get("snippet"), "rank": s.get("n"),
               "licence": s.get("licence"), "stored_text_kind": s.get("stored_text_kind"), "doi": s.get("doi"),
               "published": s.get("published"), "discovered_via": s.get("discovered_via"),
-              "source_type": s.get("source_type")} for s in sources if s.get("snippet")]
+              "source_type": s.get("source_type"),
+              **({"evidence_eligible": s["evidence_eligible"]} if "evidence_eligible" in s else {})}
+             for s in sources if s.get("snippet")]
     g = cfg.get("gate_a") or {}
     scored = score_candidates(question, cands, llm_call, cfg=GateAConfig(
         fetch_threshold=float(g.get("fetch_threshold", GateAConfig.fetch_threshold)),

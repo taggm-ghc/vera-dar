@@ -350,6 +350,18 @@ def test_c4_numbered_protocol_kept_real_reference_list_matches():
     assert cv.C4 in {c["rule"] for c in cv.evaluate_chunks(para(1) + "\n\n" + doi, None, CFG, CH)["chunks"]}
 
 
+def test_c4_ieee_initials_first_and_doi_only_lines_match_protocol_kept():
+    def hit(body):
+        return cv.C4 in {c["rule"] for c in cv.evaluate_chunks(para(1) + "\n\n" + body, None, CFG, CH)["chunks"]}
+    ieee_year = "\n".join(f"[{i}] A. B. Smith, C. Jones, and D. Lee, \"Title {i},\" IEEE Trans. X, vol. 1, 2020." for i in range(1, 8))
+    ieee_doi = "\n".join(f"[{i}] A. Smith and B. Jones, Some title {i}, doi:10.1234/abc{i}" for i in range(10, 17))
+    doi_only = "\n".join(f"https://doi.org/10.1234/abc.{i}" if i % 2 else f"doi:10.5678/xyz{i}" for i in range(1, 8))
+    proto = "\n".join(f"{i}. Mix Buffer A with Solution B and incubate sample {i} for ten minutes." for i in range(1, 12))
+    assert hit(ieee_year) and hit(ieee_doi) and hit(doi_only)
+    assert not hit(proto)
+    assert CFG["enabled"] is False
+
+
 def test_d2_dictionary_only_hit_is_review_and_shipped_disabled():
     assert CFG["enabled"] is False
     txt = "the of and cytokine phosphorylation kinase receptor ligand mitochondrial apoptosis " * 60

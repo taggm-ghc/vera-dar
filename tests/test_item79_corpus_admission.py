@@ -121,3 +121,22 @@ def test_ask_schedules_admission_only_with_a_store(monkeypatch):
     assert c.post("/ask", json={"question": "q"}, headers=h).status_code == 200 and calls == []
     monkeypatch.setattr(main, "store_from_env", lambda cfg: FakeStore())
     assert c.post("/ask", json={"question": "q"}, headers=h).status_code == 200 and len(calls) == 1
+
+
+def test_e6_not_evidence_eligible_never_admitted_eligible_unchanged():
+    portal = dict(_src(1, "https://arxiv.org/abs/1"), evidence_eligible=False)
+    odd = dict(_src(2, "https://doi.org/10.1/x"), evidence_eligible=None)
+    ok = dict(_src(3, "https://doi.org/10.1/c"), evidence_eligible=True)
+    plain = _src(4, "https://doi.org/10.1/d")
+    store = FakeStore()
+    counts = ca.admit("q", [portal, odd, ok, plain], _llm([0.9, 0.9]), CFG, store)
+    assert {r["url"] for r in store.rows} == {"https://doi.org/10.1/c", "https://doi.org/10.1/d"}
+    assert counts == {"admitted": 2}
+
+
+def test_e6_store_level_backstop_refuses_before_db():
+    class Boom:
+        def begin(self):
+            raise AssertionError("DB touched")
+    st = ca.WoCorpusStore(Boom(), "q")
+    assert st.admit({"url": "u", "evidence_eligible": False}) == "skipped_not_evidence_eligible"
