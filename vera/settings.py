@@ -36,11 +36,12 @@ REFUSED_STEMS = frozenset({"api_permissions", "licence_rules", "licence_allowlis
                            "robots_ai", "source_permissions", "source_withdrawals", "us_federal_pd",
                            "us_gov_domains_federal", "env_precedence"})
 REFUSED_PREFIXES = ("auto_acquire.landing_route.", "crawl_delay.")
-SQL_SETTINGS = ("SELECT key, value, version FROM vera_vjay.set_settings WHERE state = 'active'")
-SQL_DENY = ("SELECT list_name, pattern, created_at, expires_at, wildcard_confirmed FROM vera_vjay.set_deny "
-            "WHERE state = 'active' AND expires_at > now()")
+# Column names match migration 026 (branch settings-mig026-1110): set_settings JOIN set_keys; view set_deny_active.
+SQL_SETTINGS = ("SELECT s.key, s.value, s.version FROM vera_vjay.set_settings s "
+                "JOIN vera_vjay.set_keys k ON k.key = s.key WHERE s.state = 'active'")
+SQL_DENY = ("SELECT list_name, value, created_at, expires_at, wildcard_confirmed FROM vera_vjay.set_deny_active")
 _DEFAULT_CFG = {"read_from_db": {}, "cache_ttl_s": 60.0, "query_timeout_ms": 500, "db_url_env": "VERA_DB_URL_RO",
-                "deny_max_ttl_days": 30, "deny_max_items": 500}
+                "deny_max_ttl_days": 90, "deny_max_items": 500}
 _MISSING = object()
 
 _LOCK = threading.RLock()

@@ -111,7 +111,7 @@ def test_deny_only_lists(env):
 def test_deny_rows_expired_overlong_or_unconfirmed_wildcard_ignored(env):
     old = DT - timedelta(days=40)
     env["d"] = [deny("m.hosts", "a.org", created=old, days=5),      # expired
-                deny("m.hosts", "b.org", days=90),                  # TTL over the 30-day cap
+                deny("m.hosts", "b.org", days=100),                 # TTL over the 90-day hard maximum
                 deny("m.hosts", "*.org", wild=False),               # wildcard without confirmation
                 ("m.hosts", "c.org", DT, DT + timedelta(days=1)),   # malformed / allow-shaped (no wildcard field)
                 deny("m.hosts", "", days=1)]
@@ -237,3 +237,9 @@ def test_chunk_taxo_overlay_stays_valid_with_real_validator(env):
     out = st.overlay("chunk_taxo", raw)
     assert out["params"]["patience"] == 3 and out["params"]["k_max"] == raw["params"]["k_max"]
     assert chunk_taxo.load_cfg is not None
+
+
+def test_sql_matches_migration_026_shapes():
+    assert "set_settings" in st.SQL_SETTINGS and "set_keys" in st.SQL_SETTINGS and "'active'" in st.SQL_SETTINGS
+    assert "set_deny_active" in st.SQL_DENY and "wildcard_confirmed" in st.SQL_DENY
+    assert st._CFG is not None and json.loads((ROOT / "config" / "settings.json").read_text())["deny_max_ttl_days"] == 90

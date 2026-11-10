@@ -4,6 +4,6 @@
   "cache_ttl_s": 60,
   "query_timeout_ms": 500,
   "db_url_env": "VERA_DB_URL_RO",
-  "deny_max_ttl_days": 30,
+  "deny_max_ttl_days": 90,
   "deny_max_items": 500
 }
