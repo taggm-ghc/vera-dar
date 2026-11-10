@@ -918,9 +918,9 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
             "admitted_spans": per_doc.get(did_s, 0),
             "corpus_added_at": _stamp_holder(corpus, did_s).get("corpus_added_at"),
             "corpus_chunks": _corpus_chunks(_stamp_holder(corpus, did_s), None, None)})
-    try:  # CHUNK-USAGE-1110: best-effort counters (matched = cleared the relevance rules, selected = admitted)
+    try:  # CHUNK-USAGE-1110: stage this pass (counted only if the delivered answer used it; vera.chunk_usage.commit_answer)
         from vera import chunk_usage as _cu2
-        _cu2.note_admission(corpus, [t[3] for t in scored], admitted, _stamp_holder)
+        _cu2.stage_admission(corpus, [t[3] for t in scored], admitted, _stamp_holder)
     except Exception:  # noqa: BLE001
         pass
     by_reason: dict = {}

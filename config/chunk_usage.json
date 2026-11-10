@@ -1,5 +1,5 @@
 {
-  "_note": "CHUNK-USAGE-1110 (WP11, work/CHUNK-VALUE-1110/plan.md section 6b). Per-chunk, per-association match-to-use counters and association weights in vera_vjay.chunk_use (migration 025, owner-run). Counts, weights and UTC dates only; no question text. Best-effort: increments are queued in memory, flushed in bounded batches by a background thread, and dropped on any error; /ask is never slowed or failed. The writer stays inert until the table is detected (to_regclass probe every probe_s), so shipping this code before the migration changes nothing. Nothing consumes the weights yet: demote.scale is 0 (OFF) and the router reads them through vera.chunk_usage.association().",
+  "_note": "CHUNK-USAGE-1110 (WP11, work/CHUNK-VALUE-1110/plan.md section 6b). Match-to-use counters per chunk (vera_vjay.chunk_use) and per association at partition level (vera_vjay.chunk_use_assoc, keyed by node_kind + node_id), migration 025, owner-run. Counts, weights and UTC dates only; no question text. Counting happens only for the bundle a delivered answer used (staged at admission, committed in fulldoc_answer). Best-effort: increments are queued in memory, flushed in bounded batches by a background thread and dropped on any error; /ask is never slowed or failed. Inert until both tables exist (to_regclass probe every probe_s). No association row is written until a production baseline-similarity source is wired (vera.chunk_usage.set_similarity_source). Nothing consumes the weights yet: demote.scale is 0 (OFF) and the router reads them through vera.chunk_usage.association().",
   "enabled": true,
   "queue_max": 2000,
   "batch_max": 200,
@@ -8,7 +8,7 @@
   "connect_timeout_s": 3,
   "statement_timeout_ms": 3000,
   "assoc": {
-    "_note": "Association weight (owner 2026-11-10). initial_weight = the taxonomy job's chunk-link cosine score (1 - cosine distance, clamped to [-1,1], 6 places; 1.0 when unknown). After k matches through a node with no use, each further match multiplies the weight by decay, not below floor * initial_weight; each use moves it back toward initial_weight by the fraction restore. When weight < remove_below * initial_weight (relative true; false = absolute weight) the association is SOFT-removed (removed_at); a use that lifts it back clears the mark. The chunk is never deleted. PENDING CAL: k, decay, floor, restore and remove_below are uncalibrated starting values (no real counter history exists); they only write data, nothing reads it until the router and demote.scale are switched on. Calibrate on the first weeks of real chunk_use rows (match-to-use spread per node) before enabling any consumer.",
+    "_note": "Association weight (owner 2026-11-10). initial_weight = the taxonomy job's chunk-link cosine score (1 - cosine distance, clamped to [-1,1], 6 places; 1.0 when unknown). After k selections of the association without a citation, each further such selection multiplies the weight by decay, not below floor * initial_weight; each use moves it back toward initial_weight by the fraction restore. When weight < remove_below * initial_weight (relative true; false = absolute weight) the association is SOFT-removed (removed_at); a use that lifts it back clears the mark. The chunk is never deleted. PENDING CAL: k, decay, floor, restore and remove_below are uncalibrated starting values (no real counter history exists); they only write data, nothing reads it until the router and demote.scale are switched on. Calibrate on the first weeks of real chunk_use rows (match-to-use spread per node) before enabling any consumer.",
     "k": 50,
     "decay": 0.9,
     "floor": 0.05,
@@ -22,6 +22,7 @@
   },
   "snapshot": {
     "refresh_s": 900.0,
-    "max_rows": 50000
-  }
+    "max_rows": 10000
+  },
+  "stage_max": 256
 }

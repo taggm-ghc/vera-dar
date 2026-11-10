@@ -216,10 +216,10 @@ def _trace_sent(sources) -> None:
 
 
 def _note_used(ev, citations) -> None:
-    """CHUNK-USAGE-1110: count the chunks behind the delivered citations (best-effort, counts only, never raises)."""
+    """CHUNK-USAGE-1110: commit the staged match-to-use counts of the delivered answer (best-effort, never raises)."""
     try:
         from vera import chunk_usage
-        chunk_usage.note_used(ev, citations)
+        chunk_usage.commit_answer(ev, citations)
     except Exception:  # noqa: BLE001
         pass
 
