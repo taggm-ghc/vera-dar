@@ -216,24 +216,6 @@ def _reset_singletons(monkeypatch):
                 monkeypatch.setattr(mod, attr, None)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _hybrid_off_session():
-    """FLAGON-HYBRID-1109: the shipped config/hybrid_retrieval.json is on; the suite must not depend on it (no index thread, no embedder).
-    Session scope so module-scoped fixtures that build corpora (e.g. tests/test_acquired_pins.py) also see it off. Tests that exercise hybrid
-    retrieval set their own config with set_config_for_tests."""
-    from vera import hybrid_retrieval as _hr
-    _hr.set_config_for_tests({"enabled": False})
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _hybrid_off_by_default():
-    from vera import hybrid_retrieval as _hr
-    _hr.set_config_for_tests({"enabled": False})
-    yield
-    _hr.set_config_for_tests({"enabled": False})
-
-
 @pytest.fixture(autouse=True)
 def _vera_boundary_item(request, monkeypatch):
     """A4: re-scrub guarded names that leaked in; clear cached engines/services. A3: a live item in a live session
