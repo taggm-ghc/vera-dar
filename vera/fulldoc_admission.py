@@ -35,16 +35,17 @@ _ET_AL = re.compile(r"\bet\.?\s+al\b\.?", re.IGNORECASE)
 
 
 
-# FILLER-PROPER-1109: sentence-initial imperative/auxiliary fillers: a capitalised first word of this kind is not evidence of a name.
-_LEAD_VERBS = frozenset({"explain", "describe", "tell", "give", "make", "get", "know", "did", "does", "do", "done", "doing"})
-_CAP = re.compile(r"[\"'(\[]*[A-Z][\w'-]*[\"')\].,;:?!]*$")
-_QUOTED = re.compile(r"[\"\u201c][^\"\u201d]+[\"\u201d]")
+# FILLER-PROPER-1109: a capitalised sentence-initial word listed in icfg["question_lead_verbs"] (config, beside
+# question_generic_terms) is not evidence of a name: question words/imperatives are capitalised by position.
+# FILLER-CLEANUP-1109: Unicode-aware capital test (first letter .isupper()).
+_CAP = re.compile("[\"'(\\[\u201c\u2018]*([^\\W\\d_])[\\w'-]*[\"')\\].,;:?!\u201d\u2019]*$")
+_SENT_END = re.compile("[.?!;][\"')\\]\u201d\u2019]*$")
 
 
-def _name_protected(words: list) -> set:
-    """Indexes of words inside a proper-name run (>= 2 consecutive capitalised words, joined by lowercase connectors
-    of/the/and/for/de etc. is NOT done: only adjacent capitals) or inside double quotes. A sentence-initial first word
-    counts as capitalised only if it is not in _LEAD_VERBS (question words/imperatives are capitalised by position)."""
+def _name_protected(words: list, lead_verbs=frozenset()) -> set:
+    """Indexes of words inside a proper-name run (>= 2 consecutive capitalised words; adjacent capitals only, lowercase
+    connectors such as of/the/de are not bridged) or inside double quotes. The first word of the question and of each
+    later sentence or sub-question (after ?, !, . or ;) counts as capitalised only if it is not in lead_verbs."""
     prot, n = set(), len(words)
     inq = False
     for i, w in enumerate(words):
@@ -54,7 +55,12 @@ def _name_protected(words: list) -> set:
             prot.add(i)
         if w[-1:] in "\"\u201d" and (len(w) > 1 or not w[:1] in "\"\u201c"):
             inq = False
-    caps = [bool(_CAP.match(w)) and not (i == 0 and w.strip("\"'(").casefold() in _LEAD_VERBS) for i, w in enumerate(words)]
+    caps = []
+    for i, w in enumerate(words):
+        m = _CAP.match(w)
+        start = i == 0 or bool(_SENT_END.search(words[i - 1]))
+        lead = start and w.strip("\"'(\u201c\u2018").casefold() in lead_verbs
+        caps.append(bool(m) and m.group(1).isupper() and not lead)
     i = 0
     while i < n:
         if caps[i]:
@@ -80,7 +86,8 @@ def retrieval_kept_words(question: str, icfg: dict) -> list:
     def generic(t):
         return t in gset or (t.endswith("s") and t[:-1] in gset)
     words = drop_generic(question).split()
-    prot = _name_protected(words)
+    lead = {str(x).casefold() for x in (icfg.get("question_lead_verbs") or []) if isinstance(x, str)}
+    prot = _name_protected(words, lead)
     kept = [w for i, w in enumerate(words) if i in prot or not any(generic(t) for t in tokenize(w, icfg))]
     return kept if any(tokenize(w, icfg) for w in kept) else []
 
