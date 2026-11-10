@@ -5,6 +5,13 @@ Settings come from the `grounding` block of config/ask-provider-chain.json. Retr
 keyless search providers; results with an abstract are used directly and link-only results are followed to
 their original sources (vera/source_resolver.py), so every numbered source gives the model text to ground
 on. Nothing is stored: no database, no corpus file.
+
+PORTAL-WIRE-B-1110 (owner 2026-11-10, OD-1110-PORTALS-ALL; owner: "That sample illustrates a result from a portal through
+which we can links to original sources"): search providers and indexes (OpenAlex, DuckDuckGo, arXiv, Semantic Scholar,
+INSPIRE, Wikipedia, Europe PMC search) are PORTALS. Their abstracts and snippets are NEVER evidence: every search
+record is listed as a discovery entry (title, link, identifier; its snippet stays internal, for relevance judgement and
+ranking only) with evidence_eligible False. Only a stored full-document chunk (dar_span) on a non-portal host is
+evidence_eligible; grounding_sources() is the one filter every grounding prompt goes through.
 """
 import json
 import logging
@@ -139,11 +146,39 @@ def _content_matcher(question: str):
         return None
 
 
+_NO_EVIDENCE_ROLES = ("PORTAL", "EXCLUDED")
+
+
+def evidence_eligible(r) -> bool:
+    """PORTAL-WIRE-B-1110: may this record's text ground an answer? Only a stored full-document chunk (dar_span) whose
+    record role (DOI prefix, then URL host; vera/host_role.py) is not PORTAL or EXCLUDED, and which no producer marked
+    evidence_eligible False. Every search or index record (abstract or snippet) is False. Never raises (False)."""
+    try:
+        if not isinstance(r, dict) or r.get("evidence_eligible") is False or not isinstance(r.get("dar_span"), dict):
+            return False
+        from vera import host_role
+        return host_role.role_for_record({"doi": r.get("doi"), "url": r.get("url")}).role not in _NO_EVIDENCE_ROLES
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def grounding_sources(sources) -> list[dict]:
+    """The sources a grounding prompt may use: evidence_eligible ones only, renumbered 1..n (copies). A source already
+    filtered here keeps its eligibility flag, so the call is idempotent."""
+    out = []
+    for s in sources or ():
+        if isinstance(s, dict) and s.get("evidence_eligible") is True:
+            out.append({**s, "n": len(out) + 1})
+    return out
+
+
 def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
                  resolver: Callable | None = None, trace_out: dict | None = None,
                  dar_corpus=None) -> tuple[list[dict], list[dict]]:
-    """(sources, unused): numbered sources with abstracts [{n, title, url, published, snippet, source_type}],
-    and original sources that were traced but have no free abstract (listed, never used). ([], []) on failure.
+    """(sources, unused): numbered listed sources [{n, title, url, published, snippet, source_type, evidence_eligible}]
+    and traced originals (source_resolver, metadata only: never an abstract) and arXiv-only works, listed and handed to
+    acquisition only. ([], []) on failure. PORTAL-WIRE-B-1110: a search/index record's snippet is internal (relevance,
+    ranking) and evidence_eligible False.
     Optional, additive: trace_out (a dict filled with COUNTS-ONLY routing/stored-branch aggregates) and dar_corpus
     (a vera.dar_corpus.DarCorpus; None = no stored branch). The return contract is unchanged."""
     info: dict = {}
@@ -211,7 +246,8 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
         seen.add(key)
         src = {"n": len(out) + 1, "title": clean_text(r.get("title"), 300) or url, "url": url,
                "published": (str(r.get("published"))[:10] if r.get("published") else None),
-               "snippet": snippet, "source_type": r.get("source_type")}
+               "snippet": snippet, "source_type": r.get("source_type"),
+               "evidence_eligible": evidence_eligible(r)}  # PORTAL-WIRE-B-1110: portal text is never evidence
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
         for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus", "authors", "publisher", "container_title", "journal"):  # internal, for the corpus gauntlet (pmcid is published only via public_sources/_pmcid_of, PMCID-PUBLIC-1023)
@@ -290,7 +326,9 @@ def provenance(r: dict) -> dict:
 
 
 def messages_for(question: str, sources: list[dict]) -> list[dict]:
-    return grounded_v1_messages(question, sources)
+    """The grounded-v1 prompt over grounding_sources(sources) only (PORTAL-WIRE-B-1110: a portal abstract or snippet
+    never reaches the model as a source)."""
+    return grounded_v1_messages(question, grounding_sources(sources))
 
 
 def _expand(group: str) -> list[int]:

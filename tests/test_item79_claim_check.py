@@ -15,8 +15,11 @@ CC = {"enabled": True, "timeout_s": 1, "max_claims": 30, "partial_marker": " (pa
                    {"provider": "b", "base_url": "x", "model": "second", "api_key_env": "KEY_B", "family": "openai"}]}
 CFG = {"no_sources_text": "NO SOURCES", "removed_citation_note": "NOTE", "insufficient_text": "INSUFFICIENT",
        "claim_check": CC}
-SRC = [{"n": 1, "title": "A", "url": "https://arxiv.org/abs/2401.00001", "snippet": "Copilot users were 55% faster."},
-       {"n": 2, "title": "B", "url": "https://doi.org/10.1/b", "snippet": "No effect on code quality."}]
+# PORTAL-WIRE-B-1110: evidence_eligible stands for eligible (stored full-document) sources so the seam grounds
+SRC = [{"n": 1, "title": "A", "url": "https://arxiv.org/abs/2401.00001", "snippet": "Copilot users were 55% faster.",
+        "evidence_eligible": True},
+       {"n": 2, "title": "B", "url": "https://doi.org/10.1/b", "snippet": "No effect on code quality.",
+        "evidence_eligible": True}]
 
 
 def _verdicts(mapping):

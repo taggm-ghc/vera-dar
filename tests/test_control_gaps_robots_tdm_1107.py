@@ -374,7 +374,6 @@ REGISTRY: dict[str, tuple] = {
     "vera/source_resolver.py:_s2": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:lookup_doi": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:lookup_title": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
-    "vera/source_resolver.py:with_abstract": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/reporting_lane.py:ReportingLane.__init__": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
     "vera/reporting_lane.py:_open": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
     "vera/reporting_lane.py:_no_redirect_handler._H": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
@@ -559,7 +558,7 @@ FORMER_UNGATED_API_SITES = (  # CONTROL-GAPS-1107's frozen list of 12 (renamed o
     "vera/search_providers.py:europepmc_default_transport", "vera/search_providers.py:doaj_default_transport",
     "vera/source_resolver.py:_api_get",  # was "<module>" (the module-level limited getter, now this function)
     "vera/source_resolver.py:_s2", "vera/source_resolver.py:lookup_doi", "vera/source_resolver.py:lookup_title",
-    "vera/source_resolver.py:with_abstract", "vera/reporting_lane.py:ReportingLane.__init__",
+    "vera/reporting_lane.py:ReportingLane.__init__",  # PORTAL-WIRE-B-1110: source_resolver.with_abstract removed (no portal abstract fetch)
     "vera/reporting_lane.py:_open",  # was "_default_http_get" (its urllib body moved here, behind the gate)
     "vera/reporting_lane.py:_no_redirect_handler._H")
 
@@ -568,7 +567,7 @@ FORMER_UNGATED_API_SITES = (  # CONTROL-GAPS-1107's frozen list of 12 (renamed o
 def test_each_former_ungated_api_site_calls_the_gate(site):
     """API-ALLOW-1107 r2 (5): every one of the 12 former api_no_robots_check_owner_decision sites is still found by the
     scan, is classified api_permission_gate, and its gate function really calls the api_permissions gate."""
-    assert len(FORMER_UNGATED_API_SITES) == 12
+    assert len(FORMER_UNGATED_API_SITES) == 11  # 12 frozen; PORTAL-WIRE-B-1110 deleted source_resolver.with_abstract
     assert site in _all_sites(), f"{site} no longer found by the scan: update the list with the reason"
     kind, gate_fn, call = REGISTRY[site]
     assert kind == API_GATE and call.startswith("api_permissions.")
@@ -603,5 +602,5 @@ def test_no_ungated_api_sites_remain():
     no entry may use any other class for an API site, and none may come back as ungated."""
     assert all(e[0] in (GATE, TRANSPORT, ROBOTS_FETCH, FIRST_PARTY, LLM_API, NO_REQUEST, API_GATE, TRACKED_GAP)
                for e in REGISTRY.values())
-    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 13
+    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 12  # PORTAL-WIRE-B-1110: - source_resolver.with_abstract
     assert sum(1 for e in REGISTRY.values() if e[0] == TRACKED_GAP) == 0  # Wikipedia portal gated since e87ef55

@@ -1688,8 +1688,12 @@ def _answer_grounded(question, model, pricing, sources, cfg, decision, chained) 
     """State A (evidentiary answer). The ONLY caller is the L3 branch of answer_in_scope, and only when full documents
     were examined; the abstract-grounded behaviour it used to implement for every question is retired (DEC-FDA1)."""
     from vera import answer_contract as contract
-    from vera.grounded_ask import count_valid_citations, fix_citations, messages_for, public_candidates
+    from vera.grounded_ask import count_valid_citations, fix_citations, grounding_sources, messages_for, public_candidates
 
+    listed, sources = sources, grounding_sources(sources)  # PORTAL-WIRE-B-1110: portal abstracts/snippets never ground
+    if not sources:  # nothing but portal records: the reading list, no model call
+        return contract.reading_list_result(public_candidates(listed), decision.tokens_used, decision.cost_usd,
+                                            sources=listed)
     kind = "answer"
     _pre_llm(writer=True)  # STREAM-1031
     _progress.emit("write", "start")  # PROG-1027 W2a (legacy path; test-only today)

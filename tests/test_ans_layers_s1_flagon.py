@@ -25,7 +25,8 @@ def _lists(r):
 
 # ---------------------------------------------------------------- grounded path (ask_service ~:891-894, :917-922)
 GCFG = {"removed_citation_note": "NOTE-BAD-CITES", "no_sources_text": "NO SOURCES"}
-SRC = [{"n": 1, "title": "T", "url": "https://arxiv.org/abs/1", "published": None, "snippet": "abstract"}]
+SRC = [{"n": 1, "title": "T", "url": "https://arxiv.org/abs/1", "published": None, "snippet": "abstract",
+        "evidence_eligible": True}]  # PORTAL-WIRE-B-1110: stands for an eligible (stored) source
 DEC = SimpleNamespace(accepted=True, tokens_used=0, cost_usd=0.0)
 
 
