@@ -35,7 +35,7 @@ Retrieval and acquisition changed as follows (details and bounds in the [README]
 - *Acquisition.* Each question runs one inline acquisition aiming at 6 new documents, one job per question against 120 jobs/hour and 2000/day; portal pages are followed at most 2 hops and a reference may lead to its original host through the unchanged fetch gates (answer-only, not stored).
 - *Multi-question prompts.* Split on grammar only (at most 3 questions); each question is answered or refused on its own.
 - *Retrieval.* Filler words are dropped whole-word only, sparing proper-name runs and quoted text. With hybrid retrieval on, BM25 candidates and an embedding list (Cloudflare Workers AI bge-m3, vectors from the chunk-taxonomy job) are fused by reciprocal rank fusion, and up to 48 passages of the top 3 partitions are re-ranked at ask time. Any embedding failure, timeout, lock wait or budget stop falls back to word-only search.
-- *Chunk taxonomy.* A mechanical background job (embeddings, seeded clustering, nearest-center assignment, c-TF-IDF names) bounded by a neuron budget and a memory guard; it needs migrations 022 and 024 (drafts; see `db/README.md`).
+- *Chunk taxonomy.* A mechanical background job (embeddings, seeded clustering, nearest-center assignment, c-TF-IDF names) bounded by a neuron budget and a memory guard; it needs migrations 022 and 024 (both applied 2026-11-09; see `db/README.md`).
 
 ## Four design objectives
 
