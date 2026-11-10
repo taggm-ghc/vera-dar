@@ -250,3 +250,14 @@ def test_adversarial_replay_holdout_off_entity_falls_and_recall_holds_and_contro
     assert m["relevant_tier0_after"]["k"] >= m["relevant_tier0_before"]["k"] - 1 and m["regression"] is True
     allm = mod.replay("all")["flags"]["subquery_adversarial"]
     assert all(n == 1 for sid, n in allm["n_parts"].items() if sid.startswith("adv_c"))  # real decomposer: no split
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the call slots and order from before DuckDuckGo became a fallback (C6: DuckDuckGo
+    concurrent and first). The shipped switches are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})
