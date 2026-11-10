@@ -272,6 +272,19 @@
       ],
       "_note": "API-ALLOW-1107 prior: interval not stated in the relayed summary, so 0.5/s (5 per 10 s), one at a time. No call site uses Crossref yet (config/api_permissions.json crossref_rest)."
     },
+    "zenodo": {
+      "hosts": ["zenodo.org"], "rate_per_s": 0.1, "burst": 1, "max_concurrency": 1, "daily_cap": 1000,
+      "throttle_statuses": [429, 503], "base_cooldown_s": 60.0, "max_cooldown_s": 900.0, "contact_param": null,
+      "sources": [
+        {"url": "https://zenodo.org/robots.txt", "read": "2026-11-09", "inspection": "summarizing fetch (research-reader, PHYS-SUPPLY-1110)",
+         "claims": "User-agent * only (no AI-agent group): Disallow /search, /api (Allow /api/records/*/files; Disallow /api/records/*/files-archive), /records/*/preview, /account, /login; Crawl-delay 10; /records/<id> not disallowed"},
+        {"url": "https://developers.zenodo.org/", "read": "2026-11-09", "inspection": "summarizing fetch (research-reader, PHYS-SUPPLY-1110)",
+         "claims": "guest users: 60 requests per minute, 2000 requests per hour (per-IP not stated)"},
+        {"url": "https://about.zenodo.org/policies/", "read": "2026-11-09", "inspection": "summarizing fetch (research-reader, PHYS-SUPPLY-1110)",
+         "claims": "metadata CC0 (except email addresses); use and re-use subject to the licence each data object was deposited under; access over HTTP and OAI-PMH. Terms (about.zenodo.org/terms) say nothing on automated access or AI/TDM; users shall respect licence conditions"}
+      ],
+      "_note": "PHYS-SUPPLY-1110 (diag HADRONS-B3 cause 3: zenodo.org had no portal). Conservative: 1 request / 10 s = the robots Crawl-delay 10 (stricter than the guest 60/min), serial, daily_cap 1000 (half of ONE hour's documented guest allowance; a planner prior bound, not calibrated: what would change it is the per-portal ratelimit line over live use). This entry paces requests only; it opens NO acquisition route: fetch.allowed_hosts and arxiv_route.hosts do not list zenodo.org, and the repository-PDF route (config/repository_pdf.json, row status pending, flag repository_pdf_route.enabled false, no code yet) is the only planned reader, restricted to /records/{id}/files/*.pdf with the record licence through the unchanged licence gate. Activating it needs the owner (that file's _evidence_note)."
+    },
     "doi_landing": {
       "hosts": ["doi.org", "dx.doi.org"],
       "rate_per_s": 0.5,
