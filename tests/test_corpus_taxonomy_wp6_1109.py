@@ -13,7 +13,7 @@ from vera import corpus_description as cd, corpus_taxonomy as ct, sources_sideba
 ROOT = Path(__file__).resolve().parent.parent
 CN = ct.CLASSIFIER
 assert CN == "chunk_taxo_auto"
-LINK = "(link_id INTEGER PRIMARY KEY, {a} INTEGER, {b} INTEGER, classifier_name TEXT, state TEXT)"
+LINK = "(link_id INTEGER PRIMARY KEY, {a} INTEGER, {b} INTEGER, classifier_name TEXT, state TEXT, score_kind TEXT)"
 
 
 def _engine():

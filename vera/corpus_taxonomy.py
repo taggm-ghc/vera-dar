@@ -18,13 +18,17 @@ from sqlalchemy import text
 CLASSIFIER = "chunk_taxo_auto"  # default; the in-app job's writer name (OD-1109-TAXO-AUTO). Config: corpus_description.stored_taxonomy.classifier_name
 V = "vera_vjay."
 
+# Display counts use STRICT links only: score_kind NULL or 'cosine'. Routing-only links (cosine_r<k>, cosine_soft; TAXO-ROUTE-R1-1110) are excluded.
+STRICT_CT = "(ct.score_kind IS NULL OR ct.score_kind = 'cosine')"
+STRICT_CS = "(cs.score_kind IS NULL OR cs.score_kind = 'cosine')"
+STRICT_1 = "(score_kind IS NULL OR score_kind = 'cosine')"
 _CL = (  # chunk -> topic, direct UNION subtopic rolled up; distinct (span, topic)
     f"cl AS (SELECT ct.span_id, ct.topic_id FROM {V}tax_chunk_topic ct JOIN {V}tax_topics t ON t.topic_id = ct.topic_id AND t.state = 'active' "
-    "WHERE ct.classifier_name = :cn AND ct.state = 'active' "
+    "WHERE ct.classifier_name = :cn AND ct.state = 'active' AND " + STRICT_CT + " "
     f"UNION SELECT cs.span_id, ts.topic_id FROM {V}tax_chunk_subtopic cs "
     f"JOIN {V}tax_subtopics sb ON sb.subtopic_id = cs.subtopic_id AND sb.state = 'active' "
     f"JOIN {V}tax_topic_subtopic ts ON ts.subtopic_id = cs.subtopic_id AND ts.state = 'active' "
-    f"JOIN {V}tax_topics t2 ON t2.topic_id = ts.topic_id AND t2.state = 'active' WHERE cs.classifier_name = :cn AND cs.state = 'active')")
+    f"JOIN {V}tax_topics t2 ON t2.topic_id = ts.topic_id AND t2.state = 'active' WHERE cs.classifier_name = :cn AND cs.state = 'active' AND " + STRICT_CS + ")")
 _DOC = "COALESCE(s.canonical_source_id, s.source_id)"
 _SP = f"JOIN {V}evidence_spans e ON e.span_id = {{x}}.span_id JOIN {V}sources s ON s.source_id = e.source_id"
 
@@ -33,7 +37,7 @@ Q_DOMAIN_UNION = (f"WITH {_CL} SELECT dt.domain_id, count(DISTINCT cl.span_id), 
                   f"JOIN {V}tax_domain_topic dt ON dt.topic_id = cl.topic_id AND dt.state = 'active' " + _SP.format(x="cl") + " GROUP BY dt.domain_id")
 Q_SUBTOPIC_UNION = (f"SELECT cs.subtopic_id, count(DISTINCT cs.span_id), count(DISTINCT {_DOC}) FROM {V}tax_chunk_subtopic cs "
                     f"JOIN {V}tax_subtopics sb ON sb.subtopic_id = cs.subtopic_id AND sb.state = 'active' " + _SP.format(x="cs")
-                    + " WHERE cs.classifier_name = :cn AND cs.state = 'active' GROUP BY cs.subtopic_id")
+                    + " WHERE cs.classifier_name = :cn AND cs.state = 'active' AND " + STRICT_CS + " GROUP BY cs.subtopic_id")
 Q_TOPIC_VOTE = (f"SELECT st.topic_id, count(DISTINCT {_DOC}) FROM {V}tax_source_topic st JOIN {V}tax_topics t ON t.topic_id = st.topic_id AND t.state = 'active' "
                 f"JOIN {V}sources s ON s.source_id = st.source_id WHERE st.classifier_name = :cn AND st.state = 'active' GROUP BY st.topic_id")
 Q_DOMAIN_VOTE = (  # F7: direct source_domain OR source_topic joined through domain_topic
@@ -51,8 +55,8 @@ Q_HIER = (f"SELECT d.domain_id, d.slug, d.label, t.topic_id, t.slug, t.label, sb
           "ORDER BY d.slug, t.slug, sb.slug")
 Q_TOTALS = (f"SELECT (SELECT count(*) FROM {V}evidence_spans), (SELECT count(DISTINCT {_DOC}) FROM {V}sources s), "
             f"(SELECT count(DISTINCT {_DOC}) FROM {V}sources s WHERE EXISTS (SELECT 1 FROM {V}evidence_spans e WHERE e.source_id = s.source_id))")
-Q_LABELLED = (f"WITH ls AS (SELECT span_id FROM {V}tax_chunk_topic WHERE classifier_name = :cn AND state = 'active' "
-              f"UNION SELECT span_id FROM {V}tax_chunk_subtopic WHERE classifier_name = :cn AND state = 'active') "
+Q_LABELLED = (f"WITH ls AS (SELECT span_id FROM {V}tax_chunk_topic WHERE classifier_name = :cn AND state = 'active' AND " + STRICT_1 + " "
+              f"UNION SELECT span_id FROM {V}tax_chunk_subtopic WHERE classifier_name = :cn AND state = 'active' AND " + STRICT_1 + ") "
               f"SELECT (SELECT count(*) FROM ls), (SELECT count(DISTINCT {_DOC}) FROM ls " + _SP.format(x="ls") + ")")
 Q_VOTED = (f"SELECT count(DISTINCT {_DOC}) FROM (SELECT source_id FROM {V}tax_source_topic WHERE classifier_name = :cn AND state = 'active' "
            f"UNION SELECT source_id FROM {V}tax_source_domain WHERE classifier_name = :cn AND state = 'active') u JOIN {V}sources s ON s.source_id = u.source_id")
