@@ -243,9 +243,9 @@ def test_crawl_delay_past_the_deadline_is_a_crawl_delay_stop_not_an_attempt(monk
 
 
 def test_every_redirect_hop_is_gated():
-    other = "https://www.ebi.ac.uk/blocked/x.xml"  # OA-2: eutils left fetch.allowed_hosts; same host, robots-blocked path
+    other = "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC2/fullTextXML"  # OA-2: eutils left fetch.allowed_hosts; same host, robots-blocked path
     web = _xml_web({JATS: A.Resp(status=302, headers={"Location": other}),
-                    ROBOTS: _txt("User-agent: *\nDisallow: /blocked/\n")})
+                    ROBOTS: _txt("User-agent: *\nDisallow: /europepmc/webservices/rest/PMC2/\n")})
     assert _code(web) == "R-ACQ-ROBOTS"
     assert other not in web.urls and JATS in web.urls
 
