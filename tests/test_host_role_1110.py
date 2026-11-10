@@ -231,9 +231,19 @@ class HostRoleTests(unittest.TestCase):
 
     def test_bare_host_and_userinfo(self):
         self.assertEqual(role("arxiv.org/abs/1"), P)
-        self.assertEqual(role("https://user:pw@arxiv.org/abs/1"), P)
         self.assertEqual(role("https://arxiv.org:443/abs/1"), P)
-        self.assertEqual(role("https://example.com@arxiv.org/"), P)
+        # userinfo: RFC 2606 .invalid hosts in a synthetic registry (no real host, mailbox or credential in fixtures)
+        hr.set_registry_for_tests(hr.Registry({"hosts": [
+            {"match": "portal.example.invalid", "role": "PORTAL", "kind": "x"},
+            {"match": "original.example.invalid", "role": "ORIGINAL", "kind": "x"},
+        ]}, "t"))
+        self.assertEqual(role("https://portal.example.invalid/abs/1"), P)
+        self.assertEqual(role("https://user@portal.example.invalid/abs/1"), P)
+        self.assertEqual(role("https://user:@portal.example.invalid/abs/1"), P)  # colon in userinfo, empty password
+        self.assertEqual(role("https://portal.example.invalid:443/abs/1"), P)
+        # userinfo that names an ORIGINAL host must not borrow its role: the host is after the "@"
+        self.assertEqual(role("https://original.example.invalid@portal.example.invalid/"), P)
+        self.assertEqual(role("https://portal.example.invalid@original.example.invalid/"), O)
 
     def _reg(self, text):
         with tempfile.TemporaryDirectory(dir=str(Path(hr.__file__).resolve().parent.parent / "scratch")) if False else tempfile.TemporaryDirectory() as td:

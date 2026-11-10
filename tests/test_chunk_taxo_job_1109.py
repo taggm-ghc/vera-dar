@@ -737,14 +737,14 @@ def _fresh_inert_flag():
 
 def test_startup_logs_delay_and_missing_cred_names_only(caplog):
     caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
-    secret = "s3cr3t-token-value"
+    sentinel = "placeholder-not-a-credential"  # must never appear in the warning
     c = dict(cfg(initial_delay_s=10**6), embedder="cloudflare")
     assert job.start(c, env={"CLOUDFLARE_API_TOKEN": "  "}) is True
     job.reset_for_tests()
     msgs = [(r.levelno, r.getMessage()) for r in caplog.records]
     assert (logging.INFO, "chunk_taxo: first pass in 1000000 s") in msgs
     warn = [m for lv, m in msgs if lv == logging.WARNING and "credentials_missing" in m]
-    assert len(warn) == 1 and "CLOUDFLARE_ACCOUNT_ID" in warn[0] and "CLOUDFLARE_API_TOKEN" in warn[0] and secret not in warn[0]
+    assert len(warn) == 1 and "CLOUDFLARE_ACCOUNT_ID" in warn[0] and "CLOUDFLARE_API_TOKEN" in warn[0] and sentinel not in warn[0]
 
 
 def test_startup_no_warning_when_creds_present(caplog):
