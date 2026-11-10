@@ -27,6 +27,16 @@ Only a response with `result_kind: "answer"` is an evidentiary answer. The curre
 - **News source rules and link-only items (2026-11-06, NEWS-BATCH-2).** VOA is read only for VOA-original pages, Wikinews from mainspace only (an archive), ProPublica and The Conversation are excluded, PBS is link-only. Wikipedia-citation links appear as link-only items (NT-3, `vera/lane_evidence.py`). `vera/news_access.py` (H19) is offline, not yet wired into the lane, and link-only until NC-BASIS-1 is recorded. H20 repository-PDF route: config only, flag off, Zenodo the only listed host (status pending).
 - **Owner scripts.** Release verification and deploy checks live under `work/RELEASE-VERIFY-1104/` (`run_release_verify.sh`, `owner_release_gate.sh`, `owner_deploy_check.sh`).
 
+## Additions of 2026-11-09 (offline-tested; live behaviour unverified; flags on from this release)
+
+Retrieval and acquisition changed as follows (details and bounds in the [README](../README.md) "Update 2026-11-09" paragraph; values from `config/` at c3aabb1):
+
+- *Stored corpus.* No cap on stored documents; compact BM25 index; newer rows are appended to a fork of the serving index.
+- *Acquisition.* Each question runs one inline acquisition aiming at 6 new documents, one job per question against 120 jobs/hour and 2000/day; a portal page can lead to one further eligible portal page (`max_hops` 2), and an on-question reference may lead to its original host through the unchanged per-hop gates (public-address check, robots.txt, AI-use signals, licence, rate limit); content from an original host is used for that answer only and is not stored.
+- *Multi-question prompts.* Split on grammar only (at most 3 questions); each question is answered or refused on its own.
+- *Retrieval.* Filler words are dropped whole-word only, sparing proper-name runs and quoted text. With hybrid retrieval on, BM25 candidates and an embedding list (Cloudflare Workers AI bge-m3, vectors from the chunk-taxonomy job) are fused by reciprocal rank fusion, and up to 48 passages of the top 3 partitions are re-ranked at ask time. Any embedding failure, timeout, lock wait or budget stop falls back to word-only search.
+- *Chunk taxonomy.* A mechanical background job (embeddings, seeded clustering, nearest-center assignment, c-TF-IDF names) bounded by a neuron budget and a memory guard; migration 024 creates its tables and 022 gates its write mode (nodes, anchors, links; without 022 it only computes); both applied 2026-11-09, see `db/README.md`.
+
 ## Four design objectives
 
 1. **Grounding:** link research claims to relevant observed evidence.
