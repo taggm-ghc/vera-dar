@@ -113,8 +113,6 @@ def _race(factory_fail):
     return made, res, fake
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT hybrid_retrieval._embedder: check and create are in separate lock sections, so N "
-                   "concurrent first asks each call load_embedder (N adapters, N credential loads), not one")
 def test_c_concurrent_asks_success_create_exactly_one_embedder():
     made, res, fake = _race(False)
     assert len(res) == N and len(made) == 1
@@ -127,8 +125,6 @@ def test_c_concurrent_asks_success_all_return_and_embedder_usable():
     assert hr._embedder()[0] is not None
 
 
-@pytest.mark.xfail(strict=True, reason="DEFECT hybrid_retrieval._embedder: concurrent first asks all retry the failing creation "
-                   "(N attempts) because cooldown is only recorded after creation ends")
 def test_c_concurrent_asks_failure_create_exactly_one_attempt():
     made, res, _ = _race(True)
     assert len(res) == N and len(made) == 1

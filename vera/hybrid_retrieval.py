@@ -75,6 +75,8 @@ SQL_NEURONS_TODAY = ("SELECT COALESCE(SUM(r.neurons_used), 0) FROM vera_vjay.tax
 # beyond LOCK_TIMEOUT_S. (The plain Lock self-deadlocked when _embedder called config() while holding it.)
 _LOCK = threading.RLock()
 LOCK_TIMEOUT_S = 2.0
+INFLIGHT_STALE_S = 30.0  # HYBRID-SINGLEFLIGHT-1109: an embedder creation older than this is presumed dead
+_INFLIGHT: dict = {}  # slot -> (Event, started monotonic); guarded by _LOCK
 
 
 @contextmanager
@@ -172,6 +174,7 @@ def reset_for_tests() -> None:
                       neurons_today=None, loader=None, clock=time.monotonic, wall=time.time)
         _QCACHE.clear()
         _PCACHE.clear()
+        _INFLIGHT.clear()
     _TL.__dict__.clear()
 
 
@@ -215,17 +218,46 @@ def _embedder(slot: str = "emb"):
             return _STATE[slot], "ok"
         if _STATE[slot + "_at"] is not None and now - _STATE[slot + "_at"] < cooldown:
             return None, _STATE[slot + "_reason"]
+        flight = _INFLIGHT.get(slot)
+        if flight is not None and time.monotonic() - flight[1] > INFLIGHT_STALE_S:
+            flight = None  # a creator that never finished: stop waiting on it, take over
+        if flight is None:
+            flight = _INFLIGHT[slot] = (threading.Event(), time.monotonic())
+            creator = True
+        else:
+            creator = False
+    if not creator:
+        # HYBRID-SINGLEFLIGHT-1109: one creator per slot; waiters wait at most LOCK_TIMEOUT_S, then fall back to word-only.
+        flight[0].wait(LOCK_TIMEOUT_S)
+        try:
+            with _locked():
+                if _STATE[slot] is not None:
+                    return _STATE[slot], "ok"
+                if _STATE[slot + "_at"] is not None and flight[0].is_set():
+                    return None, _STATE[slot + "_reason"]  # the creator's failure, shared (it is in the cooldown record)
+        except TimeoutError:
+            pass
+        return None, "embedder_wait_timeout"
+    emb, why = None, "embedder_error"
     try:
         from vera.chunk_taxo_embed import load_embedder
         tc = _taxo_cfg()
         to = float(config()["timeout_s"] if slot == "emb" else config()["rerank"]["timeout_s"])
         cf = dict(tc.get("cloudflare") or {}, reserve_neurons=0, max_attempts=1, timeout_s=to)
-        emb, why = load_embedder(dict(tc, cloudflare=cf))
+        emb, why = load_embedder(dict(tc, cloudflare=cf))  # network/credential I/O: never under _LOCK
     except Exception as exc:  # noqa: BLE001
         emb, why = None, "embedder_error"
         log.warning("hybrid embedder unavailable (%s)", type(exc).__name__)
-    with _locked():
-        _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
+    finally:
+        try:
+            with _locked():
+                _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
+                if _INFLIGHT.get(slot) is flight:
+                    del _INFLIGHT[slot]
+        except TimeoutError:
+            if _INFLIGHT.get(slot) is flight:  # best effort; waiters time out and the stale rule frees the slot
+                _INFLIGHT.pop(slot, None)
+        flight[0].set()
     return emb, why
 
 
