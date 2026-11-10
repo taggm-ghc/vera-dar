@@ -3,7 +3,7 @@
 -- CHUNK-USAGE-1110 (WP11 of work/CHUNK-VALUE-1110/plan.md, section 6b) DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL.
 -- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin-run only, rehearsal first
 -- (work/CHUNK-USAGE-MIG025-1110/scripts/rehearse_025.sh in vera_dar_rehearsal), never via db/apply_migrations.py.
--- Purpose: a per-chunk match-to-use counter ("a chunk that is often matched but rarely used is a signal", owner 2026-11-10).
+-- Purpose (rev. 2026-11-10, owner: reduce an association's weight, then soft-remove it, never purge the chunk): a per-chunk, per-association match-to-use counter ("a chunk that is often matched but rarely used is a signal", owner 2026-11-10).
 --   chunk_use: one row per stored retrieval chunk = (evidence_spans partition span_id, chunk_start, chunk_end in document offsets).
 --   matched_count  times the chunk cleared the question's relevance rules (a retrieval candidate that survived admission scoring)
 --   selected_count times it was admitted as evidence for the writer
@@ -80,23 +80,42 @@ BEGIN
   END IF;
 END $$;
 
--- ---------------------------------------------------------------------------------------------------------------------------------
--- 1. chunk_use. 5 constraints: pk, span_fk, range_chk, counts_chk, days_chk.
+-- 1. chunk_use. One row per (chunk, node_id): node_id 0 is the per-chunk TOTAL row (asks without routing and the chunk's overall
+--    counts); node_id > 0 is one routing association (the taxonomy/domain node through which the chunk matched). node_id carries NO
+--    foreign key: no tax_* table is touched. 10 pk/fk/check constraints: pk, span_fk, range_chk, counts_chk, days_chk, node_chk,
+--    init_chk, weight_chk, assoc_chk, msu_chk. Index chunk_use_assoc_idx (partial: decayed or removed associations, the router's read set).
+--    initial_weight = the baseline similarity of the association (the taxonomy job's chunk-link score, kind 'cosine' = 1 - cosine
+--    distance clamped to [-1, 1] and rounded to 6 places, supplied by the caller; 1.0 when none is known). weight starts equal to it,
+--    never exceeds it, and decays multiplicatively; a use restores it toward initial_weight. removal is judged on weight (by default
+--    relative to initial_weight, an application setting). weight (<= initial_weight) decays multiplicatively and removed_at is set SOFT when it falls below the removal threshold; both are
+--    reversible by a use (restore) or by an owner UPDATE. A chunk row or a chunk is NEVER deleted by this mechanism: the app roles
+--    have no DELETE and the association mark never touches evidence_spans, so the chunk stays globally searchable.
 -- ---------------------------------------------------------------------------------------------------------------------------------
 CREATE TABLE vera_vjay.chunk_use (
-    span_id        BIGINT NOT NULL CONSTRAINT chunk_use_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
-    chunk_start    INTEGER NOT NULL,
-    chunk_end      INTEGER NOT NULL,
-    matched_count  BIGINT NOT NULL DEFAULT 0,
-    selected_count BIGINT NOT NULL DEFAULT 0,
-    used_count     BIGINT NOT NULL DEFAULT 0,
-    first_seen_day DATE NOT NULL DEFAULT (now() AT TIME ZONE 'utc')::date,
-    last_seen_day  DATE NOT NULL DEFAULT (now() AT TIME ZONE 'utc')::date,
-    CONSTRAINT chunk_use_pk PRIMARY KEY (span_id, chunk_start, chunk_end),
+    span_id           BIGINT NOT NULL CONSTRAINT chunk_use_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    chunk_start       INTEGER NOT NULL,
+    chunk_end         INTEGER NOT NULL,
+    node_id           BIGINT NOT NULL DEFAULT 0,
+    matched_count     BIGINT NOT NULL DEFAULT 0,
+    selected_count    BIGINT NOT NULL DEFAULT 0,
+    used_count        BIGINT NOT NULL DEFAULT 0,
+    matched_since_use BIGINT NOT NULL DEFAULT 0,
+    initial_weight    DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    weight            DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    removed_at        TIMESTAMPTZ,
+    first_seen_day    DATE NOT NULL DEFAULT (now() AT TIME ZONE 'utc')::date,
+    last_seen_day     DATE NOT NULL DEFAULT (now() AT TIME ZONE 'utc')::date,
+    CONSTRAINT chunk_use_pk PRIMARY KEY (span_id, chunk_start, chunk_end, node_id),
     CONSTRAINT chunk_use_range_chk CHECK (chunk_start >= 0 AND chunk_end > chunk_start),
     CONSTRAINT chunk_use_counts_chk CHECK (matched_count >= 0 AND selected_count >= 0 AND used_count >= 0),
-    CONSTRAINT chunk_use_days_chk CHECK (last_seen_day >= first_seen_day)
+    CONSTRAINT chunk_use_days_chk CHECK (last_seen_day >= first_seen_day),
+    CONSTRAINT chunk_use_node_chk CHECK (node_id >= 0),
+    CONSTRAINT chunk_use_init_chk CHECK (initial_weight > 0.0 AND initial_weight <= 1.0),
+    CONSTRAINT chunk_use_weight_chk CHECK (weight >= 0.0 AND weight <= initial_weight),
+    CONSTRAINT chunk_use_assoc_chk CHECK (node_id > 0 OR (initial_weight = 1.0 AND weight = 1.0 AND removed_at IS NULL)),
+    CONSTRAINT chunk_use_msu_chk CHECK (matched_since_use >= 0)
 );
+CREATE INDEX chunk_use_assoc_idx ON vera_vjay.chunk_use (node_id, span_id) WHERE node_id > 0 AND (weight < initial_weight OR removed_at IS NOT NULL);
 
 -- ---------------------------------------------------------------------------------------------------------------------------------
 -- 2. Grants: default deny, then exact grants to the rw and ro groups only.
@@ -106,16 +125,17 @@ DO $$ BEGIN
   EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.chunk_use FROM %I, %I', current_setting('vera025.rw'), current_setting('vera025.ro'));
 END $$;
 GRANT SELECT ON vera_vjay.chunk_use TO vera_vjay_rw, vera_vjay_ro;
-GRANT INSERT (span_id, chunk_start, chunk_end, matched_count, selected_count, used_count, first_seen_day, last_seen_day) ON vera_vjay.chunk_use TO vera_vjay_rw;
-GRANT UPDATE (matched_count, selected_count, used_count, last_seen_day) ON vera_vjay.chunk_use TO vera_vjay_rw;
+GRANT INSERT (span_id, chunk_start, chunk_end, node_id, matched_count, selected_count, used_count, matched_since_use, initial_weight, weight, removed_at, first_seen_day, last_seen_day)
+  ON vera_vjay.chunk_use TO vera_vjay_rw;
+GRANT UPDATE (matched_count, selected_count, used_count, matched_since_use, initial_weight, weight, removed_at, last_seen_day) ON vera_vjay.chunk_use TO vera_vjay_rw;
 
 -- Final privilege check against the actual logins (inside the transaction: a RAISE rolls everything back).
 DO $$
 DECLARE
   rw text := current_setting('vera025.rw'); ro text := current_setting('vera025.ro');
   t text := 'vera_vjay.chunk_use'; r text; p text; c text;
-  ins text[] := ARRAY['span_id','chunk_start','chunk_end','matched_count','selected_count','used_count','first_seen_day','last_seen_day'];
-  upd text[] := ARRAY['matched_count','selected_count','used_count','last_seen_day'];
+  ins text[] := ARRAY['span_id','chunk_start','chunk_end','node_id','matched_count','selected_count','used_count','matched_since_use','initial_weight','weight','removed_at','first_seen_day','last_seen_day'];
+  upd text[] := ARRAY['matched_count','selected_count','used_count','matched_since_use','initial_weight','weight','removed_at','last_seen_day'];
 BEGIN
   FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
     IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '025 grant check failed: login % needs SELECT on %.', r, t; END IF;
