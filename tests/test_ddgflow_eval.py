@@ -818,3 +818,15 @@ def test_flow_a_ddg_result_redirect_landing_doi_oa_fulltext_cited_same_request(w
     blob = json.dumps({"cands": spy["ddg_out"], "body": body, "queued": queued(),
                        "plans": world.rig.store.plans}, default=str)  # plans carry plan["candidate"] ({S}.candidates)
     assert marker not in blob and marker.lower() not in blob.lower()
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the behaviour from before the DuckDuckGo reductions (both site groups per call,
+    DuckDuckGo concurrent and first, branches/variants/answered questions included). The switches shipped in
+    config/ddg_reduce.json are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})

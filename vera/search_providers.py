@@ -2366,7 +2366,7 @@ class DuckDuckGoLiteProvider:
                 self.last_query["cause"] = "R-ACQ-ROBOTS"
                 raise ProviderUnavailable("R-ACQ-ROBOTS: robots.txt of the DuckDuckGo host disallows the query path "
                                           "or could not be read; DuckDuckGo skipped")
-        parts, live = [], 0
+        parts, live, spent = [], 0, 0  # spent = POSTs attempted (cap spent), live = POSTs answered
         self.last_call_cached = False
         for i, q in enumerate(queries):
             hit = self._cache_get(q)
@@ -2388,10 +2388,13 @@ class DuckDuckGoLiteProvider:
                     raise
                 self.last_query["note"] = "daily cap reached before the later queries"
                 break
+            spent += 1
             try:
                 r = tx(self.endpoint, {"q": q["query"], "kl": self.s["region"]}, headers, timeout_s)
             except requests_exceptions() as e:
                 if not live and not parts:
+                    from vera import ddg_meter  # DDG-REDUCE-1110: a POST whose transport raised was still sent
+                    ddg_meter.record(spent, self.last_query.get("cache_hits", 0))
                     raise
                 self.last_query.setdefault("errors", []).append(f"{q['group']}: {type(e).__name__}: {e}")
                 break
@@ -2401,7 +2404,7 @@ class DuckDuckGoLiteProvider:
                 break  # a challenge or error stops further queries; it is never retried or evaded
         self.last_call_cached = bool(parts) and not live
         from vera import ddg_meter  # DDG-REDUCE-1110 WP0: counts only, by call site
-        ddg_meter.record(live, self.last_query.get("cache_hits", 0))
+        ddg_meter.record(spent, self.last_query.get("cache_hits", 0))
         return _DdgParts(parts)
 
     @staticmethod

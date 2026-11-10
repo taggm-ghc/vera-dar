@@ -519,3 +519,15 @@ def test_9_same_request_grounded_answer_from_newly_admitted_evidence(world):
     ro = _ro(body)
     assert ro["kind"] == "answered_with_new" and ro["complete"] is True
     assert canon(_need_portals(body)[0]["portal"]) == "ddg"
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the behaviour from before the DuckDuckGo reductions (both site groups per call,
+    DuckDuckGo concurrent and first, branches/variants/answered questions included). The switches shipped in
+    config/ddg_reduce.json are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})

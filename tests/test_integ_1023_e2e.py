@@ -245,3 +245,15 @@ def test_e2e_acquisition_search_arxiv_hit_takes_the_arxiv_route_and_is_admitted_
     urls = world.rig.web.urls
     assert not any("ebi.ac.uk" in u and "48550" in u for u in urls), urls  # no Europe PMC lookup for the arXiv record
     _assert_arxiv_admitted_and_cited(world, body)
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the behaviour from before the DuckDuckGo reductions (both site groups per call,
+    DuckDuckGo concurrent and first, branches/variants/answered questions included). The switches shipped in
+    config/ddg_reduce.json are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})

@@ -356,3 +356,13 @@ def _no_spell_vocabulary_for_unrelated_tests(request, monkeypatch):
         monkeypatch.setattr(spell_clarify, "_corpora", lambda: ())
     yield
     spell_clarify.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _ddg_meter_fresh_per_test():
+    """DDG-REDUCE-1110: the DuckDuckGo meter's aggregate counter is process-wide; each test starts and ends at zero.
+    (It only resets state: the config/ddg_reduce.json switches keep their shipped values.)"""
+    from vera import ddg_meter
+    ddg_meter.reset()
+    yield
+    ddg_meter.reset()

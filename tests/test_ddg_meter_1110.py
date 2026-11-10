@@ -511,3 +511,47 @@ def test_c6_fixture_mix_measured_posts_per_question(rig, monkeypatch):
     assert (round(base, 2), round(c13, 2), round(c136, 2), round(poor_all, 2)) == (3.0, 1.0, 0.0, 1.0)
     # a fallback rate of 25% of questions (one in four falls back) gives 0.25 POST per question
     assert abs(0.25 * poor_all + 0.75 * c136 - 0.25) < 1e-9
+
+
+def test_post_whose_transport_raised_is_still_counted(rig, monkeypatch):
+    import requests
+
+    def boom(url, data, headers, timeout):
+        raise requests.ConnectionError("down")
+    rig.ddg._transport = boom
+    with pytest.raises(requests.ConnectionError):
+        rig.ddg.call(Q_PLAIN, 5, 5.0)
+    assert ddg_meter.snapshot()["base"]["posts"] == 1       # the cap was spent and the request was sent
+
+
+def test_c2_behavioural_real_extra_rounds_spend_no_duckduckgo_on_a_news_question(rig, monkeypatch):
+    """The real inline_acquire.acquire / _extra_rounds loop (tests/test_acq6_rounds_1103.py harness) for a NEWS question
+    whose variant rounds search through the real acquisition_search and the real DuckDuckGoLiteProvider: with the switch
+    on the variant rounds make no POST (round 0 keeps its one DuckDuckGo call), off they make 2 POSTs per round."""
+    from tests.test_acq6_rounds_1103 import ENV, H, Q, cand, cfg
+    from vera import acq_rounds, inline_acquire as ia, query_variants6
+    monkeypatch.setattr(query_variants6, "variants", lambda q: ["coding assistants seed funding", "coding assistants venture rounds", "coding assistants startup investors"])
+    monkeypatch.setattr(ia, "news_question", lambda q: True)
+    ddg_fn = lambda q, n, t: rig.ddg.parse(rig.ddg.call(q, n, t), n)  # noqa: E731
+    scfg = {"search": {"ddg_first": {"enabled": True, "max_landing_fetches": 0}, "europepmc": {"enabled": False}},
+            "bounds": {"max_search_calls_per_job": 6}}
+    real = sp.acquisition_search(lambda *a: [], scfg, ddg_search=ddg_fn, get=lambda *a, **k: (_ for _ in ()).throw(OSError("offline")),
+                                 url_check=lambda u: False, transport=lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    res = {}
+    for flag in (True, False):
+        rig.posts.clear(); rig.ddg._mem.clear(); ddg_meter.reset()
+        set_flags(monkeypatch, variant_rounds_no_ddg=flag)
+        h = H(monkeypatch, [[cand("z0", usable=False)]])
+
+        def search(query, n, t, _h=h):
+            _h.searches.append(query)
+            with sp.portal_scope():
+                real(query, n, t)
+            return []
+        h.deps.search = search
+        ia.acquire(Q, cfg(), env=ENV, clock=h.clock, deps_factory=lambda a, e: h.deps)
+        snap = ddg_meter.snapshot()
+        res[flag] = (len(h.searches), snap.get("variant", {}).get("posts", 0), snap.get("inline", {}).get("posts", 0))
+    assert res[True][0] >= 2 and res[True][1] == 0
+    assert res[False][1] == 2 * (res[False][0] - 1) and res[False][1] >= 2
+    assert res[True][2] == 2 and res[False][2] == 2        # round 0 unchanged by C2
