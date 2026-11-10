@@ -43,7 +43,7 @@ def test_safe_cost_records_an_unknown_cost_in_the_ledger(unpriced):
 def test_production_admission_defers_on_unpriced_cost_without_raising(unpriced, caplog):
     store = FakeStore()
     with caplog.at_level(logging.WARNING, logger="vera"):
-        counts = ca.admit("visitor question", [_src(1, "https://arxiv.org/abs/1"), _src(2, "https://arxiv.org/abs/2")],
+        counts = ca.admit("visitor question", [_src(1, "https://www.nature.com/articles/1"), _src(2, "https://www.nature.com/articles/2")],
                           _llm([0.9, 0.9]), CFG, store)
     assert counts == {"recorded_defer": 2} and "error" not in counts
     assert {r["gate_a_decision"] for r in store.rows} == {"defer"}

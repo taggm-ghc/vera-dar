@@ -111,8 +111,8 @@ class WoCorpusStore:
 
     def admit(self, cand: dict) -> str:
         """Record one scored candidate; store it as a source if admitted. Returns the outcome label."""
-        if _not_eligible(cand):  # E6: store-level backstop, before any DB access
-            return "skipped_not_evidence_eligible"
+        if _not_eligible(cand):  # E6: store-level backstop (same host-role check), before any DB access
+            return "skipped_host_role"
         rid = self.run_id()
         with self.engine.begin() as c:
             cid = self._insert_new(c, "INSERT INTO {S}.candidates (run_id, source_url, title, snippet, search_rank, "
@@ -172,10 +172,21 @@ def is_stored_document_source(src: dict) -> bool:
     return acquisition_state({"stored_text_kind": src.get("stored_text_kind"), "admission_passed": True}) == ACQ_ACQUIRED
 
 
+_ROLE_KEYS = ("doi", "url", "landing_url", "fulltext_url", "full_text_url", "source", "type", "source_type", "oa",
+              "pub_types", "pubTypeList", "is_preprint")
+
+
 def _not_eligible(src) -> bool:
-    """E6 (fail-closed): a source that carries an evidence_eligible key which is not True (portal-derived, index or
-    metadata-only entries are False) is never admitted. A source without the key is unchanged."""
-    return isinstance(src, dict) and "evidence_eligible" in src and src["evidence_eligible"] is not True
+    """E6 (fail-closed, host role): True unless the record's role (vera.host_role.role_for_record: DOI prefix, source
+    flag, preprint type, then URL host) allows it as stored evidence. PORTAL, EXCLUDED, RESOLVER and an undeterminable
+    (UNKNOWN) role are refused. evidence_eligible is NOT the filter: it only means 'may ground an answer'."""
+    try:
+        from vera import host_role
+        if not isinstance(src, dict):
+            return True
+        return not host_role.is_evidence_allowed({k: src[k] for k in _ROLE_KEYS if src.get(k) is not None}, "store")
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def gauntlet(question: str, sources: list[dict], llm_call, cfg: dict) -> list[dict]:
@@ -185,7 +196,7 @@ def gauntlet(question: str, sources: list[dict], llm_call, cfg: dict) -> list[di
               "licence": s.get("licence"), "stored_text_kind": s.get("stored_text_kind"), "doi": s.get("doi"),
               "published": s.get("published"), "discovered_via": s.get("discovered_via"),
               "source_type": s.get("source_type"),
-              **({"evidence_eligible": s["evidence_eligible"]} if "evidence_eligible" in s else {})}
+              **{k: s[k] for k in _ROLE_KEYS if k in s and k not in ("doi", "url", "source_type")}}
              for s in sources if s.get("snippet")]
     g = cfg.get("gate_a") or {}
     scored = score_candidates(question, cands, llm_call, cfg=GateAConfig(
