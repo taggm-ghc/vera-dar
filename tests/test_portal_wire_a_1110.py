@@ -179,3 +179,28 @@ def test_portal_quarantine_does_not_write(monkeypatch, tmp_path):
     before = json.dumps(s, sort_keys=True)
     fulldoc_db.load_from_rows(s, copy.deepcopy(spans), cfg)
     assert json.dumps(s, sort_keys=True) == before
+
+
+# ------------------------------------------------------------------------------------------------ V3: F1 chain, Q2 unknown count
+_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=EXT_ID:PMC1&format=json&resultType=core"
+
+
+def test_v3_discovered_europe_pmc_row_with_real_url_chain_still_serves():
+    prov = {"acquisition": {"resolver": "europepmc", "url_chain": [_SEARCH, EPMC]}}
+    assert fulltext_loader.portal_verdict({"fulltext_url": EPMC}, prov) is None
+
+
+def test_v3_row_whose_text_bearing_url_is_a_portal_is_quarantined():
+    prov = {"acquisition": {"resolver": "doi-landing", "url_chain": [_SEARCH, "https://www.biorxiv.org/content/x.full.xml"]},
+            "fulltext_url": "https://www.biorxiv.org/content/x.full.xml"}
+    assert fulltext_loader.portal_verdict({}, prov)
+    prov = {"acquisition": {"resolver": "doi-landing", "abs_url": "https://arxiv.org/abs/1", "url_chain": [_SEARCH]}}
+    assert fulltext_loader.portal_verdict({}, prov)
+
+
+def test_v3_manifest_unknown_host_allowed_counted_and_logged(caplog):
+    n0 = fulltext_loader.portal_unknown_count()
+    with caplog.at_level("INFO", logger="vera"):
+        fulltext_loader.check_portal({"doi": "10.9999/x.1", "landing_url": "https://unlisted.example.net/a?secret=1"})
+    assert fulltext_loader.portal_unknown_count() == n0 + 1
+    assert "unlisted.example.net" in caplog.text and "secret" not in caplog.text
