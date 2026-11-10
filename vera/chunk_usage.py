@@ -74,9 +74,9 @@ SQL_UPSERT_ASSOC = _sql("chunk_usage_upsert_assoc.sql")
 SQL_SNAPSHOT = ("SELECT span_id, node_kind, node_id, initial_weight, weight, (removed_at IS NOT NULL) FROM vera_vjay.chunk_use_assoc "
                 "WHERE weight < initial_weight OR removed_at IS NOT NULL ORDER BY node_kind, node_id, span_id LIMIT :max_rows")
 SQL_REFRESH_INIT = (
-    "UPDATE vera_vjay.chunk_use_assoc SET weight = LEAST(CAST(:new AS double precision), CASE WHEN initial_weight > 0 "
-    "THEN weight / initial_weight * CAST(:new AS double precision) ELSE CAST(:new AS double precision) END), "
-    "initial_weight = CAST(:new AS double precision) WHERE span_id = :span_id AND node_kind = :node_kind AND node_id = :node_id")
+    "UPDATE vera_vjay.chunk_use_assoc SET weight = LEAST(:new, CASE WHEN initial_weight > 0 "
+    "THEN weight / initial_weight * :new ELSE :new END), "
+    "initial_weight = :new WHERE span_id = :span_id AND node_kind = :node_kind AND node_id = :node_id")
 SQL_RESTORE = ("UPDATE vera_vjay.chunk_use_assoc SET weight = initial_weight, removed_at = NULL, selected_since_use = 0 "
                "WHERE span_id = :span_id AND node_kind = :node_kind AND node_id = :node_id")
 

@@ -1,5 +1,5 @@
--- 025_chunk_use.sql
--- Filename deliberately contains no "_vera_" token, so apply_migrations.py's `{prefix}_vera_*.sql` glob never picks it up (as 007/011/012/017/020/022/024).
+-- 025-DRAFT-chunk-use.sql.draft
+-- Filename follows the draft convention (007/011/012/017/020/022/024): it does not match apply_migrations.py's `{prefix}_vera_*.sql` glob; rename only at approval.
 -- CHUNK-USAGE-1110 (WP11 of work/CHUNK-VALUE-1110/plan.md, section 6b) DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL.
 -- APPLYING IT NEEDS OWNER-APPROVED DDL in that turn (AGENTS.md section 7), admin-run only, rehearsal first
 -- (work/CHUNK-USAGE-MIG025-1110/scripts/rehearse_025.sh in vera_dar_rehearsal), never via db/apply_migrations.py.

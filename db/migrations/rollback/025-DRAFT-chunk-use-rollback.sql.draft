@@ -1,4 +1,4 @@
--- 025_chunk_use rollback. CHUNK-USAGE-1110 DRAFT. NOT EXECUTED. OWNER-ONLY, admin-run, never via db/apply_migrations.py.
+-- 025-DRAFT-chunk-use rollback. CHUNK-USAGE-1110 DRAFT. NOT EXECUTED. OWNER-ONLY, admin-run, never via db/apply_migrations.py.
 -- A prepared undo path that is never expected to run (OD-1031-ROLLBACK-KEEP). Drops vera_vjay.chunk_use_assoc and vera_vjay.chunk_use. Nothing else is touched:
 -- no CASCADE; evidence_spans, the 020/022/024 objects and every role are unchanged.
 -- DATA-SAFE: it REFUSES while any row exists (counters are history that cannot be recomputed). To roll back anyway, the owner first
