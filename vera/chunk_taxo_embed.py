@@ -3,7 +3,7 @@
 Config `embedder` (config/chunk_taxo.json, or env CHUNK_TAXO_EMBEDDER):
   "none"        (default) the job stays inert with one log line; nothing is imported or sent.
   "cloudflare"  Cloudflare Workers AI REST (@cf/baai/bge-*), over HTTPS to api.cloudflare.com only. Credentials are the env vars
-                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN, read at call time; without them the adapter is not created and the
+                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, read at call time; without them the adapter is not created and the
                 job stays inert (one log line). AI Gateway is not used. No model is loaded in the API.
   any name registered with register() (tests use this for a deterministic fake).
 
@@ -29,7 +29,7 @@ from typing import Callable, Sequence
 log = logging.getLogger("vera.chunk_taxo")
 
 HOST = "api.cloudflare.com"
-ENV_ACCOUNT, ENV_TOKEN = "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_TOKEN"
+ENV_ACCOUNT, ENV_TOKEN = "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"
 # Model facts from the Cloudflare docs read by the coordinator (v3.8a); every value is overridable in config `cloudflare.models`.
 MODELS = {
     "bge-m3": {"max_tokens": 60000, "neurons_per_m": 1075, "dim": None},

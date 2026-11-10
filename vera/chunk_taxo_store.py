@@ -69,6 +69,11 @@ def _build() -> dict[str, str]:
                            "reasons, utc_day, neurons_used, state) "
                            f"VALUES ('{CLASSIFIER}', :version, to_timestamp(:started), to_timestamp(:finished), CAST(:metrics AS jsonb), :display_ok, "
                            "CAST(:reasons AS text[]), timezone('utc', now())::date, 0, 'finished')")
+    # Self-report row (TAXO-DIAG-FIX-1110): one closed 'failed' row when a pass ends inert; display_ok false satisfies the display/finished checks.
+    s["job_run_inert"] = ("INSERT INTO vera_vjay.tax_job_runs (classifier_name, classifier_version, started_at, finished_at, metrics, display_ok, "
+                          "reasons, utc_day, neurons_used, state) "
+                          f"VALUES ('{CLASSIFIER}', 'inert', now(), now(), CAST('{{}}' AS jsonb), false, "
+                          "CAST(:reasons AS text[]), timezone('utc', now())::date, 0, 'failed')")
     s["neurons_today"] = ("SELECT COALESCE(SUM(neurons_used), 0) FROM vera_vjay.tax_job_runs "
                           f"WHERE classifier_name = '{CLASSIFIER}' AND utc_day = timezone('utc', now())::date")
     s["job_run_latest"] = ("SELECT classifier_version, finished_at, metrics, display_ok, reasons FROM vera_vjay.tax_job_runs "

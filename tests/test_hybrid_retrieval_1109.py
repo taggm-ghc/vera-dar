@@ -122,7 +122,7 @@ class Loader:
 
 
 Q = "Which agent archetypes are used in multi-agent orchestration?"
-CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct_test", "CLOUDFLARE_AI_TOKEN": "tok-secret-123"}
+CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct_test", "CLOUDFLARE_API_TOKEN": "tok-secret-123"}
 
 
 @pytest.fixture(autouse=True)

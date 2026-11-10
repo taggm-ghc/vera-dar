@@ -263,6 +263,8 @@ class Job:
                     self._set(state="error")
                     log.warning("chunk_taxo job failed: CT_JOB_ERROR (%s)", type(exc).__name__)
                     return {"state": "error", "complete": False, "rows_embedded": self.rows_embedded}
+            if self._inert:
+                self._record_inert(self._inert)  # after the probe connection is closed (pool of one)
             if self._run_id is not None:
                 self._close_run("deferred")
             self._release_buffers()  # early stop or end of pass: no chunk or vector buffer survives it
@@ -312,7 +314,22 @@ class Job:
         self._inert = code
         self._drop_engine()
         self._set(state="inert", reasons=[code])
-        log.info("chunk_taxo job inert: %s", code)
+        log.warning("chunk_taxo job inert: %s", code)
+
+    def _record_inert(self, code: str) -> None:
+        """Self-report: at most one closed 'failed' tax_job_runs row per process start (rw app path). Never raises."""
+        global _INERT_ROW_DONE
+        with _GUARD_ROW:
+            if _INERT_ROW_DONE:
+                return
+            _INERT_ROW_DONE = True
+        try:
+            with self._engine().begin() as conn:
+                store.run_sql(conn, "job_run_inert", {"reasons": [str(code)[:64]]})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chunk_taxo inert run row not written: CT_INERT_ROW_ERROR (%s)", type(exc).__name__)
+        finally:
+            self._drop_engine()
 
     def _drop_engine(self) -> None:
         eng, self._eng = self._eng, None
@@ -847,6 +864,8 @@ _JOB: Job | None = None
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
 _GUARD = threading.Lock()
+_GUARD_ROW = threading.Lock()
+_INERT_ROW_DONE = False  # one inert self-report row per process start
 
 
 def status() -> dict:
@@ -857,7 +876,8 @@ def status() -> dict:
 
 
 def reset_for_tests() -> None:
-    global _JOB, _THREAD
+    global _JOB, _THREAD, _INERT_ROW_DONE
+    _INERT_ROW_DONE = False
     _STOP.set()
     t = _THREAD
     if t is not None:
@@ -893,7 +913,21 @@ def loop(job: Job, sleep=None, max_passes=None) -> None:
             return
 
 
-def start(cfg=None) -> bool:
+def _announce(job: "Job", env) -> None:
+    """Startup self-report: first-pass delay at INFO; WARNING naming (names only, never values) any missing credential variables."""
+    try:
+        log.info("chunk_taxo: first pass in %d s", int(_num(job.jcfg, "initial_delay_s")))
+        from vera import chunk_taxo_embed as emb  # noqa: PLC0415
+        name = str(job.cfg.get("embedder") or env.get("CHUNK_TAXO_EMBEDDER") or "")
+        if name == "cloudflare":
+            missing = [v for v in (emb.ENV_ACCOUNT, emb.ENV_TOKEN) if not (env.get(v) or "").strip()]
+            if missing:
+                log.warning("chunk_taxo: credentials_missing, absent env var names: %s", ", ".join(missing))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def start(cfg=None, env=None) -> bool:
     """Start the single daemon thread when config chunk_taxo.enabled is true. Never raises; no thread, engine or connection
     otherwise. Returns True only when a thread was started."""
     global _JOB, _THREAD
@@ -909,6 +943,7 @@ def start(cfg=None) -> bool:
             _JOB = Job(cfg)
             _THREAD = threading.Thread(target=loop, args=(_JOB,), name="chunk-taxo-job", daemon=True)
             _THREAD.start()
+            _announce(_JOB, env if env is not None else os.environ)
             return True
     except Exception as exc:  # noqa: BLE001
         log.warning("chunk_taxo job not started: CT_START_ERROR (%s)", type(exc).__name__)

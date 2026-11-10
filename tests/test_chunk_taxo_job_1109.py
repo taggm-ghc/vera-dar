@@ -41,6 +41,7 @@ class FakeDB:
         self.acct = ("vera_claude_code_rw", user_rw, user_wo)
         self.vectors, self.nodes, self.links, self.runs, self.anchors = {}, {}, {}, [], []
         self.run_rows = []
+        self.inert_rows = []
         self.ids = count(1)
         self.ctx = None
         self.fail_on = None
@@ -77,6 +78,9 @@ class FakeDB:
             return Res([])
         if name == "job_run_insert":
             self.runs.append(p)
+            return Res([])
+        if name == "job_run_inert":
+            self.inert_rows.append(p)
             return Res([])
         if name == "job_run_start":
             self.run_rows.append(dict(state="running", neurons=0))
@@ -285,7 +289,7 @@ def test_embedder_none_is_inert_with_one_log_line(caplog):
     j = job.Job({"enabled": True, "params": {}}, core=StubCore(), engine_factory=factory_for(db), env=dict(ENV))
     assert j.run()["state"] == "inert"
     assert [r for r in caplog.records if "inert" in r.getMessage()].__len__() == 1
-    assert j.engines_created == 0 and db.log == []
+    assert db.names() == ["job_run_inert"] and db.inert_rows == [{"reasons": ["embedder_none"]}]  # self-report row only
 
 
 @pytest.mark.parametrize("rw,wo,why", [(False, False, "account_not_rw"), (True, True, "account_is_wo")])
@@ -294,7 +298,7 @@ def test_wrong_account_inert(rw, wo, why):
     j = make(db)
     r = j.run()
     assert r["state"] == "inert" and j.status()["reasons"] == [why]
-    assert db.names() == ["probe_account"]
+    assert db.names() == ["probe_account", "job_run_inert"] and db.inert_rows == [{"reasons": [why]}]
 
 
 def test_missing_024_or_020_inert():
@@ -535,7 +539,7 @@ def test_status_reader_absent_and_ok_and_cached():
 # ----------------------------------------------------------------------------------------------- Cloudflare adapter (fake opener)
 import urllib.error  # noqa: E402
 
-CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_AI_TOKEN": "TOKEN-SENTINEL_TEXT-VALUE"}
+CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_API_TOKEN": "TOKEN-SENTINEL_TEXT-VALUE"}
 
 
 class FakeResp:
@@ -721,3 +725,76 @@ def test_cf_default_opener_refuses_redirects_so_the_token_is_not_forwarded():
         e.embed(["a"])
     assert str(ei.value) == "http_302"
     assert emb.CloudflareEmbedder({}, env=dict(CF_ENV)).opener is emb._default_open
+
+
+# ----------------------------------------------------------------------------------------------- TAXO-DIAG-FIX-1110 self-report
+@pytest.fixture(autouse=True)
+def _fresh_inert_flag():
+    job.reset_for_tests()
+    yield
+    job.reset_for_tests()
+
+
+def test_startup_logs_delay_and_missing_cred_names_only(caplog):
+    caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+    secret = "s3cr3t-token-value"
+    c = dict(cfg(initial_delay_s=10**6), embedder="cloudflare")
+    assert job.start(c, env={"CLOUDFLARE_API_TOKEN": "  "}) is True
+    job.reset_for_tests()
+    msgs = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert (logging.INFO, "chunk_taxo: first pass in 1000000 s") in msgs
+    warn = [m for lv, m in msgs if lv == logging.WARNING and "credentials_missing" in m]
+    assert len(warn) == 1 and "CLOUDFLARE_ACCOUNT_ID" in warn[0] and "CLOUDFLARE_API_TOKEN" in warn[0] and secret not in warn[0]
+
+
+def test_startup_no_warning_when_creds_present(caplog):
+    caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+    c = dict(cfg(initial_delay_s=10**6), embedder="cloudflare")
+    assert job.start(c, env={"CLOUDFLARE_ACCOUNT_ID": "a", "CLOUDFLARE_API_TOKEN": "t"}) is True
+    job.reset_for_tests()
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("first pass in" in r.getMessage() for r in caplog.records)
+
+
+def test_inert_log_is_warning_and_one_failed_row_per_process(caplog):
+    caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+    db = FakeDB(spans())
+    e = {"CHUNK_TAXO_EMBEDDER": "cloudflare", **ENV}
+    r1 = job.Job({"enabled": True, "params": {}, "embedder": "cloudflare", "send_allowed": True}, core=StubCore(), engine_factory=factory_for(db), env=e)
+    assert r1.run()["state"] == "inert" and db.inert_rows == [{"reasons": ["credentials_missing"]}]
+    assert [r.levelno for r in caplog.records if "inert:" in r.getMessage()] == [logging.WARNING]
+    r2 = job.Job({"enabled": True, "params": {}, "embedder": "cloudflare", "send_allowed": True}, core=StubCore(), engine_factory=factory_for(db), env=e)
+    assert r2.run()["state"] == "inert" and len(db.inert_rows) == 1  # second inert in the same process writes nothing
+
+
+def test_inert_row_insert_failure_tolerated(caplog):
+    caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+    db = FakeDB(spans())
+    db.fail_on = "job_run_inert"
+    j = job.Job({"enabled": True, "params": {}}, core=StubCore(), engine_factory=factory_for(db), env=dict(ENV))
+    assert j.run()["state"] == "inert"
+    assert [r for r in caplog.records if r.levelno == logging.WARNING and "CT_INERT_ROW_ERROR" in r.getMessage()]
+
+
+def test_enabled_path_writes_no_inert_row():
+    db = FakeDB(spans())
+    j = make(db)
+    assert j.run()["complete"] and db.inert_rows == [] and "job_run_inert" not in db.names()
+
+
+def test_embedder_loads_with_account_and_api_token_and_inert_when_either_missing(caplog):
+    from vera.chunk_taxo_embed import load_embedder
+    c = {"embedder": "cloudflare", "send_allowed": True}
+    emb, why = load_embedder(c, env={"CLOUDFLARE_ACCOUNT_ID": "fake-acct", "CLOUDFLARE_API_TOKEN": "fake-token"})
+    assert emb is not None and why == "ok"
+    for env in ({"CLOUDFLARE_ACCOUNT_ID": "fake-acct"}, {"CLOUDFLARE_API_TOKEN": "fake-token"}):
+        emb, why = load_embedder(c, env=env)
+        assert emb is None and why == "credentials_missing"
+        caplog.clear()
+        caplog.set_level(logging.INFO, logger="vera.chunk_taxo")
+        job.reset_for_tests()
+        assert job.start(dict(cfg(initial_delay_s=10**6), embedder="cloudflare"), env=env) is True
+        job.reset_for_tests()
+        w = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(w) == 1 and "credentials_missing" in w[0] and "fake-" not in w[0]
+        assert ("CLOUDFLARE_API_TOKEN" in w[0]) != ("CLOUDFLARE_ACCOUNT_ID" in w[0])
