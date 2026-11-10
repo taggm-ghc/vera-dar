@@ -677,20 +677,35 @@ def _fan_out(chain, question, n, minimum, rrf_k, kw, max_share=None, soft_max_sh
     live = [p for p in chain if not p.name.startswith("seed:")]
     seeds = [p for p in chain if p.name.startswith("seed:")]
     notes, tried, per = [], [], {}
-    for p, (kind, val, ms) in zip(live, _call_live_concurrently(live, question, n, kw)):
-        if kind == "raise":  # an unexpected error propagates, as in the serial loop (chain order)
-            raise val
-        if kind == "sce":
-            raise SearchConfigError(f"{p.name}: {val}") from None
-        if kind == "failed":
-            notes += [f"{p.name}: {x}" for x in val.notes]
-            tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(val.notes)})
-            _trace_provider(p.name, None, notes=val.notes, ms=ms)
-            continue
-        items = _finalize(val, p.name, n)
-        _trace_provider(p.name, None, items=items, ms=ms)
-        per[p.name] = items
-        tried.append({"provider": p.name, "outcome": "ok", "count": len(items), "status": "completed"})
+
+    def run(group):
+        for p, (kind, val, ms) in zip(group, _call_live_concurrently(group, question, n, kw)):
+            if kind == "raise":  # an unexpected error propagates, as in the serial loop (chain order)
+                raise val
+            if kind == "sce":
+                raise SearchConfigError(f"{p.name}: {val}") from None
+            if kind == "failed":
+                notes.extend(f"{p.name}: {x}" for x in val.notes)
+                tried.append({"provider": p.name, "outcome": "failed", "status": _failure_status(val.notes)})
+                _trace_provider(p.name, None, notes=val.notes, ms=ms)
+                continue
+            items = _finalize(val, p.name, n)
+            _trace_provider(p.name, None, items=items, ms=ms)
+            per[p.name] = items
+            tried.append({"provider": p.name, "outcome": "ok", "count": len(items), "status": "completed"})
+    from vera import ddg_reduce
+    from vera.search_providers import DDG_NAME
+    ddg_p = [p for p in live if p.name == DDG_NAME]
+    if ddg_p and len(ddg_p) < len(live) and ddg_reduce.fallback_only():
+        # DDG-REDUCE-1110 C6 (owner 2026-11-10 "make DDG a fallback now"): the other routes first; DuckDuckGo only when they
+        # return fewer than ddg_fallback_min_results candidates. Never for a seed request (the provider refuses it).
+        run([p for p in live if p.name != DDG_NAME])
+        if ddg_reduce.usable_count(question, [x for v in per.values() for x in v]) < ddg_reduce.fallback_min():
+            run(ddg_p)
+        else:
+            tried.append({"provider": DDG_NAME, "outcome": "skipped", "status": "not_attempted"})
+    else:
+        run(live)
     merged = rrf_merge(per, rrf_k, max(n * len(per), n)) if per else []
     share_dropped = 0
     if merged and max_share:  # after RRF, before the top-n cut: discovery cannot crowd out scholarly results

@@ -1,0 +1,24 @@
+{
+  "_note": "DDG-REDUCE-1110 (owner OD-1110-SEARCHCAPS 'Keep low, use it better'; plan work/DDG-REDUCE-1110/plan.md in the root workspace). Each switch ships true = the new behaviour; false restores the previous behaviour of that one path. They lower the visitor DuckDuckGo POSTs per question (counts: vera/ddg_meter.py). The daily cap (config/vera_eval_run.json search.duckduckgo_lite.daily_query_cap 8) is unchanged. Planner priors, UNCALIBRATED: what would change them is the per-site POST counts in the request trace (search/ddg_<site>) over a few days of real questions.",
+  "domain_branches_scholarly_only": true,
+  "_domain_branches_scholarly_only_note": "C1: domain-routing branches search with the non-DuckDuckGo providers only; the base (unrestricted) search keeps DuckDuckGo.",
+  "variant_rounds_no_ddg": true,
+  "_variant_rounds_no_ddg_note": "C2: acquisition variant rounds (news questions included) spend no DuckDuckGo; a news question's variant rounds keep the reporting lane (GDELT) and the other routes.",
+  "one_group_per_call": true,
+  "_one_group_per_call_note": "C3: one DuckDuckGo site-group query per call (one POST, was up to 2): the news group for a news / current-events question, else the portals group. false restores one query per group (max_queries_per_question).",
+  "answered_question_no_ddg": true,
+  "_answered_question_no_ddg_note": "C4: the search for new documents on an ANSWERED, SUFFICIENT and FRESH question (the only trigger is new_documents, OD-1109-SIX; ask_service._research_attempt) spends no DuckDuckGo unless the question has news intent; for any other trigger (insufficient, stale, freshness_unknown) DuckDuckGo stays available as the C6 fallback; OpenAlex and Europe PMC still run. YIELD-1021 (DDG first) covers questions not in the corpus.",
+  "longer_normalized_cache": true,
+  "memory_cache_ttl_s_by_group": {
+    "portals": 21600,
+    "news": 3600
+  },
+  "_longer_normalized_cache_note": "C5: the in-process DuckDuckGo cache (url + title only, per process, lost on restart, 256 entries) lives 6 h for the portals group and 1 h for news (freshness rule: news stays short), keyed by group plus the lower-cased, de-duplicated, sorted query terms. UNCALIBRATED planner priors; one PDSA cycle per week from the ddg_<site> counts. false = the exact query string and search.duckduckgo_lite.memory_cache_ttl_s (900).",
+  "ddg_fallback_only": true,
+  "ddg_fallback_min_results": 3,
+  "ddg_fallback_relevant_only": true,
+  "_ddg_fallback_relevant_only_note": "C6 (v3 F2): only candidates that pass the existing pre-filters (search_query.relevance_tiers not tier 2; search_providers.acq_prefilter not nd / not_oa) count toward ddg_fallback_min_results, so loosely matched hits do not suppress the fallback. false = raw count.",
+  "ddg_fallback_min_remaining_s": 1.0,
+  "_ddg_fallback_min_remaining_s_note": "C6: the fallback is skipped (not started) when less than this many seconds of the search deadline remain; a DuckDuckGo call cannot finish in less. Applies to every question, news included (no exemption; accepted risk, work/DDG-REDUCE-1110/v3_notes.md). UNCALIBRATED prior.",
+  "_ddg_fallback_only_note": "C6 (owner 2026-11-10, 'Make DDG a fallback now'; changes YIELD-1021 'DDG first' to 'DDG when the other routes return too little'): the reading-list search and the acquisition search call the scholarly routes (OpenAlex, Europe PMC, DOAJ, arXiv when on, Wikipedia portal) first and DuckDuckGo only when they return fewer than ddg_fallback_min_results candidates in total. A question with no other route still reaches DuckDuckGo. Never for a seed request (reserved for visitors). The official lane and reference portal run in their own lanes and are unchanged. false = DuckDuckGo concurrent and first as before. ddg_fallback_min_results 3 is an UNCALIBRATED planner prior (PDSA from the ddg_<site> counts)."
+}

@@ -377,3 +377,13 @@ def legacy_arxiv_route(monkeypatch):
     monkeypatch.setattr(acq_config, "load_config", load)
     yield
     host_role_support.reset()
+
+
+@pytest.fixture(autouse=True)
+def _ddg_meter_fresh_per_test():
+    """DDG-REDUCE-1110: the DuckDuckGo meter's aggregate counter is process-wide; each test starts and ends at zero.
+    (It only resets state: the config/ddg_reduce.json switches keep their shipped values.)"""
+    from vera import ddg_meter
+    ddg_meter.reset()
+    yield
+    ddg_meter.reset()

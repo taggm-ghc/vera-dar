@@ -40,7 +40,7 @@ from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from vera import acq_config, acq_rounds, rate_limit
+from vera import acq_config, acq_rounds, ddg_meter, ddg_reduce, rate_limit
 from vera import auto_acquire as aa
 from vera import request_trace as rt
 from vera import research_outcome, search_providers, source_type, stream_ctx
@@ -795,10 +795,12 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             try:
                 # P0DTA-PRIO D3: the search phase ends a fetch reserve (per_doc_timeout_s) before the inline deadline
                 # (STREAM-1031: no inline deadline, so the search keeps only its own timeout_s)
-                cands = list(_with_parts(sq_plan, deps.search, question, int(s.get("results_per_provider", 10)),
-                                         float(s.get("timeout_s", 20)) if ctx is not None else
-                                         max(1.0, min(float(s.get("timeout_s", 20)),
-                                                      deadline - clock() - _b(acq, "per_doc_timeout_s", 25)))) or [])
+                # DDG-REDUCE-1110 WP0: counted as "inline" (a caller's own label, e.g. freshness, is kept)
+                with ddg_meter.site("inline" if ddg_meter.current() == "base" else ddg_meter.current()):
+                    cands = list(_with_parts(sq_plan, deps.search, question, int(s.get("results_per_provider", 10)),
+                                             float(s.get("timeout_s", 20)) if ctx is not None else
+                                             max(1.0, min(float(s.get("timeout_s", 20)),
+                                                          deadline - clock() - _b(acq, "per_doc_timeout_s", 25)))) or [])
                 if not portals_l:  # FRESH-1023: a search callable that records no portals counts as ONE portal
                     search_providers.record_portal("acquisition_search", "completed", len(cands))
             except Exception:  # noqa: BLE001
@@ -1381,11 +1383,15 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                 # not forced to scholarly-only portals (a scholarly-only round cannot find current reporting); the
                 # web results it finds go through the same A6-W web route gates as round 0.
                 so_tok = search_providers.SCHOLARLY_ONLY.set(not news)
+                site_tok = ddg_meter.SITE.set("variant")  # DDG-REDUCE-1110 WP0: counted as a variant round
+                nd_tok = ddg_reduce.NO_DDG.set(ddg_reduce.on("variant_rounds_no_ddg"))  # C2: news rounds keep GDELT, not DDG
                 try:
                     cands = list(_with_parts(None, deps.search, q, int(s.get("results_per_provider", 10)),
                                              float(s.get("timeout_s", 20)) if ctx is not None else
                                              max(1.0, min(float(s.get("timeout_s", 20)), deadline - clock() - per_doc))) or [])
                 finally:
+                    ddg_reduce.NO_DDG.reset(nd_tok)
+                    ddg_meter.SITE.reset(site_tok)
                     search_providers.SCHOLARLY_ONLY.reset(so_tok)
                 if not pl:
                     search_providers.record_portal("acquisition_search", "completed", len(cands))

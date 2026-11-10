@@ -20,7 +20,7 @@ import contextlib
 import contextvars
 import hashlib
 import json
-from vera import strict_json
+from vera import ddg_reduce, strict_json
 import re
 import threading
 from datetime import datetime, timezone
@@ -1599,6 +1599,10 @@ def _search_parts(base_search: Callable, parts: list, B: Mapping, question: str,
     return out
 
 
+def ddg_reduce_no_ddg() -> bool:
+    return ddg_reduce.NO_DDG.get()
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
@@ -1622,6 +1626,9 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         b = _budget(cap, n_parts)
         if SCHOLARLY_ONLY.get():  # NONASK-1103 N3: variant rounds never call DDG, its id lookup or Wikipedia
             b = dict(b, ddg=False, wiki=False, lookup=0)
+        from vera import ddg_reduce
+        if ddg_reduce.NO_DDG.get():  # DDG-REDUCE-1110 C2/C4: this call site spends no DuckDuckGo (nothing else changes)
+            b = dict(b, ddg=False)
         from vera import request_origin
         if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
             b = dict(b, ddg=False)  # SEARCHCAPS-1110: seed requests never call DuckDuckGo (OD-1110-SEARCHCAPS)
@@ -1682,12 +1689,12 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         multi = len(parts) > 1 and (s.get("subquery") or {}).get("enabled") is True
         from vera import request_origin
         B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else \
-            (budget(cap0) if SCHOLARLY_ONLY.get() or request_origin.is_seed() else B0)
+            (budget(cap0) if SCHOLARLY_ONLY.get() or request_origin.is_seed() or ddg_reduce_no_ddg() else B0)
         use_ddg, use_epmc, use_wiki, use_arxiv, lookup_left = B["ddg"], B["epmc"], B["wiki"], B["arxiv"], B["lookup"]
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
-            if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context (the inline rate-limit deadline)
+            if use_ddg and not ddg_reduce.fallback_only():  # RATE-1022 C2: each future runs in a copy of this context
                 futs["ddg"] = _submit_in_order(pool, ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
             if use_epmc:
                 try:
@@ -1793,6 +1800,24 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                     st_f[k] = "timeout"
                 else:
                     st_f[k] = "failed"
+        if use_ddg and "ddg" not in futs and ddg_reduce.fallback_only():
+            # DDG-REDUCE-1110 C6 (owner 2026-11-10 "make DDG a fallback now"): DuckDuckGo runs only when the other routes
+            # returned fewer than ddg_fallback_min_results usable candidates (and the deadline allows it).
+            # v3 F2: only candidates that pass the existing pre-filters count (ddg_reduce.usable_count)
+            usable = ddg_reduce.usable_count(question, [*base, *(got.get("epmc") or ()), *(got.get("wiki") or ())],
+                                             (s.get("openalex_profile") or {}).get("generic_terms") or ())
+            if usable < ddg_reduce.fallback_min() and t_end - clock() > ddg_reduce.fallback_min_remaining_s():
+                futs["ddg"] = _submit_in_order(pool2 := cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="acq-ddg"),
+                                               ddg_search or _default_ddg_search(cfg), question, n, max(1.0, t_end - clock()))
+                pool2.shutdown(wait=False)
+                futs_order.append("ddg")
+                try:
+                    got["ddg"] = list(futs["ddg"].result(timeout=max(0.1, t_end - clock())) or [])
+                    st_f["ddg"] = "completed"
+                except Exception as e:  # noqa: BLE001
+                    got["ddg"] = []
+                    own = _own_decision(e)
+                    st_f["ddg"] = own or ("quota" if _is_quota_error(e) else "timeout" if _is_timeout(e) else "failed")
         sfx = str(ecfg.get("query_suffix") or "")
         if (use_epmc and epmc_ok and not got.get("epmc") and not got.get("ddg") and lookup_left >= 1
                 and t_end - clock() > 1 and _or_differs(question, terms, profile, sfx)):
@@ -2120,10 +2145,13 @@ class _LiteLinks(HTMLParser):
             self._href = None
 
 
-def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> list[dict]:
+def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping, *, groups: list | None = None,
+                      limit: int | None = None) -> list[dict]:
     """-> [{"group", "query"}], at most `max_queries_per_question`, each <= `max_query_chars`. Unquoted core+extra
     terms plus a (site:a OR site:b) group; a group whose sites do not fit is split into chunks (first chunk of
-    every group is served before any second chunk). Raises ValueError when nothing searchable remains."""
+    every group is served before any second chunk). Raises ValueError when nothing searchable remains.
+    DDG-REDUCE-1110 C3: `groups` (ordered names) restricts the groups used (names the config does not have are ignored;
+    none left = all groups); `limit` replaces max_queries_per_question."""
     if terms_cfg is not None:
         qt = build_query_terms(question, terms_cfg)
         words = list(qt.core) + list(qt.extra)
@@ -2134,7 +2162,10 @@ def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> l
                  if w not in QUERY_STOPWORDS and len(w) > 1][:8]
     if not words:
         raise ValueError("question has no searchable term after stopword removal")
-    cap, groups = int(s["max_query_chars"]), {g: list(v) for g, v in s["site_groups"].items() if v}
+    only = [g for g in (groups or []) if s["site_groups"].get(g)]
+    cap = int(s["max_query_chars"])
+    groups = {g: list(s["site_groups"][g]) for g in only} if only else \
+        {g: list(v) for g, v in s["site_groups"].items() if v}
     if not groups:
         raise ValueError("duckduckgo_lite: no site group has any site")
     longest = max(len(x) for v in groups.values() for x in v)
@@ -2160,7 +2191,19 @@ def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> l
         for g, v in chunks.items():
             if i < len(v):
                 ordered.append({"group": g, "query": base + " (" + " OR ".join("site:" + x for x in v[i]) + ")"})
-    return ordered[:int(s["max_queries_per_question"])]
+    return ordered[:int(limit if limit is not None else s["max_queries_per_question"])]
+
+
+def ddg_group_for(question: str, s: Mapping) -> str:
+    """DDG-REDUCE-1110 C3: the one site group a question is searched with: "news" for a news / current-events question
+    (vera.news_intent), else "portals". A group the config does not have falls back to the first one it has."""
+    try:
+        from vera import news_intent
+        want = "news" if news_intent.news_intent(str(question or "")) else "portals"
+    except Exception:  # noqa: BLE001
+        want = "portals"
+    have = [g for g, v in (s.get("site_groups") or {}).items() if v]
+    return want if want in have else (have[0] if have else want)
 
 
 class _CachedPart:
@@ -2250,11 +2293,34 @@ class DuckDuckGoLiteProvider:
             return None
         return self.cache_dir / (hashlib.sha256(q["query"].encode("utf-8")).hexdigest() + ".json")
 
+    def _mem_ttl(self, q: Mapping) -> float:
+        """In-process cache lifetime of one query. DDG-REDUCE-1110 C5 (config/ddg_reduce.json longer_normalized_cache):
+        per site group (portals 6 h, news 1 h), else memory_cache_ttl_s. 0 = off (also when a disk cache is used)."""
+        if self.cache_dir is not None:
+            return 0.0
+        from vera import ddg_reduce
+        if ddg_reduce.on("longer_normalized_cache"):
+            by = ddg_reduce.load().get("memory_cache_ttl_s_by_group") or {}
+            v = by.get(q.get("group")) if isinstance(by, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+                return float(v)
+        return self._mem_ttl_s
+
+    @staticmethod
+    def _mem_key(q: Mapping) -> str:
+        """The in-process cache key: the query string, or with C5 the group plus its lower-cased, de-duplicated, sorted terms
+        (the same question worded or ordered differently, or repeated words, shares one entry)."""
+        from vera import ddg_reduce
+        if ddg_reduce.on("longer_normalized_cache"):
+            return str(q.get("group")) + "|" + " ".join(sorted(set(q["query"].lower().split())))
+        return q["query"]
+
     def _cache_get(self, q: Mapping) -> list[dict] | None:
         path = self._cache_path(q)
         if path is None:
-            hit = self._mem.get(q["query"]) if self._mem_ttl_s > 0 else None
-            if hit is None or not (0 <= self._wall() - hit[0] <= self._mem_ttl_s):
+            ttl = self._mem_ttl(q)
+            hit = self._mem.get(self._mem_key(q)) if ttl > 0 else None
+            if hit is None or not (0 <= self._wall() - hit[0] <= ttl):
                 return None
             return [dict(i) for i in hit[1]]
         try:
@@ -2277,10 +2343,10 @@ class DuckDuckGoLiteProvider:
     def _cache_put(self, q: Mapping, items: list[dict]) -> None:
         path = self._cache_path(q)
         if path is None:
-            if self._mem_ttl_s > 0:
+            if self._mem_ttl(q) > 0:
                 if len(self._mem) >= 256:  # bounded: drop the oldest entry
                     self._mem.pop(next(iter(self._mem)), None)
-                self._mem[q["query"]] = (self._wall(), [{"url": i["url"], "title": i["title"]} for i in items])
+                self._mem[self._mem_key(q)] = (self._wall(), [{"url": i["url"], "title": i["title"]} for i in items])
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -2293,10 +2359,18 @@ class DuckDuckGoLiteProvider:
             if self.last_query is not None:
                 self.last_query.setdefault("errors", []).append(f"cache write failed: {type(e).__name__}: {e}")
 
+    def _build_queries(self, question: str) -> list[dict]:
+        """The site-group queries of one call. DDG-REDUCE-1110 C3 (config/ddg_reduce.json one_group_per_call): ONE query,
+        the group chosen by the question's intent, instead of one per group."""
+        from vera import ddg_reduce
+        if ddg_reduce.on("one_group_per_call"):
+            return build_ddg_queries(question, self.query_terms, self.s, groups=[ddg_group_for(question, self.s)], limit=1)
+        return build_ddg_queries(question, self.query_terms, self.s)
+
     def gate_exempt(self, question: str) -> bool:
         """True when every site-group query for this question is cached, so no request (and no gate wait) is needed."""
         try:
-            queries = build_ddg_queries(question, self.query_terms, self.s)
+            queries = self._build_queries(question)
         except ValueError:
             return False
         return bool(queries) and all(self._cache_get(q) is not None for q in queries)
@@ -2309,7 +2383,7 @@ class DuckDuckGoLiteProvider:
     def call(self, query: str, n: int, timeout_s: float, *, queries: list | None = None):
         # NONASK-1103 S4 (plan 6.3): `queries` = explicit [{"group", "query"}] (the official lane's one site: query);
         # it goes through the same cache, daily cap, rate gate and transport as every other call.
-        queries = list(queries) if queries else build_ddg_queries(query, self.query_terms, self.s)
+        queries = list(queries) if queries else self._build_queries(query)
         self.last_query = {"query": [q["query"] for q in queries], "mode": "site_groups"}
         from vera import request_origin
         if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
@@ -2326,7 +2400,7 @@ class DuckDuckGoLiteProvider:
                 self.last_query["cause"] = "R-ACQ-ROBOTS"
                 raise ProviderUnavailable("R-ACQ-ROBOTS: robots.txt of the DuckDuckGo host disallows the query path "
                                           "or could not be read; DuckDuckGo skipped")
-        parts, live = [], 0
+        parts, live, spent = [], 0, 0  # spent = POSTs attempted (cap spent), live = POSTs answered
         self.last_call_cached = False
         for i, q in enumerate(queries):
             hit = self._cache_get(q)
@@ -2348,10 +2422,13 @@ class DuckDuckGoLiteProvider:
                     raise
                 self.last_query["note"] = "daily cap reached before the later queries"
                 break
+            spent += 1
             try:
                 r = tx(self.endpoint, {"q": q["query"], "kl": self.s["region"]}, headers, timeout_s)
             except requests_exceptions() as e:
                 if not live and not parts:
+                    from vera import ddg_meter  # DDG-REDUCE-1110: a POST whose transport raised was still sent
+                    ddg_meter.record(spent, self.last_query.get("cache_hits", 0))
                     raise
                 self.last_query.setdefault("errors", []).append(f"{q['group']}: {type(e).__name__}: {e}")
                 break
@@ -2360,6 +2437,8 @@ class DuckDuckGoLiteProvider:
             if r.status_code != 200 or self._is_challenge(r.text or ""):
                 break  # a challenge or error stops further queries; it is never retried or evaded
         self.last_call_cached = bool(parts) and not live
+        from vera import ddg_meter  # DDG-REDUCE-1110 WP0: counts only, by call site
+        ddg_meter.record(spent, self.last_query.get("cache_hits", 0))
         return _DdgParts(parts)
 
     @staticmethod

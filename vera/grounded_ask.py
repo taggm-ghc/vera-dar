@@ -60,6 +60,26 @@ def _provider_chain(names: list[str]):
     return [p for p in chain if p.name in set(names)]
 
 
+def _branch_providers(providers):
+    """DDG-REDUCE-1110 C1: a domain-routing branch searches with the providers other than DuckDuckGo (the base query keeps
+    it); config/ddg_reduce.json domain_branches_scholarly_only false restores the full chain."""
+    from vera import ddg_reduce
+    from vera.search_providers import DDG_NAME
+    if not ddg_reduce.on("domain_branches_scholarly_only"):
+        return providers
+    return [p for p in providers if getattr(p, "name", None) != DDG_NAME]
+
+
+def _domain_search_fn(fn: Callable) -> Callable:
+    """DDG-REDUCE-1110 WP0: DuckDuckGo calls made by a domain-routing branch are counted as the "domain" site."""
+    from vera import ddg_meter
+
+    def run(q):
+        with ddg_meter.site("domain"):
+            return fn(q)
+    return run
+
+
 def retrieve(question: str, cfg: dict, search: Callable | None = None, resolver: Callable | None = None) -> list[dict]:
     """Numbered sources with abstracts (the prompt's sources)."""
     return retrieve_all(question, cfg, search, resolver)[0]
@@ -198,6 +218,10 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
             from vera.search_and_fetch import search_question
 
             providers = _provider_chain(cfg["providers"])
+            from vera import ddg_reduce
+            if ddg_reduce.NO_DDG.get():  # DDG-REDUCE-1110 C4: this call site spends no DuckDuckGo
+                from vera.search_providers import DDG_NAME
+                providers = [p for p in providers if getattr(p, "name", None) != DDG_NAME]
             # per-provider timeout below the overall deadline, so one slow provider cannot starve the others
             results = search_question(question, num_results=int(cfg["num_results"]), providers=providers,
                                       min_candidates=1, mode="fan_out", deadline_s=float(cfg["deadline_s"]),
@@ -206,7 +230,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
             try:
                 from vera import domain_routing as _dr
                 if _dr.flag_enabled():
-                    results, rtrace = _dr.route_search(question, results, _dr.make_search_fn(search_question, providers, cfg), (dar_corpus.registry if dar_corpus is not None else _dr.get_registry()), _dr.get_cfg(), num_results=int(cfg["num_results"]))
+                    results, rtrace = _dr.route_search(question, results, _domain_search_fn(_dr.make_search_fn(search_question, _branch_providers(providers), cfg)), (dar_corpus.registry if dar_corpus is not None else _dr.get_registry()), _dr.get_cfg(), num_results=int(cfg["num_results"]))
                     info["routing"] = _trace_counts(rtrace)
                     logger.info("DAR routing: %s", info["routing"])
             except Exception as exc:  # noqa: BLE001  (routing never fails the request; baseline results are kept)

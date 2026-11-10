@@ -1969,7 +1969,7 @@ def _freshness_research(question, model, pricing, decision, chained, grounding, 
     # PERF-MISS-1105-FIX2 F2: start the lane pass concurrently with the research attempt when that attempt can run
     # (its first guards); the result is used only when the attempt ran (o is not None), as before.
     lane_task = _ia.start_lane_pass(question, acq) if _research_may_run(question, acq, budget, grounding) else None
-    pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget)
+    pub, o = _research_attempt(question, grounding, acq, fcfg, used_in, budget, trig)
     lane_res = lane_task.result() if lane_task is not None and o is not None else None  # unused: not joined
     if o is not None and lane_task is None:
         lane_res = _ia.lane_pass(question, acq)
@@ -2062,7 +2062,7 @@ def _research_may_run(question, acq, budget, grounding=None) -> bool:
         return False
 
 
-def _research_attempt(question, grounding, acq, fcfg, used_in, budget):
+def _research_attempt(question, grounding, acq, fcfg, used_in, budget, triggers=None):
     """(public inline outcome dict, Outcome or None): at most ONE inline acquisition per request, under the same
     guards as the in-scope inline retry. A refusal is reported (status), never treated as 'nothing found'."""
     if acq is None:
@@ -2080,13 +2080,22 @@ def _research_attempt(question, grounding, acq, fcfg, used_in, budget):
     if need is None or remaining < need:
         return {"status": "budget_unknown" if need is None else "deadline"}, None
     budget.inline_used = True
-    from vera import acq_discovered
+    from vera import acq_discovered, ddg_meter, ddg_reduce
+    # DDG-REDUCE-1110 WP0: the OD-1109-SIX search on an answered question is its own call site ("freshness").
+    # C4: DuckDuckGo is for questions the corpus cannot answer (YIELD-1021); an answered non-news question spends none on
+    # this search (OpenAlex and Europe PMC still run), a news-intent question keeps it. answered_question_no_ddg.
+    # v3 F1: only when new_documents is the SOLE trigger (the answer is sufficient and fresh); for insufficient, stale,
+    # freshness_unknown (or unknown triggers) DuckDuckGo stays available as the C6 fallback.
+    from vera import research_record as _rr
+    skip_ddg = (ddg_reduce.on("answered_question_no_ddg") and list(triggers or ()) == [_rr.TRIGGER_NEW]
+                and not inline_acquire.news_question(question))
     kw = {}
-    if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):
-        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
-    if fcfg.get("rank_prefer_recent") is True:
-        kw["prefer_recent"] = True
-    o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
+    with ddg_meter.site("freshness"), ddg_reduce.no_ddg(skip_ddg):
+        if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):
+            kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
+        if fcfg.get("rank_prefer_recent") is True:
+            kw["prefer_recent"] = True
+        o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
     st = str(getattr(o, "status", "error"))
     return (o.public() if st != "off" and hasattr(o, "public") else {"status": st}), o
 

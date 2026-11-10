@@ -307,3 +307,15 @@ def test_no_cache_dir_means_no_cache_files(tmp_path):
     p = DuckDuckGoLiteProvider({**DDG, "memory_cache_ttl_s": 0}, transport=lambda *a: R(text=PAGE), query_terms=QT, sleep=lambda s: None)
     p.parse(p.call(Q, 10, 5.0), 10)
     assert p.cache_dir is None and not p.gate_exempt(Q)  # ROUTE-R3: memory cache off here; see test_route_r3
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the behaviour from before the DuckDuckGo reductions (both site groups per call,
+    DuckDuckGo concurrent and first, branches/variants/answered questions included). The switches shipped in
+    config/ddg_reduce.json are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})

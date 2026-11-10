@@ -357,8 +357,10 @@ def _ddg_site_search(host: str, terms: list) -> list:
     if ddg is None:
         return []
     q = {"group": "official", "query": f"{' '.join(terms)} (site:{host})"[:int(ddg.s.get("max_query_chars", 500))]}
+    from vera import ddg_meter  # DDG-REDUCE-1110 WP0: counted as the official lane
     n = int(ddg.s.get("results_per_query", 10) or 10)
-    return ddg.parse(ddg.call(q["query"], n, float(ddg.s.get("timeout_s", 10) or 10), queries=[q]), n)
+    with ddg_meter.site("official"):
+        return ddg.parse(ddg.call(q["query"], n, float(ddg.s.get("timeout_s", 10) or 10), queries=[q]), n)
 
 
 def _gate(url: str, row: dict):

@@ -185,3 +185,14 @@ def test_inline_run_binds_a_monotonic_rate_limit_deadline(monkeypatch):
     assert inline_acquire._run("q", {"bounds": {"deadline_s": 45}}, {}, lambda: 0.0, None) == "o"
     assert got["d"] is not None and t < got["d"] <= time.monotonic() + 46
     assert rate_limit.DEADLINE.get() is None
+
+
+import pytest as _pytest_ddgr  # noqa: E402
+
+
+@_pytest_ddgr.fixture(autouse=True)
+def _pre_ddg_reduce_behaviour(monkeypatch):
+    """DDG-REDUCE-1110: this module pins the call slots and order from before DuckDuckGo became a fallback (C6: DuckDuckGo
+    concurrent and first). The shipped switches are tested in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})
