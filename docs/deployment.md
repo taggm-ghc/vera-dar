@@ -35,6 +35,7 @@ This is the canonical list of the environment variables the serving code reads. 
 | `VERA_DB_URL_RO` | Optional | Read-only database connection: aggregate corpus description, the database corpus source, and reading acquired documents. |
 | `VERA_DB_URL_WO` | Optional; needed for acquisition | Write-only application account that automatic acquisition uses to store acquired documents. Acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. It is also the INSERT-only connection for the request trace and the stored corpus digest (see "Request trace and stored digest" below). |
 | `VERA_AUTOACQ_DISABLED` | Optional (kill switch) | When set to a true-like value (`true`, `1`, `yes`, `on`), automatic acquisition is off even though `config/auto_acquire.json` enables it. Leave unset for normal operation. |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` | Optional | Cloudflare Workers AI credentials for the chunk-taxonomy job and hybrid retrieval query embeddings (`vera/chunk_taxo_embed.py`; read at call time, never logged). Without them no embedder is created: the taxonomy job does not run and retrieval is word-only. Names only; set values in the host's secret settings. |
 | `VERA_FULLDOC_BUNDLE_DIR` | Optional | Full-document corpus from a local bundle directory. |
 | `VERA_FULLDOC_DB_RUN_ID` | Optional | Full-document corpus from a pinned database run, read through `VERA_DB_URL_RO`. |
 | `VERA_OWNER_KEY` | Optional | Operator key for the memory review routes, per `.env.example`; unset keeps those routes closed. |
