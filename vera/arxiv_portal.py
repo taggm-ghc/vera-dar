@@ -35,6 +35,24 @@ def is_arxiv_host(host) -> bool:
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+)$", re.I)
 
 
+def is_arxiv_only_work(r) -> bool:
+    """OD-1110-ARXIV-ABSTRACT (owner 2026-11-10, "No, portal only"): True for a search record whose only version is the
+    arXiv e-print: an arXiv DataCite DOI (10.48550/arXiv.*), or no DOI and an arXiv-family URL or provider. A record
+    carrying a journal DOI is the published work (not arXiv-only). Metadata only."""
+    if not isinstance(r, dict):
+        return False
+    from urllib.parse import urlsplit
+    from vera.search_providers import normalise_doi
+    doi = normalise_doi(r.get("doi"))
+    if doi:
+        return bool(_ARXIV_DOI.match(doi))
+    try:
+        host = urlsplit(str(r.get("url") or "")).hostname or ""
+    except ValueError:
+        host = ""
+    return is_arxiv_host(host) or str(r.get("provider") or "").lower() == "arxiv"
+
+
 def cfg_of(acq: dict | None = None) -> dict:
     from vera import acq_config
     a = acq if isinstance(acq, dict) else acq_config.load_config()

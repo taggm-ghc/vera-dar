@@ -230,3 +230,33 @@ def test_r3_redirect_hop_to_an_arxiv_mirror_is_refused_before_any_request():
     assert sent == ["https://example.org/hadrons"] and res.pages == [] and len(res.listed) == 1
     assert res.dev[0]["gate"]["read"] == "read_arxiv_portal"
     assert "arXiv is used only to find original sources" in json.dumps(res.listed[0])
+
+
+# ------------------------------------------------------------------------------------------------ OD-1110-ARXIV-ABSTRACT
+def _rec(**kw):
+    return {"title": "Hadron spectroscopy of quarks", "snippet": "We study hadrons made of quarks and gluons.",
+            "published": "2025-01-01", "source_type": "scholarly", "provider": "openalex", **kw}
+
+
+@pytest.mark.parametrize("arx", [
+    _rec(doi="10.48550/arXiv.2101.00001", url="https://doi.org/10.48550/arXiv.2101.00001"),  # arXiv DataCite DOI
+    _rec(url="https://arxiv.org/abs/2101.00001"),  # no DOI, arXiv landing
+    _rec(url="https://ar5iv.org/abs/2101.00001"),  # a mirror
+    _rec(provider="arxiv", url="https://example.org/x"),
+])
+def test_arxiv_only_abstract_is_never_grounding_and_is_listed_for_acquisition(arx):
+    from tests.test_dar_pipeline_acceptance import _ground_cfg
+    from vera import grounded_ask
+    journal = _rec(doi="10.9999/synth.prd.2", url="https://doi.org/10.9999/synth.prd.2", title="Hadron masses of quarks")
+    published_on_arxiv_url = _rec(doi="10.9999/synth.prd.3", url="https://arxiv.org/abs/2101.00003",
+                                  title="Quark hadron journal version")
+    out, unused = grounded_ask.retrieve_all("What are hadrons made of quarks?", _ground_cfg(),
+                                            search=lambda q: [arx, journal, published_on_arxiv_url])
+    assert {s.get("doi") for s in out} == {"10.9999/synth.prd.2", "10.9999/synth.prd.3"}  # journal DOIs ground
+    assert [u["url"] for u in unused] == [arx["url"]] and "snippet" not in unused[0]
+
+
+def test_is_arxiv_only_work():
+    assert arxiv_portal.is_arxiv_only_work(_rec(doi="https://doi.org/10.48550/ARXIV.2101.00001")) is True
+    assert arxiv_portal.is_arxiv_only_work(_rec(doi="10.1103/PhysRevD.1.1", url="https://arxiv.org/abs/2101.1")) is False
+    assert arxiv_portal.is_arxiv_only_work(_rec(url="https://example.org/paper")) is False
