@@ -77,8 +77,6 @@ DISPATCH = [
     ("arxiv_dict_route_off", dict(ARX, arxiv={"id": X.AID, "version": X.VER}), X.DOI, False,
      ("arxiv", {"doi": X.DOI, "arxiv": {"id": X.AID, "version": X.VER}, "url": X.ABS_URL, "min_spans": None,
                 "score": 0.5})),
-    # PHYS-SUPPLY-1110: still Europe PMC FIRST (the peer-reviewed text); only a not_oa stop falls back to the arXiv
-    # version (tests/test_phys_supply_1110.py)
     ("arxiv_url_journal_doi", dict(ARX, doi="10.1234/journal.x"), "10.1234/journal.x", True,
      ("europepmc", {"doi": "10.1234/journal.x", "pmcid": None, "chain": False})),
     ("discovered_doi", dict(A.cand("10.9999/oa4.disc"), discovery={"provider": "openalex"}), "10.9999/oa4.disc", True,
@@ -123,8 +121,7 @@ ROUTABLE = [
     ("arxiv_url_only", {"url": X.ABS_URL, "title": "t"}, True, True),
     ("arxiv_url_only_route_off", {"url": X.ABS_URL, "title": "t"}, False, False),
     ("arxiv_dict_route_off", dict(ARX, arxiv={"id": X.AID, "version": X.VER}), False, True),
-    ("arxiv_url_journal_doi", dict(ARX, doi="10.1234/journal.x"), True, True),  # PHYS-SUPPLY-1110 (was False)
-    ("arxiv_url_journal_doi_route_off", dict(ARX, doi="10.1234/journal.x"), False, False),
+    ("arxiv_url_journal_doi", dict(ARX, doi="10.1234/journal.x"), True, False),
     ("doi_url_only", {"url": "https://doi.org/10.9999/r.u", "title": "t"}, True, False),
     ("no_ident_url", {"url": "https://example.org/page", "title": "t"}, True, False),
     ("oa_not_dict", dict(A.cand("10.9999/r.bad"), oa="yes"), True, False),

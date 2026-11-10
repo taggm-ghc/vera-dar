@@ -599,14 +599,8 @@ def openalex_oa_info(w: Mapping) -> dict | None:
     ids = w.get("ids") if isinstance(w.get("ids"), Mapping) else {}
     pmcid = _pmcid_of(ids.get("pmcid")) or next((p for p in (_pmcid_of(x.get("landing_page_url")) for x in pmc) if p),
                                                  None)
-    # PHYS-SUPPLY-1110 (diag HADRONS-B3 fix 4b): an arXiv location of the work (landing or PDF URL on arxiv.org) is
-    # recorded as metadata only, so the arXiv full-text route can read a CC-licensed arXiv version of a journal DOI
-    # (vera/fulltext_routes._arxiv_prepare). The key is present only when such a location exists.
-    axid = next((f"{m.group(1).lower()}{(m.group(2) or '').lower()}" for m in (
-        _ARXIV_URL.match(str(x.get(k) or "").strip()) for x in ([best] if best else []) + locs
-        for k in ("landing_page_url", "pdf_url")) if m), None)
     return {"is_oa": oa.get("is_oa") if isinstance(oa.get("is_oa"), bool) else None, "has_oa_location": has_oa,
-            "licence": lic, "pmcid": pmcid, **({"arxiv_id": axid} if axid else {})}
+            "licence": lic, "pmcid": pmcid}
 
 
 def _licence_is_nd(lic) -> bool:

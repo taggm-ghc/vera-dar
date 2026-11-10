@@ -394,27 +394,6 @@ def _article_ccfg(ccfg: dict) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ evaluate
-def _norm_title(t) -> str:
-    return " ".join(re.sub(r"[^0-9a-z]+", " ", str(t or "").lower()).split())
-
-
-def version_mismatch(page, cand: dict) -> str | None:
-    """PHYS-SUPPLY-1110 F1: None when the arXiv abs page is the same work as the journal record the candidate came from
-    (cand["journal_doi"]), else why not. A DOI the abs page states (citation_doi) must equal journal_doi (normalised,
-    case-insensitive). With no stated DOI, the normalised titles (lower case, punctuation and spacing collapsed) must be
-    equal; an empty title on either side is a mismatch (fail closed). Equality, not a similarity score: no threshold to
-    calibrate, at the cost of rejecting versions whose title changed between preprint and journal."""
-    from vera.search_providers import normalise_doi
-    jdoi = normalise_doi(cand.get("journal_doi"))
-    stated = {normalise_doi(d) for d in page.meta.get("citation_doi", []) if normalise_doi(d)}
-    if stated:
-        return None if jdoi and jdoi in stated else "arXiv abs page states a different DOI than the journal record"
-    a, b = _norm_title((page.meta.get("citation_title") or [""])[0]), _norm_title(cand.get("title"))
-    if not a or not b:
-        return "no DOI on the arXiv abs page and no title to compare with the journal record"
-    return None if a == b else "no DOI on the arXiv abs page and the title differs from the journal record"
-
-
 def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.monotonic, deadline=None, dur=None,
              min_spans=None):
     """auto_acquire.evaluate_candidate for an arXiv-routed candidate. Same contract: returns (plan, isbn); raises
@@ -454,11 +433,6 @@ def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.mon
     ids = {x.lower() for x in page.meta.get("citation_arxiv_id", [])}
     if ids and not ({aid, f"{aid}{ver or ''}"} & ids):
         raise aa._Stop(acq_config.reason(acq, "identity_mismatch"))
-    if cand.get("journal_doi"):  # PHYS-SUPPLY-1110 F1: the arXiv version must belong to the journal DOI it stands in for
-        why = version_mismatch(page, cand)
-        if why:
-            attempts.append({"representation": "abs", "url": abs_url, "status": "refused", "reason": why})
-            raise aa._Stop(acq_config.reason(acq, "identity_mismatch"))
     if ver is None:  # an unversioned discovery record: pin the newest version the abs page lists
         if not page.versions:
             raise aa._Stop(acq_config.reason(acq, "identity_mismatch"))
@@ -556,8 +530,6 @@ def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.mon
     a["arxiv"] = {"id": aid, "version": ver, "abs_url": abs_canon, "html_url": final, "licence": lic,
                   "licence_url": lic_url, "published": published or None, "retrieved_at": now_iso,
                   "attempts": [dict(x) for x in attempts]}
-    if cand.get("journal_doi"):  # PHYS-SUPPLY-1110 F2: the journal DOI this arXiv version was read for, and why
-        a["journal_doi"], a["arxiv_via"] = str(cand["journal_doi"]), str(cand.get("arxiv_via") or "journal_doi_alt")
     n_adm = aa.relevance_gate(job.question, plan, acq, icfg, fdcfg)
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
     need = acq_config.persist_min_spans(acq) if min_spans is None else max(1, int(min_spans))

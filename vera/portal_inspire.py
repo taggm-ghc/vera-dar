@@ -80,27 +80,17 @@ def parse(body: bytes, acfg: Mapping) -> list:
         md = h.get("metadata") if isinstance(h, Mapping) else None
         if not isinstance(md, Mapping):
             continue
-        got = _merge(_ids_of(md.get("dois"), "doi")[:1], _ids_of(md.get("arxiv_eprints"), "arxiv")[:1])
-        if got:
-            out.append(got)
+        out += _ids_of(md.get("dois"), "doi")[:1] + _ids_of(md.get("arxiv_eprints"), "arxiv")[:1]
         n = 0
         for r in md.get("references") or () if isinstance(md.get("references"), list) else ():
             ref = r.get("reference") if isinstance(r, Mapping) else None
             if not isinstance(ref, Mapping) or n >= per:
                 continue
-            got = _merge(_ids_of(ref.get("dois"), "doi")[:1], _ids_of(ref.get("arxiv_eprint"), "arxiv")[:1])
+            got = _ids_of(ref.get("dois"), "doi")[:1] or _ids_of(ref.get("arxiv_eprint"), "arxiv")[:1]
             if got:
-                out.append(got)
+                out += got
                 n += 1
     return out
-
-
-def _merge(doi: list, arxiv: list) -> dict | None:
-    """PHYS-SUPPLY-1110: ONE identifier set per work: {"doi"} | {"arxiv"} | {"doi", "arxiv"} (a journal DOI whose
-    INSPIRE record names its arXiv e-print; the candidate keeps the DOI and carries the e-print as arxiv_alt, so
-    vera/fulltext_routes can read a CC-licensed arXiv version when Europe PMC has none)."""
-    d = {**(doi[0] if doi else {}), **(arxiv[0] if arxiv else {})}
-    return d or None
 
 
 def adapter(question: str, base, cfg: Mapping, deps, counts: dict, clock: Callable = time.monotonic,
@@ -175,8 +165,6 @@ def adapter(question: str, base, cfg: Mapping, deps, counts: dict, clock: Callab
             continue
         c.update({"provider": f"portal:{ADAPTER}", "acq_source": "reference_portal", "portal": ADAPTER,
                   "title": "", "snippet": ""})
-        if i.get("doi") and i.get("arxiv"):  # PHYS-SUPPLY-1110: metadata only (CC0); the route decides by licence
-            c["arxiv_alt"] = {"id": i["arxiv"], "source": "inspire"}
         out.append(c)
     counts["inspire_ids"] = len(out)
     return out
