@@ -10,7 +10,7 @@ import streamlit as st
 from vera.safe_path import PathRefused, safe_path
 
 # ENV-PATHS-1110: anchored on __file__, not cwd. Env-supplied paths must resolve inside <repo root>/eval_results.
-ROOT = Path(__file__).resolve().parents[2]
+from vera.trace_viz import ROOT  # the same __file__-anchored repo root (no parents[n] climb outside env_files)
 RESULTS_ROOT = ROOT / "eval_results"
 RESULTS_PATH = str(RESULTS_ROOT / "trace_eval_v1.json")
 VALIDATION_PATH = str(RESULTS_ROOT / "trace_eval_v1_validation.json")
