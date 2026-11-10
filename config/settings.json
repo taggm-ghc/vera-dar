@@ -1,0 +1,9 @@
+{
+  "_note": "SETTINGS-W3-1110: vera/settings.py loader config. read_from_db is per module (config file stem); a module absent or false reads files only. Ships empty = every module OFF. TTL 60 s and 500 ms query timeout are starting values pending calibration (plan 9.6).",
+  "read_from_db": {},
+  "cache_ttl_s": 60,
+  "query_timeout_ms": 500,
+  "db_url_env": "VERA_DB_URL_RO",
+  "deny_max_ttl_days": 90,
+  "deny_max_items": 500
+}

@@ -1,5 +1,5 @@
 {
-  "_note": "LISTS-TO-DB-1104 (owner directive 2026-11-04: 'data in lists and lists should be in a table in the db!'). This file is seed/fallback config only: the DB views vera_vjay.lstreg_active_lists_v and lstreg_active_items_v are the source when read_from_db is true; any failure returns the seed list from the original config file. Ships off. File names are relative to config/; path is a JSON key list.",
+  "_note": "LISTS-TO-DB-1104 (owner directive 2026-11-04: 'data in lists and lists should be in a table in the db!'). This file is seed/fallback config only: the DB views vera_vjay.lstreg_active_lists_v and lstreg_active_items_v are the source when read_from_db is true; any failure returns the seed list from the original config file. Ships off. File names are relative to config/; path is a JSON key list. SETTINGS-W3-1110: the 8 replace-mapped allow-lists (licences, entities, outlets, fallback order, search providers, off-topic providers, trace key allowlist, repository hosts) were removed: a DB row must never widen an allow-list; those lists stay in the reviewed files (deny-only DB entries come via vera/settings.py). Remaining mappings: union deny-lists and the numeric-words vocabulary.",
   "read_from_db": false,
   "db_url_env": "VERA_DB_URL_RO",
   "cache_ttl_s": 300,
@@ -7,16 +7,39 @@
   "connect_timeout_s": 2,
   "statement_timeout_ms": 2000,
   "lists": {
-    "licence.allowlist": {"file": "licence_allowlist.json", "path": ["entries"], "shape": "records", "state_field": "status", "key_field": "id", "key_lower": false, "combine": "replace"},
-    "entity.registry": {"file": "entity_registry.json", "path": ["entities"], "shape": "records", "state_field": "state", "key_field": "entity", "key_lower": true, "combine": "replace"},
-    "news.outlets": {"file": "reporting_lane.json", "path": ["outlets"], "shape": "records", "state_field": null, "key_field": "host", "key_lower": true, "combine": "replace"},
-    "news.fallback_order": {"file": "reporting_lane.json", "path": ["fallback_order"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
-    "acquire.search_providers": {"file": "auto_acquire.json", "path": ["search", "providers"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
-    "scope.offtopic_providers": {"file": "scope_router.json", "path": ["offtopic_providers"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
-    "trace.key_allowlist": {"file": "request_trace.json", "path": ["key_allowlist"], "shape": "stage_keys", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
-    "digest.numeric_words": {"file": "corpus_digest_numeric_words.json", "path": ["numeric_words", "words"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "replace"},
-    "fetch.deny_hosts": {"file": "public_fetch.json", "path": ["deny_hosts"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "union"},
-    "permissions.deny_hosts": {"file": "source_permissions.json", "path": ["deny_hosts"], "shape": "strings", "state_field": null, "key_field": null, "key_lower": false, "combine": "union"},
-    "repository.pdf_hosts": {"file": "repository_pdf.json", "path": ["hosts"], "shape": "records", "state_field": "status", "key_field": "host", "key_lower": true, "combine": "replace"}
+    "digest.numeric_words": {
+      "file": "corpus_digest_numeric_words.json",
+      "path": [
+        "numeric_words",
+        "words"
+      ],
+      "shape": "strings",
+      "state_field": null,
+      "key_field": null,
+      "key_lower": false,
+      "combine": "replace"
+    },
+    "fetch.deny_hosts": {
+      "file": "public_fetch.json",
+      "path": [
+        "deny_hosts"
+      ],
+      "shape": "strings",
+      "state_field": null,
+      "key_field": null,
+      "key_lower": false,
+      "combine": "union"
+    },
+    "permissions.deny_hosts": {
+      "file": "source_permissions.json",
+      "path": [
+        "deny_hosts"
+      ],
+      "shape": "strings",
+      "state_field": null,
+      "key_field": null,
+      "key_lower": false,
+      "combine": "union"
+    }
   }
 }

@@ -496,8 +496,15 @@ def start(question, meta: dict | None = None) -> str | None:
         _remember(tr)
         ls = CFG.get("log_sink") if isinstance(CFG.get("log_sink"), dict) else {}
         q = {"question": tr.question} if ls.get("include_question") is True else {"question_chars": len(tr.question)}
-        _emit(tr, "start", "received", {}, None,
-              extra={**q, "client_request_id": tr.client_request_id, "endpoint": tr.endpoint})
+        extra = {**q, "client_request_id": tr.client_request_id, "endpoint": tr.endpoint}
+        try:  # SETTINGS-W3-1110: settings digest in force; absent (byte-identical line) while every read_from_db flag is off
+            from vera import settings as _settings
+            sv = _settings.version()
+            if sv:
+                extra["settings_version"] = sv
+        except Exception:  # noqa: BLE001  never break a trace
+            pass
+        _emit(tr, "start", "received", {}, None, extra=extra)
         return tr.trace_id
     except Exception as exc:  # noqa: BLE001
         _drop("start_error")

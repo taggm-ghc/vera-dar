@@ -1,0 +1,1536 @@
+{
+ "_note": "SETTINGS-W3-1110: TUNABLE_DB allowlist generated from the W1 manifest; the loader uses a DB row only for a key listed here. sha256 covers the keys object (canonical JSON) and is pinned in vera/settings.py REGISTRY_SHA256.",
+ "keys": {
+  "ask-provider-chain.corpus_description.subject_areas.chunk_chars": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 8000,
+   "min": 100,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.chunk_chars",
+   "type": "int",
+   "validator": true
+  },
+  "ask-provider-chain.corpus_description.subject_areas.chunks_per_doc": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 200,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.chunks_per_doc",
+   "type": "int",
+   "validator": true
+  },
+  "ask-provider-chain.corpus_description.subject_areas.min_chunk_votes": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.min_chunk_votes",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.cache_ttl_seconds": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 3600,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.cache_ttl_seconds",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.batch_size": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 20,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.batch_size",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_attempts": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 5,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_attempts",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_calls_per_registration": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 100,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_calls_per_registration",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_completion_tokens": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 2048,
+   "min": 16,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_completion_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_judgments_per_day": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 400,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_judgments_per_day",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_text_chars": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 1200,
+   "min": 40,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_text_chars",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_tokens_per_registration": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 200000,
+   "min": 100,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_tokens_per_registration",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.timeout_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 60,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.cloudflare.daily_neuron_budget": {
+   "clamp": "lower_only",
+   "file": "config/chunk_taxo.json",
+   "max": 8000,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "cloudflare.daily_neuron_budget",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.cloudflare.reserve_neurons": {
+   "clamp": "raise_only",
+   "file": "config/chunk_taxo.json",
+   "max": 1000000000,
+   "min": 5000,
+   "module": "chunk_taxo",
+   "path": "cloudflare.reserve_neurons",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.max_abstain_share": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.max_abstain_share",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.max_null_floor_spread": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.max_null_floor_spread",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_center_match_rate": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_center_match_rate",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_coverage_domain": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_coverage_domain",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_coverage_subtopic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_coverage_subtopic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_domain": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_domain",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_subtopic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_subtopic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_topic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_topic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_stability_ari": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_stability_ari",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.max_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.max_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.max_frac": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.max_frac",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.min_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.min_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.gain_epsilon": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.gain_epsilon",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.identity_jaccard": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.identity_jaccard",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.k_max": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 200,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.k_max",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.k_min": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 2,
+   "module": "chunk_taxo",
+   "path": "params.k_min",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.k_step": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.k_step",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.kmeans_max_iter": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.kmeans_max_iter",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.label_terms": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.label_terms",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.min_cluster_size": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.min_cluster_size",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.min_support": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.min_support",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.null_q_dist": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.null_q_dist",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.null_q_margin": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.null_q_margin",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.patience": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.patience",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.stability_match_cos": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": -1,
+   "module": "chunk_taxo",
+   "path": "params.stability_match_cos",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.term_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.term_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.term_max_df": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.term_max_df",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.term_min_len": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.term_min_len",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.max_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.max_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.max_frac": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.max_frac",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.min_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.min_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.vote_min_lead": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.vote_min_lead",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.vote_min_share": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.vote_min_share",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_topic_terms.min_distinct_terms": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_topic_terms",
+   "path": "min_distinct_terms",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_topic_terms.min_lead_ratio": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 100.0,
+   "min": 1.0,
+   "module": "chunk_topic_terms",
+   "path": "min_lead_ratio",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_topic_terms.min_token_len": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_topic_terms",
+   "path": "min_token_len",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_topic_terms.min_vote_share": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_topic_terms",
+   "path": "min_vote_share",
+   "type": "float",
+   "validator": true
+  },
+  "corpus_frequent_subjects.max_phrases": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 30,
+   "min": 1,
+   "module": "corpus_frequent_subjects",
+   "path": "max_phrases",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.max_words": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 6,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "max_words",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.min_docs": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 1000,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "min_docs",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.min_words": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 6,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "min_words",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.title_limit": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 20000,
+   "min": 1,
+   "module": "corpus_frequent_subjects",
+   "path": "title_limit",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.chunks_per_partition": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 100,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "chunks_per_partition",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 60,
+   "module": "hybrid_retrieval",
+   "path": "cooldown_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.index_refresh_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 10000000,
+   "min": 10,
+   "module": "hybrid_retrieval",
+   "path": "index_refresh_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.max_index_mb": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 400,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "max_index_mb",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.page_ids": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 5000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "page_ids",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.query_cache_max": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 4096,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "query_cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.query_cache_ttl_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "query_cache_ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.cache_max": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 100000,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "rerank.cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 60,
+   "module": "hybrid_retrieval",
+   "path": "rerank.cooldown_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.max_chars": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20000,
+   "min": 50,
+   "module": "hybrid_retrieval",
+   "path": "rerank.max_chars",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.max_passages": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 64,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rerank.max_passages",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.reserve_slots": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "rerank.reserve_slots",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.timeout_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 30,
+   "min": 0.2,
+   "module": "hybrid_retrieval",
+   "path": "rerank.timeout_s",
+   "type": "float",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.top_partitions": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rerank.top_partitions",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rrf_k": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rrf_k",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.stem_floor_min_hits": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "stem_floor_min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.stem_floor_sim": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "hybrid_retrieval",
+   "path": "stem_floor_sim",
+   "type": "float_or_null",
+   "validator": true
+  },
+  "hybrid_retrieval.timeout_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 30,
+   "min": 0.2,
+   "module": "hybrid_retrieval",
+   "path": "timeout_s",
+   "type": "float",
+   "validator": true
+  },
+  "hybrid_retrieval.vector_k": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "vector_k",
+   "type": "int_or_null",
+   "validator": true
+  },
+  "progress.first_event_grace_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 600,
+   "min": 0,
+   "module": "progress",
+   "path": "first_event_grace_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.get_timeout_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.1,
+   "module": "progress",
+   "path": "get_timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_count": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 1000000000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_count",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_events_per_poll": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 10000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_events_per_poll",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_events_per_record": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 10000,
+   "min": 2,
+   "module": "progress",
+   "path": "max_events_per_record",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_records": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 100000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_records",
+   "type": "int",
+   "validator": true
+  },
+  "progress.poll_interval_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.1,
+   "module": "progress",
+   "path": "poll_interval_s",
+   "type": "float",
+   "validator": true
+  },
+  "progress.poll_margin_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 600,
+   "min": 0,
+   "module": "progress",
+   "path": "poll_margin_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.activity_tick_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.01,
+   "module": "progress",
+   "path": "stream.activity_tick_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.client_no_data_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 3600,
+   "min": 1,
+   "module": "progress",
+   "path": "stream.client_no_data_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 300,
+   "min": 0.1,
+   "module": "progress",
+   "path": "stream.connect_timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.heartbeat_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 300,
+   "min": 0.01,
+   "module": "progress",
+   "path": "stream.heartbeat_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.orphan_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 86400,
+   "min": 1,
+   "module": "progress",
+   "path": "stream.orphan_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.ttl_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 86400,
+   "min": 1,
+   "module": "progress",
+   "path": "ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "rate_limits.defaults.breaker_failures": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 3,
+   "min": 1,
+   "module": "rate_limits",
+   "path": "defaults.breaker_failures",
+   "type": "int",
+   "validator": true
+  },
+  "rate_limits.defaults.breaker_open_max_s": {
+   "clamp": "raise_only",
+   "file": "config/rate_limits.json",
+   "max": 86400.0,
+   "min": 900.0,
+   "module": "rate_limits",
+   "path": "defaults.breaker_open_max_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.breaker_open_s": {
+   "clamp": "raise_only",
+   "file": "config/rate_limits.json",
+   "max": 86400.0,
+   "min": 30.0,
+   "module": "rate_limits",
+   "path": "defaults.breaker_open_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.decrease_factor": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.5,
+   "min": 0.01,
+   "module": "rate_limits",
+   "path": "defaults.decrease_factor",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.half_open_max": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 1,
+   "min": 1,
+   "module": "rate_limits",
+   "path": "defaults.half_open_max",
+   "type": "int",
+   "validator": true
+  },
+  "rate_limits.defaults.increase_frac": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.increase_frac",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.jitter_frac": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.2,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.jitter_frac",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.max_wait_s": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 2.0,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.max_wait_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.min_rate_factor": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.001,
+   "module": "rate_limits",
+   "path": "defaults.min_rate_factor",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.poll_s": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.001,
+   "module": "rate_limits",
+   "path": "defaults.poll_s",
+   "type": "float",
+   "validator": true
+  },
+  "reference_portals.caps.max_candidates_per_question": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 30,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_candidates_per_question",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_hops": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 2,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_hops",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_hrefs_scanned": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 5000,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_hrefs_scanned",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_links_per_page": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_links_per_page",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_page_bytes": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 4000000,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_page_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_pages_per_host": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 1,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_pages_per_host",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_pages_per_question": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 4,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_pages_per_question",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.shadow_deadline_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 30,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.shadow_deadline_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.tdmrep_max_bytes": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 65536,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.tdmrep_max_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 5,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.min_contain_len": {
+   "clamp": null,
+   "file": "config/reference_portals.json",
+   "max": 60,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "relevance.min_contain_len",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.min_hits": {
+   "clamp": "raise_only",
+   "file": "config/reference_portals.json",
+   "max": 20,
+   "min": 2,
+   "module": "reference_portals",
+   "path": "relevance.min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.stem_len": {
+   "clamp": null,
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "relevance.stem_len",
+   "type": "int",
+   "validator": true
+  },
+  "scope_router.layer2.malformed_retry": {
+   "clamp": null,
+   "file": "config/scope_router.json",
+   "max": 1,
+   "min": 0,
+   "module": "scope_router",
+   "path": "layer2.malformed_retry",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.fit_quantile": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 0.9999,
+   "min": 0.5,
+   "module": "taxo_hier",
+   "path": "params.fit_quantile",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.min_agree": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.min_agree",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.min_token_len": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxo_hier",
+   "path": "params.min_token_len",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.min_top_share": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.min_top_share",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.null_chunks": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20000,
+   "min": 50,
+   "module": "taxo_hier",
+   "path": "params.null_chunks",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.null_replicates": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxo_hier",
+   "path": "params.null_replicates",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.seed": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 2147483648,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.seed",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.semantic_weight": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "taxo_hier",
+   "path": "params.semantic_weight",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.anchor_terms": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 120,
+   "min": 5,
+   "module": "taxonomy_induction",
+   "path": "anchor_terms",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.chunk_chars": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 8000,
+   "min": 100,
+   "module": "taxonomy_induction",
+   "path": "chunk_chars",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.chunks_per_doc": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 200,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "chunks_per_doc",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.keyphrases": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 40,
+   "min": 3,
+   "module": "taxonomy_induction",
+   "path": "keyphrases",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_clusters_new": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 200,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "max_clusters_new",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_clusters_per_topic": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "max_clusters_per_topic",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_df_share": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1.0,
+   "min": 0.01,
+   "module": "taxonomy_induction",
+   "path": "max_df_share",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.max_iter": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "max_iter",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_proposals": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 500,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "max_proposals",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_chunk_votes": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_chunk_votes",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_df": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_df",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_docs": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_docs",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_similarity": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "taxonomy_induction",
+   "path": "min_similarity",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.naming.batch_size": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "naming.batch_size",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_calls": {
+   "clamp": "lower_only",
+   "file": "config/taxonomy_induction.json",
+   "max": 20,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "naming.max_calls",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_completion_tokens": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 4096,
+   "min": 64,
+   "module": "taxonomy_induction",
+   "path": "naming.max_completion_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_rate_limited": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 100,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "naming.max_rate_limited",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/taxonomy_induction.json",
+   "max": 60000,
+   "min": 100,
+   "module": "taxonomy_induction",
+   "path": "naming.max_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.timeout_s": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 120,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "naming.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.scan_max_documents": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 20000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "scan_max_documents",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.subtopic_min_chunks": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 100000,
+   "min": 2,
+   "module": "taxonomy_induction",
+   "path": "subtopic_min_chunks",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.terms_per_chunk": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 3,
+   "module": "taxonomy_induction",
+   "path": "terms_per_chunk",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.max_articles": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 3,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_articles",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.max_refs": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 20,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_refs",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.max_response_bytes": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 4000000,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_response_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.query.max_query_chars": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 3000,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "query.max_query_chars",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.query.max_terms": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 8,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "query.max_terms",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.max_refs_scanned": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 500,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.max_refs_scanned",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.min_contain_len": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 60,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.min_contain_len",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.min_hits": {
+   "clamp": "raise_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 20,
+   "min": 2,
+   "module": "wiki_ref_portal",
+   "path": "relevance.min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.stem_len": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 50,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.stem_len",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 5,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "timeout_s",
+   "type": "int",
+   "validator": true
+  }
+ },
+ "sha256": "49979b1e40bd768b2c3de1290ce14a93031c32061a417617f0c6e8ae04963206"
+}
