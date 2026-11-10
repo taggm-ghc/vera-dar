@@ -20,7 +20,7 @@ import contextlib
 import contextvars
 import hashlib
 import json
-from vera import strict_json
+from vera import ddg_reduce, strict_json
 import re
 import threading
 from datetime import datetime, timezone
@@ -1570,7 +1570,6 @@ def _search_parts(base_search: Callable, parts: list, B: Mapping, question: str,
 
 
 def ddg_reduce_no_ddg() -> bool:
-    from vera import ddg_reduce
     return ddg_reduce.NO_DDG.get()
 
 
@@ -1665,7 +1664,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
-            if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context (the inline rate-limit deadline)
+            if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context
                 futs["ddg"] = _submit_in_order(pool, ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
             if use_epmc:
                 try:
@@ -2244,11 +2243,34 @@ class DuckDuckGoLiteProvider:
             return None
         return self.cache_dir / (hashlib.sha256(q["query"].encode("utf-8")).hexdigest() + ".json")
 
+    def _mem_ttl(self, q: Mapping) -> float:
+        """In-process cache lifetime of one query. DDG-REDUCE-1110 C5 (config/ddg_reduce.json longer_normalized_cache):
+        per site group (portals 6 h, news 1 h), else memory_cache_ttl_s. 0 = off (also when a disk cache is used)."""
+        if self.cache_dir is not None:
+            return 0.0
+        from vera import ddg_reduce
+        if ddg_reduce.on("longer_normalized_cache"):
+            by = ddg_reduce.load().get("memory_cache_ttl_s_by_group") or {}
+            v = by.get(q.get("group")) if isinstance(by, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+                return float(v)
+        return self._mem_ttl_s
+
+    @staticmethod
+    def _mem_key(q: Mapping) -> str:
+        """The in-process cache key: the query string, or with C5 the group plus its lower-cased, de-duplicated, sorted terms
+        (the same question worded or ordered differently, or repeated words, shares one entry)."""
+        from vera import ddg_reduce
+        if ddg_reduce.on("longer_normalized_cache"):
+            return str(q.get("group")) + "|" + " ".join(sorted(set(q["query"].lower().split())))
+        return q["query"]
+
     def _cache_get(self, q: Mapping) -> list[dict] | None:
         path = self._cache_path(q)
         if path is None:
-            hit = self._mem.get(q["query"]) if self._mem_ttl_s > 0 else None
-            if hit is None or not (0 <= self._wall() - hit[0] <= self._mem_ttl_s):
+            ttl = self._mem_ttl(q)
+            hit = self._mem.get(self._mem_key(q)) if ttl > 0 else None
+            if hit is None or not (0 <= self._wall() - hit[0] <= ttl):
                 return None
             return [dict(i) for i in hit[1]]
         try:
@@ -2271,10 +2293,10 @@ class DuckDuckGoLiteProvider:
     def _cache_put(self, q: Mapping, items: list[dict]) -> None:
         path = self._cache_path(q)
         if path is None:
-            if self._mem_ttl_s > 0:
+            if self._mem_ttl(q) > 0:
                 if len(self._mem) >= 256:  # bounded: drop the oldest entry
                     self._mem.pop(next(iter(self._mem)), None)
-                self._mem[q["query"]] = (self._wall(), [{"url": i["url"], "title": i["title"]} for i in items])
+                self._mem[self._mem_key(q)] = (self._wall(), [{"url": i["url"], "title": i["title"]} for i in items])
             return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

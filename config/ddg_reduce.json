@@ -7,5 +7,11 @@
   "one_group_per_call": true,
   "_one_group_per_call_note": "C3: one DuckDuckGo site-group query per call (one POST, was up to 2): the news group for a news / current-events question, else the portals group. false restores one query per group (max_queries_per_question).",
   "answered_question_no_ddg": true,
-  "_answered_question_no_ddg_note": "C4: the search for new documents on an ANSWERED question (OD-1109-SIX; ask_service._research_attempt) spends no DuckDuckGo unless the question has news intent; OpenAlex and Europe PMC still run. YIELD-1021 (DDG first) covers questions not in the corpus."
+  "_answered_question_no_ddg_note": "C4: the search for new documents on an ANSWERED question (OD-1109-SIX; ask_service._research_attempt) spends no DuckDuckGo unless the question has news intent; OpenAlex and Europe PMC still run. YIELD-1021 (DDG first) covers questions not in the corpus.",
+  "longer_normalized_cache": true,
+  "memory_cache_ttl_s_by_group": {
+    "portals": 21600,
+    "news": 3600
+  },
+  "_longer_normalized_cache_note": "C5: the in-process DuckDuckGo cache (url + title only, per process, lost on restart, 256 entries) lives 6 h for the portals group and 1 h for news (freshness rule: news stays short), keyed by group plus the lower-cased, de-duplicated, sorted query terms. UNCALIBRATED planner priors; one PDSA cycle per week from the ddg_<site> counts. false = the exact query string and search.duckduckgo_lite.memory_cache_ttl_s (900)."
 }

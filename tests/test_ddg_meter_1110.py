@@ -52,6 +52,7 @@ class Rig:
         self.ddg = DuckDuckGoLiteProvider({**DDG_CFG, **(cfg_over or {})}, transport=tx, query_terms=QT,
                                           sleep=self.sleeps.append)
         self.scholar_calls = []
+        self.scholar_n = 1          # how many candidates the fake scholarly provider returns per call
         rig = self
 
         class Scholar:
@@ -59,8 +60,8 @@ class Rig:
 
             def call(self, q, n, t):
                 rig.scholar_calls.append(q)
-                return SimpleNamespace(status_code=200, payload=[f"https://doi.org/10.1/{len(rig.scholar_calls)}"],
-                                       text="", headers={})
+                return SimpleNamespace(status_code=200, payload=[f"https://doi.org/10.1/{len(rig.scholar_calls)}-{i}"
+                                                                 for i in range(rig.scholar_n)], text="", headers={})
 
             def parse(self, resp, n):
                 return [{"url": u, "title": "T", "snippet": "an abstract", "source_type": "journal_article"}
@@ -347,3 +348,69 @@ def test_c4_the_flag_is_scoped_to_the_call(rig, monkeypatch):
     set_flags(monkeypatch, answered_question_no_ddg=True)
     _freshness_attempt(rig, monkeypatch, Q_PLAIN)
     assert ddg_reduce.NO_DDG.get() is False and ddg_meter.current() == "base"
+
+
+# ------------------------------------------------------------------------------------------------------------- C5
+class Clock:
+    def __init__(self):
+        self.t = 1_000_000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _clocked(rig):
+    c = Clock()
+    rig.ddg._wall = c
+    return c
+
+
+def test_c5_repeat_question_within_six_hours_is_served_from_cache(rig, monkeypatch):
+    set_flags(monkeypatch, one_group_per_call=True, longer_normalized_cache=True,
+              memory_cache_ttl_s_by_group={"portals": 21600, "news": 3600})
+    c = _clocked(rig)
+    reading_list(rig, Q_PLAIN)
+    c.t += 5 * 3600
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 1
+    c.t += 2 * 3600                                         # 7 h after the first call: expired
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 2
+
+
+def test_c5_news_group_expires_after_one_hour(rig, monkeypatch):
+    set_flags(monkeypatch, one_group_per_call=True, longer_normalized_cache=True,
+              memory_cache_ttl_s_by_group={"portals": 21600, "news": 3600})
+    c = _clocked(rig)
+    reading_list(rig, Q_NEWS)
+    c.t += 1800
+    reading_list(rig, Q_NEWS)
+    assert len(rig.posts) == 1
+    c.t += 3600
+    reading_list(rig, Q_NEWS)
+    assert len(rig.posts) == 2
+
+
+def test_c5_key_is_normalized_case_order_and_repeats(rig, monkeypatch):
+    set_flags(monkeypatch, longer_normalized_cache=True, memory_cache_ttl_s_by_group={"portals": 21600})
+    a = {"group": "portals", "query": "Coding assistants productivity (site:nature.com)"}
+    b = {"group": "portals", "query": "productivity coding CODING assistants (site:nature.com)"}
+    assert rig.ddg._mem_key(a) == rig.ddg._mem_key(b)
+    assert rig.ddg._mem_key(a) != rig.ddg._mem_key({**a, "group": "news"})
+
+
+def test_c5_off_keeps_the_exact_key_and_900_s(rig, monkeypatch):
+    set_flags(monkeypatch, longer_normalized_cache=False)
+    c = _clocked(rig)
+    reading_list(rig, Q_PLAIN)
+    c.t += 1000
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 4                              # both groups, twice: 900 s expired
+
+
+def test_c5_cache_stays_bounded_and_holds_url_and_title_only(rig, monkeypatch):
+    set_flags(monkeypatch, longer_normalized_cache=True, memory_cache_ttl_s_by_group={"portals": 21600})
+    for i in range(300):
+        rig.ddg._cache_put({"group": "portals", "query": f"term{i} (site:a.org)"}, [{"url": "https://a.org/x", "title": "T", "snippet": "S"}])
+    assert len(rig.ddg._mem) <= 256
+    assert all(set(it) == {"url", "title"} for _t, items in rig.ddg._mem.values() for it in items)
