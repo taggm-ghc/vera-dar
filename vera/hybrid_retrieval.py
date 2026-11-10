@@ -82,9 +82,25 @@ _INFLIGHT: dict = {}  # slot -> (Event, started monotonic); guarded by _LOCK
 
 
 def _begin_ask_budget(seconds: float) -> None:
-    """HYBRID-HARDEN-1109: start this thread's per-ask lock-wait budget (lock acquisitions and the embedder single-flight
-    wait share it, so the worst case is bounded per ask, not per acquisition). Separate from the embed deadlines."""
+    """HYBRID-HARDEN-1109: start this thread's per-retrieve lock-wait budget (lock acquisitions and the embedder single-flight
+    wait share it, so the worst case is bounded per vector_fn call and its fn, not per acquisition; plus at most 0.5 s of
+    unbudgeted embedder-recording cleanup in a creator and in end_ask_budget). Separate from the embed deadlines."""
     _TL.lock_left = max(0.0, float(seconds))
+
+
+def end_ask_budget() -> None:
+    """HYBRID-HARDEN-1109 (H1/H3): end this thread's ask scope. A successful embedder whose recording lock was busy is
+    recorded now (one unbudgeted try, at most 0.5 s), then the budget is cleared so later calls on this thread never
+    inherit an exhausted budget. Never raises."""
+    pend = getattr(_TL, "pending_emb", None)
+    _TL.pending_emb = None
+    _TL.lock_left = None
+    if pend is not None:
+        try:
+            with _locked(timeout=0.5, budgeted=False):
+                _record_embedder(*pend)
+        except Exception:  # noqa: BLE001  TimeoutError: the next ask creates another one (safe, one extra creation)
+            pass
 
 
 def _wait_left() -> float | None:
@@ -238,6 +254,17 @@ def _text_chars() -> int:
         return 8000
 
 
+def _record_embedder(slot: str, emb, why, now, flight) -> None:
+    """Under _LOCK. R-SF1: a superseded (taken-over) creator writes only a success into an empty slot; a failure never
+    replaces a good embedder, and a creator that no longer owns the slot never writes a failure. Only the owner frees
+    the _INFLIGHT slot."""
+    owner = _INFLIGHT.get(slot) is flight
+    if (owner or (emb is not None and _STATE[slot] is None)) and not (emb is None and _STATE[slot] is not None):
+        _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
+    if owner:
+        del _INFLIGHT[slot]
+
+
 def _embedder(slot: str = "emb"):
     """(embedder | None, reason). slot "emb" = the question embedder (timeout_s), "emb2" = the stage-2 passage embedder
     (rerank.timeout_s); each is a separate adapter instance (one attempt). Created once; a failed creation is retried after
@@ -286,22 +313,16 @@ def _embedder(slot: str = "emb"):
     finally:
         try:
             with _locked():
-                owner = _INFLIGHT.get(slot) is flight
-                # R-SF1: a superseded (taken-over) creator writes only a success into an empty slot; a failure never
-                # replaces a good embedder, and a creator that no longer owns the slot never writes a failure.
-                if (owner or (emb is not None and _STATE[slot] is None)) and not (emb is None and _STATE[slot] is not None):
-                    _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
-                if owner:
-                    del _INFLIGHT[slot]
+                _record_embedder(slot, emb, why, now, flight)
         except TimeoutError:
             # HYBRID-HARDEN-1109: ownership check and pop under the lock, bounded (0.5 s, outside the ask budget); if the lock
             # is still unavailable the entry is left and the stale rule frees it (a pop without the lock raced a takeover).
             try:
                 with _locked(timeout=0.5, budgeted=False):
-                    if _INFLIGHT.get(slot) is flight:
-                        del _INFLIGHT[slot]
+                    _record_embedder(slot, emb, why, now, flight)  # H3: a success is cached too (R-SF1 write rule)
             except TimeoutError:
-                pass
+                if emb is not None:  # H3: try once more when the ask ends (end_ask_budget)
+                    _TL.pending_emb = (slot, emb, why, now, flight)
         flight[0].set()
     return emb, why
 

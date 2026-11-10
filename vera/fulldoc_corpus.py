@@ -138,6 +138,13 @@ class FullDocCorpus:
             return self._ev_dar
 
     def retrieve(self, question: str, k: int | None = None, evidence_only: bool = False) -> list:
+        from vera import hybrid_retrieval
+        try:
+            return self._retrieve(question, k, evidence_only)
+        finally:
+            hybrid_retrieval.end_ask_budget()  # HYBRID-HARDEN-1109 H1: the per-retrieve lock budget ends with the retrieve
+
+    def _retrieve(self, question: str, k: int | None = None, evidence_only: bool = False) -> list:
         """Top-k candidate spans. evidence_only=True drops non-evidence chunks (abstract, title, back matter, C1-excluded
         sections) BEFORE the top-k cut; the default keeps today's behaviour. Each span carries `in_evidence`."""
         if self.status != STATUS_OK or self._dar is None or not self._texts:
