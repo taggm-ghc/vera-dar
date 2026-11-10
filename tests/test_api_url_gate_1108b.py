@@ -19,7 +19,7 @@ UNLISTED_API = [
     "https://openrouter.ai/api/v1/models",                                    # api/v<N>
     "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pmc",      # eutils host
     "https://www.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?id=1",            # /eutils/ path
-    "https://en.wikipedia.org/w/api.php?action=query",                        # MediaWiki API
+    "https://de.wikipedia.org/w/api.php?action=query",                        # MediaWiki API (en: is listed, SEARCHCAPS-1110)
     "https://api.example.org/v1/items",                                       # api.* host
     "https://example.org/api",                                                # bare /api
     "https://example.org/graphql",                                            # GraphQL endpoint
@@ -74,6 +74,8 @@ EXPECTED_REFUSED_HOSTS = {
     "export.arxiv.org", "doaj.org", "hn.algolia.com", "openrouter.ai", "api.groq.com", "api.openai.com",
     "api.slack.com", "eutils.ncbi.nlm.nih.gov", "127", "127.0.0.1", "inspirehep.net",
     "api.openaire.eu", "api.plos.org"}
+# SEARCHCAPS-1110: listed API endpoints on a website host (refused for the generic "fulltext" purpose by their entry).
+EXPECTED_REFUSED_URLS = {"https://en.wikipedia.org/w/api.php"}
 
 
 def _corpus():
@@ -110,7 +112,7 @@ def test_no_config_or_code_url_outside_the_expected_api_set_is_refused():
             host = (urlsplit(u).hostname or "").lower()
         except ValueError:
             continue
-        if _refused(u) and host not in EXPECTED_REFUSED_HOSTS:
+        if _refused(u) and host not in EXPECTED_REFUSED_HOSTS and u not in EXPECTED_REFUSED_URLS:
             bad.append(u)
     assert not bad, f"pages refused by the API gate (recalibrate config/api_like_patterns.json): {bad}"
 

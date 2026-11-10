@@ -7,6 +7,13 @@
     "en.wikipedia.org"
   ],
   "user_agent": "VERA-DAR-wiki-ref-portal/0.2 (non-commercial educational research assistant; reference-list discovery only; https://github.com/taggm-ghc/vera-dar)",
+  "search_api": {
+    "_note": "SEARCHCAPS-1110 (owner OD-1110-SEARCHCAPS, 2026-11-10, DuckDuckGo 'Keep low, use it better'): step 1 (DISCOVER) now uses Wikipedia's own search API instead of a DuckDuckGo site: query, so this portal spends none of DuckDuckGo's small daily cap (the _doc's 'ONE DuckDuckGo Lite site: query' is superseded). One MediaWiki Action API list=search call per question, titles only (srprop and srinfo empty: no snippet, no prose), main namespace, formatversion 2, maxlag 5 (Wikimedia API etiquette: serial requests, descriptive User-Agent with a contact URL; no email is sent). Gated by config/api_permissions.json entry wikipedia_search_api and paced by config/rate_limits.json portal 'wikipedia' (1 req/s, serial). Article pages are still fetched only under /wiki/ after robots.txt allows them. max_results 10 and max_response_bytes 200000 are safety bounds (a 10-title JSON reply is a few kB), not tuned thresholds; timeout_s follows the portal's timeout_s.",
+    "endpoint": "https://en.wikipedia.org/w/api.php",
+    "params": {"action": "query", "list": "search", "srnamespace": "0", "srprop": "", "srinfo": "", "format": "json", "formatversion": "2", "maxlag": "5"},
+    "max_results": 10,
+    "max_response_bytes": 200000
+  },
   "max_articles": 3,
   "max_refs": 20,
   "timeout_s": 5,

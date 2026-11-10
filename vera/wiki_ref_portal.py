@@ -4,10 +4,16 @@ Owner 2026-11-07: "for Wikipedia, we shouldn't use its page contents. instead, o
 those for original sources". Owner 2026-10-22: Wikipedia is never evidence, only a portal. Standing rules: robots.txt
 first and default-deny; never violate robots, terms or a deny-list.
 
-Flow (no /w/, no /api/, no Special: path is ever requested; en.wikipedia.org/robots.txt disallows them for `*`):
+Flow (no page under /w/, /api/ or Special: is ever fetched; en.wikipedia.org/robots.txt disallows them for `*`):
 
-  1. DISCOVER articles with the project's existing DuckDuckGo Lite instance (DDG first) and ONE explicit
-     `site:en.wikipedia.org` query. Only main-namespace article URLs https://en.wikipedia.org/wiki/<Title> are kept.
+  1. DISCOVER articles with ONE call to Wikipedia's own search API (SEARCHCAPS-1110, owner OD-1110-SEARCHCAPS
+     "Keep low, use it better": Wikipedia lookups go through Wikipedia's API instead of a DuckDuckGo `site:` query,
+     which keeps DuckDuckGo's small daily cap for visitor questions). The call is the MediaWiki Action API
+     list=search (titles only: srprop is empty, so no snippet or prose is returned), gated by config/api_permissions.json
+     entry wikipedia_search_api (owner_switch permit, OD-1110-SEARCHCAPS; the API is judged on its documented API
+     terms, OD-1107-HITL), sent serially through the "wikipedia" rate portal with the project's descriptive
+     User-Agent (a project URL as the contact, no email; Wikimedia API etiquette) and maxlag. Only main-namespace
+     article URLs https://en.wikipedia.org/wiki/<Title> are kept.
   2. ROBOTS: each article URL goes through vera.selective_fetch.robots_allowed (RFC 9309 matcher, AI-agent groups and
      statements, fail closed) BEFORE any request to it; a deny or an unreadable robots.txt means no fetch. The
      host's Crawl-delay is honoured (crawl_reserve: never sent early). Public-address check, no redirect, byte cap,
@@ -38,7 +44,7 @@ import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "wiki_ref_portal.json"
@@ -425,16 +431,66 @@ def _read_body(resp, max_bytes: int, end: float, clock: Callable) -> bytes:
     return b"".join(box["chunks"])
 
 
-def _default_site_search(query: str, host: str, n: int) -> list:
-    """The shared /ask DuckDuckGo Lite instance (as vera.official_lane): ONE explicit site: query, through its cache,
-    daily cap, rate gate and robots check. [] when DuckDuckGo is not in the chain."""
-    from vera import search_and_fetch, search_providers as sp
-    chain, _m, _mode = search_and_fetch.cached_chain()
-    ddg = next((p for p in chain if getattr(p, "name", None) == sp.DDG_NAME), None)
-    if ddg is None:
+def _api_get(url: str, params: dict, headers: dict, timeout_s: float):
+    """The gated API call (as vera.portal_inspire): config/api_permissions.json entry, conditions, rate portal and
+    User-Agent through vera.api_permissions.call, over the pinned public-only GET; never a redirect."""
+    from vera import api_permissions
+    from vera import selective_fetch as sf
+    with api_permissions.purpose_scope("metadata", url):
+        return api_permissions.call(sf.pinned_get, url, params=params, headers=headers, timeout=timeout_s,
+                                    purpose="metadata", allow_redirects=False)
+
+
+def parse_api_search(body: bytes, host: str, n: int) -> list:
+    """MediaWiki list=search JSON -> [{"url": https://<host>/wiki/<Title>}] (titles only). Any shape error or an API
+    error object (maxlag included) -> [] (fail closed)."""
+    try:
+        doc = json.loads(body.decode("utf-8"))
+        hits = doc["query"]["search"]
+    except Exception:  # noqa: BLE001
         return []
-    q = {"group": "wikipedia", "query": f"{query} (site:{host})"[:int(ddg.s.get("max_query_chars", 500))]}
-    return ddg.parse(ddg.call(q["query"], n, float(ddg.s.get("timeout_s", 10) or 10), queries=[q]), n)
+    out = []
+    for h in hits if isinstance(hits, list) else []:
+        t = h.get("title") if isinstance(h, Mapping) else None
+        if isinstance(t, str) and t.strip() and h.get("ns", 0) == 0:
+            out.append({"url": f"https://{host}/wiki/{quote(t.strip().replace(' ', '_'), safe='_()-,.')}"})
+        if len(out) >= n:
+            break
+    return out
+
+
+def api_search(query: str, host: str, n: int, cfg: Mapping, *, get: Callable | None = None) -> list:
+    """SEARCHCAPS-1110: ONE Wikipedia search API call (cfg["search_api"]) -> article URLs. [] when the API is not
+    configured or the endpoint is not on the article host (fail closed: no DuckDuckGo fallback). Raises on transport
+    errors (discover counts them as a failed search)."""
+    a = cfg.get("search_api") if isinstance(cfg, Mapping) else None
+    if not isinstance(a, Mapping) or not a.get("endpoint"):
+        return []
+    ep = str(a["endpoint"])
+    if urlsplit(ep).scheme != "https" or _host(ep) != str(host).lower():
+        return []
+    params = {**{str(k): str(v) for k, v in (a.get("params") or {}).items()},
+              "srsearch": str(query), "srlimit": str(max(1, min(int(n), int(a.get("max_results", 10)))))}
+    resp = (get or _api_get)(ep, params, {"User-Agent": str(cfg["user_agent"]), "Accept": "application/json"},
+                             float(a.get("timeout_s", cfg["timeout_s"])))
+    try:
+        if int(getattr(resp, "status_code", 0) or 0) != 200:
+            raise PortalError("rate_limited" if int(getattr(resp, "status_code", 0) or 0) == 429 else "unreachable")
+        body = getattr(resp, "content", b"") or b""
+        if len(body) > int(a.get("max_response_bytes", 200000)):
+            raise PortalError("too_large")
+        return parse_api_search(body, str(host).lower(), int(n))
+    finally:
+        try:
+            if hasattr(resp, "close"):
+                resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _default_site_search(query: str, host: str, n: int, cfg: Mapping | None = None) -> list:
+    """SEARCHCAPS-1110: the Wikipedia search API (was a DuckDuckGo Lite site: query until OD-1110-SEARCHCAPS)."""
+    return api_search(query, host, n, cfg if cfg is not None else load_config())
 
 
 def _default_robots(http_get: Callable, url_check: Callable, ua: str) -> Callable:
@@ -473,8 +529,12 @@ def discover(question: str, cfg: Mapping | None = None, *, site_search: Callable
     max_articles = int(cfg["max_articles"])
     try:
         counts["search"] = 1
-        results = list((site_search or _default_site_search)(build_query(question, cfg), str(cfg["article_host"]),
-                                                               max(max_articles * 3, 5)) or [])
+        if site_search is not None:
+            results = list(site_search(build_query(question, cfg), str(cfg["article_host"]),
+                                       max(max_articles * 3, 5)) or [])
+        else:
+            results = _default_site_search(build_query(question, cfg), str(cfg["article_host"]),
+                                           max(max_articles * 3, 5), cfg)
     except Exception:  # noqa: BLE001  a failed search ends the portal for this question (the other providers stand)
         counts["error"] = "search"
         results = []
