@@ -73,17 +73,18 @@ class HostRoleTests(unittest.TestCase):
         self.assertEqual(role("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1/"), R)
         self.assertEqual(role("https://www.ncbi.nlm.nih.gov/books/NBK1/"), R)
         self.assertEqual(role("https://www.ncbi.nlm.nih.gov/pubmed/1"), P)
-        self.assertEqual(role("https://www.ncbi.nlm.nih.gov/gene/1"), O)
+        self.assertEqual(role("https://www.ncbi.nlm.nih.gov/gene/1"), P)
 
     def test_federal_index_and_regulations(self):
         self.assertEqual(role("https://eric.ed.gov/?q=x"), P)
         self.assertEqual(role("https://eric.ed.gov/?id=ED123456"), R)
-        self.assertEqual(role("https://www.regulations.gov/document/X"), O)
+        self.assertEqual(role("https://www.regulations.gov/document/X"), P)
         self.assertEqual(role("https://www.regulations.gov/comment/X-1"), P)
 
     def test_archive_org_paths(self):
         self.assertEqual(role("https://archive.org/web/2020/http://x"), P)
-        self.assertEqual(role("https://archive.org/details/foo"), U)
+        self.assertEqual(role("https://archive.org/details/foo"), P)
+        self.assertEqual(role("https://archive.org/about/"), U)
 
     def test_preprint_dois(self):
         for d in ["10.48550/arXiv.2401.1", "10.1101/2020.01.01.123456", "10.1101/123456v2", "10.2139/ssrn.123",
@@ -165,6 +166,58 @@ class HostRoleTests(unittest.TestCase):
         self.assertEqual(hr.role_for_record(None).role, U)
         self.assertEqual(hr.role_for_record({}).role, U)
         self.assertFalse(hr.is_evidence_allowed({}, "answer"))
+
+    def test_review_fixes(self):
+        # F1 trailing ideographic/fullwidth dots
+        for u in ["https://arxiv.org\u3002/abs/1", "https://arxiv.org\uff0e/abs/1", "https://arxiv\u3002org/abs/1", "https://arxiv.org\uff61/x", "https://arxiv.org../x"]:
+            self.assertFalse(hr.is_evidence_allowed(u, "answer"), u)
+        self.assertEqual(role("https://arxiv.org\u3002/abs/1"), P)
+        # F2 path normalisation and ncbi default
+        n = "https://www.ncbi.nlm.nih.gov"
+        for path in ["//pubmed/123", "/pmc/../pubmed/123", "/pmc/%2e%2e/pubmed/1", "/pmc/%252e%252e/pubmed/1", "/./pubmed/1", "/books/./../pubmed/1"]:
+            self.assertEqual(role(n + path), P, path)
+        self.assertEqual(role("https://europepmc.org/articles/PMC1/../../search"), P)
+        self.assertEqual(role("https://ncbi.nlm.nih.gov/pubmed/1"), P)
+        self.assertEqual(role("https://ncbi.nlm.nih.gov/pmc/articles/PMC1/"), R)
+        self.assertEqual(role(n + "//pmc/articles/PMC1/"), R)
+        self.assertEqual(role("https://pubchem.ncbi.nlm.nih.gov/compound/1"), P)
+        self.assertEqual(role("https://pmc.ncbi.nlm.nih.gov/articles/PMC1/"), R)
+        # F3 portal rows
+        for u in ["https://pubmed.gov/1", "https://search.gov/x", "https://clinicaltrials.gov/search?term=x", "https://loc.gov/search/?q=x",
+                  "https://catalog.loc.gov/x", "https://catalog.archives.gov/search", "https://search.yahoo.com/search?p=x",
+                  "https://yandex.com/search/?text=x", "https://www.baidu.com/s?wd=x", "https://search.brave.com/search?q=x",
+                  "https://www.startpage.com/do/search", "https://www.ecosia.org/search?q=x", "https://www.google.com/url?q=x",
+                  "https://books.google.com/books?id=1", "https://www.google.com/books/feeds", "https://www.yahoo.com/news/x",
+                  "https://flipboard.com/x", "https://apple.news/x", "https://ground.news/x", "https://www.newsbreak.com/x",
+                  "https://dblp.org/x", "https://www.lens.org/x", "https://app.dimensions.ai/x", "https://scite.ai/x",
+                  "https://scholar.archive.org/search", "https://citeseerx.ist.psu.edu/x", "https://philpapers.org/rec/X",
+                  "https://ideas.repec.org/p/x", "https://paperswithcode.com/paper/x", "https://www.techrxiv.org/x",
+                  "https://essopenarchive.org/x", "https://www.authorea.com/x", "https://qeios.com/x", "https://www.scribd.com/x",
+                  "https://www.slideshare.net/x", "https://archive.org/details/x"]:
+            self.assertEqual(role(u), P, u)
+            self.assertFalse(hr.is_evidence_allowed(u, "answer"), u)
+        self.assertEqual(role("https://clinicaltrials.gov/study/NCT1"), O)
+        self.assertEqual(role("https://www.loc.gov/item/x"), O)
+        self.assertEqual(role("https://www.regulations.gov/comment/X"), P)
+        self.assertEqual(role("https://www.state.tx.us/x"), U)
+        self.assertEqual(role("https://www.texas.gov/x"), O)  # documented deviation: state .gov hosts are ORIGINAL
+        # F4 hop semantics and numeric hosts
+        self.assertFalse(hr.is_hop_allowed("https://example.org/x", "store"))
+        self.assertTrue(hr.is_hop_allowed("https://example.org/x", "answer"))
+        self.assertTrue(hr.is_hop_allowed("https://www.nature.com/x", "store"))
+        self.assertTrue(hr.is_hop_allowed("https://pmc.ncbi.nlm.nih.gov/x", "store"))
+        self.assertTrue(hr.is_hop_allowed("https://doi.org/10.1038/x", "store"))
+        self.assertFalse(hr.is_hop_allowed("https://zenodo.org/records/1", "store"))
+        self.assertTrue(hr.is_hop_allowed("https://zenodo.org/records/1", "store", {"version": "published"}))
+        self.assertFalse(hr.is_hop_allowed("https://arxiv.org/x", "store"))
+        self.assertFalse(hr.is_hop_allowed("https://arxiv.org/x", "answer"))
+        self.assertFalse(hr.is_hop_allowed("https://example.org/x", "bogus"))
+        for u in ["http://0x7f.1/", "http://2130706433/", "http://0177.0.0.1/", "http://1.2.3.4.5/", "http://10.1/"]:
+            self.assertEqual(hr.role_for_url(u).role, U, u)
+            self.assertIn(hr.role_for_url(u).rule_id, ("ip_literal", "malformed_url"), u)
+            self.assertFalse(hr.is_evidence_allowed(u, "answer"), u)
+        # store re-checks the final host: a resolver hop alone is not evidence
+        self.assertFalse(hr.is_evidence_allowed("https://doi.org/10.1038/x", "store"))
 
     def test_bare_host_and_userinfo(self):
         self.assertEqual(role("arxiv.org/abs/1"), P)

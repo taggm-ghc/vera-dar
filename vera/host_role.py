@@ -164,22 +164,49 @@ def _split(url) -> tuple[str | None, str, str]:
         return None, "", "malformed_url"
     if not host:
         return None, "", "malformed_url"
-    host = host.lower().rstrip(".")
+    host = re.sub("[\u3002\uff0e\uff61]", ".", host.lower()).rstrip(".")
     if not host or "." not in host or ".." in host or "%" in host:
+        return None, "", "malformed_url"
+    try:
+        host = host.encode("idna").decode("ascii").lower().rstrip(".")  # strip again: IDNA can map to "."
+    except Exception:  # noqa: BLE001
+        return None, "", "malformed_url"
+    if not host or "." not in host or ".." in host:
         return None, "", "malformed_url"
     try:
         ipaddress.ip_address(host)
         return None, "", "ip_literal"
     except ValueError:
         pass
-    try:
-        host = host.encode("idna").decode("ascii")
-    except Exception:  # noqa: BLE001
-        return None, "", "malformed_url"
-    path = unquote(p.path or "/")
-    if p.query and p.path in ("", "/"):
+    if _NUMERIC_LABEL.match(host.rsplit(".", 1)[-1]) or all(_NUMERIC_LABEL.match(x) for x in host.split(".")):
+        return None, "", "ip_literal"  # inet_aton forms such as 0x7f.1, 2130706433
+    path = _norm_path(p.path or "/")
+    if p.query and path == "/":
         path = "/?" + p.query  # ERIC-style /?id=ED123
     return host, path, ""
+
+
+_NUMERIC_LABEL = re.compile(r"^(?:0x[0-9a-f]*|[0-9]+)$", re.I)
+
+
+def _norm_path(raw: str) -> str:
+    """Percent-decode (up to 3 rounds), collapse //, resolve . and .. (RFC 3986 5.2.4) before rule matching."""
+    path = raw
+    for _ in range(3):
+        d = unquote(path)
+        if d == path:
+            break
+        path = d
+    out: list[str] = []
+    for seg in path.replace("\\", "/").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(seg)
+    return "/" + "/".join(out) + ("/" if path.endswith("/") and out else "")
 
 
 def _suffix_ok(host: str, match: str) -> bool:
@@ -303,10 +330,18 @@ def is_evidence_allowed(target, use: str = "store") -> bool:
         return False
 
 
-def is_hop_allowed(url) -> bool:
-    """Redirect-hop check: refuse PORTAL/EXCLUDED/malformed; RESOLVER and unknown hosts pass (the lane allowlist
-    and the final host's role decide)."""
-    hr = role_for_url(url)
-    if hr.role in ("PORTAL", "EXCLUDED"):
+def is_hop_allowed(url, use: str = "answer", meta=None) -> bool:
+    """Redirect-hop check. store: only ORIGINAL, REPOSITORY_OF_RECORD or RESOLVER hops (unknown hops refused; the
+    route allowlist still applies). answer: PORTAL/EXCLUDED/malformed refused, RESOLVER and unknown hosts pass, and
+    the caller must re-check the final URL with is_evidence_allowed(final, "answer"). Never raises."""
+    try:
+        if use not in _USES:
+            return False
+        hr = role_for_url(url, meta)
+        if use == "store":
+            return hr.role in _EVIDENCE_ROLES or hr.role == "RESOLVER"
+        if hr.role in ("PORTAL", "EXCLUDED"):
+            return False
+        return not (hr.role == UNKNOWN and hr.rule_id in ("malformed_url", "ip_literal"))
+    except Exception:  # noqa: BLE001
         return False
-    return not (hr.role == UNKNOWN and hr.rule_id in ("malformed_url", "ip_literal"))

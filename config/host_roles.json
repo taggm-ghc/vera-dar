@@ -122,6 +122,34 @@
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
+   "match": "techrxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "essopenarchive.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "authorea.com",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "qeios.com",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
    "match": "osf.io",
    "role": "PORTAL",
    "kind": "preprint_server",
@@ -207,6 +235,69 @@
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
+   "match": "dblp.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "lens.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "dimensions.ai",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "scite.ai",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "scholar.archive.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "citeseerx.ist.psu.edu",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "philpapers.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "repec.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "paperswithcode.com",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
    "match": "science.gov",
    "role": "PORTAL",
    "kind": "index",
@@ -228,12 +319,55 @@
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
-   "match": "www.ncbi.nlm.nih.gov",
+   "match": "ncbi.nlm.nih.gov",
    "role": "PORTAL",
    "kind": "index",
-   "basis": "NCBI PubMed index pages",
+   "basis": "federal index/search hosts (review F2b/F3): NCBI default is PORTAL, pmc/books paths override as RoR",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "pubmed.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "federal index/search hosts (review F2b/F3): NCBI default is PORTAL, pmc/books paths override as RoR",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "search.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "federal index/search hosts (review F2b/F3): NCBI default is PORTAL, pmc/books paths override as RoR",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "catalog.loc.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "federal index/search hosts (review F2b/F3): NCBI default is PORTAL, pmc/books paths override as RoR",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "catalog.archives.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "federal index/search hosts (review F2b/F3): NCBI default is PORTAL, pmc/books paths override as RoR",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "clinicaltrials.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "search pages (study records /study/NCT stay ORIGINAL)",
    "decided_by": "OD-1110-PORTALS-ALL",
-   "path_regex": "^/pubmed(/|$)"
+   "path_regex": "^/search"
+  },
+  {
+   "match": "loc.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "search pages",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/search"
   },
   {
    "match": "europepmc.org",
@@ -261,9 +395,8 @@
    "match": "regulations.gov",
    "role": "PORTAL",
    "kind": "index",
-   "basis": "third-party public comments are not the agency's own text (plan 1c; default PORTAL)",
-   "decided_by": "OD-1110-PORTALS-ALL",
-   "path_regex": "^/comment(/|$)"
+   "basis": "plan 1c: default PORTAL (third-party comments are not agency text; agency documents are also on the agencies' own hosts and govinfo.gov)",
+   "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
    "match": "duckduckgo.com",
@@ -304,9 +437,65 @@
    "match": "google.com",
    "role": "PORTAL",
    "kind": "search_engine",
-   "basis": "Google search results",
+   "basis": "Google search, redirect, books, scholar results",
    "decided_by": "OD-1110-PORTALS-ALL",
-   "path_regex": "^/search"
+   "path_regex": "^/(search|url|books|scholar|imgres)"
+  },
+  {
+   "match": "books.google.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "search.yahoo.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "yandex.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "yandex.ru",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "baidu.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "search.brave.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "startpage.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ecosia.org",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or book-search index (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
    "match": "wikipedia.org",
@@ -473,9 +662,9 @@
    "match": "archive.org",
    "role": "PORTAL",
    "kind": "mirror",
-   "basis": "Wayback paths only",
+   "basis": "Wayback paths and /details uploads (user-uploaded items)",
    "decided_by": "OD-1110-PORTALS-ALL",
-   "path_regex": "^/(web|wayback)/"
+   "path_regex": "^/(web|wayback|details)(/|$)"
   },
   {
    "match": "researchgate.net",
@@ -489,6 +678,56 @@
    "role": "PORTAL",
    "kind": "uploader",
    "basis": "uploader platforms: no deposit or version-of-record verification (plan 1c)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "scribd.com",
+   "role": "PORTAL",
+   "kind": "uploader",
+   "basis": "uploader platforms: no deposit or version-of-record verification (plan 1c)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "slideshare.net",
+   "role": "PORTAL",
+   "kind": "uploader",
+   "basis": "uploader platforms: no deposit or version-of-record verification (plan 1c)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "yahoo.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "Yahoo News",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/news"
+  },
+  {
+   "match": "flipboard.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "apple.news",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ground.news",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (review F3b)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "newsbreak.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (review F3b)",
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
@@ -626,10 +865,10 @@
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
-   "match": "www.ncbi.nlm.nih.gov",
+   "match": "ncbi.nlm.nih.gov",
    "role": "REPOSITORY_OF_RECORD",
    "kind": "repository",
-   "basis": "PMC and Bookshelf",
+   "basis": "PMC and Bookshelf (www. and bare host)",
    "decided_by": "OD-1110-PORTALS-ALL",
    "path_regex": "^/(pmc|books)(/|$)",
    "priority": 10
@@ -826,14 +1065,7 @@
    "match": "govinfo.gov",
    "role": "ORIGINAL",
    "kind": "agency",
-   "basis": "GPO / agency documents; regulations.gov comments overridden by path row",
-   "decided_by": "OD-1110-PORTALS-ALL"
-  },
-  {
-   "match": "regulations.gov",
-   "role": "ORIGINAL",
-   "kind": "agency",
-   "basis": "GPO / agency documents; regulations.gov comments overridden by path row",
+   "basis": "GPO is the official publisher",
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
@@ -1155,14 +1387,14 @@
    "match": "gov",
    "role": "ORIGINAL",
    "kind": "agency",
-   "basis": "federal and government agency pages: the agency is the author (plan 1c). Index and repository hosts above override by specificity",
+   "basis": "government agency pages: the agency is the author (plan 1c). NOTE deviation: the plan named the federal dataset rule; this suffix also covers state, local and tribal .gov hosts, accepted because they are equally the publisher of their own pages. Index and repository hosts override by specificity",
    "decided_by": "OD-1110-PORTALS-ALL"
   },
   {
    "match": "mil",
    "role": "ORIGINAL",
    "kind": "agency",
-   "basis": "federal and government agency pages: the agency is the author (plan 1c). Index and repository hosts above override by specificity",
+   "basis": "government agency pages: the agency is the author (plan 1c). NOTE deviation: the plan named the federal dataset rule; this suffix also covers state, local and tribal .gov hosts, accepted because they are equally the publisher of their own pages. Index and repository hosts override by specificity",
    "decided_by": "OD-1110-PORTALS-ALL"
   }
  ],
