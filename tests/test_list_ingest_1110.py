@@ -388,3 +388,61 @@ def test_openalex_lookup_still_refused_when_slot_exhausted(monkeypatch):
         assert len(sent) == 1  # nothing sent when limited
     finally:
         rate_limit.set_registry_for_tests(None)
+
+
+# LI-TRANSIENT-CODES-1110 (review S6-1): a transient failure is never reported as a final no-route / refused-portal.
+def test_lookup_exception_is_lookup_unavailable_not_no_route(monkeypatch):
+    def boom(x):
+        raise OSError("timeout")
+    rv = list_ingest.Resolvers(pmid=boom, arxiv_original=boom, known=lambda d, u: False)
+    r = _ingest(["pmid:111", "arXiv:2301.12345"], monkeypatch, resolvers=rv)
+    assert codes(r) == ["lookup-unavailable", "lookup-unavailable"]
+    assert not list_ingest._ACCEPTED and (auto_acquire._S.queue is None or not list(auto_acquire._S.queue.queue))
+
+
+def test_definitive_no_route_is_unchanged(monkeypatch):
+    r = _ingest(["pmid:111"], monkeypatch, resolvers=Rv(pmid={}))
+    assert codes(r) == ["no-route"]
+
+
+def test_host_role_check_failure_is_check_unavailable_and_stores_nothing(monkeypatch):
+    from vera import host_role
+
+    def boom(rec):
+        raise RuntimeError("config unreadable")
+    monkeypatch.setattr(host_role, "role_for_record", boom)
+    r = _ingest(["10.9999/journal.5"], monkeypatch, resolvers=Rv())
+    assert codes(r) == ["check-unavailable"]
+    assert not list_ingest._ACCEPTED and (auto_acquire._S.queue is None or not list(auto_acquire._S.queue.queue))
+
+
+def _resp(sc, body=None):
+    class R:
+        status_code = sc
+
+        def json(self):
+            return body or {}
+    return R()
+
+
+def _lookup_with(monkeypatch, inspire, openalex):
+    def fake(url, params, t):
+        v = inspire if "inspire" in url else openalex
+        if isinstance(v, Exception):
+            raise v
+        return v
+    monkeypatch.setattr(list_ingest, "_api_get", fake)
+    return list_ingest._default_arxiv_original("2101.00001", list_ingest.load_config())
+
+
+def test_default_arxiv_lookup_transient_vs_definitive(monkeypatch):
+    ok_empty = _resp(200, {"hits": {"hits": []}})
+    oa_none = _resp(200, {"locations": []})
+    assert _lookup_with(monkeypatch, ok_empty, _resp(404)) is None  # definitive: not found
+    assert _lookup_with(monkeypatch, ok_empty, oa_none) is None
+    for inspire, oa in ((ok_empty, _resp(429)), (ok_empty, _resp(503)), (ok_empty, OSError("t")),
+                        (OSError("t"), oa_none), (_resp(500), oa_none), (OSError("t"), _resp(404))):
+        with pytest.raises(Exception):
+            _lookup_with(monkeypatch, inspire, oa)
+    assert _lookup_with(monkeypatch, OSError("t"), _resp(200, {"locations": [
+        {"landing_page_url": "https://doi.org/10.1234/j.x"}]})) == "10.1234/j.x"

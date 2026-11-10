@@ -24,6 +24,8 @@
     "arxiv_no_original": "no-route-arxiv-original-not-found",
     "arxiv_lookup_limit": "arxiv-lookup-limit",
     "portal": "refused-portal",
+    "lookup_unavailable": "lookup-unavailable",
+    "check_unavailable": "check-unavailable",
     "invalid_topic": "invalid-topic",
     "rate_limited": "rate-limited",
     "queue_full": "queue-full",

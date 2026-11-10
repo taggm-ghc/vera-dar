@@ -98,7 +98,7 @@ def parse_identifier(raw) -> tuple[str, str] | None:
 # ------------------------------------------------------------------------------------------------ resolution
 class Resolvers:
     """Identifier-only lookups; each is injectable (tests pass fakes; defaults use the gated API calls). Each returns
-    None when nothing is found and raises on transport errors (the item then gets no-route)."""
+    None when nothing is found and raises on transport errors (the item then gets lookup-unavailable, retryable)."""
 
     def __init__(self, pmid: Callable | None = None, arxiv_original: Callable | None = None,
                  known: Callable | None = None):
@@ -144,6 +144,7 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
     """The journal DOI of an arXiv id through INSPIRE, then OpenAlex (metadata-only identifier lookups through the
     existing api_permissions entries; no search, no body text)."""
     t = float(cfg["lookup_timeout_s"])
+    incomplete = False  # INSPIRE could not answer: "nothing found" is then not definitive
     try:
         r = _api_get(cfg["inspire"]["url"], {"q": f"arxiv:{arxiv_id}", "fields": "dois", "size": 1}, t)
         if getattr(r, "status_code", 0) == 200:
@@ -152,16 +153,24 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
                     j = _journal_doi(d.get("value") if isinstance(d, dict) else d)
                     if j:
                         return j
+        else:
+            incomplete = True
     except Exception as e:  # noqa: BLE001
+        incomplete = True
         logger.info("list-ingest inspire lookup failed (%s)", type(e).__name__)
     r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
                  {"select": "doi,locations"}, t)
-    if getattr(r, "status_code", 0) != 200:
-        return None
+    sc = getattr(r, "status_code", 0)
+    if sc == 404 and not incomplete:
+        return None  # OpenAlex definitively has no such work
+    if sc != 200:
+        raise RuntimeError(f"openalex status {sc}")  # 429/5xx/other: the lookup did not complete (lookup-unavailable)
     for loc in r.json().get("locations") or ():
         j = _journal_doi((loc or {}).get("landing_page_url"))
         if j:
             return j
+    if incomplete:
+        raise RuntimeError("inspire unavailable and openalex found no journal original")
     return None
 
 
@@ -257,9 +266,9 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
                     out(raw, kind, "no_route")
                     continue
                 cand = {k: c2[k] for k in ("doi", "pmcid") if c2.get(k)} | {"url": val}
-        except Exception as e:  # noqa: BLE001  transport/permission/rate failure on an identifier lookup
+        except Exception as e:  # noqa: BLE001  transport/permission/rate failure: not definitive, nothing stored, retryable
             logger.info("list-ingest lookup failed (%s)", type(e).__name__)
-            out(raw, kind, "no_route")
+            out(raw, kind, "lookup_unavailable")
             continue
         if cand.get("doi") and _ARXIV_DOI.match(cand["doi"]):  # belt and braces: never route an arXiv DOI to the pipeline
             out(raw, kind, "arxiv_no_original")
@@ -270,8 +279,9 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
             role = host_role.role_for_record({
                 "doi": cand.get("doi") or "", "source": (rec or {}).get("source") or "",
                 "pub_types": (rec or {}).get("pub_types") or (rec or {}).get("pubTypeList") or []}).role
-        except Exception:  # noqa: BLE001  fail closed
-            role = "PORTAL"
+        except Exception:  # noqa: BLE001  fail closed (nothing queued), but not a definitive refusal: retryable
+            out(raw, kind, "check_unavailable")
+            continue
         if role in ("PORTAL", "EXCLUDED"):
             out(raw, kind, "portal")
             continue
