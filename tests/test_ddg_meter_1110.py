@@ -290,3 +290,60 @@ def test_c1_c2_c3_cumulative_posts_per_question(rig, monkeypatch):
         reading_list(rig, q)
         got[name] = len(rig.posts)
     assert got == {"plain": 1, "one_domain": 1, "two_domains": 1, "news": 1}
+
+
+# ------------------------------------------------------------------------------------------------------------- C4
+def _freshness_attempt(rig, monkeypatch, question):
+    """ask_service._research_attempt (the OD-1109-SIX search on an answered question) with only the guards stubbed and
+    inline_acquire.acquire replaced by a round-0 search through the REAL provider (acquisition_search)."""
+    import time
+    from vera import acq_discovered, ask_service, fulldoc_corpus, inline_acquire
+    monkeypatch.setattr(ask_service, "_layer1_clean", lambda q: True)
+    monkeypatch.setattr(ask_service, "inline_need_s", lambda acq, g: 1.0)
+    monkeypatch.setattr(ask_service, "_doc_keys", lambda x: [])
+    monkeypatch.setattr(fulldoc_corpus, "flag_enabled", lambda c: True)
+    monkeypatch.setattr(fulldoc_corpus, "load_config", lambda: {})
+    monkeypatch.setattr(inline_acquire, "icfg_of", lambda acq: {"in_scope": True})
+    monkeypatch.setattr(inline_acquire, "inline_enabled", lambda acq: True)
+    monkeypatch.setattr(acq_discovered, "use_discovered", lambda acq: True)
+    ddg_fn = lambda q, n, t: rig.ddg.parse(rig.ddg.call(q, n, t), n)  # noqa: E731
+    cfg = {"search": {"ddg_first": {"enabled": True}, "europepmc": {"enabled": False}}, "bounds": {"max_search_calls_per_job": 6}}
+
+    def acquire(q, acq, **kw):
+        search = sp.acquisition_search(lambda *a: [], cfg, ddg_search=ddg_fn)
+        with ddg_meter.site("inline" if ddg_meter.current() == "base" else ddg_meter.current()), sp.portal_scope():
+            search(q, 5, 5.0)
+        return SimpleNamespace(status="ok", public=lambda: {"status": "ok"})
+    monkeypatch.setattr(inline_acquire, "acquire", acquire)
+    corpus = SimpleNamespace(registry=FakeRegistry("photonics", "genomics", "quantum"), cfg={})
+    grounding = (lambda restricted=False: grounded_ask.retrieve_all(question, GROUNDING, dar_corpus=corpus)[0],)
+    return ask_service._research_attempt(question, grounding, {"x": 1}, {}, {}, SimpleNamespace(
+        inline_used=False, deadline=time.monotonic() + 100))
+
+
+@pytest.mark.parametrize("question,before", [(Q_PLAIN, 2), (Q_ONE, 4), (Q_TWO, 6)])
+def test_c4_answered_non_news_question_spends_no_duckduckgo(rig, monkeypatch, question, before):
+    _freshness_attempt(rig, monkeypatch, question)
+    assert len(rig.posts) == before                       # baseline: the discovery search (+ branches); round 0 is cached
+    ddg_meter.reset(); rig.posts.clear(); rig.ddg._mem.clear()
+    set_flags(monkeypatch, answered_question_no_ddg=True)
+    _freshness_attempt(rig, monkeypatch, question)
+    assert rig.posts == [] and posts_by_site() == {}
+
+
+def test_c4_news_question_keeps_duckduckgo(rig, monkeypatch):
+    set_flags(monkeypatch, answered_question_no_ddg=True)
+    _freshness_attempt(rig, monkeypatch, Q_NEWS)
+    assert len(rig.posts) == 2 and posts_by_site() == {"freshness": 2}
+
+
+def test_c4_scholarly_providers_still_search_on_an_answered_question(rig, monkeypatch):
+    set_flags(monkeypatch, answered_question_no_ddg=True)
+    _freshness_attempt(rig, monkeypatch, Q_PLAIN)
+    assert len(rig.scholar_calls) >= 1
+
+
+def test_c4_the_flag_is_scoped_to_the_call(rig, monkeypatch):
+    set_flags(monkeypatch, answered_question_no_ddg=True)
+    _freshness_attempt(rig, monkeypatch, Q_PLAIN)
+    assert ddg_reduce.NO_DDG.get() is False and ddg_meter.current() == "base"

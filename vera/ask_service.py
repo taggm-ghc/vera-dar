@@ -2073,14 +2073,17 @@ def _research_attempt(question, grounding, acq, fcfg, used_in, budget):
     if need is None or remaining < need:
         return {"status": "budget_unknown" if need is None else "deadline"}, None
     budget.inline_used = True
-    from vera import acq_discovered
+    from vera import acq_discovered, ddg_meter, ddg_reduce
+    # DDG-REDUCE-1110 WP0: the OD-1109-SIX search on an answered question is its own call site ("freshness").
+    # C4: DuckDuckGo is for questions the corpus cannot answer (YIELD-1021); an answered non-news question spends none on
+    # this search (OpenAlex and Europe PMC still run), a news-intent question keeps it. answered_question_no_ddg.
+    skip_ddg = ddg_reduce.on("answered_question_no_ddg") and not inline_acquire.news_question(question)
     kw = {}
-    if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):
-        kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
-    if fcfg.get("rank_prefer_recent") is True:
-        kw["prefer_recent"] = True
-    from vera import ddg_meter  # DDG-REDUCE-1110 WP0: the OD-1109-SIX search on an answer is its own call site
-    with ddg_meter.site("freshness"):
+    with ddg_meter.site("freshness"), ddg_reduce.no_ddg(skip_ddg):
+        if acq_discovered.use_discovered(acq) and inline_acquire.inline_enabled(acq):
+            kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
+        if fcfg.get("rank_prefer_recent") is True:
+            kw["prefer_recent"] = True
         o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
     st = str(getattr(o, "status", "error"))
     return (o.public() if st != "off" and hasattr(o, "public") else {"status": st}), o

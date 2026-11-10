@@ -183,6 +183,10 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
             from vera.search_and_fetch import search_question
 
             providers = _provider_chain(cfg["providers"])
+            from vera import ddg_reduce
+            if ddg_reduce.NO_DDG.get():  # DDG-REDUCE-1110 C4: this call site spends no DuckDuckGo
+                from vera.search_providers import DDG_NAME
+                providers = [p for p in providers if getattr(p, "name", None) != DDG_NAME]
             # per-provider timeout below the overall deadline, so one slow provider cannot starve the others
             results = search_question(question, num_results=int(cfg["num_results"]), providers=providers,
                                       min_candidates=1, mode="fan_out", deadline_s=float(cfg["deadline_s"]),
