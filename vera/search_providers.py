@@ -2328,6 +2328,8 @@ class DuckDuckGoLiteProvider:
             if r.status_code != 200 or self._is_challenge(r.text or ""):
                 break  # a challenge or error stops further queries; it is never retried or evaded
         self.last_call_cached = bool(parts) and not live
+        from vera import ddg_meter  # DDG-REDUCE-1110 WP0: counts only, by call site
+        ddg_meter.record(live, self.last_query.get("cache_hits", 0))
         return _DdgParts(parts)
 
     @staticmethod

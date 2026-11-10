@@ -53,6 +53,16 @@ def _provider_chain(names: list[str]):
     return [p for p in chain if p.name in set(names)]
 
 
+def _domain_search_fn(fn: Callable) -> Callable:
+    """DDG-REDUCE-1110 WP0: DuckDuckGo calls made by a domain-routing branch are counted as the "domain" site."""
+    from vera import ddg_meter
+
+    def run(q):
+        with ddg_meter.site("domain"):
+            return fn(q)
+    return run
+
+
 def retrieve(question: str, cfg: dict, search: Callable | None = None, resolver: Callable | None = None) -> list[dict]:
     """Numbered sources with abstracts (the prompt's sources)."""
     return retrieve_all(question, cfg, search, resolver)[0]
@@ -171,7 +181,7 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
             try:
                 from vera import domain_routing as _dr
                 if _dr.flag_enabled():
-                    results, rtrace = _dr.route_search(question, results, _dr.make_search_fn(search_question, providers, cfg), (dar_corpus.registry if dar_corpus is not None else _dr.get_registry()), _dr.get_cfg(), num_results=int(cfg["num_results"]))
+                    results, rtrace = _dr.route_search(question, results, _domain_search_fn(_dr.make_search_fn(search_question, providers, cfg)), (dar_corpus.registry if dar_corpus is not None else _dr.get_registry()), _dr.get_cfg(), num_results=int(cfg["num_results"]))
                     info["routing"] = _trace_counts(rtrace)
                     logger.info("DAR routing: %s", info["routing"])
             except Exception as exc:  # noqa: BLE001  (routing never fails the request; baseline results are kept)

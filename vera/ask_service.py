@@ -2079,7 +2079,9 @@ def _research_attempt(question, grounding, acq, fcfg, used_in, budget):
         kw["discovered"] = acq_discovered.discovery_results(grounding, restricted=False)
     if fcfg.get("rank_prefer_recent") is True:
         kw["prefer_recent"] = True
-    o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
+    from vera import ddg_meter  # DDG-REDUCE-1110 WP0: the OD-1109-SIX search on an answer is its own call site
+    with ddg_meter.site("freshness"):
+        o = inline_acquire.acquire(question, acq, served=_doc_keys(used_in.get("acq")), **kw)
     st = str(getattr(o, "status", "error"))
     return (o.public() if st != "off" and hasattr(o, "public") else {"status": st}), o
 
