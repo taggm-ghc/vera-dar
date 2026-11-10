@@ -38,14 +38,14 @@ class FakeStore:
 
 
 def test_gauntlet_admits_only_relevant_and_licensed():
-    srcs = [_src(1, "https://www.nature.com/articles/1"), _src(2, "https://link.springer.com/article/b", licence=None),
-            _src(3, "https://link.springer.com/article/c")]
+    srcs = [_src(1, "https://www.nature.com/articles/1"), _src(2, "https://doi.org/10.1/b", licence=None),
+            _src(3, "https://doi.org/10.1/c")]
     store = FakeStore()
     counts = ca.admit("visitor question", srcs, _llm([0.9, 0.9, 0.1]), CFG, store)
     by_url = {r["url"]: r for r in store.rows}
     assert by_url["https://www.nature.com/articles/1"]["gate_a_decision"] == "fetch"
-    assert by_url["https://link.springer.com/article/b"]["gate_a_decision"] == "defer"  # no declared licence: held for review
-    assert by_url["https://link.springer.com/article/c"]["gate_a_decision"] == "reject"  # low score, low uncertainty
+    assert by_url["https://doi.org/10.1/b"]["gate_a_decision"] == "defer"  # no declared licence: held for review
+    assert by_url["https://doi.org/10.1/c"]["gate_a_decision"] == "reject"  # low score, low uncertainty
     assert counts == {"admitted": 1, "recorded_defer": 1, "recorded_reject": 1}
 
 
@@ -123,17 +123,19 @@ def test_ask_schedules_admission_only_with_a_store(monkeypatch):
     assert c.post("/ask", json={"question": "q"}, headers=h).status_code == 200 and len(calls) == 1
 
 
-def test_e6_host_role_portal_refused_ordinary_admitted_unknown_refused():
+def test_e6_portal_refused_ordinary_admitted():
     portal = _src(1, "https://arxiv.org/abs/1")
     ppr = dict(_src(2, "https://europepmc.org/article/PPR/PPR1"), source="PPR")
-    prepr_doi = dict(_src(3, "https://www.nature.com/x"), doi="10.1101/2020.01.01.123456")
-    unknown = _src(4, "https://no-such-host.example.invalid/p")
-    ok = dict(_src(5, "https://www.nature.com/articles/a"), evidence_eligible=False)  # retrieve_all marks search results so
-    ok2 = _src(6, "https://link.springer.com/article/b")
+    pre_doi = _src(3, "https://doi.org/10.1101/2020.01.01.123456")
+    pre_land = dict(_src(4, "https://doi.org/10.1/p"), landing_url="https://arxiv.org/abs/9")
+    jdoi = _src(5, "https://doi.org/10.1038/s41586-020-1")
+    unlisted = _src(6, "https://journal.unlisted-publisher.example/a")
+    jland = dict(_src(7, "https://doi.org/10.1/j"), landing_url="https://www.nature.com/articles/j", evidence_eligible=False)
     store = FakeStore()
-    counts = ca.admit("q", [portal, ppr, prepr_doi, unknown, ok, ok2], _llm([0.9, 0.9]), CFG, store)
-    assert {r["url"] for r in store.rows} == {"https://www.nature.com/articles/a", "https://link.springer.com/article/b"}
-    assert counts == {"admitted": 2}
+    counts = ca.admit("q", [portal, ppr, pre_doi, pre_land, jdoi, unlisted, jland], _llm([0.9] * 3), CFG, store)
+    assert {r["url"] for r in store.rows} == {"https://doi.org/10.1038/s41586-020-1",
+                                              "https://journal.unlisted-publisher.example/a", "https://doi.org/10.1/j"}
+    assert counts == {"admitted": 3}
 
 
 def test_e6_store_level_backstop_refuses_before_db():
@@ -142,4 +144,4 @@ def test_e6_store_level_backstop_refuses_before_db():
             raise AssertionError("DB touched")
     st = ca.WoCorpusStore(Boom(), "q")
     assert st.admit({"url": "https://arxiv.org/abs/1"}) == "skipped_host_role"
-    assert st.admit({"url": "https://unknown.example.invalid/x"}) == "skipped_host_role"
+    assert st.admit({"url": "https://doi.org/10.1101/2020.01.01.123456"}) == "skipped_host_role"

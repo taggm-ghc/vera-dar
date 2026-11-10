@@ -176,15 +176,27 @@ _ROLE_KEYS = ("doi", "url", "landing_url", "fulltext_url", "full_text_url", "sou
               "pub_types", "pubTypeList", "is_preprint")
 
 
+_URL_KEYS = ("url", "landing_url", "fulltext_url", "full_text_url")
+
+
 def _not_eligible(src) -> bool:
-    """E6 (fail-closed, host role): True unless the record's role (vera.host_role.role_for_record: DOI prefix, source
-    flag, preprint type, then URL host) allows it as stored evidence. PORTAL, EXCLUDED, RESOLVER and an undeterminable
-    (UNKNOWN) role are refused. evidence_eligible is NOT the filter: it only means 'may ground an answer'."""
+    """E6 (fail-closed on error): item #79 stores metadata, so only PORTAL and EXCLUDED records are refused (OD-1110-
+    PORTALS-ALL). The verdict is the strictest of: the record role from DOI prefix / source flag (Europe PMC PPR) /
+    preprint type or flag (no URL consulted), and the role of each of the url, landing and fulltext hosts. A doi.org URL
+    is judged by its DOI prefix plus the landing host if present. UNKNOWN and RESOLVER are admitted: full-text
+    acquisition re-checks the host before anything is stored as evidence. evidence_eligible is NOT the filter."""
     try:
         from vera import host_role
         if not isinstance(src, dict):
             return True
-        return not host_role.is_evidence_allowed({k: src[k] for k in _ROLE_KEYS if src.get(k) is not None}, "store")
+        meta = {k: src[k] for k in _ROLE_KEYS if src.get(k) is not None}
+        bad = ("PORTAL", "EXCLUDED")
+        if host_role.role_for_record({k: v for k, v in meta.items() if k not in _URL_KEYS}).role in bad:
+            return True
+        for k in _URL_KEYS:
+            if meta.get(k) and host_role.role_for_url(meta[k], meta).role in bad:
+                return True
+        return False
     except Exception:  # noqa: BLE001
         return True
 
