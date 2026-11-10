@@ -291,3 +291,32 @@ def test_d1_arxiv_via_provenance_fields():
     meta = {"host": "europepmc.org", "licence_id": "x", "title_present": True, "text_sha256": None, "fulltext_url": "https://arxiv.org/pdf/1"}
     out = cv.audit_document(meta, [("a", 0, 5, "hello")], CFG)
     assert out["d_flags"][0] == {"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}}
+
+
+def test_d2_repairs_pdf_hyphenation_and_ligatures():
+    line = "the model of the forecast and the evidence that results were fore-\ncast accuracy of the data inter-\nval scores are ﬁne\n"
+    txt = "".join(line.replace("evidence", "evidence q%d" % i).replace("data", "data r%d" % i).replace("\ufb01ne", "\ufb01ne s%d" % i) for i in range(40))
+    d = _plain(txt)
+    f = cv.document_flags(d, CFG, WORDS | {"fine", "interval", "forecast", "s", "q", "r"})
+    assert "D2_incomprehensible:dictionary_word_share" not in f["reasons"]
+    assert f["metrics"]["is_english"] == 1 and f["metrics"]["dictionary_word_share"] >= 0.8
+    assert f["purge"] is False, f["reasons"]  # a hyphen-break hit alone is review
+    assert cv.normalise_extraction("compre-\nhension ­ﬁx") == "comprehension fix"
+    # unrepaired broken words would have failed the dictionary
+    raw_share = sum(1 for w in __import__("re").findall("[A-Za-z]{3,}", txt) if w.lower() in WORDS) / len(__import__("re").findall("[A-Za-z]{3,}", txt))
+    assert raw_share < f["metrics"]["dictionary_word_share"]
+
+
+def test_d3_missing_title_alone_is_review():
+    d = good_doc()
+    d["provenance"] = dict(d["provenance"], title=None)
+    f = cv.document_flags(d, CFG)
+    assert f["reasons"] == [f"{cv.D3}:missing_title"] and f["purge"] is False
+    d["provenance"] = dict(d["provenance"], licence_id=None)
+    assert cv.document_flags(d, CFG)["purge"] is True
+    meta = {"host": "europepmc.org", "licence_id": "x", "title_present": False, "text_sha256": None}
+    txt = " ".join(f"alpha{chr(97 + i % 26)}{chr(97 + i // 26 % 26)}word sentence number" for i in range(400))
+    out = cv.audit_document(dict(meta, text_sha256=cv._sha(txt)), [("a", 0, len(txt), txt)], CFG)
+    assert [(f["rule"], f["severity"]) for f in out["d_flags"] if f["rule"] == "D3"] == [("D3", "review")]
+    d2 = [f for f in out["d_flags"] if f["rule"] == "D2"]
+    assert all({"is_english", "math_heavy"} <= set(f["metrics"]) for f in d2)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from urllib.parse import urlparse
 
 # rule ids (the only named constants)
@@ -319,17 +320,26 @@ def d1_arxiv(doc: dict, cfg: dict) -> list:
     return []
 
 
+def normalise_extraction(text: str) -> str:
+    """Repair common extraction artefacts before the dictionary and non-alnum metrics: soft hyphens removed, ligatures
+    and compatibility forms folded (NFKC), line-break hyphens joined ("compre-\\nhension" -> "comprehension")."""
+    t = unicodedata.normalize("NFKC", text.replace("\u00ad", ""))
+    return re.sub(r"(?<=[^\W\d_])-[ \t]*\n[ \t]*(?=[^\W\d_])", "", t)
+
+
 def d2_metrics(text: str, cfg: dict, words=None) -> dict:
     """Garbled-extraction metrics at document level (pure numbers; thresholds are applied in d2_incomprehensible)."""
     c = cfg["document"][D2]
     n = max(len(text), 1)
+    raw = text
+    text = normalise_extraction(text)  # dictionary, language and non-alnum metrics see repaired text
     m: dict = {}
     nonws = [ch for ch in text if not ch.isspace()]
     m["non_alnum_share"] = (sum(1 for ch in nonws if not ch.isalnum()) / len(nonws)) if nonws else 1.0
-    m["bad_chars_per_1000"] = 1000 * len(re.findall(c["bad_char_regex"], text)) / n
-    m["cid_per_1000"] = 1000 * len(re.findall(c["cid_regex"], text)) / n
-    m["hyphen_break_per_1000"] = 1000 * len(re.findall(c["hyphen_break_regex"], text)) / n
-    lines = [ln for ln in text.split("\n") if ln.strip()]
+    m["bad_chars_per_1000"] = 1000 * len(re.findall(c["bad_char_regex"], raw)) / n
+    m["cid_per_1000"] = 1000 * len(re.findall(c["cid_regex"], raw)) / n
+    m["hyphen_break_per_1000"] = 1000 * len(re.findall(c["hyphen_break_regex"], raw)) / n
+    lines = [ln for ln in raw.split("\n") if ln.strip()]
     m["n_lines"] = len(lines)
     m["mean_line_chars"] = (sum(len(ln) for ln in lines) / len(lines)) if lines else 0.0
     cnt: dict = {}
@@ -372,20 +382,28 @@ def d2_incomprehensible(text: str, cfg: dict, words=None) -> tuple:
     return [f"{D2}:{h}" for h in hits], m
 
 
-def d2_severity(metrics: dict) -> str:
-    """'purge' only for detected-English, not math-heavy text; any other D2 hit is 'review' (never purged)."""
+def d2_severity(metrics: dict, hits=None) -> str:
+    """'purge' only for detected-English, not math-heavy text; any other D2 hit is 'review' (never purged). A
+    hyphen-break hit alone (readable text with PDF line-break hyphens) is review too."""
+    if hits is not None and all(str(h).split(":")[-1] == "hyphen_break_per_1000" for h in hits):
+        return "review"
     return "purge" if metrics.get("is_english") and not metrics.get("math_heavy") else "review"
 
 
+def d3_code_severity(code: str, chunk_result: dict | None, cfg: dict) -> str:
+    """missing_title alone is review (the body is intact); too_few follows d3_severity's C5 rule; the rest purge."""
+    if code.endswith(":missing_title"):
+        return "review"
+    if code.endswith("too_few_substantive_chunks"):
+        rc = (chunk_result or {}).get("rule_chunks_pre_cap") or {}
+        dom = max(rc, key=rc.get) if rc else None
+        return "review" if dom == cfg["document"][D3]["review_when_dominant_drop_rule"] else "purge"
+    return "purge"
+
+
 def d3_severity(code_list: list, chunk_result: dict | None, cfg: dict) -> str:
-    """D3 is 'review' when its only hit is too_few_substantive_chunks that follows from the configured dominant rule
-    (C5 low-info); every other D3 sub-code is 'purge'."""
-    other = [x for x in code_list if not x.endswith("too_few_substantive_chunks")]
-    if other:
-        return "purge"
-    rc = (chunk_result or {}).get("rule_chunks_pre_cap") or {}
-    dom = max(rc, key=rc.get) if rc else None
-    return "review" if dom == cfg["document"][D3]["review_when_dominant_drop_rule"] else "purge"
+    return "purge" if any(d3_code_severity(x, chunk_result, cfg) == "purge" for x in code_list) else "review"
+
 
 
 def d3_incomplete(doc: dict, cfg: dict, chunk_result: dict | None = None) -> list:
@@ -429,7 +447,7 @@ def document_flags(doc: dict, cfg: dict, words=None, chunk_result: dict | None =
     reasons += r2 + r3
     sev = {}
     for r in reasons:
-        sev[r] = "purge" if r.startswith(D1) else (d2_severity(metrics) if r.startswith(D2) else d3_severity(r3, chunk_result, cfg))
+        sev[r] = "purge" if r.startswith(D1) else (d2_severity(metrics, [r]) if r.startswith(D2) else d3_code_severity(r, chunk_result, cfg))
     return {"known_bad": bool(reasons), "reasons": reasons, "severity": sev,
             "purge": any(v == "purge" for v in sev.values()), "metrics": metrics}
 
@@ -547,7 +565,7 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
         d_flags.append({"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}})
     hits, m = d2_incomprehensible(text, cfg, words)
     if hits:
-        d_flags.append({"rule": "D2", "severity": d2_severity(m),
+        d_flags.append({"rule": "D2", "severity": d2_severity(m, hits),
                         "metrics": {k: float(m[k]) for k in [h.split(":", 1)[1] for h in hits] + ["is_english", "math_heavy"]}})
     r3 = d3_incomplete(doc, cfg, cr)
     if r3:
