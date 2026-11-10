@@ -287,6 +287,7 @@ def test_D_new_token_retry_answers_in_same_request_from_acquired_doc(h, monkeypa
 
 # ------------------------------------------------------------------------------------------------ G: _guarded_get bounds
 ALLOW = A.cfg()["fetch"]["allowed_hosts"][0]
+FT = f"https://{ALLOW}/europepmc/webservices/rest/PMC1/fullTextXML"  # PORTAL-RULE-1110: a real full-text path (host_role RoR)
 
 
 # level: L2 (bounded, SSRF-checked traversal during acquisition)
@@ -314,7 +315,7 @@ def test_G_non_allowlisted_or_non_https_host_never_requested():
 def test_G_ssrf_check_failure_stops_before_any_request():
     calls = []
     d = _with_check(lambda *a, **k: calls.append(a) or A.Resp(), lambda u: (False, "private"))
-    assert _stop_code(f"https://{ALLOW}/x", d) == acq_config.reason(A.cfg(), "host")
+    assert _stop_code(FT, d) == acq_config.reason(A.cfg(), "host")
     assert not calls
 
 
@@ -326,7 +327,7 @@ def test_G_redirect_to_internal_host_is_blocked_and_never_fetched():
         seen.append(url)
         return A.Resp(status=302, headers={"Location": "https://internal.invalid/admin"})
     d = _with_check(get, lambda u: (False, "private") if "internal" in u else (True, ""))
-    assert _stop_code(f"https://{ALLOW}/x", d) == acq_config.reason(A.cfg(), "host")
+    assert _stop_code(FT, d) == acq_config.reason(A.cfg(), "host")
     assert not any("internal" in u for u in seen)
 
 
@@ -336,9 +337,9 @@ def test_G_redirect_loop_is_bounded():
 
     def get(url, **k):
         seen.append(url)
-        return A.Resp(status=302, headers={"Location": f"https://{ALLOW}/again"})
+        return A.Resp(status=302, headers={"Location": f"https://{ALLOW}/europepmc/webservices/rest/PMC2/fullTextXML"})
     d = _with_check(get)
-    assert _stop_code(f"https://{ALLOW}/x", d) == acq_config.reason(A.cfg(), "unreachable")
+    assert _stop_code(FT, d) == acq_config.reason(A.cfg(), "unreachable")
     assert len(seen) <= 4  # selective_fetch.MAX_REDIRECTS (3) + the first hop
 
 
@@ -346,7 +347,7 @@ def test_G_oversize_body_is_capped():
     A.seed_access(ALLOW, __import__('time').monotonic())  # CONTROL-GAPS-1107: robots/TDM tested elsewhere
     d = _with_check(lambda *a, **k: A.Resp(ctype="application/xml", body=b"x" * 3_000_000))
     with pytest.raises(auto_acquire._Stop) as ei:
-        auto_acquire._guarded_get(f"https://{ALLOW}/x", A.cfg(), d, 1000, 5.0, False)
+        auto_acquire._guarded_get(FT, A.cfg(), d, 1000, 5.0, False)
     assert ei.value.code == acq_config.reason(A.cfg(), "too_large")
 
 

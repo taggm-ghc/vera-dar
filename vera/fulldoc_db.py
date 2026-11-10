@@ -159,6 +159,13 @@ def _rebuild(src: dict, spans: list, prov: dict) -> str:
     return text
 
 
+_PORTAL_REFUSED = [0]  # PORTAL-RULE-1110 CP5: stored rows refused at load since process start (a counter, no host or text)
+
+
+def portal_refused_count() -> int:
+    return _PORTAL_REFUSED[0]
+
+
 def _unusable_corpus(cfg, items, code, reason) -> FullDocCorpus:
     un = [_unusable(i, code, reason) for i in items] or [_unusable(None, code, reason)]
     return FullDocCorpus(STATUS_UNUSABLE, [], un, {}, None, {}, cfg)
@@ -224,6 +231,12 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
             if not isinstance(did, str) or did in seen_ids:
                 raise fulltext_loader.Refused(R_DUP, f"document_id {did!r} missing or duplicated")
             seen_ids.add(did)
+            _prule = fulltext_loader.portal_verdict(prov.get("item"), prov, row.get("canonical_url"))
+            if _prule:  # PORTAL-RULE-1110 CP5: a stored portal row is never served as evidence (no DB write; counted + logged)
+                _PORTAL_REFUSED[0] += 1
+                logging.getLogger("vera").warning("fulldoc load: stored row refused R-ACQ-PORTAL rule=%s", _prule[:60])
+                unusable.append(_unusable(did, fulltext_loader.R_PORTAL, "stored row comes from a portal host or record"))
+                continue
             if prov.get("chunking") != live_chunking:
                 raise fulltext_loader.Refused(R_DBCHUNK, "chunking settings at ingest differ from the live settings")
             text = _rebuild(row, by_src.get(row.get("source_id"), []), prov)

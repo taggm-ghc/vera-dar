@@ -259,7 +259,9 @@ class _Unlisted:
 
 
 @pytest.mark.parametrize("which", ["europepmc", "arxiv"])
-def test_every_route_fails_closed_on_an_unlisted_host(monkeypatch, which):
+def test_every_route_fails_closed_on_an_unlisted_host(monkeypatch, request, which):
+    if which == "arxiv":  # PORTAL-RULE-1110: pins the dormant arXiv route, whose pre-1110 state had no host-role rule
+        request.getfixturevalue("legacy_arxiv_route")
     monkeypatch.setattr(arxiv_fulltext, "_sleep", lambda s: None)
     from vera import acq_discovered
     monkeypatch.setattr(acq_discovered, "_ROBOTS", {})

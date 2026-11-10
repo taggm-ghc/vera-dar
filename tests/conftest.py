@@ -365,6 +365,8 @@ def legacy_arxiv_route(monkeypatch):
     arxiv_route.enabled true in every loaded acquisition config, i.e. the pre-1110 shipped state those tests pin."""
     from vera import acq_config, arxiv_fulltext
     monkeypatch.setattr(arxiv_fulltext, "PORTAL_ONLY", False)
+    from tests import host_role_support  # PORTAL-RULE-1110: the pre-1110 state also had no host-role rule for arXiv
+    host_role_support.install(original=("arxiv.org", "export.arxiv.org"), drop=("arxiv.org", "export.arxiv.org"), drop_doi_rules=True)
     real = acq_config.load_config
 
     def load(*a, **k):
@@ -374,3 +376,4 @@ def legacy_arxiv_route(monkeypatch):
         return c
     monkeypatch.setattr(acq_config, "load_config", load)
     yield
+    host_role_support.reset()

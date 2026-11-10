@@ -18,6 +18,14 @@ from vera import acq_config, acq_discovered, ask_service, auto_acquire, inline_a
 DOI = "10.9999/acq.epi4"
 PMC = "PMC1234567"
 PUB = "pub.example.org"  # test-only publisher host
+
+
+@pytest.fixture(autouse=True)
+def _pub_is_original():  # PORTAL-RULE-1110: the store lanes deny unknown hosts, so the test publisher is a listed ORIGINAL
+    from tests import host_role_support as HR
+    HR.install(original=(PUB,))
+    yield
+    HR.reset()
 W1 = "https://openalex.org/W111"
 CC0 = {"metadata": {"id": "CC0-1.0", "url": "https://creativecommons.org/publicdomain/zero/1.0/"}}
 
@@ -323,7 +331,7 @@ def test_t7_unsafe_urls_are_rejected_before_any_request(url):
 
 
 def test_t7_private_address_and_offlist_redirect_are_rejected():
-    a = "https://www.ebi.ac.uk/x"
+    a = "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1/fullTextXML"  # a real full-text path (host_role: RoR)
     web = Router({}, {}, {a: redirect("https://evil.example.net/y")})
     with pytest.raises(auto_acquire._Stop) as e:
         _gg(web, a, chain=[])

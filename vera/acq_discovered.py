@@ -433,6 +433,9 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                                                  else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
         if not _host_ok(cur, hosts):
             raise aa._Stop(acq_config.reason(acq, "host"))
+        from vera import host_role  # PORTAL-RULE-1110 CP3: every landing / full-text hop is ORIGINAL / RoR / a resolver
+        if robots and not host_role.is_hop_allowed(cur, "store"):  # robots.txt / tdmrep.json reads are not documents
+            raise aa._Stop(acq_config.reason(acq, "portal"))
         ok = check(cur)
         if not (ok[0] if isinstance(ok, tuple) else ok):
             raise aa._Stop(acq_config.reason(acq, "host"))
@@ -826,6 +829,9 @@ def landing_fetch(doi: str, cand: dict, acq: dict, deps, icfg: dict, clock=time.
     raw, got, _st = _b_get(xml_url, ft, {str(c).lower() for c in (acq.get("fetch") or {}).get("content_types") or ()},
                            int(acq_config.bound(acq, "max_fetch_bytes")), int(lc.get("landing_max_redirects", 2)),
                            deps, acq, clock, deadline, chain, timeout_s=float(acq_config.bound(acq, "fetch_timeout_s")))
+    from vera import host_role  # PORTAL-RULE-1110: the text's own final host must be ORIGINAL / RoR (landing hops were checked per hop)
+    if not host_role.is_evidence_allowed(got, "store"):
+        raise aa._Stop(acq_config.reason(acq, "portal"))
     # X1: the converter's guards accept these exact bytes BEFORE any other parse (jats_licences, article-type)
     try:
         conv = jats_text.convert(raw, (acq.get("fetch") or {}).get("fulltext_format", "jats-xml"), icfg["converter"])

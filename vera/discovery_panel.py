@@ -40,6 +40,7 @@ REASON_TEXT = {
     # ARXIV-PORTAL-1110 (owner 2026-11-10: "arxiv is a portal to sources, not a source, itself")
     "R-ACQ-ARXIV_PORTAL": "arXiv record: used to find its published version and the sources it cites; arXiv text is "
                           "not used as evidence.",
+    "R-ACQ-PORTAL": "Portal site: used to find original sources; its text is not used as evidence.",
     "R-ACQ-ARXIV_LICENCE_HOLD": "Preprint: its arXiv licence does not permit reuse of the full text, so it was not used.",
     "R-ACQ-ARXIV_HTML_POLICY": "Preprint: the full text was found, but arXiv full text is not yet used as evidence.",
     "R-ACQ-NOTOA": "Full text is not openly available.",

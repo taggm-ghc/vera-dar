@@ -332,6 +332,7 @@
     "format_unsupported": "R-ACQ-FORMAT_UNSUPPORTED",
     "identity_mismatch": "R-ACQ-IDENTITY_MISMATCH",
     "arxiv_portal": "R-ACQ-ARXIV_PORTAL",
+    "portal": "R-ACQ-PORTAL",
     "licence_absent": "R-ACQ-LICENCE_ABSENT",
     "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
     "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",

@@ -347,6 +347,50 @@ def legacy_label_view(provenance: dict, meta: dict) -> dict:
     return out
 
 
+R_PORTAL = "R-ACQ-PORTAL"  # PORTAL-RULE-1110: the item / stored row comes from a portal host or portal record
+
+
+def portal_verdict(item: dict, prov: dict | None = None, canonical_url: str | None = None) -> str | None:
+    """PORTAL-RULE-1110 (CP4/CP5): the host_role rule id when this manifest item, or a stored row's item + provenance,
+    is a PORTAL / EXCLUDED record (a portal URL in any of its URL fields or acquisition chain, a preprint DOI, a Europe
+    PMC PPR source or a preprint type, or the arXiv route), else None. Pure; unknown hosts are not refused here (the
+    store lanes already deny them at fetch time). Never raises (an error counts as a portal, fail closed)."""
+    try:
+        from vera import host_role
+        item = item if isinstance(item, dict) else {}
+        prov = prov if isinstance(prov, dict) else {}
+        acq = prov.get("acquisition") if isinstance(prov.get("acquisition"), dict) else {}
+        if isinstance(acq.get("arxiv"), dict) and acq["arxiv"].get("id"):  # the arXiv route's own record: its abs page URL
+            urls_extra = [f"https://arxiv.org/abs/{acq['arxiv']['id']}"]
+        else:
+            urls_extra = []
+        rec = {"doi": item.get("doi") or prov.get("doi") or "", "source": item.get("source") or "",
+               "source_type": item.get("source_type") or "", "pub_types": item.get("pub_types") or [],
+               "is_preprint": item.get("is_preprint")}
+        urls = [item.get("url"), item.get("landing_url"), item.get("fulltext_url"), prov.get("url"), prov.get("fulltext_url"),
+                (item.get("identifier") or {}).get("url") if isinstance(item.get("identifier"), dict) else None,
+                canonical_url, acq.get("abs_url")]
+        urls += urls_extra + (list(acq.get("chain") or []) if isinstance(acq.get("chain"), list) else [])
+        hr = host_role.role_for_record(rec)
+        if hr.role in ("PORTAL", "EXCLUDED"):
+            return hr.rule_id
+        for u in urls:
+            if isinstance(u, str) and u.lower().startswith(("http://", "https://")):
+                hr = host_role.role_for_url(u)
+                if hr.role in ("PORTAL", "EXCLUDED"):
+                    return hr.rule_id
+        return None
+    except Exception:  # noqa: BLE001
+        return "internal_error"
+
+
+def check_portal(item: dict) -> None:
+    """Manifest ingest (owner-run): refuse an item that is a portal record or sits on a portal host."""
+    rule = portal_verdict(item)
+    if rule:
+        raise Refused(R_PORTAL, f"portal record or host ({rule}): portals are used only to find original sources")
+
+
 def check_item_declared(item: dict, cfg: dict) -> None:
     """The manifest-item level filters (pure; no I/O). Shared by prepare() and the DB-backed reader (R3)."""
     check_item(item, cfg)
@@ -376,6 +420,7 @@ def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | 
     if not _checked:
         check_item_declared(item, cfg)
     lic = check_text_record(item, text, meta, cfg, arxiv_evidence=arxiv_evidence)
+    check_portal(item)  # PORTAL-RULE-1110 CP4: manifest ingest; the item's own defects keep their specific codes
     now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
     src = {"doi": item.get("doi"), "url": item["landing_url"]}
     cu = canonical_url(src)

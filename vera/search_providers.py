@@ -849,9 +849,13 @@ _WIKI_HOST = re.compile(r"(?:^|\.)(?:wikipedia|wikimedia|wikidata)\.org$", re.I)
 def _is_wikipedia(url: str) -> bool:
     """Wikipedia is a portal only (owner 2026-10-22): its pages are never fetched, followed or used as evidence here."""
     try:
-        return bool(_WIKI_HOST.search(urlsplit(str(url or "")).hostname or ""))
+        if _WIKI_HOST.search(urlsplit(str(url or "")).hostname or ""):
+            return True
     except ValueError:
         return False
+    from vera import host_role  # PORTAL-RULE-1110: wiki-family portals the regex does not name (e.g. wikinews, mirrors)
+    hr = host_role.role_for_url(url)
+    return hr.role == "PORTAL" and "wik" in hr.rule_id
 
 
 def _landing_url_ok(u: str) -> bool:
