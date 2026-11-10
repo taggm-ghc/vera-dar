@@ -29,6 +29,17 @@ def on(key: str) -> bool:
     return load().get(key) is True
 
 
+def fallback_only() -> bool:
+    """C6: DuckDuckGo runs only when the other routes return too little (config ddg_fallback_only)."""
+    return on("ddg_fallback_only")
+
+
+def fallback_min() -> int:
+    """C6: the fewest usable candidates from the other routes that make DuckDuckGo unnecessary (UNCALIBRATED prior)."""
+    v = load().get("ddg_fallback_min_results")
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 1 else 3
+
+
 @contextlib.contextmanager
 def no_ddg(active: bool = True):
     tok = NO_DDG.set(bool(active) or NO_DDG.get())

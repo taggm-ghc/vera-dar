@@ -1664,7 +1664,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
         try:
-            if use_ddg:  # RATE-1022 C2: each future runs in a copy of this context
+            if use_ddg and not ddg_reduce.fallback_only():  # RATE-1022 C2: each future runs in a copy of this context
                 futs["ddg"] = _submit_in_order(pool, ddg_search or _default_ddg_search(cfg), question, n, timeout_s)
             if use_epmc:
                 try:
@@ -1770,6 +1770,22 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                     st_f[k] = "timeout"
                 else:
                     st_f[k] = "failed"
+        if use_ddg and "ddg" not in futs and ddg_reduce.fallback_only():
+            # DDG-REDUCE-1110 C6 (owner 2026-11-10 "make DDG a fallback now"): DuckDuckGo runs only when the other routes
+            # returned fewer than ddg_fallback_min_results usable candidates (and the deadline allows it).
+            usable = len(base) + len(got.get("epmc") or ()) + len(got.get("wiki") or ())
+            if usable < ddg_reduce.fallback_min() and t_end - clock() > 1:
+                futs["ddg"] = _submit_in_order(pool2 := cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="acq-ddg"),
+                                               ddg_search or _default_ddg_search(cfg), question, n, max(1.0, t_end - clock()))
+                pool2.shutdown(wait=False)
+                futs_order.append("ddg")
+                try:
+                    got["ddg"] = list(futs["ddg"].result(timeout=max(0.1, t_end - clock())) or [])
+                    st_f["ddg"] = "completed"
+                except Exception as e:  # noqa: BLE001
+                    got["ddg"] = []
+                    own = _own_decision(e)
+                    st_f["ddg"] = own or ("quota" if _is_quota_error(e) else "timeout" if _is_timeout(e) else "failed")
         sfx = str(ecfg.get("query_suffix") or "")
         if (use_epmc and epmc_ok and not got.get("epmc") and not got.get("ddg") and lookup_left >= 1
                 and t_end - clock() > 1 and _or_differs(question, terms, profile, sfx)):

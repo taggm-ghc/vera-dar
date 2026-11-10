@@ -414,3 +414,100 @@ def test_c5_cache_stays_bounded_and_holds_url_and_title_only(rig, monkeypatch):
         rig.ddg._cache_put({"group": "portals", "query": f"term{i} (site:a.org)"}, [{"url": "https://a.org/x", "title": "T", "snippet": "S"}])
     assert len(rig.ddg._mem) <= 256
     assert all(set(it) == {"url", "title"} for _t, items in rig.ddg._mem.values() for it in items)
+
+
+# ------------------------------------------------------------------------------------------------------------- C6
+C6 = dict(one_group_per_call=True, ddg_fallback_only=True, ddg_fallback_min_results=3)
+
+
+def test_c6_enough_scholarly_candidates_means_no_duckduckgo(rig, monkeypatch):
+    set_flags(monkeypatch, **C6)
+    rig.scholar_n = 3
+    reading_list(rig, Q_PLAIN)
+    assert rig.posts == [] and posts_by_site() == {}
+    assert len(rig.scholar_calls) == 1
+
+
+def test_c6_too_few_scholarly_candidates_falls_back_to_duckduckgo(rig, monkeypatch):
+    set_flags(monkeypatch, **C6)
+    rig.scholar_n = 2
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 1 and posts_by_site() == {"base": 1}
+
+
+def test_c6_a_question_with_no_other_route_still_reaches_duckduckgo(rig, monkeypatch):
+    set_flags(monkeypatch, **C6)
+    monkeypatch.setattr(grounded_ask, "_provider_chain", lambda names: [rig.ddg])
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 1
+
+
+def test_c6_fan_out_meta_records_duckduckgo_as_not_attempted(rig, monkeypatch):
+    import vera.search_and_fetch as sf
+    set_flags(monkeypatch, **C6)
+    rig.scholar_n = 3
+    res = sf.search_question(Q_PLAIN, num_results=5, providers=rig.chain, min_candidates=1, mode="fan_out",
+                             deadline_s=30, timeout_s=5, max_retries=1)
+    assert {"portal": "duckduckgo_lite", "status": "not_attempted", "n_results": 0} in res.meta["portals"]
+
+
+def test_c6_seed_requests_never_reach_duckduckgo(rig, monkeypatch):
+    from vera import request_origin
+    set_flags(monkeypatch, **C6)
+    rig.scholar_n = 0
+    with request_origin.scope("seed"):
+        reading_list(rig, Q_PLAIN)
+    assert rig.posts == []
+
+
+def test_c6_switch_off_runs_duckduckgo_first_and_concurrent_as_before(rig, monkeypatch):
+    set_flags(monkeypatch, ddg_fallback_only=False)
+    rig.scholar_n = 3
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 2
+
+
+def _acq_search(rig, base_n):
+    ddg_fn = lambda q, n, t: rig.ddg.parse(rig.ddg.call(q, n, t), n)  # noqa: E731
+    cfg = {"search": {"ddg_first": {"enabled": True}, "europepmc": {"enabled": False}}, "bounds": {"max_search_calls_per_job": 6}}
+    base = lambda q, n, t: [{"provider": "openalex", "doi": f"10.9/{i}", "url": f"https://doi.org/10.9/{i}"} for i in range(base_n)]  # noqa: E731
+    with ddg_meter.site("inline"), sp.portal_scope() as recs:
+        sp.acquisition_search(base, cfg, ddg_search=ddg_fn)(Q_PLAIN, 5, 5.0)
+    return recs
+
+
+def test_c6_acquisition_search_skips_duckduckgo_when_the_scholarly_routes_suffice(rig, monkeypatch):
+    set_flags(monkeypatch, **C6)
+    _acq_search(rig, 3)
+    assert rig.posts == []
+
+
+def test_c6_acquisition_search_falls_back_when_they_return_too_little(rig, monkeypatch):
+    set_flags(monkeypatch, **C6)
+    recs = _acq_search(rig, 1)
+    assert len(rig.posts) == 1 and posts_by_site() == {"inline": 1}
+    assert ("ddg", "completed") in [(r["portal"], r["status"]) for r in recs]
+
+
+def test_c6_fixture_mix_measured_posts_per_question(rig, monkeypatch):
+    """Per-question DuckDuckGo POSTs on the plan's question mix (plan section 1: 50% no domain, 30% one domain, 10% two,
+    10% news), reading-list search only, same fixtures: baseline vs C1+C3 vs C1+C3+C6. The scholarly fixture returns >= 3
+    candidates for 3 of every 4 questions (the fallback fires on 25%: a fixture assumption, not live data)."""
+    mix = [(Q_PLAIN, .5), (Q_ONE, .3), (Q_TWO, .1), (Q_NEWS, .1)]
+
+    def measure(flags, poor_every=None):
+        out = 0.0
+        for k, (q, w) in enumerate(mix):
+            rig.posts.clear(); rig.ddg._mem.clear()
+            set_flags(monkeypatch, **flags)
+            rig.scholar_n = 0 if (poor_every is not None and k % poor_every == 0) else 3
+            reading_list(rig, q)
+            out += w * len(rig.posts)
+        return out
+    base = measure({})
+    c13 = measure(dict(domain_branches_scholarly_only=True, one_group_per_call=True))
+    c136 = measure(dict(domain_branches_scholarly_only=True, **C6))
+    poor_all = measure(dict(domain_branches_scholarly_only=True, **C6), poor_every=1)   # every question falls back
+    assert (round(base, 2), round(c13, 2), round(c136, 2), round(poor_all, 2)) == (3.0, 1.0, 0.0, 1.0)
+    # a fallback rate of 25% of questions (one in four falls back) gives 0.25 POST per question
+    assert abs(0.25 * poor_all + 0.75 * c136 - 0.25) < 1e-9

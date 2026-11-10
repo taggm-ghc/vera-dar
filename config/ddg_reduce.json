@@ -13,5 +13,8 @@
     "portals": 21600,
     "news": 3600
   },
-  "_longer_normalized_cache_note": "C5: the in-process DuckDuckGo cache (url + title only, per process, lost on restart, 256 entries) lives 6 h for the portals group and 1 h for news (freshness rule: news stays short), keyed by group plus the lower-cased, de-duplicated, sorted query terms. UNCALIBRATED planner priors; one PDSA cycle per week from the ddg_<site> counts. false = the exact query string and search.duckduckgo_lite.memory_cache_ttl_s (900)."
+  "_longer_normalized_cache_note": "C5: the in-process DuckDuckGo cache (url + title only, per process, lost on restart, 256 entries) lives 6 h for the portals group and 1 h for news (freshness rule: news stays short), keyed by group plus the lower-cased, de-duplicated, sorted query terms. UNCALIBRATED planner priors; one PDSA cycle per week from the ddg_<site> counts. false = the exact query string and search.duckduckgo_lite.memory_cache_ttl_s (900).",
+  "ddg_fallback_only": true,
+  "ddg_fallback_min_results": 3,
+  "_ddg_fallback_only_note": "C6 (owner 2026-11-10, 'Make DDG a fallback now'; changes YIELD-1021 'DDG first' to 'DDG when the other routes return too little'): the reading-list search and the acquisition search call the scholarly routes (OpenAlex, Europe PMC, DOAJ, arXiv when on, Wikipedia portal) first and DuckDuckGo only when they return fewer than ddg_fallback_min_results candidates in total. A question with no other route still reaches DuckDuckGo. Never for a seed request (reserved for visitors). The official lane and reference portal run in their own lanes and are unchanged. false = DuckDuckGo concurrent and first as before. ddg_fallback_min_results 3 is an UNCALIBRATED planner prior (PDSA from the ddg_<site> counts)."
 }
