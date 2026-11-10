@@ -71,7 +71,7 @@ def _get(name, c, eng, seed, clock=None):
 def test_shipped_flag_is_off_and_registry_complete():
     c = json.loads((ROOT / "config" / "list_tables.json").read_text())
     # repository.pdf_hosts added by H20 D-CFG (2026-11-05)
-    assert c["read_from_db"] is False and len(c["lists"]) == 11
+    assert c["read_from_db"] is False and len(c["lists"]) == 3  # SETTINGS-W3-1110: 8 replace-mapped allow-lists removed
     assert lt._CFG["read_from_db"] is False
 
 
@@ -210,22 +210,19 @@ def test_trace_flag_off_gives_config_allowlist():
         assert rt._stage_keys(st) == frozenset(k for k in ent["keys"] if isinstance(k, str))
 
 
-def test_trace_flag_on_gives_db_rows(monkeypatch):
+def test_trace_flag_on_db_rows_cannot_change_allowlist(monkeypatch):
+    # SETTINGS-W3-1110: trace.key_allowlist is no longer mapped; a DB row can never widen it
     eng = Eng([("trace.key_allowlist", "stage_keys", "replace", 1)],
               TSTAGES + [("trace.key_allowlist", "s:p.n1", 3, 1, {"stage": "s", "parent": "p", "key": "n1"})])
     rt = _rt_on(monkeypatch, eng)
-    assert rt._stage_keys("s") == frozenset({"k"})
-    assert rt._nested_keys("s", "p") == ["n1"] or set(rt._nested_keys("s", "p")) == {"n1"}
+    assert rt._key_allowlist() is rt.CFG.get("key_allowlist")
+    assert "s" not in (rt._key_allowlist() or {})
 
 
-def test_trace_missing_parent_gives_empty(monkeypatch):
-    seed = {"s": {"keys": ["k"], "reason": "r", "nested": {"p": ["n1"], "q": ["m1"]}}}
-    eng = Eng([("trace.key_allowlist", "stage_keys", "replace", 1)],
-              TSTAGES + [("trace.key_allowlist", "s:p.n1", 3, 1, {"stage": "s", "parent": "p", "key": "n1"})])
-    rt = _rt_on(monkeypatch, eng)
-    monkeypatch.setitem(rt.CFG, "key_allowlist", seed)
-    assert list(rt._nested_keys("s", "q") or []) == []
-    assert lt.get("trace.key_allowlist", seed)["s"]["nested"]["q"] == []
+def test_no_replace_mapping_for_allow_lists():
+    c = json.loads((ROOT / "config" / "list_tables.json").read_text())
+    for name, spec in c["lists"].items():
+        assert spec["combine"] == "union" or name == "digest.numeric_words", name
 
 
 def test_trace_db_error_falls_back_to_seed(monkeypatch):

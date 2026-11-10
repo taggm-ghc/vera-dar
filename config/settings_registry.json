@@ -1,0 +1,5712 @@
+{
+ "_note": "SETTINGS-W3-1110: TUNABLE_DB allowlist generated from the W1 manifest; the loader uses a DB row only for a key listed here. sha256 covers the keys object (canonical JSON) and is pinned in vera/settings.py REGISTRY_SHA256.",
+ "keys": {
+  "acq_variants.drop_bare_one_word_variants": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/acq_variants.json",
+   "module": "acq_variants",
+   "path": "drop_bare_one_word_variants",
+   "type": "bool",
+   "validator": false
+  },
+  "acq_variants.max_terms_per_query": {
+   "clamp": null,
+   "file": "config/acq_variants.json",
+   "max": 40,
+   "min": 1,
+   "module": "acq_variants",
+   "path": "max_terms_per_query",
+   "type": "int",
+   "validator": false
+  },
+  "api_kickstart.backoff_factor": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 20.0,
+   "min": 0,
+   "module": "api_kickstart",
+   "path": "backoff_factor",
+   "type": "float",
+   "validator": false
+  },
+  "api_kickstart.backoff_initial_s": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 5.0,
+   "min": 0,
+   "module": "api_kickstart",
+   "path": "backoff_initial_s",
+   "type": "float",
+   "validator": false
+  },
+  "api_kickstart.backoff_max_s": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 40.0,
+   "min": 1,
+   "module": "api_kickstart",
+   "path": "backoff_max_s",
+   "type": "float",
+   "validator": false
+  },
+  "api_kickstart.health_timeout_s": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 20.0,
+   "min": 0.001,
+   "module": "api_kickstart",
+   "path": "health_timeout_s",
+   "type": "float",
+   "validator": false
+  },
+  "api_kickstart.max_polls": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 100,
+   "min": 1,
+   "module": "api_kickstart",
+   "path": "max_polls",
+   "type": "int",
+   "validator": false
+  },
+  "api_kickstart.max_wait_s": {
+   "clamp": null,
+   "file": "config/api_kickstart.json",
+   "max": 200.0,
+   "min": 1,
+   "module": "api_kickstart",
+   "path": "max_wait_s",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.answer_notes_separate": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "module": "ask-provider-chain",
+   "path": "answer_notes_separate",
+   "type": "bool",
+   "validator": false
+  },
+  "ask-provider-chain.corpus.gate_a.fetch_threshold": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "ask-provider-chain",
+   "path": "corpus.gate_a.fetch_threshold",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.corpus.gate_a.max_fetch": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 8,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus.gate_a.max_fetch",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus.gate_a.reject_threshold": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "ask-provider-chain",
+   "path": "corpus.gate_a.reject_threshold",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.check_max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 500,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.check_max_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.cluster_max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 900,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.cluster_max_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.deadline_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 250,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.draft_max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 700,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.draft_max_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.max_clusters": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 80,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.max_clusters",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.max_sentences": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 60,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.max_sentences",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.sample_excerpt_chars": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 10,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.sample_excerpt_chars",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.agentic.sample_per_cluster": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.agentic.sample_per_cluster",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.echo_retry_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 36000,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.echo_retry_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.max_titles": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1500,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.max_titles",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.retry_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 3000,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.retry_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.cache_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 3000,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.cache_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.chunk_chars": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 8000,
+   "min": 100,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.chunk_chars",
+   "type": "int",
+   "validator": true
+  },
+  "ask-provider-chain.corpus_description.subject_areas.chunk_votes": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.chunk_votes",
+   "type": "bool",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.chunks_per_doc": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 200,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.chunks_per_doc",
+   "type": "int",
+   "validator": true
+  },
+  "ask-provider-chain.corpus_description.subject_areas.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.display_domains": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 80,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.display_domains",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.display_subtopics": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 20,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.display_subtopics",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.display_topics": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 30,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.display_topics",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.min_chunk_votes": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.min_chunk_votes",
+   "type": "int",
+   "validator": true
+  },
+  "ask-provider-chain.corpus_description.subject_areas.scan_max": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 20000,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.scan_max",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.corpus_description.subject_areas.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50000,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "corpus_description.subject_areas.statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.exhaustion.recheck_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 600,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "exhaustion.recheck_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.claim_check.context_title": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "module": "ask-provider-chain",
+   "path": "grounding.claim_check.context_title",
+   "type": "bool",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.claim_check.keep_partial": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "module": "ask-provider-chain",
+   "path": "grounding.claim_check.keep_partial",
+   "type": "bool",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.claim_check.max_claims": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 300,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.claim_check.max_claims",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.claim_check.timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 200,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.claim_check.timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.deadline_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 100,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.num_results": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 5,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.num_results",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.provider_max_retries": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 1,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.provider_max_retries",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.provider_timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.provider_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.deadline_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 120,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.max_depth": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 2,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.max_depth",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.max_ids_per_page": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 2,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.max_ids_per_page",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.max_links_per_page": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 3,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.max_links_per_page",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.max_pages_per_result": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 3,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.max_pages_per_result",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.max_results_to_resolve": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 4,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.max_results_to_resolve",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 60,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.resolve.title_match_min": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "ask-provider-chain",
+   "path": "grounding.resolve.title_match_min",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.grounding.snippet_max_chars": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 15000,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "grounding.snippet_max_chars",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.long_digit_run": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 12,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.long_digit_run",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.max_chars": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 400,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.max_chars",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.max_question_overlap": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 0.6,
+   "min": 0.0,
+   "module": "ask-provider-chain",
+   "path": "memory.max_question_overlap",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.memory.min_chars": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 400,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "memory.min_chars",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.min_overlap_tokens": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 3,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "memory.min_overlap_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.min_words": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 80,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "memory.min_words",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.half_life_days": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 140,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "memory.store.half_life_days",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.max_pending": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1000,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.max_pending",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.max_query_terms": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 160,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.max_query_terms",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.max_writes_per_answer": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 3,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.max_writes_per_answer",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.max_writes_per_day": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 50,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.max_writes_per_day",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.min_matched_terms": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 20,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.min_matched_terms",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.min_query_word_len": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 40,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.min_query_word_len",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.min_rank": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "ask-provider-chain",
+   "path": "memory.store.min_rank",
+   "type": "float",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.pending_list_limit": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 500,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.pending_list_limit",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.recall_k": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 30,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.recall_k",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 50000,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "memory.store.statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.memory.store.ttl_days": {
+   "clamp": "lower_only",
+   "file": "config/ask-provider-chain.json",
+   "max": 30,
+   "min": 0,
+   "module": "ask-provider-chain",
+   "path": "memory.store.ttl_days",
+   "type": "int",
+   "validator": false
+  },
+  "ask-provider-chain.timeout_s": {
+   "clamp": null,
+   "file": "config/ask-provider-chain.json",
+   "max": 200,
+   "min": 1,
+   "module": "ask-provider-chain",
+   "path": "timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.arxiv_route.abs_max_bytes": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 1048576,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "arxiv_route.abs_max_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.arxiv_route.min_interval_s": {
+   "clamp": "raise_only",
+   "file": "config/auto_acquire.json",
+   "max": 30,
+   "min": 3,
+   "module": "auto_acquire",
+   "path": "arxiv_route.min_interval_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.acq_round_count_reused": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "bounds.acq_round_count_reused",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.bounds.acq_round_max_open": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 200,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.acq_round_max_open",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.acq_round_target_new_docs": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 6,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.acq_round_target_new_docs",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.acq_rounds_one_job": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "bounds.acq_rounds_one_job",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.bounds.answer_min_admitted_spans": {
+   "clamp": "raise_only",
+   "file": "config/auto_acquire.json",
+   "max": 1,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.answer_min_admitted_spans",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.dedupe_window_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 3600,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "bounds.dedupe_window_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.docs_per_day": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 100000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.docs_per_day",
+   "type": "int_or_null",
+   "validator": false
+  },
+  "auto_acquire.bounds.fetch_timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 20,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.fetch_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.job_deadline_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 120,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.job_deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.jobs_per_day": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 2000,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "bounds.jobs_per_day",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.jobs_per_hour": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 120,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "bounds.jobs_per_hour",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_candidates_resolved": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.max_candidates_resolved",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_docs_per_job": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 2,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.max_docs_per_job",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_docs_per_prompt": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.max_docs_per_prompt",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_fetch_bytes": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 8000000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.max_fetch_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_groq_tokens_per_job": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "bounds.max_groq_tokens_per_job",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.max_search_calls_per_job": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 7,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.max_search_calls_per_job",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.persist_min_admitted_spans": {
+   "clamp": "raise_only",
+   "file": "config/auto_acquire.json",
+   "max": 2,
+   "min": 2,
+   "module": "auto_acquire",
+   "path": "bounds.persist_min_admitted_spans",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.question_max_age_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 600,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.question_max_age_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.queue_max": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 4,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.queue_max",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.bounds.served_per_topic_max": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 1000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "bounds.served_per_topic_max",
+   "type": "int_or_null",
+   "validator": false
+  },
+  "auto_acquire.bounds.served_topic_balanced": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "bounds.served_topic_balanced",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.bounds.sync_wait_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "bounds.sync_wait_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.db_statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 150000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "db_statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.freshness.always_acquire_new": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "freshness.always_acquire_new",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.freshness.freshness_future_skew_seconds": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 3000,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "freshness.freshness_future_skew_seconds",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.freshness.freshness_max_age_hours": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 240,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "freshness.freshness_max_age_hours",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.freshness.rank_prefer_recent": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "freshness.rank_prefer_recent",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.freshness.source_authored_partial_dates_trusted": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "freshness.source_authored_partial_dates_trusted",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.freshness.sufficiency.partial_is_insufficient": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "freshness.sufficiency.partial_is_insufficient",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.inline.acq6_rounds_enabled": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "inline.acq6_rounds_enabled",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.inline.deadline_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 45,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "inline.deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.discovered_max": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.discovered_max",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.failure_ttl_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 600,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.failure_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.fetch_workers": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 4,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.fetch_workers",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.in_scope": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "inline.in_scope",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.inline.max_concurrent": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 2,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "inline.max_concurrent",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.max_waiters": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 4,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "inline.max_waiters",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.per_doc_timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 25,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "inline.per_doc_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.result_cache_max": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 80,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.result_cache_max",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.result_ttl_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 6000,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.result_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.inline.use_discovered": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "inline.use_discovered",
+   "type": "bool",
+   "validator": false
+  },
+  "auto_acquire.inline.waiter_wait_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 450,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "inline.waiter_wait_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.live.max_reuse_checks_per_prompt": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "live.max_reuse_checks_per_prompt",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.live.persist_timeout_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 150,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "live.persist_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.live.stall_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 3000,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "live.stall_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.micro_topic.count_min_score.anchor_bm25.scholarly": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 20.0,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.count_min_score.anchor_bm25.scholarly",
+   "type": "float",
+   "validator": false
+  },
+  "auto_acquire.micro_topic.registry_table.cache_ttl_seconds": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 3600,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.cache_ttl_seconds",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.batch_size": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 20,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.batch_size",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_attempts": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 5,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_attempts",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_calls_per_registration": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 100,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_calls_per_registration",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_completion_tokens": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 2048,
+   "min": 16,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_completion_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_judgments_per_day": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 400,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_judgments_per_day",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_text_chars": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 1200,
+   "min": 40,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_text_chars",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.max_tokens_per_registration": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 200000,
+   "min": 100,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.max_tokens_per_registration",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.judge.timeout_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 60,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.judge.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "auto_acquire.micro_topic.registry_table.similarity_max": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "auto_acquire",
+   "path": "micro_topic.registry_table.similarity_max",
+   "type": "float",
+   "validator": false
+  },
+  "auto_acquire.micro_topic.text_window_chars": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 20000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "micro_topic.text_window_chars",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.ddg_first.landing_max_bytes": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 524288,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.ddg_first.landing_max_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.ddg_first.landing_timeout_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 50,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.ddg_first.landing_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.ddg_first.max_landing_fetches": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 3,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.ddg_first.max_landing_fetches",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.europepmc.max_response_bytes": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 2000000,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.europepmc.max_response_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.europepmc.page_size": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.europepmc.page_size",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.max_calls_per_provider_per_job": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 1,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.max_calls_per_provider_per_job",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.openalex_profile.and_extra_max": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 4,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "search.openalex_profile.and_extra_max",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.openalex_quota_cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/auto_acquire.json",
+   "max": 9000,
+   "min": 900,
+   "module": "auto_acquire",
+   "path": "search.openalex_quota_cooldown_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.results_per_provider": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 31,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.results_per_provider",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.search.timeout_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 200,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "search.timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.serve.refresh_ttl_s": {
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "max": 3000,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "serve.refresh_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.general.scholarly": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 1,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.general.scholarly",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.general.web": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.general.web",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.mixed.scholarly": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.mixed.scholarly",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.mixed.web": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.mixed.web",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.scholarly.scholarly": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.scholarly.scholarly",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.source_type_router.fit_table.scholarly.web": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "source_type_router.fit_table.scholarly.web",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.topic_fit_order.web_min_reads.general": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 1,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "topic_fit_order.web_min_reads.general",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.topic_fit_order.web_min_reads.mixed": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "topic_fit_order.web_min_reads.mixed",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.topic_fit_order.web_min_slots.general": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 2,
+   "min": 1,
+   "module": "auto_acquire",
+   "path": "topic_fit_order.web_min_slots.general",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.topic_fit_order.web_min_slots.mixed": {
+   "clamp": "lower_only",
+   "file": "config/auto_acquire.json",
+   "max": 0,
+   "min": 0,
+   "module": "auto_acquire",
+   "path": "topic_fit_order.web_min_slots.mixed",
+   "type": "int",
+   "validator": false
+  },
+  "auto_acquire.triggers.on_insufficient": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/auto_acquire.json",
+   "module": "auto_acquire",
+   "path": "triggers.on_insufficient",
+   "type": "bool",
+   "validator": false
+  },
+  "chunk_taxo.cloudflare.daily_neuron_budget": {
+   "clamp": "lower_only",
+   "file": "config/chunk_taxo.json",
+   "max": 8000,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "cloudflare.daily_neuron_budget",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.cloudflare.reserve_neurons": {
+   "clamp": "raise_only",
+   "file": "config/chunk_taxo.json",
+   "max": 1000000000,
+   "min": 5000,
+   "module": "chunk_taxo",
+   "path": "cloudflare.reserve_neurons",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.max_abstain_share": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.max_abstain_share",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.max_null_floor_spread": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.max_null_floor_spread",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_center_match_rate": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_center_match_rate",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_coverage_domain": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_coverage_domain",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_coverage_subtopic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_coverage_subtopic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_domain": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_domain",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_subtopic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_subtopic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_silhouette_topic": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_silhouette_topic",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.display_gate.min_stability_ari": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "chunk_taxo",
+   "path": "display_gate.min_stability_ari",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.max_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.max_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.max_frac": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.max_frac",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.domain_range.min_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.domain_range.min_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.gain_epsilon": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.gain_epsilon",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.identity_jaccard": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.identity_jaccard",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.k_max": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 200,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.k_max",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.k_min": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 2,
+   "module": "chunk_taxo",
+   "path": "params.k_min",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.k_step": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.k_step",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.kmeans_max_iter": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.kmeans_max_iter",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.label_terms": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.label_terms",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.min_cluster_size": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.min_cluster_size",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.min_support": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.min_support",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.null_q_dist": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.null_q_dist",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.null_q_margin": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.null_q_margin",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.patience": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.patience",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.stability_match_cos": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": -1,
+   "module": "chunk_taxo",
+   "path": "params.stability_match_cos",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.term_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.term_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.term_max_df": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.term_max_df",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.term_min_len": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.term_min_len",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.max_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1000,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.max_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.max_frac": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.max_frac",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.topic_range.min_count": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 100,
+   "min": 1,
+   "module": "chunk_taxo",
+   "path": "params.topic_range.min_count",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_taxo.params.vote_min_lead": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.vote_min_lead",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_taxo.params.vote_min_share": {
+   "clamp": null,
+   "file": "config/chunk_taxo.json",
+   "max": 1,
+   "min": 0,
+   "module": "chunk_taxo",
+   "path": "params.vote_min_share",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_topic_terms.min_distinct_terms": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_topic_terms",
+   "path": "min_distinct_terms",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_topic_terms.min_lead_ratio": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 100.0,
+   "min": 1.0,
+   "module": "chunk_topic_terms",
+   "path": "min_lead_ratio",
+   "type": "float",
+   "validator": true
+  },
+  "chunk_topic_terms.min_token_len": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 20,
+   "min": 1,
+   "module": "chunk_topic_terms",
+   "path": "min_token_len",
+   "type": "int",
+   "validator": true
+  },
+  "chunk_topic_terms.min_vote_share": {
+   "clamp": null,
+   "file": "config/chunk_topic_terms.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "chunk_topic_terms",
+   "path": "min_vote_share",
+   "type": "float",
+   "validator": true
+  },
+  "corpus_frequent_subjects.max_phrases": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 30,
+   "min": 1,
+   "module": "corpus_frequent_subjects",
+   "path": "max_phrases",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.max_words": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 6,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "max_words",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.min_docs": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 1000,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "min_docs",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.min_words": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 6,
+   "min": 2,
+   "module": "corpus_frequent_subjects",
+   "path": "min_words",
+   "type": "int",
+   "validator": true
+  },
+  "corpus_frequent_subjects.title_limit": {
+   "clamp": null,
+   "file": "config/corpus_frequent_subjects.json",
+   "max": 20000,
+   "min": 1,
+   "module": "corpus_frequent_subjects",
+   "path": "title_limit",
+   "type": "int",
+   "validator": true
+  },
+  "dar_health.cache_ttl_s": {
+   "clamp": null,
+   "file": "config/dar_health.json",
+   "max": 600,
+   "min": 0,
+   "module": "dar_health",
+   "path": "cache_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "dar_health.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/dar_health.json",
+   "max": 30,
+   "min": 1,
+   "module": "dar_health",
+   "path": "connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "dar_health.failure_cache_ttl_s": {
+   "clamp": null,
+   "file": "config/dar_health.json",
+   "max": 300,
+   "min": 0,
+   "module": "dar_health",
+   "path": "failure_cache_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "dar_health.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/dar_health.json",
+   "max": 30000,
+   "min": 1,
+   "module": "dar_health",
+   "path": "statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "discovery_contract.discovery_memory.max_candidates": {
+   "clamp": null,
+   "file": "config/discovery_contract.json",
+   "max": 30,
+   "min": 1,
+   "module": "discovery_contract",
+   "path": "discovery_memory.max_candidates",
+   "type": "int",
+   "validator": false
+  },
+  "discovery_contract.discovery_memory.max_note_chars": {
+   "clamp": null,
+   "file": "config/discovery_contract.json",
+   "max": 6000,
+   "min": 1,
+   "module": "discovery_contract",
+   "path": "discovery_memory.max_note_chars",
+   "type": "int",
+   "validator": false
+  },
+  "discovery_contract.discovery_memory.max_per_answer": {
+   "clamp": null,
+   "file": "config/discovery_contract.json",
+   "max": 10,
+   "min": 1,
+   "module": "discovery_contract",
+   "path": "discovery_memory.max_per_answer",
+   "type": "int",
+   "validator": false
+  },
+  "discovery_contract.discovery_memory.write_on_l0": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/discovery_contract.json",
+   "module": "discovery_contract",
+   "path": "discovery_memory.write_on_l0",
+   "type": "bool",
+   "validator": false
+  },
+  "domain_routing.corpus.bm25_b": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "corpus.bm25_b",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.bm25_k1": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 15.0,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "corpus.bm25_k1",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.bm25_stem": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "module": "domain_routing",
+   "path": "corpus.bm25_stem",
+   "type": "bool",
+   "validator": false
+  },
+  "domain_routing.corpus.branch_k": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 200,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.branch_k",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.chunk_chars": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 4000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.chunk_chars",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.chunk_overlap": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 600,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "corpus.chunk_overlap",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.doc_min_chunk_share": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "corpus.doc_min_chunk_share",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.doc_min_chunks": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.doc_min_chunks",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.max_chunks_per_doc": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.max_chunks_per_doc",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.max_stored_domain_branches": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.max_stored_domain_branches",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.min_chunk_chars": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 400,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.min_chunk_chars",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.query_drop_generic": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "module": "domain_routing",
+   "path": "corpus.query_drop_generic",
+   "type": "bool",
+   "validator": false
+  },
+  "domain_routing.corpus.reading_list_floor.max_df_ratio": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "corpus.reading_list_floor.max_df_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.reading_list_floor.min_relevance": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "corpus.reading_list_floor.min_relevance",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.relevance_stem_len": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 50,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.relevance_stem_len",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.result_k": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 120,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.result_k",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.snippet_chars": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 2000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "corpus.snippet_chars",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.stored_fill_max": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 50,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "corpus.stored_fill_max",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.stored_merge_max": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "corpus.stored_merge_max",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.corpus.stored_min_relevance": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "corpus.stored_min_relevance",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.corpus.sub_question_required": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "module": "domain_routing",
+   "path": "corpus.sub_question_required",
+   "type": "bool",
+   "validator": false
+  },
+  "domain_routing.identification.assoc_min_sim": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.assoc_min_sim",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.assoc_salient_min_docs": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 100,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.assoc_salient_min_docs",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.assoc_salient_min_sim": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.assoc_salient_min_sim",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.chunk_min_sim": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.chunk_min_sim",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.chunk_secondary_ratio": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.chunk_secondary_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.consolidate_min_cos": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.consolidate_min_cos",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.consolidate_min_shared": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 150,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.consolidate_min_shared",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.established_support": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.established_support",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.max_derived_domains": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 120,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.max_derived_domains",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.max_domains_per_chunk": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.max_domains_per_chunk",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.max_domains_per_doc": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.max_domains_per_doc",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.max_question_domains": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.max_question_domains",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.min_doc_terms": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 80,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.min_doc_terms",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.min_shared_salient": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 40,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.min_shared_salient",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.min_support": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 10,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.min_support",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.min_token_len": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.min_token_len",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.name_terms": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.name_terms",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.pending_min_sim": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.pending_min_sim",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.question_min_sim": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.question_min_sim",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.question_secondary_ratio": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.question_secondary_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.salient_df_max_floor": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.salient_df_max_floor",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.salient_df_max_frac": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.salient_df_max_frac",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.salient_df_min": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.salient_df_min",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.secondary_ratio": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.secondary_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.sig_cos_floor": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.sig_cos_floor",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.sig_df_max_floor": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 30,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.sig_df_max_floor",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.sig_df_max_frac": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.sig_df_max_frac",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.identification.sig_min_docs": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 80,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.sig_min_docs",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.sig_min_shared": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 90,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.sig_min_shared",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.sig_terms": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 400,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "identification.sig_terms",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.ubiquity_min_domains": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "identification.ubiquity_min_domains",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.identification.uncertain_floor": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "domain_routing",
+   "path": "identification.uncertain_floor",
+   "type": "float",
+   "validator": false
+  },
+  "domain_routing.max_domain_branches": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "max_domain_branches",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.min_fallback_slots": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 20,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "min_fallback_slots",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.rrf_k": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 600,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "rrf_k",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 50,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "runtime.connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.delta_lookback_ids": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 500,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "runtime.delta_lookback_ids",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.delta_lookback_s": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1200,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "runtime.delta_lookback_s",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.delta_max_assocs": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 200000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "runtime.delta_max_assocs",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.delta_max_documents": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 1000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "runtime.delta_max_documents",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.failure_retry_ttl_s": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 600,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "runtime.failure_retry_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.reload_ttl_s": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 3000,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "runtime.reload_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.snapshot_max_documents": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 10000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "runtime.snapshot_max_documents",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 100000,
+   "min": 1,
+   "module": "domain_routing",
+   "path": "runtime.statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "domain_routing.runtime.version_check_s": {
+   "clamp": null,
+   "file": "config/domain_routing.json",
+   "max": 10,
+   "min": 0,
+   "module": "domain_routing",
+   "path": "runtime.version_check_s",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.adequacy.qualify_line": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "adequacy.qualify_line",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.acronym_match.bare_initials": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.acronym_match.bare_initials",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.acronym_match.max_senses": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 10,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.acronym_match.max_senses",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.acronym_match.min_scan_len": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.acronym_match.min_scan_len",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.acronym_match.min_word_len": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.acronym_match.min_word_len",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.adaptive_min_matched_stems": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.adaptive_min_matched_stems",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.df_cache_max": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 160,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "admission.df_cache_max",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.idf_signal.min_relevance": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.idf_signal.min_relevance",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.idf_signal.min_weighted_coverage": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.idf_signal.min_weighted_coverage",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.idf_signal.salient_k": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 20,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.idf_signal.salient_k",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.max_admitted_chars": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 48000,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.max_admitted_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.max_spans_per_doc": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 60,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.max_spans_per_doc",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.max_spans_per_doc_prior_uncalibrated": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.max_spans_per_doc_prior_uncalibrated",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.max_spans_total": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 60,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.max_spans_total",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.merge_adjacent.max_gap_chars": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 10,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "admission.merge_adjacent.max_gap_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.merge_adjacent.max_passage_chars": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 12000,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.merge_adjacent.max_passage_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.metadata_selectors.restrict_candidates": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.metadata_selectors.restrict_candidates",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.min_matched_stems": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 20,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "admission.min_matched_stems",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.min_question_coverage": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.min_question_coverage",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.min_relevance": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.min_relevance",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.part_allocation.concepts": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.part_allocation.concepts",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.pointer_filter.min_content_tokens": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 60,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "admission.pointer_filter.min_content_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.pointer_filter.min_token_len": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.pointer_filter.min_token_len",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.pointer_filter.ref_list_min_entries": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.pointer_filter.ref_list_min_entries",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.pointer_filter.ref_list_min_fraction": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.pointer_filter.ref_list_min_fraction",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.relevance.min_token_len": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.relevance.min_token_len",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.relevance.stem_len": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 50,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.relevance.stem_len",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.retrieval_drop_generic": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.retrieval_drop_generic",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.section_gap_chars": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 20,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "admission.section_gap_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.admission.seed_per_doc_spans": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.seed_per_doc_spans",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.topic_anchor.max_df_ratio": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.topic_anchor.max_df_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "fulldoc_answer.admission.topical_fit.fit_hi": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.topical_fit.fit_hi",
+   "type": "float_or_null",
+   "validator": false
+  },
+  "fulldoc_answer.admission.topical_fit.fit_lo": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "fulldoc_answer",
+   "path": "admission.topical_fit.fit_lo",
+   "type": "float_or_null",
+   "validator": false
+  },
+  "fulldoc_answer.admission.topical_fit.order": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "admission.topical_fit.order",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.admission.topical_fit.top_n": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 200,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "admission.topical_fit.top_n",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.answer.always_attempt": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.always_attempt",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer.count_matching_documents": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.count_matching_documents",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer.inline_honest_counts": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.inline_honest_counts",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer.max_parts": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 40,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "answer.max_parts",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.answer.per_part.keep_partial_parts": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.per_part.keep_partial_parts",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer.scope_check.mechanical_fallback": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.scope_check.mechanical_fallback",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer.scope_check.min_title_qualifiers": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 30,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "answer.scope_check.min_title_qualifiers",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.answer.scope_check.writer_hint": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer.scope_check.writer_hint",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.answer_adequacy.widen": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "answer_adequacy.widen",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.db_bounds.db_load_deadline_s": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 300,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "db_bounds.db_load_deadline_s",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.db_bounds.health_wait_s": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 150,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "db_bounds.health_wait_s",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.db_bounds.single_flight_wait_s": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 600,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "db_bounds.single_flight_wait_s",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.fulldoc.warm_at_startup": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "module": "fulldoc_answer",
+   "path": "fulldoc.warm_at_startup",
+   "type": "bool",
+   "validator": false
+  },
+  "fulldoc_answer.retrieval.candidate_k": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 160,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "retrieval.candidate_k",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.retrieval.candidate_k_prior_uncalibrated": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 200,
+   "min": 0,
+   "module": "fulldoc_answer",
+   "path": "retrieval.candidate_k_prior_uncalibrated",
+   "type": "int",
+   "validator": false
+  },
+  "fulldoc_answer.retrieval.max_chunks_per_doc": {
+   "clamp": null,
+   "file": "config/fulldoc_answer.json",
+   "max": 80,
+   "min": 1,
+   "module": "fulldoc_answer",
+   "path": "retrieval.max_chunks_per_doc",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.converter.max_element_depth": {
+   "clamp": "lower_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 200,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "converter.max_element_depth",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.converter.max_raw_bytes": {
+   "clamp": "lower_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 20000000,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "converter.max_raw_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.converter.reference_text_chars": {
+   "clamp": null,
+   "file": "config/fulltext_ingest.json",
+   "max": 4000,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "converter.reference_text_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.dar.enable_for_ingest": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/fulltext_ingest.json",
+   "module": "fulltext_ingest",
+   "path": "dar.enable_for_ingest",
+   "type": "bool",
+   "validator": false
+  },
+  "fulltext_ingest.max_docs_ceiling": {
+   "clamp": "lower_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 50,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "max_docs_ceiling",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.max_docs_default": {
+   "clamp": null,
+   "file": "config/fulltext_ingest.json",
+   "max": 90,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "max_docs_default",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.max_text_bytes": {
+   "clamp": "lower_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 5000000,
+   "min": 1,
+   "module": "fulltext_ingest",
+   "path": "max_text_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.min_body_chars": {
+   "clamp": "raise_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 40000,
+   "min": 4000,
+   "module": "fulltext_ingest",
+   "path": "min_body_chars",
+   "type": "int",
+   "validator": false
+  },
+  "fulltext_ingest.min_body_to_abstract_ratio": {
+   "clamp": "raise_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 20.0,
+   "min": 2.0,
+   "module": "fulltext_ingest",
+   "path": "min_body_to_abstract_ratio",
+   "type": "float",
+   "validator": false
+  },
+  "fulltext_ingest.min_fulltext_chars": {
+   "clamp": "raise_only",
+   "file": "config/fulltext_ingest.json",
+   "max": 80000,
+   "min": 8000,
+   "module": "fulltext_ingest",
+   "path": "min_fulltext_chars",
+   "type": "int",
+   "validator": false
+  },
+  "help_evidence.help_specific_ratio": {
+   "clamp": null,
+   "file": "config/help_evidence.json",
+   "max": 1000,
+   "min": 0,
+   "module": "help_evidence",
+   "path": "help_specific_ratio",
+   "type": "int",
+   "validator": false
+  },
+  "help_evidence.max_passages": {
+   "clamp": null,
+   "file": "config/help_evidence.json",
+   "max": 30,
+   "min": 1,
+   "module": "help_evidence",
+   "path": "max_passages",
+   "type": "int",
+   "validator": false
+  },
+  "hybrid_retrieval.chunks_per_partition": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 100,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "chunks_per_partition",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 60,
+   "module": "hybrid_retrieval",
+   "path": "cooldown_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.index_refresh_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 10000000,
+   "min": 10,
+   "module": "hybrid_retrieval",
+   "path": "index_refresh_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.max_index_mb": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 400,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "max_index_mb",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.page_ids": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 5000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "page_ids",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.query_cache_max": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 4096,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "query_cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.query_cache_ttl_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "query_cache_ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.cache_max": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 100000,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "rerank.cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/hybrid_retrieval.json",
+   "max": 86400,
+   "min": 60,
+   "module": "hybrid_retrieval",
+   "path": "rerank.cooldown_s",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.max_chars": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20000,
+   "min": 50,
+   "module": "hybrid_retrieval",
+   "path": "rerank.max_chars",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.max_passages": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 64,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rerank.max_passages",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.reserve_slots": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 0,
+   "module": "hybrid_retrieval",
+   "path": "rerank.reserve_slots",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.timeout_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 30,
+   "min": 0.2,
+   "module": "hybrid_retrieval",
+   "path": "rerank.timeout_s",
+   "type": "float",
+   "validator": true
+  },
+  "hybrid_retrieval.rerank.top_partitions": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rerank.top_partitions",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.rrf_k": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "rrf_k",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.stem_floor_min_hits": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 20,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "stem_floor_min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "hybrid_retrieval.stem_floor_sim": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1.0,
+   "min": -1.0,
+   "module": "hybrid_retrieval",
+   "path": "stem_floor_sim",
+   "type": "float_or_null",
+   "validator": true
+  },
+  "hybrid_retrieval.timeout_s": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 30,
+   "min": 0.2,
+   "module": "hybrid_retrieval",
+   "path": "timeout_s",
+   "type": "float",
+   "validator": true
+  },
+  "hybrid_retrieval.vector_k": {
+   "clamp": null,
+   "file": "config/hybrid_retrieval.json",
+   "max": 1000,
+   "min": 1,
+   "module": "hybrid_retrieval",
+   "path": "vector_k",
+   "type": "int_or_null",
+   "validator": true
+  },
+  "live_stats.cache_ttl_s": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 600,
+   "min": 0,
+   "module": "live_stats",
+   "path": "cache_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "live_stats.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 20,
+   "min": 1,
+   "module": "live_stats",
+   "path": "connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "live_stats.hard_timeout_s": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 30,
+   "min": 1,
+   "module": "live_stats",
+   "path": "hard_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "live_stats.min_count": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 50,
+   "min": 1,
+   "module": "live_stats",
+   "path": "min_count",
+   "type": "int",
+   "validator": false
+  },
+  "live_stats.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 20000,
+   "min": 1,
+   "module": "live_stats",
+   "path": "statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "live_stats.window_days_max": {
+   "clamp": null,
+   "file": "config/live_stats.json",
+   "max": 300,
+   "min": 0,
+   "module": "live_stats",
+   "path": "window_days_max",
+   "type": "int",
+   "validator": false
+  },
+  "multi_question.aux_window": {
+   "clamp": null,
+   "file": "config/multi_question.json",
+   "max": 30,
+   "min": 0,
+   "module": "multi_question",
+   "path": "aux_window",
+   "type": "int",
+   "validator": false
+  },
+  "multi_question.max_questions": {
+   "clamp": "lower_only",
+   "file": "config/multi_question.json",
+   "max": 3,
+   "min": 1,
+   "module": "multi_question",
+   "path": "max_questions",
+   "type": "int",
+   "validator": false
+  },
+  "multi_question.stream_rounds_per_question": {
+   "clamp": "lower_only",
+   "file": "config/multi_question.json",
+   "max": 2,
+   "min": 1,
+   "module": "multi_question",
+   "path": "stream_rounds_per_question",
+   "type": "int",
+   "validator": false
+  },
+  "portal_registry.health.max_consecutive_failures": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 30,
+   "min": 1,
+   "module": "portal_registry",
+   "path": "health.max_consecutive_failures",
+   "type": "int",
+   "validator": false
+  },
+  "portal_registry.health.max_success_age_hours": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1680,
+   "min": 1,
+   "module": "portal_registry",
+   "path": "health.max_success_age_hours",
+   "type": "int",
+   "validator": false
+  },
+  "portal_registry.selection.epsilon": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.epsilon",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.selection.max_share": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.max_share",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.selection.min_trials": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 30,
+   "min": 0,
+   "module": "portal_registry",
+   "path": "selection.min_trials",
+   "type": "int",
+   "validator": false
+  },
+  "portal_registry.selection.ucb_c": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.ucb_c",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.selection.weights.relevant_rate": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.weights.relevant_rate",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.selection.weights.success_rate": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.weights.success_rate",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.selection.weights.valuable_rate": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "portal_registry",
+   "path": "selection.weights.valuable_rate",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.store.busy_timeout_s": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 2.0,
+   "min": 0.001,
+   "module": "portal_registry",
+   "path": "store.busy_timeout_s",
+   "type": "float",
+   "validator": false
+  },
+  "portal_registry.store.max_pending": {
+   "clamp": null,
+   "file": "config/portal_registry.json",
+   "max": 80,
+   "min": 1,
+   "module": "portal_registry",
+   "path": "store.max_pending",
+   "type": "int",
+   "validator": false
+  },
+  "progress.first_event_grace_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 600,
+   "min": 0,
+   "module": "progress",
+   "path": "first_event_grace_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.get_timeout_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.1,
+   "module": "progress",
+   "path": "get_timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_count": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 1000000000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_count",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_events_per_poll": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 10000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_events_per_poll",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_events_per_record": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 10000,
+   "min": 2,
+   "module": "progress",
+   "path": "max_events_per_record",
+   "type": "int",
+   "validator": true
+  },
+  "progress.max_records": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 100000,
+   "min": 1,
+   "module": "progress",
+   "path": "max_records",
+   "type": "int",
+   "validator": true
+  },
+  "progress.poll_interval_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.1,
+   "module": "progress",
+   "path": "poll_interval_s",
+   "type": "float",
+   "validator": true
+  },
+  "progress.poll_margin_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 600,
+   "min": 0,
+   "module": "progress",
+   "path": "poll_margin_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.activity_tick_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 60,
+   "min": 0.01,
+   "module": "progress",
+   "path": "stream.activity_tick_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.client_no_data_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 3600,
+   "min": 1,
+   "module": "progress",
+   "path": "stream.client_no_data_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 300,
+   "min": 0.1,
+   "module": "progress",
+   "path": "stream.connect_timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.heartbeat_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 300,
+   "min": 0.01,
+   "module": "progress",
+   "path": "stream.heartbeat_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.stream.orphan_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 86400,
+   "min": 1,
+   "module": "progress",
+   "path": "stream.orphan_s",
+   "type": "int",
+   "validator": true
+  },
+  "progress.ttl_s": {
+   "clamp": null,
+   "file": "config/progress.json",
+   "max": 86400,
+   "min": 1,
+   "module": "progress",
+   "path": "ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "public_fetch.timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/public_fetch.json",
+   "max": 8,
+   "min": 1,
+   "module": "public_fetch",
+   "path": "timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.max_completion_tokens": {
+   "clamp": "lower_only",
+   "file": "config/query_norm.json",
+   "max": 80,
+   "min": 1,
+   "module": "query_norm",
+   "path": "llm.max_completion_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.max_shadow_threads": {
+   "clamp": "lower_only",
+   "file": "config/query_norm.json",
+   "max": 2,
+   "min": 1,
+   "module": "query_norm",
+   "path": "llm.max_shadow_threads",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.max_term_chars": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 400,
+   "min": 1,
+   "module": "query_norm",
+   "path": "llm.max_term_chars",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.max_terms": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 40,
+   "min": 1,
+   "module": "query_norm",
+   "path": "llm.max_terms",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.timeout_s": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 50,
+   "min": 1,
+   "module": "query_norm",
+   "path": "llm.timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.llm.transient_cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/query_norm.json",
+   "max": 600,
+   "min": 60,
+   "module": "query_norm",
+   "path": "llm.transient_cooldown_s",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.stem_len": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 50,
+   "min": 1,
+   "module": "query_norm",
+   "path": "stem_len",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.vocabulary_bounds.max_entries": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 5000,
+   "min": 1,
+   "module": "query_norm",
+   "path": "vocabulary_bounds.max_entries",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.vocabulary_bounds.max_terms_per_entry": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 40,
+   "min": 1,
+   "module": "query_norm",
+   "path": "vocabulary_bounds.max_terms_per_entry",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.vocabulary_bounds.max_triggers_per_entry": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 100,
+   "min": 1,
+   "module": "query_norm",
+   "path": "vocabulary_bounds.max_triggers_per_entry",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.vocabulary_bounds.min_trigger_chars": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 80,
+   "min": 0,
+   "module": "query_norm",
+   "path": "vocabulary_bounds.min_trigger_chars",
+   "type": "int",
+   "validator": false
+  },
+  "query_norm.vocabulary_bounds.min_trigger_words": {
+   "clamp": null,
+   "file": "config/query_norm.json",
+   "max": 20,
+   "min": 0,
+   "module": "query_norm",
+   "path": "vocabulary_bounds.min_trigger_words",
+   "type": "int",
+   "validator": false
+  },
+  "rate_limits.defaults.breaker_failures": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 3,
+   "min": 1,
+   "module": "rate_limits",
+   "path": "defaults.breaker_failures",
+   "type": "int",
+   "validator": true
+  },
+  "rate_limits.defaults.breaker_open_max_s": {
+   "clamp": "raise_only",
+   "file": "config/rate_limits.json",
+   "max": 86400.0,
+   "min": 900.0,
+   "module": "rate_limits",
+   "path": "defaults.breaker_open_max_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.breaker_open_s": {
+   "clamp": "raise_only",
+   "file": "config/rate_limits.json",
+   "max": 86400.0,
+   "min": 30.0,
+   "module": "rate_limits",
+   "path": "defaults.breaker_open_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.decrease_factor": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.5,
+   "min": 0.01,
+   "module": "rate_limits",
+   "path": "defaults.decrease_factor",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.half_open_max": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 1,
+   "min": 1,
+   "module": "rate_limits",
+   "path": "defaults.half_open_max",
+   "type": "int",
+   "validator": true
+  },
+  "rate_limits.defaults.increase_frac": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.increase_frac",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.jitter_frac": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.2,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.jitter_frac",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.max_wait_s": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 2.0,
+   "min": 0.0,
+   "module": "rate_limits",
+   "path": "defaults.max_wait_s",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.min_rate_factor": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.001,
+   "module": "rate_limits",
+   "path": "defaults.min_rate_factor",
+   "type": "float",
+   "validator": true
+  },
+  "rate_limits.defaults.poll_s": {
+   "clamp": "lower_only",
+   "file": "config/rate_limits.json",
+   "max": 0.05,
+   "min": 0.001,
+   "module": "rate_limits",
+   "path": "defaults.poll_s",
+   "type": "float",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.cache_max": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 256,
+   "min": 0,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.cache_ttl_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 86400,
+   "min": 0,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.cache_ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.cooldown_min_s": {
+   "clamp": "raise_only",
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 5,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.cooldown_min_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.max_query_terms": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 6,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.max_query_terms",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.max_refs_per_seed": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 30,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.max_refs_per_seed",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.max_response_bytes": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 4000000,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.max_response_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.inspire_refs.size": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 3,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.inspire_refs.size",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.cache_max": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 512,
+   "min": 0,
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.cache_max",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.cache_ttl_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 86400,
+   "min": 0,
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.cache_ttl_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.max_calls_per_question": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 1,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.max_calls_per_question",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.max_seeds": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 3,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.max_seeds",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.or_seeds": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/reference_portals.json",
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.or_seeds",
+   "type": "bool",
+   "validator": true
+  },
+  "reference_portals.adapters.openalex_rw.per_page": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 0,
+   "module": "reference_portals",
+   "path": "adapters.openalex_rw.per_page",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.adapters.wikipedia_title.max_title_tries": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 2,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "adapters.wikipedia_title.max_title_tries",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_candidates_per_question": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 30,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_candidates_per_question",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_hops": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 2,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_hops",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_hrefs_scanned": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 5000,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_hrefs_scanned",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_links_per_page": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_links_per_page",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_page_bytes": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 4000000,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_page_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_pages_per_host": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 1,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_pages_per_host",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.max_pages_per_question": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 4,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.max_pages_per_question",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.shadow_deadline_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 30,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.shadow_deadline_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.tdmrep_max_bytes": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 65536,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.tdmrep_max_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.caps.timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/reference_portals.json",
+   "max": 5,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "caps.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.min_contain_len": {
+   "clamp": null,
+   "file": "config/reference_portals.json",
+   "max": 60,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "relevance.min_contain_len",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.min_hits": {
+   "clamp": "raise_only",
+   "file": "config/reference_portals.json",
+   "max": 20,
+   "min": 2,
+   "module": "reference_portals",
+   "path": "relevance.min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "reference_portals.relevance.stem_len": {
+   "clamp": null,
+   "file": "config/reference_portals.json",
+   "max": 50,
+   "min": 1,
+   "module": "reference_portals",
+   "path": "relevance.stem_len",
+   "type": "int",
+   "validator": true
+  },
+  "reporting_lane.allow_query.wait_for_slot": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/reporting_lane.json",
+   "module": "reporting_lane",
+   "path": "allow_query.wait_for_slot",
+   "type": "bool",
+   "validator": false
+  },
+  "reporting_lane.news_intent.recent_years_back": {
+   "clamp": null,
+   "file": "config/reporting_lane.json",
+   "max": 10,
+   "min": 0,
+   "module": "reporting_lane",
+   "path": "news_intent.recent_years_back",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.db_sink.batch_max": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 2000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "db_sink.batch_max",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.db_sink.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 20,
+   "min": 1,
+   "module": "request_trace",
+   "path": "db_sink.connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.db_sink.flush_interval_s": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 20,
+   "min": 0,
+   "module": "request_trace",
+   "path": "db_sink.flush_interval_s",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.db_sink.queue_max": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 50000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "db_sink.queue_max",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.db_sink.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 20000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "db_sink.statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.digest_store.connect_timeout_s": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 20,
+   "min": 1,
+   "module": "request_trace",
+   "path": "digest_store.connect_timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.digest_store.max_digest_bytes": {
+   "clamp": "lower_only",
+   "file": "config/request_trace.json",
+   "max": 65536,
+   "min": 1,
+   "module": "request_trace",
+   "path": "digest_store.max_digest_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.digest_store.statement_timeout_ms": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 20000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "digest_store.statement_timeout_ms",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_detail_bytes": {
+   "clamp": "lower_only",
+   "file": "config/request_trace.json",
+   "max": 2048,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_detail_bytes",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_detail_keys": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 240,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_detail_keys",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_events_per_request": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 4000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_events_per_request",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_list_items": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 200,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_list_items",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_question_chars": {
+   "clamp": "lower_only",
+   "file": "config/request_trace.json",
+   "max": 4000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_question_chars",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.max_str_chars": {
+   "clamp": "lower_only",
+   "file": "config/request_trace.json",
+   "max": 200,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.max_str_chars",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.recent_max": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 500,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.recent_max",
+   "type": "int",
+   "validator": false
+  },
+  "request_trace.limits.recent_ttl_s": {
+   "clamp": null,
+   "file": "config/request_trace.json",
+   "max": 9000,
+   "min": 1,
+   "module": "request_trace",
+   "path": "limits.recent_ttl_s",
+   "type": "int",
+   "validator": false
+  },
+  "scope_router.layer2.malformed_retry": {
+   "clamp": null,
+   "file": "config/scope_router.json",
+   "max": 1,
+   "min": 0,
+   "module": "scope_router",
+   "path": "layer2.malformed_retry",
+   "type": "int",
+   "validator": true
+  },
+  "scope_router.layer2.max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/scope_router.json",
+   "max": 512,
+   "min": 1,
+   "module": "scope_router",
+   "path": "layer2.max_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "scope_router.layer2.timeout_s": {
+   "clamp": null,
+   "file": "config/scope_router.json",
+   "max": 200,
+   "min": 1,
+   "module": "scope_router",
+   "path": "layer2.timeout_s",
+   "type": "int",
+   "validator": false
+  },
+  "scope_router.offtopic_openalex_profile.and_extra_max": {
+   "clamp": "lower_only",
+   "file": "config/scope_router.json",
+   "max": 4,
+   "min": 1,
+   "module": "scope_router",
+   "path": "offtopic_openalex_profile.and_extra_max",
+   "type": "int",
+   "validator": false
+  },
+  "scope_router.unknown_category_step.proposal_cap": {
+   "clamp": null,
+   "file": "config/scope_router.json",
+   "max": 5000,
+   "min": 1,
+   "module": "scope_router",
+   "path": "unknown_category_step.proposal_cap",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_similarity.max_input_chars": {
+   "clamp": null,
+   "file": "config/semantic_similarity.json",
+   "max": 20000,
+   "min": 1,
+   "module": "semantic_similarity",
+   "path": "max_input_chars",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_similarity.threshold_category": {
+   "clamp": null,
+   "file": "config/semantic_similarity.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_similarity",
+   "path": "threshold_category",
+   "type": "float_or_null",
+   "validator": false
+  },
+  "semantic_similarity.threshold_topic": {
+   "clamp": null,
+   "file": "config/semantic_similarity.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_similarity",
+   "path": "threshold_topic",
+   "type": "float_or_null",
+   "validator": false
+  },
+  "semantic_space.bootstrap_fraction": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "bootstrap_fraction",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.bootstrap_refits": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 200,
+   "min": 0,
+   "module": "semantic_space",
+   "path": "bootstrap_refits",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.bootstrap_seed": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 910,
+   "min": 0,
+   "module": "semantic_space",
+   "path": "bootstrap_seed",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.covariance_shrinkage": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "covariance_shrinkage",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.default_chunk_chars": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 4000,
+   "min": 1,
+   "module": "semantic_space",
+   "path": "default_chunk_chars",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.fence_multiplier": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 15.0,
+   "min": 0,
+   "module": "semantic_space",
+   "path": "fence_multiplier",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.grade_scores.bordering": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "grade_scores.bordering",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.grade_scores.inside": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "grade_scores.inside",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.grade_scores.outside": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "grade_scores.outside",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.grade_scores.undefined": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "grade_scores.undefined",
+   "type": "float",
+   "validator": false
+  },
+  "semantic_space.max_components": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 30,
+   "min": 1,
+   "module": "semantic_space",
+   "path": "max_components",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.min_chunk_chars": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 800,
+   "min": 1,
+   "module": "semantic_space",
+   "path": "min_chunk_chars",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.min_chunks_per_doc": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 50,
+   "min": 1,
+   "module": "semantic_space",
+   "path": "min_chunks_per_doc",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.rrf_k": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 600,
+   "min": 1,
+   "module": "semantic_space",
+   "path": "rrf_k",
+   "type": "int",
+   "validator": false
+  },
+  "semantic_space.stability_floor": {
+   "clamp": null,
+   "file": "config/semantic_space.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "semantic_space",
+   "path": "stability_floor",
+   "type": "float",
+   "validator": false
+  },
+  "spell_clarify.max_suggestions": {
+   "clamp": null,
+   "file": "config/spell_clarify.json",
+   "max": 30,
+   "min": 1,
+   "module": "spell_clarify",
+   "path": "max_suggestions",
+   "type": "int",
+   "validator": false
+  },
+  "spell_clarify.refresh_s": {
+   "clamp": null,
+   "file": "config/spell_clarify.json",
+   "max": 6000,
+   "min": 0,
+   "module": "spell_clarify",
+   "path": "refresh_s",
+   "type": "int",
+   "validator": false
+  },
+  "subquery.max_comparison_side_words": {
+   "clamp": null,
+   "file": "config/subquery.json",
+   "max": 80,
+   "min": 1,
+   "module": "subquery",
+   "path": "max_comparison_side_words",
+   "type": "int",
+   "validator": false
+  },
+  "subquery.max_parts": {
+   "clamp": "lower_only",
+   "file": "config/subquery.json",
+   "max": 4,
+   "min": 1,
+   "module": "subquery",
+   "path": "max_parts",
+   "type": "int",
+   "validator": false
+  },
+  "taxo_hier.params.fit_quantile": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 0.9999,
+   "min": 0.5,
+   "module": "taxo_hier",
+   "path": "params.fit_quantile",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.min_agree": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.min_agree",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.min_token_len": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxo_hier",
+   "path": "params.min_token_len",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.min_top_share": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.min_top_share",
+   "type": "float",
+   "validator": true
+  },
+  "taxo_hier.params.null_chunks": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20000,
+   "min": 50,
+   "module": "taxo_hier",
+   "path": "params.null_chunks",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.null_replicates": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxo_hier",
+   "path": "params.null_replicates",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.seed": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 2147483648,
+   "min": 0,
+   "module": "taxo_hier",
+   "path": "params.seed",
+   "type": "int",
+   "validator": true
+  },
+  "taxo_hier.params.semantic_weight": {
+   "clamp": null,
+   "file": "config/taxo_hier.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "taxo_hier",
+   "path": "params.semantic_weight",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.anchor_terms": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 120,
+   "min": 5,
+   "module": "taxonomy_induction",
+   "path": "anchor_terms",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.chunk_chars": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 8000,
+   "min": 100,
+   "module": "taxonomy_induction",
+   "path": "chunk_chars",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.chunks_per_doc": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 200,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "chunks_per_doc",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.keyphrases": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 40,
+   "min": 3,
+   "module": "taxonomy_induction",
+   "path": "keyphrases",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_clusters_new": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 200,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "max_clusters_new",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_clusters_per_topic": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "max_clusters_per_topic",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_df_share": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1.0,
+   "min": 0.01,
+   "module": "taxonomy_induction",
+   "path": "max_df_share",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.max_iter": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "max_iter",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.max_proposals": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 500,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "max_proposals",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_chunk_votes": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_chunk_votes",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_df": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_df",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_docs": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "min_docs",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.min_similarity": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "taxonomy_induction",
+   "path": "min_similarity",
+   "type": "float",
+   "validator": true
+  },
+  "taxonomy_induction.naming.batch_size": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 20,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "naming.batch_size",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_calls": {
+   "clamp": "lower_only",
+   "file": "config/taxonomy_induction.json",
+   "max": 20,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "naming.max_calls",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_completion_tokens": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 4096,
+   "min": 64,
+   "module": "taxonomy_induction",
+   "path": "naming.max_completion_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_rate_limited": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 100,
+   "min": 0,
+   "module": "taxonomy_induction",
+   "path": "naming.max_rate_limited",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/taxonomy_induction.json",
+   "max": 60000,
+   "min": 100,
+   "module": "taxonomy_induction",
+   "path": "naming.max_tokens",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.naming.timeout_s": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 120,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "naming.timeout_s",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.scan_max_documents": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 20000,
+   "min": 1,
+   "module": "taxonomy_induction",
+   "path": "scan_max_documents",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.subtopic_min_chunks": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 100000,
+   "min": 2,
+   "module": "taxonomy_induction",
+   "path": "subtopic_min_chunks",
+   "type": "int",
+   "validator": true
+  },
+  "taxonomy_induction.terms_per_chunk": {
+   "clamp": null,
+   "file": "config/taxonomy_induction.json",
+   "max": 50,
+   "min": 3,
+   "module": "taxonomy_induction",
+   "path": "terms_per_chunk",
+   "type": "int",
+   "validator": true
+  },
+  "temporality.volatile_entity_triggers": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/temporality.json",
+   "module": "temporality",
+   "path": "volatile_entity_triggers",
+   "type": "bool",
+   "validator": false
+  },
+  "temporality.year_requires_lexicon_cue": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/temporality.json",
+   "module": "temporality",
+   "path": "year_requires_lexicon_cue",
+   "type": "bool",
+   "validator": false
+  },
+  "topic_tagging.backfill_stop_cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/topic_tagging.json",
+   "max": 3000.0,
+   "min": 300.0,
+   "module": "topic_tagging",
+   "path": "backfill_stop_cooldown_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.batch": {
+   "clamp": "lower_only",
+   "file": "config/topic_tagging.json",
+   "max": 20,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "batch",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.bm25_fallback_after_failures": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 10,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "bm25_fallback_after_failures",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.bm25_threshold": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 20.0,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "bm25_threshold",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.calls_per_minute": {
+   "clamp": "lower_only",
+   "file": "config/topic_tagging.json",
+   "max": 20,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "calls_per_minute",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.concurrency": {
+   "clamp": "lower_only",
+   "file": "config/topic_tagging.json",
+   "max": 2,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "concurrency",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.control_poll_s": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 300.0,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "control_poll_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.digest_signal_min_s": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 6000.0,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "digest_signal_min_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.max_candidates": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 120,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_candidates",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.max_failures": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 50,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_failures",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.max_part_chars": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 42000,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_part_chars",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.max_proposals_per_part": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 10,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_proposals_per_part",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.max_retry_after_s": {
+   "clamp": "raise_only",
+   "file": "config/topic_tagging.json",
+   "max": 1200.0,
+   "min": 120.0,
+   "module": "topic_tagging",
+   "path": "max_retry_after_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.max_tokens": {
+   "clamp": "lower_only",
+   "file": "config/topic_tagging.json",
+   "max": 300,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_tokens",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.max_topics_per_part": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 40,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "max_topics_per_part",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.min_active_roots": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 200,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "min_active_roots",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.min_score": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "topic_tagging",
+   "path": "min_score",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.poll_s": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 300.0,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "poll_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.propose_new_topics": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "module": "topic_tagging",
+   "path": "propose_new_topics",
+   "type": "bool",
+   "validator": false
+  },
+  "topic_tagging.queue_max": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 10000,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "queue_max",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.refresh_docs_per_request": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 80,
+   "min": 1,
+   "module": "topic_tagging",
+   "path": "refresh_docs_per_request",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.stale_sweep_max": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 500,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "stale_sweep_max",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.tag_chunkless_sources": {
+   "allowed": [
+    true,
+    false
+   ],
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "module": "topic_tagging",
+   "path": "tag_chunkless_sources",
+   "type": "bool",
+   "validator": false
+  },
+  "topic_tagging.timeout_s": {
+   "clamp": null,
+   "file": "config/topic_tagging.json",
+   "max": 200.0,
+   "min": 0.001,
+   "module": "topic_tagging",
+   "path": "timeout_s",
+   "type": "float",
+   "validator": false
+  },
+  "topic_tagging.tokens_per_minute": {
+   "clamp": "lower_only",
+   "file": "config/topic_tagging.json",
+   "max": 0,
+   "min": 0,
+   "module": "topic_tagging",
+   "path": "tokens_per_minute",
+   "type": "int",
+   "validator": false
+  },
+  "topic_tagging.transient_cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/topic_tagging.json",
+   "max": 600.0,
+   "min": 60.0,
+   "module": "topic_tagging",
+   "path": "transient_cooldown_s",
+   "type": "float",
+   "validator": false
+  },
+  "trace_eval_guidance.alpha": {
+   "clamp": null,
+   "file": "config/trace_eval_guidance.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "trace_eval_guidance",
+   "path": "alpha",
+   "type": "float",
+   "validator": false
+  },
+  "trace_eval_guidance.small_n": {
+   "clamp": null,
+   "file": "config/trace_eval_guidance.json",
+   "max": 60,
+   "min": 1,
+   "module": "trace_eval_guidance",
+   "path": "small_n",
+   "type": "int",
+   "validator": false
+  },
+  "trace_eval_guidance.trust.reliable_min_tnr": {
+   "clamp": null,
+   "file": "config/trace_eval_guidance.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "trace_eval_guidance",
+   "path": "trust.reliable_min_tnr",
+   "type": "float",
+   "validator": false
+  },
+  "trace_eval_guidance.trust.reliable_min_tpr": {
+   "clamp": null,
+   "file": "config/trace_eval_guidance.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "trace_eval_guidance",
+   "path": "trust.reliable_min_tpr",
+   "type": "float",
+   "validator": false
+  },
+  "trace_eval_guidance.trust.unusable_max_tpr": {
+   "clamp": null,
+   "file": "config/trace_eval_guidance.json",
+   "max": 1.0,
+   "min": 0.0,
+   "module": "trace_eval_guidance",
+   "path": "trust.unusable_max_tpr",
+   "type": "float",
+   "validator": false
+  },
+  "ui_wake.health_timeout_s": {
+   "clamp": null,
+   "file": "config/ui_wake.json",
+   "max": 100.0,
+   "min": 0.001,
+   "module": "ui_wake",
+   "path": "health_timeout_s",
+   "type": "float",
+   "validator": false
+  },
+  "ui_wake.max_total_s": {
+   "clamp": null,
+   "file": "config/ui_wake.json",
+   "max": 1600.0,
+   "min": 1,
+   "module": "ui_wake",
+   "path": "max_total_s",
+   "type": "float",
+   "validator": false
+  },
+  "ui_wake.page_load_recheck_s": {
+   "clamp": null,
+   "file": "config/ui_wake.json",
+   "max": 600.0,
+   "min": 0,
+   "module": "ui_wake",
+   "path": "page_load_recheck_s",
+   "type": "float",
+   "validator": false
+  },
+  "ui_wake.restart_hook_cooldown_s": {
+   "clamp": "raise_only",
+   "file": "config/ui_wake.json",
+   "max": 9000.0,
+   "min": 900.0,
+   "module": "ui_wake",
+   "path": "restart_hook_cooldown_s",
+   "type": "float",
+   "validator": false
+  },
+  "ui_wake.restart_hook_timeout_s": {
+   "clamp": null,
+   "file": "config/ui_wake.json",
+   "max": 100.0,
+   "min": 0.001,
+   "module": "ui_wake",
+   "path": "restart_hook_timeout_s",
+   "type": "float",
+   "validator": false
+  },
+  "web_route.marker_scan_chars": {
+   "clamp": "raise_only",
+   "file": "config/web_route.json",
+   "max": 6000,
+   "min": 600,
+   "module": "web_route",
+   "path": "marker_scan_chars",
+   "type": "int",
+   "validator": false
+  },
+  "wiki_ref_portal.max_articles": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 3,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_articles",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.max_refs": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 20,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_refs",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.max_response_bytes": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 4000000,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "max_response_bytes",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.query.max_query_chars": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 3000,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "query.max_query_chars",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.query.max_terms": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 8,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "query.max_terms",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.max_refs_scanned": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 500,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.max_refs_scanned",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.min_contain_len": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 60,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.min_contain_len",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.min_hits": {
+   "clamp": "raise_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 20,
+   "min": 2,
+   "module": "wiki_ref_portal",
+   "path": "relevance.min_hits",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.relevance.stem_len": {
+   "clamp": null,
+   "file": "config/wiki_ref_portal.json",
+   "max": 50,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "relevance.stem_len",
+   "type": "int",
+   "validator": true
+  },
+  "wiki_ref_portal.timeout_s": {
+   "clamp": "lower_only",
+   "file": "config/wiki_ref_portal.json",
+   "max": 5,
+   "min": 1,
+   "module": "wiki_ref_portal",
+   "path": "timeout_s",
+   "type": "int",
+   "validator": true
+  }
+ },
+ "sha256": "87e9374cfee9d6941c1140a600bb10a08d433beec8c546f67bb21e52b2dacc8e"
+}
