@@ -261,9 +261,11 @@ def test_real_pair_completes_and_writes_nodes_proposed_then_active_with_actor(fi
 
 def test_chunk_links_deepest_level_only(first_run):
     db = first_run[0]
-    sub, top = db.active("chunk_subtopic"), db.active("chunk_topic")
+    # strict links only (score_kind 'cosine'); routing-only multi-membership links (cosine_r<k>, cosine_soft) are extra (TAXO-ROUTE-R1-1110)
+    sub = sorted((k[1], k[2]) for k, v in db.links.items() if k[0] == "chunk_subtopic" and v["state"] == "active" and v["score_kind"] == "cosine")
+    top = sorted((k[1], k[2]) for k, v in db.links.items() if k[0] == "chunk_topic" and v["state"] == "active" and v["score_kind"] == "cosine")
     spans_sub, spans_top = {a for a, _b in sub}, {a for a, _b in top}
-    assert not (spans_sub & spans_top)                       # one link per chunk: never both levels
+    assert not (spans_sub & spans_top)                       # one strict link per chunk: never both levels
     assert len(sub) == len(spans_sub) and len(top) == len(spans_top)
     assert len(spans_sub | spans_top) >= 0.8 * 300 and len(spans_sub) > 0
     assert all(level_of(db, b) == "subtopic" for _a, b in sub) and all(level_of(db, b) == "topic" for _a, b in top)
