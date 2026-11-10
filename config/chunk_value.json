@@ -1,0 +1,228 @@
+{
+  "_doc": "CHUNK-VALUE-1110 WP1: thresholds, heading lists and word lists for vera/chunk_value.py (pure rules module shared by the ingest filter and the known-bad audit). Every value that decides keep/drop lives here; the module holds only rule-id names. 'enabled' is read by the caller (WP2), not by the module. Thresholds in 'document.incomprehensible' were calibrated on the 11 local real JATS documents (work/CHUNK-VALUE-1110/measure.md): each sits beyond the worst known-good value plus a margin; recalibrate on the audit's own distribution before any purge.",
+  "version": 1,
+  "enabled": true,
+  "chunk": {
+    "section_gap_chars": 2,
+    "max_evidence_drop_share": 0.05,
+    "evidence_section_kinds": [
+      "body"
+    ],
+    "cap_counted_rules": [
+      "C3_boilerplate",
+      "C4_reference_list",
+      "C5_low_info",
+      "C6_near_dup"
+    ],
+    "section_number_regex": "^\\s*[\\dIVX]+(\\.\\d+)*[.)]?\\s+",
+    "token_regex": "[a-z][a-z0-9'-]+",
+    "min_token_chars": 3,
+    "function_words": [
+      "the",
+      "and",
+      "for",
+      "with",
+      "that",
+      "this",
+      "are",
+      "was",
+      "were",
+      "from",
+      "into",
+      "which",
+      "these",
+      "those",
+      "their",
+      "there",
+      "has",
+      "have",
+      "had",
+      "not",
+      "but",
+      "can",
+      "may",
+      "also",
+      "such",
+      "than",
+      "its",
+      "our",
+      "they",
+      "been",
+      "use",
+      "used",
+      "using",
+      "more",
+      "most",
+      "other",
+      "all",
+      "any",
+      "each",
+      "one",
+      "two",
+      "both",
+      "between",
+      "however",
+      "when",
+      "where",
+      "while",
+      "what",
+      "who",
+      "how",
+      "will",
+      "would",
+      "could",
+      "should",
+      "only",
+      "over",
+      "under",
+      "about",
+      "after",
+      "before",
+      "within",
+      "without",
+      "per"
+    ],
+    "C1_section_kind": {
+      "enabled": true,
+      "drop_section_kinds": [
+        "title"
+      ]
+    },
+    "C2_heading": {
+      "enabled": true,
+      "heading_kinds": [
+        "back",
+        "body"
+      ],
+      "drop_headings": [
+        "acknowledgements",
+        "acknowledgments",
+        "acknowledgement",
+        "acknowledgment",
+        "funding",
+        "funding statement",
+        "financial support",
+        "author contributions",
+        "authors contributions",
+        "author contribution",
+        "competing interests",
+        "competing interest",
+        "conflict of interest",
+        "conflicts of interest",
+        "declaration of competing interest",
+        "declaration of interests",
+        "data availability",
+        "data availability statement",
+        "code availability",
+        "how to cite",
+        "abbreviations",
+        "references",
+        "bibliography"
+      ],
+      "back_only_headings": [
+        "supplementary information",
+        "supplementary material",
+        "supplementary materials",
+        "supporting information",
+        "additional information",
+        "author information"
+      ]
+    },
+    "C3_boilerplate": {
+      "enabled": true,
+      "formats": [
+        "html",
+        "pdf",
+        "text"
+      ],
+      "url_share_max": 0.5,
+      "url_regex": "https?://\\S+|www\\.\\S+",
+      "repeat_min_count": 4,
+      "repeat_min_line_chars": 8,
+      "short_line_chars": 25,
+      "chunk_flagged_line_share": 0.8
+    },
+    "C4_reference_list": {
+      "enabled": true,
+      "line_regex": "^\\s*(\\[\\d+\\]|\\d+\\.\\s+[A-Z][a-z]+,? [A-Z])",
+      "min_lines": 3
+    },
+    "C5_low_info": {
+      "enabled": true,
+      "min_distinct_content_tokens": 8
+    },
+    "C6_near_dup": {
+      "enabled": true,
+      "shingle_words": 5,
+      "jaccard_min": 0.8
+    }
+  },
+  "document": {
+    "D1_arxiv": {
+      "enabled": true,
+      "hosts": [
+        "arxiv.org",
+        "www.arxiv.org",
+        "export.arxiv.org"
+      ],
+      "identifier_substrings": [
+        "10.48550/arxiv",
+        "arxiv.org/abs/",
+        "arxiv.org/pdf/"
+      ],
+      "resolvers": [
+        "arxiv"
+      ]
+    },
+    "D2_incomprehensible": {
+      "enabled": true,
+      "token_regex": "[A-Za-z]{3,}",
+      "min_tokens_for_dictionary": 200,
+      "dictionary_word_share_min": 0.6,
+      "non_alnum_share_max": 0.3,
+      "bad_chars_per_1000_max": 2.0,
+      "bad_char_regex": "[\\ufffd\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f-\\u009f]|\\u00c3[\\u0080-\\u00bf]|\\u00e2\\u20ac|\\u00e2\\u0080",
+      "cid_per_1000_max": 1.0,
+      "cid_regex": "\\(cid:\\d+\\)",
+      "hyphen_break_per_1000_max": 3.0,
+      "hyphen_break_regex": "[a-z]-\\n[a-z]",
+      "min_lines_for_line_metrics": 50,
+      "mean_line_chars_min": 20.0,
+      "repeat_line_min_chars": 8,
+      "repeat_line_min_count": 6,
+      "repeat_line_share_max": 0.25
+    },
+    "D3_incomplete": {
+      "enabled": true,
+      "required_provenance_fields": [
+        "licence_id",
+        "canonical_url",
+        "title",
+        "text_sha256"
+      ],
+      "body_chars_min": 3000,
+      "doc_min_chunks": 2,
+      "check_sha": true,
+      "truncation_check": true,
+      "sentence_end_chars": ".!?)\"'\u201d\u2019]",
+      "back_section_kinds": [
+        "back"
+      ]
+    },
+    "D4_duplicate": {
+      "enabled": true,
+      "minhash_k": 128,
+      "shingle_words": 5,
+      "jaccard_min": 0.9,
+      "token_regex": "[a-z0-9]+"
+    }
+  },
+  "audit": {
+    "chunking": {
+      "chunk_chars": 400,
+      "chunk_overlap": 60,
+      "min_chunk_chars": 40
+    },
+    "_note": "stored chunking used by audit_document when the caller gives none; equals config/domain_routing.json corpus at c3aabb1 (a test pins this)"
+  }
+}
