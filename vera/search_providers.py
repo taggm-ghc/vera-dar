@@ -2096,10 +2096,13 @@ class _LiteLinks(HTMLParser):
             self._href = None
 
 
-def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> list[dict]:
+def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping, *, groups: list | None = None,
+                      limit: int | None = None) -> list[dict]:
     """-> [{"group", "query"}], at most `max_queries_per_question`, each <= `max_query_chars`. Unquoted core+extra
     terms plus a (site:a OR site:b) group; a group whose sites do not fit is split into chunks (first chunk of
-    every group is served before any second chunk). Raises ValueError when nothing searchable remains."""
+    every group is served before any second chunk). Raises ValueError when nothing searchable remains.
+    DDG-REDUCE-1110 C3: `groups` (ordered names) restricts the groups used (names the config does not have are ignored;
+    none left = all groups); `limit` replaces max_queries_per_question."""
     if terms_cfg is not None:
         qt = build_query_terms(question, terms_cfg)
         words = list(qt.core) + list(qt.extra)
@@ -2110,7 +2113,10 @@ def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> l
                  if w not in QUERY_STOPWORDS and len(w) > 1][:8]
     if not words:
         raise ValueError("question has no searchable term after stopword removal")
-    cap, groups = int(s["max_query_chars"]), {g: list(v) for g, v in s["site_groups"].items() if v}
+    only = [g for g in (groups or []) if s["site_groups"].get(g)]
+    cap = int(s["max_query_chars"])
+    groups = {g: list(s["site_groups"][g]) for g in only} if only else \
+        {g: list(v) for g, v in s["site_groups"].items() if v}
     if not groups:
         raise ValueError("duckduckgo_lite: no site group has any site")
     longest = max(len(x) for v in groups.values() for x in v)
@@ -2136,7 +2142,19 @@ def build_ddg_queries(question: str, terms_cfg: Mapping | None, s: Mapping) -> l
         for g, v in chunks.items():
             if i < len(v):
                 ordered.append({"group": g, "query": base + " (" + " OR ".join("site:" + x for x in v[i]) + ")"})
-    return ordered[:int(s["max_queries_per_question"])]
+    return ordered[:int(limit if limit is not None else s["max_queries_per_question"])]
+
+
+def ddg_group_for(question: str, s: Mapping) -> str:
+    """DDG-REDUCE-1110 C3: the one site group a question is searched with: "news" for a news / current-events question
+    (vera.news_intent), else "portals". A group the config does not have falls back to the first one it has."""
+    try:
+        from vera import news_intent
+        want = "news" if news_intent.news_intent(str(question or "")) else "portals"
+    except Exception:  # noqa: BLE001
+        want = "portals"
+    have = [g for g, v in (s.get("site_groups") or {}).items() if v]
+    return want if want in have else (have[0] if have else want)
 
 
 class _CachedPart:
@@ -2269,10 +2287,18 @@ class DuckDuckGoLiteProvider:
             if self.last_query is not None:
                 self.last_query.setdefault("errors", []).append(f"cache write failed: {type(e).__name__}: {e}")
 
+    def _build_queries(self, question: str) -> list[dict]:
+        """The site-group queries of one call. DDG-REDUCE-1110 C3 (config/ddg_reduce.json one_group_per_call): ONE query,
+        the group chosen by the question's intent, instead of one per group."""
+        from vera import ddg_reduce
+        if ddg_reduce.on("one_group_per_call"):
+            return build_ddg_queries(question, self.query_terms, self.s, groups=[ddg_group_for(question, self.s)], limit=1)
+        return build_ddg_queries(question, self.query_terms, self.s)
+
     def gate_exempt(self, question: str) -> bool:
         """True when every site-group query for this question is cached, so no request (and no gate wait) is needed."""
         try:
-            queries = build_ddg_queries(question, self.query_terms, self.s)
+            queries = self._build_queries(question)
         except ValueError:
             return False
         return bool(queries) and all(self._cache_get(q) is not None for q in queries)
@@ -2285,7 +2311,7 @@ class DuckDuckGoLiteProvider:
     def call(self, query: str, n: int, timeout_s: float, *, queries: list | None = None):
         # NONASK-1103 S4 (plan 6.3): `queries` = explicit [{"group", "query"}] (the official lane's one site: query);
         # it goes through the same cache, daily cap, rate gate and transport as every other call.
-        queries = list(queries) if queries else build_ddg_queries(query, self.query_terms, self.s)
+        queries = list(queries) if queries else self._build_queries(query)
         self.last_query = {"query": [q["query"] for q in queries], "mode": "site_groups"}
         from vera import request_origin
         if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:

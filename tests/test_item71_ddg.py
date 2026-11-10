@@ -19,6 +19,14 @@ DDG = CFG["duckduckgo_lite"]
 QT = CFG["query_terms"]
 Q = "What does published research show about AI coding assistants and developer productivity?"
 
+@pytest.fixture(autouse=True)
+def _pre_ddg_reduce_baseline(monkeypatch):
+    """DDG-REDUCE-1110: these tests pin the two-group-per-call behaviour; the shipped switches (config/ddg_reduce.json)
+    are exercised in tests/test_ddg_meter_1110.py."""
+    from vera import ddg_reduce
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: {})
+
+
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):

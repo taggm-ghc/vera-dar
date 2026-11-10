@@ -3,5 +3,7 @@
   "domain_branches_scholarly_only": true,
   "_domain_branches_scholarly_only_note": "C1: domain-routing branches search with the non-DuckDuckGo providers only; the base (unrestricted) search keeps DuckDuckGo.",
   "variant_rounds_no_ddg": true,
-  "_variant_rounds_no_ddg_note": "C2: acquisition variant rounds (news questions included) spend no DuckDuckGo; a news question's variant rounds keep the reporting lane (GDELT) and the other routes."
+  "_variant_rounds_no_ddg_note": "C2: acquisition variant rounds (news questions included) spend no DuckDuckGo; a news question's variant rounds keep the reporting lane (GDELT) and the other routes.",
+  "one_group_per_call": true,
+  "_one_group_per_call_note": "C3: one DuckDuckGo site-group query per call (one POST, was up to 2): the news group for a news / current-events question, else the portals group. false restores one query per group (max_queries_per_question)."
 }

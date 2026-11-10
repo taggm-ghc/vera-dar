@@ -249,3 +249,44 @@ def test_c2_extra_rounds_set_no_ddg_for_the_search_call(monkeypatch):
     from vera import inline_acquire
     src = inspect.getsource(inline_acquire._extra_rounds)
     assert 'ddg_reduce.NO_DDG.set(ddg_reduce.on("variant_rounds_no_ddg"))' in src and 'ddg_meter.SITE.set("variant")' in src
+
+
+# ------------------------------------------------------------------------------------------------------------- C3
+@pytest.mark.parametrize("question,group_site", [(Q_PLAIN, "nature.com"), (Q_ONE, "nature.com"), (Q_NEWS, "reuters.com")])
+def test_c3_one_group_per_call_chosen_by_intent(rig, monkeypatch, question, group_site):
+    set_flags(monkeypatch, one_group_per_call=True)
+    reading_list(rig, question)
+    base_posts = rig.posts[:1]
+    assert len(base_posts) == 1 and group_site in base_posts[0]
+    assert ("reuters.com" in base_posts[0]) == (group_site == "reuters.com")   # exactly one of the two groups
+    assert posts_by_site()["base"] == 1
+
+
+def test_c3_off_keeps_both_groups(rig, monkeypatch):
+    set_flags(monkeypatch, one_group_per_call=False)
+    reading_list(rig, Q_PLAIN)
+    assert len(rig.posts) == 2
+
+
+def test_c3_explicit_queries_are_not_reduced(rig, monkeypatch):
+    set_flags(monkeypatch, one_group_per_call=True)
+    rig.ddg.call("x", 5, 5.0, queries=[{"group": "official", "query": "a (site:nist.gov)"},
+                                       {"group": "official", "query": "b (site:nist.gov)"}])
+    assert len(rig.posts) == 2        # a caller's explicit list is its own decision (the official lane sends one)
+
+
+def test_c3_gate_exempt_uses_the_same_single_query(rig, monkeypatch):
+    set_flags(monkeypatch, one_group_per_call=True)
+    reading_list(rig, Q_PLAIN)
+    assert rig.ddg.gate_exempt(Q_PLAIN)
+
+
+def test_c1_c2_c3_cumulative_posts_per_question(rig, monkeypatch):
+    """The reading-list search with C1 + C3: one POST for every question shape (was 2 / 4 / 6 / 2)."""
+    set_flags(monkeypatch, domain_branches_scholarly_only=True, one_group_per_call=True)
+    got = {}
+    for name, q in (("plain", Q_PLAIN), ("one_domain", Q_ONE), ("two_domains", Q_TWO), ("news", Q_NEWS)):
+        rig.posts.clear(); rig.ddg._mem.clear()
+        reading_list(rig, q)
+        got[name] = len(rig.posts)
+    assert got == {"plain": 1, "one_domain": 1, "two_domains": 1, "news": 1}
