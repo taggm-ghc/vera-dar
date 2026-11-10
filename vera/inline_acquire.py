@@ -675,6 +675,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
 
     entries: dict = {}  # P0-5: id(discovered candidate) -> its public entry (disc only)
     st: dict = {"portals": None, "recs": [], "cands": []}  # FRESH-1023 C3: portal attempts + per-candidate records
+    st["entries"] = entries  # WORDING-LABELS-1110 (b): _settle also updates the reading-list (discovered) entry
 
     def done(o: Outcome) -> Outcome:
         if st.get("lanes_extra"):  # RETRIEVAL-1109 A3: variant-round lane results, request-local (never cached)
@@ -1462,6 +1463,9 @@ def _settle(st: dict, cid: int, outcome: str, reason) -> None:
     for c, r in zip(st["cands"], st["recs"]):
         if id(c) == cid:
             r["outcome"], r["reason"] = outcome, reason
+            e = (st.get("entries") or {}).get(cid)
+            if isinstance(e, dict):  # WORDING-LABELS-1110 (b): the reading list shows this entry; keep it in step
+                e["outcome"], e["reason"] = outcome, reason
             return
 
 

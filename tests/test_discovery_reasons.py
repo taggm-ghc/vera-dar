@@ -165,3 +165,21 @@ def test_safety_label_split_per_code_1110():
     assert "network safety" not in t["host"] and "network safety" not in t["robots"]
     assert len(set(t.values())) == 3
 
+
+def test_settled_cut_record_never_shows_too_many_candidates_1110():
+    """WORDING-LABELS-1110 (b): a record cut by the shortlist (deferred) and later settled keeps the reading-list entry
+    in step: no-progress stop -> the no-progress label; evaluated -> its real reason."""
+    from vera import inline_acquire as ia
+    for settle, want in (("stop", "R-ACQ-NO_PROGRESS"), ("rejected", CODES["not_oa"])):
+        cand = {"title": "t", "url": "https://x.org/0"}
+        entry = {"url": "https://x.org/0", "outcome": "deferred", "reason": CODES["defer_cap"]}
+        rec = {"outcome": "dropped", "reason": CODES["defer_cap"]}
+        st = {"cands": [cand], "recs": [rec], "entries": {id(cand): entry}}
+        if settle == "stop":
+            ia._relabel_left({"reason_codes": CODES}, None, st, cand, "no_progress")
+        else:
+            ia._settle(st, id(cand), "rejected", want)
+        assert entry["reason"] == want and rec["reason"] == want
+        line = dp._reason_line(entry)
+        assert "too many candidates" not in line
+        assert "too many candidates" not in dp._reasons_by_url(data_for([entry]))["https://x.org/0"]
