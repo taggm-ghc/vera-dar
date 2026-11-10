@@ -1,5 +1,5 @@
 """REPROV-W3-1110: parity of vera.chunk_value.portal_verdict (self-contained port) with vera.fulltext_loader.portal_verdict
-(PORTAL-RULE-1110 CP5, unchanged since batch6-rc-1110 d3fe0fe). Verdict AND rule id must be equal, row for row.
+(PORTAL-RULE-1110 CP5 as at batch6-rc-1110 d3fe0fe plus PVFIX-A-1110 75b0c6a). Verdict AND rule id must be equal, row for row.
 Synthetic fixtures only; no DB, network or env."""
 import hashlib
 import json
@@ -85,10 +85,31 @@ def _rows():
     add({"url": "https://zenodo.org/records/1", "version": "publishedVersion"}, {}, None)
     add({"url": "https://zenodo.org/records/1", "type": "dataset"}, {}, None)
     add({"landing_url": "https://hal.science/hal-1"}, {}, None)
+    # PVFIX-A-1110: version / type meta on every version-gated row shape (parity must hold for each, incl. lookalikes)
+    gated = ("https://zenodo.org/records/1234567", "https://hal.science/hal-01234567", "https://theses.hal.science/tel-1",
+             "https://dspace.mit.edu/handle/1721.1/12345", "https://eprints.soton.ac.uk/1/", "https://openreview.net/forum?id=abc",
+             "https://doi.org/10.5281/zenodo.1234567")
+    vers = ("published", "publishedVersion", "vor", "VoR", "info:eu-repo/semantics/publishedVersion", "INFO:EU-REPO/SEMANTICS/publishedVersion",
+            "accepted", "acceptedVersion", "camera-ready", "cameraready", "info:eu-repo/semantics/acceptedVersion", "submittedVersion",
+            "preprint", "draft", "unknown", "none", "", "v1.0", "PublishedVersion ", "publishedversio", "published version", 5, None)
+    for u in gated:
+        for v in vers:
+            add({"url": u, "version": v}, {}, None)
+            add({"url": "https://example.org/x"}, {"version": v}, u)
+            add({"url": u, "version": v, "type": "preprint"}, {}, None)
+            add({"url": u, "version": v, "type": "dataset"}, {}, None)
+        for t in ("dataset", "report", "software", "journal-article", "posted-content", "Dataset"):
+            add({"url": u, "type": t}, {}, None)
+            add({"url": u, "resource_type": t}, {}, None)
+            add({"url": u}, {"type": t}, None)
+            add({"url": u, "source_type": t}, {}, None)
+        add({"url": "https://example.org/x", "title": "publishedVersion"}, {}, u)
     return rows
 
 
-def test_policy_is_the_d3fe0fe_file():
+def test_policy_is_the_checkout_host_roles_file():
+    """The vendored policy equals the checkout's config/host_roles.json byte for byte (by sha) and by content. After PVFIX-A-1110 that
+    file is the 75b0c6a one (accepted_versions = published/VoR); on a rebase onto a newer main this test fails until re-copied (P7)."""
     raw = (ROOT / "config" / "host_roles.json").read_bytes()
     assert hashlib.sha256(raw).hexdigest() == POL["source_sha256"]
     ref = json.loads(raw.decode("utf-8"))
@@ -113,6 +134,10 @@ def test_parity_verdict_and_rule_id_row_for_row():
         assert rid in seen, rid
     assert None in seen and any(k and k.startswith("host:") for k in seen)
     assert "pattern:hp-shadow-libs" in seen
+    assert any(k and k.startswith("version_unqualified:") for k in seen)       # gated rows that stay PORTAL
+    vrows = [(i, p, c) for i, p, c in rows if isinstance(i, dict) and "version" in i and str(i.get("url", "")).startswith("https://zenodo.org/")]
+    assert any(fulltext_loader.portal_verdict(i, p, c) is None for i, p, c in vrows)            # published/VoR relaxes (not vacuous)
+    assert any(fulltext_loader.portal_verdict(i, p, c) for i, p, c in vrows)                    # accepted etc. stay PORTAL
 
 
 def test_fail_closed_matches_on_invalid_policy():

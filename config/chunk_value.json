@@ -162,10 +162,10 @@
   "document": {
     "D1_portal_sourced": {
       "enabled": true,
-      "source_commit": "d3fe0feb22a9146298c7f49ccdc35933aae0f7d5",
+      "source_commit": "75b0c6a91c3613e718acfffe81201b66088c6012",
       "source_file": "config/host_roles.json",
-      "source_sha256": "8126e2b4e2218b9cef466b3b7082ae639ef586ecbb0d6186b4a415e503de396c",
-      "_note": "REPROV-W3-1110: port of fulltext_loader.portal_verdict; policy is a copy of config/host_roles.json at source_commit (minus _doc and pending_decisions). Labels are not the binding: the pin of this file is.",
+      "source_sha256": "b723beb1f3445699d9fd3e5e69c0d25b44991a47d59136593690d56c1bc3638e",
+      "_note": "REPROV-W3-1110 + PVFIX-A-1110: port of fulltext_loader.portal_verdict; policy is a copy of config/host_roles.json at source_commit (PVFIX-A-1110 on d3fe0fe content; minus _doc and pending_decisions). Labels are not the binding: the pin of this file is.",
       "policy": {
         "version": 1,
         "owner_rule": "OD-1110-PORTALS-ALL",
@@ -1619,11 +1619,7 @@
           "accepted_versions": [
             "published",
             "publishedversion",
-            "vor",
-            "accepted",
-            "acceptedversion",
-            "camera-ready",
-            "cameraready"
+            "vor"
           ],
           "non_article_types": [
             "dataset",
@@ -1644,7 +1640,7 @@
       }
     },
     "D1_arxiv": {
-      "enabled": true,
+      "enabled": false,
       "hosts": [
         "arxiv.org",
         "www.arxiv.org",

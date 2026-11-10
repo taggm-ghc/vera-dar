@@ -326,7 +326,8 @@ def d1_arxiv(doc: dict, cfg: dict) -> list:
 # REPROV-W3-1110 (review R1): a self-contained port of vera.fulltext_loader.portal_verdict and vera.host_role
 # (role_for_url, role_for_record) as at batch6-rc-1110 d3fe0fe, so the audit kit (which runs this file standalone, pinned by
 # sha256) selects exactly the rows the serve-time quarantine (CP5) refuses. The host-role table, the preprint DOI prefixes, the
-# record flags and types live in cfg["document"]["D1_portal_sourced"]["policy"] (a copy of config/host_roles.json at d3fe0fe).
+# record flags and types live in cfg["document"]["D1_portal_sourced"]["policy"] (a copy of config/host_roles.json at d3fe0fe,
+# re-copied after PVFIX-A-1110 75b0c6a, which narrowed accepted_versions; source_sha256 names the file copied).
 # tests/test_chunk_value_portal_parity_1110.py asserts verdict and rule id equal the original row for row. Pure; never raises.
 _PR_ROLES = ("ORIGINAL", "REPOSITORY_OF_RECORD", "PORTAL", "RESOLVER", "EXCLUDED")
 _PR_RANK = {"EXCLUDED": 0, "PORTAL": 1, "RESOLVER": 2, "REPOSITORY_OF_RECORD": 3, "ORIGINAL": 4}
@@ -574,9 +575,22 @@ def _portal_reg(cfg) -> _PortalReg:
     return hit[1]
 
 
+_PR_EU_REPO_PREFIX = "info:eu-repo/semantics/"
+
+
+def _pr_norm_version(v) -> str:
+    """PVFIX-A-1110 port of fulltext_loader._norm_version: strip only the OpenAIRE/eu-repo prefix (case-insensitive); any other
+    string is left as is, so an unknown version ('v1.0') stays undecidable (fail closed)."""
+    v = v.strip() if isinstance(v, str) else ""
+    if v.lower().startswith(_PR_EU_REPO_PREFIX):
+        v = v[len(_PR_EU_REPO_PREFIX):]
+    return v
+
+
 def portal_verdict(item, prov=None, canonical_url=None, cfg=None):
     """The host_role rule id when this stored row (item + provenance + canonical URL) is a PORTAL / EXCLUDED record, else
-    None; same decision and rule id as vera.fulltext_loader.portal_verdict at d3fe0fe. Never raises (an error counts as a
+    None; same decision and rule id as vera.fulltext_loader.portal_verdict at d3fe0fe plus PVFIX-A-1110 (75b0c6a: item version/type
+    passed to the URL role checks; accepted_versions = published/VoR only). Never raises (an error counts as a
     portal: "internal_error"; an invalid policy: "config_invalid")."""
     try:
         reg = _portal_reg(cfg or CONFIG or _default_cfg())
@@ -594,12 +608,17 @@ def portal_verdict(item, prov=None, canonical_url=None, cfg=None):
                 (item.get("identifier") or {}).get("url") if isinstance(item.get("identifier"), dict) else None,
                 canonical_url, acq.get("abs_url")]
         urls += urls_extra  # acquisition["url_chain"] is deliberately NOT checked (wire-A F1)
+        # PVFIX-A-1110 port: the item's own version / type is meta for the URL role checks only (relaxes a version-gated row; rec unchanged)
+        vmeta = {"version": _pr_norm_version(item.get("version") or prov.get("version")),
+                 "type": item.get("type") or prov.get("type") or "",
+                 "resource_type": item.get("resource_type") or prov.get("resource_type") or "",
+                 "source_type": item.get("source_type") or ""}
         hr = _pr_role_for_record(rec, reg)
         if hr[0] in ("PORTAL", "EXCLUDED"):
             return hr[1]
         for u in urls:
             if isinstance(u, str) and u.lower().startswith(("http://", "https://")):
-                hr = _pr_role_for_url(u, reg)
+                hr = _pr_role_for_url(u, reg, vmeta)
                 if hr[0] in ("PORTAL", "EXCLUDED"):
                     return hr[1]
         return None

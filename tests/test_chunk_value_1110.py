@@ -131,16 +131,30 @@ def good_doc():
             "body_chars": 5000, "has_body": True}
 
 
+def _arxiv_on():
+    """PVFIX-B-1110: D1_arxiv ships OFF (stage C is the portal rule only); this copy keeps the flag-on code path covered."""
+    c = copy.deepcopy(CFG)
+    c["document"][cv.D1]["enabled"] = True
+    return c
+
+
+def test_d1_arxiv_shipped_off():
+    assert CFG["document"][cv.D1]["enabled"] is False
+
+
 def test_document_flags_good_and_arxiv():
     d = good_doc()
-    f = cv.document_flags(d, CFG)
+    on = _arxiv_on()
+    f = cv.document_flags(d, on)
     assert f["known_bad"] is False, f
     for urls, ids in ((["https://arxiv.org/abs/2301.00001"], []), (["https://export.arxiv.org/x"], []),
                       ([], ["10.48550/arXiv.2301.00001"])):
         d2 = dict(d, urls=urls, identifiers=ids)
-        assert cv.document_flags(d2, CFG)["reasons"][0].startswith(cv.D1)
-    assert cv.document_flags(dict(d, urls=["https://notarxiv.org.evil.com/"]), CFG)["known_bad"] is False
-    assert cv.document_flags(dict(d, resolver="arxiv"), CFG)["reasons"] == ["D1_arxiv:resolver"]
+        assert cv.document_flags(d2, on)["reasons"][0].startswith(cv.D1)
+        assert cv.document_flags(d2, CFG)["reasons"] == []          # flag off (shipped): no arXiv-metadata D1
+    assert cv.document_flags(dict(d, urls=["https://notarxiv.org.evil.com/"]), on)["known_bad"] is False
+    assert cv.document_flags(dict(d, resolver="arxiv"), on)["reasons"] == ["D1_arxiv:resolver"]
+    assert cv.document_flags(dict(d, resolver="arxiv"), CFG)["reasons"] == []
 
 
 def test_document_flags_garbled():
@@ -194,10 +208,12 @@ def test_audit_document_contract_and_no_text():
         pos, i = e, i + 1
     meta = {"source_id": 1, "document_id": "d", "host": "arxiv.org", "licence_id": "CC BY 4.0", "doi": None,
             "title_present": True, "chars": len(full), "text_sha256": hashlib.sha256(full.encode()).hexdigest()}
-    out = cv.audit_document(meta, parts, CFG)
-    assert [f["rule"] for f in out["d_flags"]][0] == "D1"
+    on = cv.audit_document(meta, parts, _arxiv_on())                 # flag-on path: arXiv host gives D1 first
+    assert [f["rule"] for f in on["d_flags"]][0] == "D1"
+    out = cv.audit_document(meta, parts, CFG)                        # shipped (PVFIX-B-1110): D1_arxiv off, no portal inputs -> no D1
+    assert all(f["rule"] != "D1" for f in out["d_flags"])
     rx = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,39}$")
-    for f in out["d_flags"]:
+    for f in out["d_flags"] + on["d_flags"]:
         assert rx.match(f["rule"]) and all(isinstance(v, (int, float)) for v in f["metrics"].values())
     assert out["dropped"] and set(out["dropped"]) <= {p[0] for p in parts}
     assert set(out["dropped"].values()) == {cv.C5}
@@ -285,12 +301,16 @@ def test_d3_review_when_c5_dominant_and_english_purge_garble():
 
 def test_d1_arxiv_via_provenance_fields():
     d = good_doc()
+    on = _arxiv_on()
     for k, v in (("fulltext_url", "https://export.arxiv.org/pdf/1"), ("repository", "arXiv"), ("identifiers", ["10.48550/arXiv.2301.1"])):
-        r = cv.document_flags(dict(d, **{k: v}), CFG)
+        r = cv.document_flags(dict(d, **{k: v}), on)
         assert r["reasons"][0].startswith(cv.D1) and r["severity"][r["reasons"][0]] == "purge", k
+        assert not [x for x in cv.document_flags(dict(d, **{k: v}), CFG)["reasons"] if x.startswith(cv.D1)], k   # shipped: off
     meta = {"host": "europepmc.org", "licence_id": "x", "title_present": True, "text_sha256": None, "fulltext_url": "https://arxiv.org/pdf/1"}
-    out = cv.audit_document(meta, [("a", 0, 5, "hello")], CFG)
+    out = cv.audit_document(meta, [("a", 0, 5, "hello")], on)
     assert out["d_flags"][0] == {"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}}
+    out = cv.audit_document(meta, [("a", 0, 5, "hello")], CFG)
+    assert not [f for f in out["d_flags"] if f["rule"] == "D1"]                 # no portal inputs, flag off: no D1
 
 
 def test_d2_repairs_pdf_hyphenation_and_ligatures():
