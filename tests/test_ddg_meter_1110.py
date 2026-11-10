@@ -8,7 +8,7 @@ from urllib.parse import quote
 import pytest
 
 import vera.search_providers as sp
-from vera import ddg_meter, grounded_ask, official_lane
+from vera import ddg_meter, ddg_reduce, grounded_ask, official_lane
 from vera import domain_routing as dr
 from vera import request_trace as rt
 from vera.eval_config import load_eval_config
@@ -88,6 +88,16 @@ class FakeRegistry:
 
 GROUNDING = {"providers": ["duckduckgo_lite", "openalex"], "num_results": 5, "deadline_s": 30, "snippet_max_chars": 1500,
              "provider_timeout_s": 5, "provider_max_retries": 1, "resolve": {"enabled": False}}
+
+
+def set_flags(monkeypatch, **flags):
+    """config/ddg_reduce.json with the given switches; unnamed switches are OFF (the pre-DDG-REDUCE behaviour)."""
+    monkeypatch.setattr(ddg_reduce, "load", lambda path=None: dict(flags))
+
+
+@pytest.fixture(autouse=True)
+def baseline_flags(monkeypatch):
+    set_flags(monkeypatch)  # every test pins the BASELINE unless it calls set_flags itself
 
 
 @pytest.fixture
@@ -192,3 +202,24 @@ def test_domain_name_already_in_the_question_adds_no_post_the_branch_query_is_ca
     reading_list(rig, "How does quantum error correction affect hardware reliability estimates?")
     assert len(rig.posts) == 2
     assert ddg_meter.snapshot()["domain"] == {"calls": 1, "posts": 0, "cache_hits": 2}
+
+
+# ------------------------------------------------------------------------------------------------------------- C1
+@pytest.mark.parametrize("question,before,after", [(Q_PLAIN, 2, 2), (Q_ONE, 4, 2), (Q_TWO, 6, 2), (Q_NEWS, 2, 2)])
+def test_c1_domain_branches_spend_no_duckduckgo(rig, monkeypatch, question, before, after):
+    reading_list(rig, question)
+    assert len(rig.posts) == before
+    ddg_meter.reset(); rig.posts.clear(); rig.ddg._mem.clear()
+    set_flags(monkeypatch, domain_branches_scholarly_only=True)
+    reading_list(rig, question)
+    assert len(rig.posts) == after and posts_by_site() == {"base": 2}
+
+
+def test_c1_branches_still_search_the_scholarly_provider(rig, monkeypatch):
+    set_flags(monkeypatch, domain_branches_scholarly_only=True)
+    reading_list(rig, Q_TWO)
+    assert len(rig.scholar_calls) == 3      # the base query and one call per branch (2 domains)
+
+
+def test_c1_shipped_config_defaults_on():
+    assert ddg_reduce.CONFIG_PATH.exists() and __import__("json").loads(ddg_reduce.CONFIG_PATH.read_text())["domain_branches_scholarly_only"] is True
