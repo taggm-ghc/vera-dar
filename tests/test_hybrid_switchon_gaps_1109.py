@@ -17,6 +17,7 @@ NAME = "fakegaps"
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     hr.reset_for_tests()
+    hr.set_config_for_tests({"enabled": False})  # the shipped file is on: the word-only baselines below must not try hybrid
     emb.reset_budget_for_tests()
     tc = chunk_taxo.load_cfg()
     monkeypatch.setattr(hr, "_taxo_cfg", lambda: dict(tc, embedder=NAME))
@@ -224,3 +225,38 @@ def test_b_threaded_index_build_asks_served_word_only_then_vectors():
     assert hs["index"] is not None and hs["building"] is False
     after = c.retrieve(Q, 16, True)
     assert hr.last_status()["status"] == "ok" and any(x.get("vec_sim") is not None for x in after)
+
+
+# ------------------------------------------------------------------------------ (e) R-SF1: takeover must not let a stale creator overwrite
+@pytest.mark.parametrize("stale_fails", [True, False])
+def test_e_superseded_creator_late_result_never_replaces_takeover_embedder(monkeypatch, stale_fails):
+    monkeypatch.setattr(hr, "INFLIGHT_STALE_S", 0.2)
+    first_started, release_first, calls = threading.Event(), threading.Event(), []
+    good, stale_emb = FakeEmbedder(), FakeEmbedder()
+    mu = threading.Lock()
+
+    def factory(cfg):
+        with mu:
+            calls.append(1)
+            n = len(calls)
+        if n == 1:  # creator A: slow, outlives the stale limit
+            first_started.set()
+            assert release_first.wait(8)
+            if stale_fails:
+                raise RuntimeError("late failure")
+            return stale_emb
+        return good  # creator B (takeover)
+    emb.register(NAME, factory)
+    hr.set_config_for_tests({"enabled": True, "cooldown_s": 60})
+    out = []
+    ta = threading.Thread(target=lambda: out.append(hr._embedder()), daemon=True)
+    ta.start()
+    assert first_started.wait(5)
+    time.sleep(0.4)  # A is now stale
+    got, why = hr._embedder()  # B takes over and succeeds
+    assert got is good and why == "ok" and len(calls) == 2
+    release_first.set()
+    ta.join(8)
+    assert not ta.is_alive() and out  # A returned (never raises)
+    assert hr._embedder() == (good, "ok")  # A's late failure/success did not replace or clear B's embedder
+    assert hr._STATE["emb"] is good and hr._INFLIGHT == {}

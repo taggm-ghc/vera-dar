@@ -244,15 +244,19 @@ def _embedder(slot: str = "emb"):
         tc = _taxo_cfg()
         to = float(config()["timeout_s"] if slot == "emb" else config()["rerank"]["timeout_s"])
         cf = dict(tc.get("cloudflare") or {}, reserve_neurons=0, max_attempts=1, timeout_s=to)
-        emb, why = load_embedder(dict(tc, cloudflare=cf))  # network/credential I/O: never under _LOCK
+        emb, why = load_embedder(dict(tc, cloudflare=cf))  # kept outside _LOCK: it reads config and env, and a custom factory may do I/O
     except Exception as exc:  # noqa: BLE001
         emb, why = None, "embedder_error"
         log.warning("hybrid embedder unavailable (%s)", type(exc).__name__)
     finally:
         try:
             with _locked():
-                _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
-                if _INFLIGHT.get(slot) is flight:
+                owner = _INFLIGHT.get(slot) is flight
+                # R-SF1: a superseded (taken-over) creator writes only a success into an empty slot; a failure never
+                # replaces a good embedder, and a creator that no longer owns the slot never writes a failure.
+                if (owner or (emb is not None and _STATE[slot] is None)) and not (emb is None and _STATE[slot] is not None):
+                    _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
+                if owner:
                     del _INFLIGHT[slot]
         except TimeoutError:
             if _INFLIGHT.get(slot) is flight:  # best effort; waiters time out and the stale rule frees the slot
