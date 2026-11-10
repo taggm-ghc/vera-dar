@@ -160,7 +160,7 @@ def test_flag_off_no_new_keys_no_calls_and_same_candidates(monkeypatch):
     called = []
     monkeypatch.setattr(hr, "vector_fn", lambda *a, **k: called.append(1) or (None, None))
     monkeypatch.setattr(hr, "query_vector", lambda *a, **k: called.append(2))
-    assert hr.enabled() is False  # flag off (the suite default; the shipped file is on, FLAGON-HYBRID-1109)
+    assert hr.enabled() is False  # shipped config: OFF (BATCH6-RC-1110)
     cands = c.retrieve(Q, 16, True)
     direct = c._evidence_dar().retrieve(Q, 16, max_per_doc=8)
     assert [x["span_id"] for x in cands] == [f"{c._key_to_doc[d['source_key']]}:{d['start']}-{d['end']}" for d in direct["candidates"]]
@@ -403,7 +403,8 @@ def _rr_corpus(monkeypatch, fake=None, **rr):
 
 def test_rerank_off_by_default_and_stage1_unchanged(monkeypatch):
     assert hr._clean({})["rerank"]["enabled"] is False
-    assert json.loads(hr.CONFIG_PATH.read_text())["rerank"]["enabled"] is True  # FLAGON-HYBRID-1109: shipped on (clean({}) default stays off)
+    assert json.loads(hr.CONFIG_PATH.read_text())["rerank"]["enabled"] is False  # BATCH6-RC-1110 (owner D1): shipped OFF; hybrid ships later via the release chain
+    assert json.loads(hr.CONFIG_PATH.read_text())["enabled"] is False  # BATCH6-RC-1110: shipped hybrid flag OFF
     c, table = _corpus(spans_b=[(0, len(_texts()[1]))])
     setup_hybrid(monkeypatch, c, table, chunks_per_partition=1)
     out = c.retrieve(Q, 16, True)

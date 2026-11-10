@@ -1,6 +1,6 @@
 {
   "_note": "HYBRID-1109 (OD-1109-HYBRID, owner 2026-11-09: \"Yes, hybrid search\"). Stored-passage retrieval adds embedding similarity to word matching. FLAG OFF by default: enabled=false => no embedding call, no vector load, no new candidate or trace key; retrieval and admission are byte-identical to before. When true it also needs the chunk-taxonomy job to have stored vectors (vera_vjay.tax_chunk_vectors, migration 024) for the served chunks, and a usable embedder (config/chunk_taxo.json: same Cloudflare account, token and model as the taxonomy job). Each question is embedded once (one HTTPS call, timeout_s, one attempt); any failure, quota or budget stop falls back to word-only search and is traced as a code (never the question text). Design and measurements: vera/hybrid_retrieval.py docstring.",
-  "enabled": true,
+  "enabled": false,
   "timeout_s": 3.0,
   "rrf_k": 60,
   "_rrf_k_note": "Reciprocal rank fusion constant for both fusions (BM25 + vector candidates in vera.dar_corpus.retrieve; lexical + vector admission order in vera.fulldoc_admission). 60 is the standard RRF constant and equals config/domain_routing.json rrf_k; rank-only, so it compares no scores across signals. Not a decision threshold.",
@@ -22,7 +22,7 @@
   "page_ids": 256,
   "rerank": {
     "_note": "Stage 2 (orchestrator decision within OD-1109-HYBRID, 2026-11-09). OWN FLAG, default false; needs the stage-1 flag above too. After stage 1, the top_partitions stored partitions (RRF of the partition cosine order and the partition best-BM25 order) have their 400-character retrieval passages (at most max_passages, each cut to max_chars) embedded at ask time in ONE batched Cloudflare call (timeout_s, one attempt) and ranked by cosine to the question vector; that passage order joins the vector candidate list and is a third RRF input to the admission order. Passage vectors are cached in process memory per (sha256(text), model), LRU of cache_max entries; nothing is written to the database from the ask path. Budget: the estimated neurons (characters / 3 tokens x 1075 per million for bge-m3; 48 x 400 characters is about 6.9 neurons) must fit the ask-time share (config/chunk_taxo.json cloudflare.reserve_neurons, counted per UTC day in process memory together with the question embeddings); else, and on any error, quota or timeout, stage 2 falls back to the stage-1 list (traced as a code) and waits cooldown_s (quota or share: until 00:00 UTC). At the shipped share of 5000 (orchestrator decision 2026-11-09; the job keeps 3000) that is about 700 uncached re-ranks a day; cached passages cost nothing.",
-    "enabled": true,
+    "enabled": false,
     "top_partitions": 3,
     "max_passages": 48,
     "max_chars": 2000,
