@@ -201,6 +201,10 @@ def test_trace_start_records_settings_version(env, monkeypatch):
         rt.end_context()
 
 
+# Exactly one shipped placeholder is tolerated until the owner's calibrate+finalize step writes a number.
+_PLACEHOLDER_OK = ("hybrid_retrieval.stem_floor_sim", "FILL_FROM_CALIBRATION")
+
+
 def test_registry_pin_and_static_checks(tmp_path):
     reg = json.loads((ROOT / "config" / "settings_registry.json").read_text())
     assert st.registry_digest(reg["keys"]) == reg["sha256"] == st.REGISTRY_SHA256
@@ -214,6 +218,8 @@ def test_registry_pin_and_static_checks(tmp_path):
         cfg = json.loads((ROOT / e["file"]).read_text())
         for part in e["path"].split("."):
             cfg = cfg[part]  # key exists in the shipped file
+        if (k, cfg) == _PLACEHOLDER_OK:
+            continue  # shipped calibration placeholder: hybrid code ignores any non-number (rule OFF, fail-closed); a DB override must still be numeric and in range
         if e["type"] != "bool":
             assert isinstance(e["min"], (int, float)) and isinstance(e["max"], (int, float)), k
             if cfg is not None:
@@ -254,3 +260,11 @@ def test_key_level_refusal_mirrors_026():
     reg = dict(keys); reg["reference_portals.adapters.z.n"] = {"module": "reference_portals", "path": "adapters.z.n", "type": "bool", "allowed": [True]}
     import tempfile, os
     assert "reference_portals.adapters.z.n" not in {k for k in reg if not st.REFUSED_KEY_RE.match(k)}
+
+
+def test_stem_floor_placeholder_never_usable_and_db_override_numeric():
+    e = st.load_registry()["hybrid_retrieval.stem_floor_sim"]
+    assert st._coerce(e, "FILL_FROM_CALIBRATION") is st._MISSING
+    assert st.validate_value(e, "FILL_FROM_CALIBRATION", "FILL_FROM_CALIBRATION") == (False, None)
+    assert st.validate_value(e, 2.0, "FILL_FROM_CALIBRATION") == (False, None)
+    assert st.validate_value(e, 0.5, "FILL_FROM_CALIBRATION") == (True, 0.5)
