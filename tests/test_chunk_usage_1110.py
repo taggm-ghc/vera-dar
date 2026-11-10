@@ -388,3 +388,17 @@ def test_admit_demotion_scale_zero_does_not_touch_the_order():
     cu.set_config_for_tests({"enabled": True, "demote": {"scale": 0}})
     cu._STATE["snap"] = {(7, DAR, 3): (0.8, 0.01, True)}
     assert admit(Q, FakeCorpus(), ACFG).admitted[0]["relevance"] == 1.0
+
+
+def test_shipped_config_passes_its_own_validator_unchanged():
+    import json
+    raw = json.loads(cu.CONFIG_PATH.read_text(encoding="utf-8"))
+    cleaned = cu._clean(raw)
+    assert raw["snapshot"]["max_rows"] == 10000 == cu.SNAP_DEFAULTS["max_rows"] == cleaned["snapshot"]["max_rows"]
+    for k, (lo, hi) in cu._BOUNDS.items():
+        assert k not in raw or (lo <= raw[k] <= hi and cleaned[k] == raw[k]), k
+    for k in cu._ABOUNDS:
+        assert cleaned["assoc"][k] == raw["assoc"][k], k  # nothing was clamped or defaulted away
+    for k in cu._SBOUNDS:
+        assert cleaned["snapshot"][k] == raw["snapshot"][k], k
+    assert cleaned["demote"]["scale"] == raw["demote"]["scale"] and cleaned["enabled"] is True
