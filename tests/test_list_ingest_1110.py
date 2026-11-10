@@ -462,9 +462,34 @@ def test_permission_denial_is_lookup_denied_not_unavailable(monkeypatch):
 
 def test_http_401_403_from_lookup_services_is_denied(monkeypatch):
     ok_empty = _resp(200, {"hits": {"hits": []}})
-    for inspire, oa in ((_resp(403), ok_empty), (_resp(401), ok_empty), (ok_empty, _resp(403)), (ok_empty, _resp(401))):
-        with pytest.raises(list_ingest.LookupDenied):
+    for inspire, oa in ((_resp(403), _resp(403)), (_resp(401), _resp(401)), (_resp(403), _resp(403))):
+        with pytest.raises(list_ingest.LookupDenied):  # every lookup denied
             _lookup_with(monkeypatch, inspire, oa)
-    rv = list_ingest.Resolvers(arxiv_original=lambda a: _lookup_with(monkeypatch, _resp(403), ok_empty), known=lambda d, u: False)
+    rv = list_ingest.Resolvers(arxiv_original=lambda a: _lookup_with(monkeypatch, _resp(403), _resp(403)), known=lambda d, u: False)
     assert codes(_ingest(["arXiv:2301.12345"], monkeypatch, resolvers=rv)) == ["lookup-denied"]
+    for inspire, oa in ((ok_empty, _resp(403)), (ok_empty, _resp(401))):  # only one denied: not terminal
+        with pytest.raises(RuntimeError) as ei:
+            _lookup_with(monkeypatch, inspire, oa)
+        assert not isinstance(ei.value, list_ingest.LookupDenied)
     assert list_ingest._is_denied(OSError("t")) is False
+
+
+def test_inspire_denial_falls_through_to_openalex_both_orders(monkeypatch):
+    from vera import api_permissions
+    found = _resp(200, {"locations": [{"landing_page_url": "https://doi.org/10.1234/j.x"}]})
+    ins_found = _resp(200, {"hits": {"hits": [{"metadata": {"dois": [{"value": "10.5555/ins.1"}]}}]}})
+    denied_exc = api_permissions.ApiDenied("R-API-DENIED", "x", "no entry")
+    # INSPIRE denied (HTTP and exception form), OpenAlex answers: the item resolves
+    assert _lookup_with(monkeypatch, _resp(403), found) == "10.1234/j.x"
+    assert _lookup_with(monkeypatch, denied_exc, found) == "10.1234/j.x"
+    # OpenAlex denied but INSPIRE answered first: resolved by INSPIRE
+    assert _lookup_with(monkeypatch, ins_found, _resp(403)) == "10.5555/ins.1"
+    # INSPIRE denied, OpenAlex has nothing / unavailable: not terminal-denied
+    for oa in (_resp(200, {"locations": []}), _resp(404), _resp(503)):
+        with pytest.raises(RuntimeError) as ei:
+            _lookup_with(monkeypatch, _resp(403), oa)
+        assert not isinstance(ei.value, list_ingest.LookupDenied)
+    # both denied, in either exception/HTTP form: lookup-denied
+    for i, o in ((denied_exc, denied_exc), (_resp(403), denied_exc), (denied_exc, _resp(401))):
+        with pytest.raises(list_ingest.LookupDenied):
+            _lookup_with(monkeypatch, i, o)

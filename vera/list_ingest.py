@@ -159,6 +159,7 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
     existing api_permissions entries; no search, no body text)."""
     t = float(cfg["lookup_timeout_s"])
     incomplete = False  # INSPIRE could not answer: "nothing found" is then not definitive
+    inspire_denied = False  # S8-2: an INSPIRE denial falls through to OpenAlex; lookup-denied only if every lookup is denied
     try:
         r = _api_get(cfg["inspire"]["url"], {"q": f"arxiv:{arxiv_id}", "fields": "dois", "size": 1}, t)
         if getattr(r, "status_code", 0) in (401, 403):
@@ -172,15 +173,23 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
         else:
             incomplete = True
     except Exception as e:  # noqa: BLE001
-        if _is_denied(e):
-            raise  # permission denial is terminal (lookup-denied), not "incomplete"
         incomplete = True
+        inspire_denied = _is_denied(e)
         logger.info("list-ingest inspire lookup failed (%s)", type(e).__name__)
-    r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
-                 {"select": "doi,locations"}, t)
+    def _oa_denied(why):  # OpenAlex refused: terminal only when INSPIRE was refused too
+        if inspire_denied:
+            raise LookupDenied(why)
+        raise RuntimeError(why + "; inspire did not refuse, so not every lookup is denied")
+    try:
+        r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
+                     {"select": "doi,locations"}, t)
+    except Exception as e:  # noqa: BLE001
+        if _is_denied(e):
+            _oa_denied("openalex denied")
+        raise
     sc = getattr(r, "status_code", 0)
     if sc in (401, 403):
-        raise LookupDenied(f"openalex status {sc}")
+        _oa_denied(f"openalex status {sc}")
     if sc == 404 and not incomplete:
         return None  # OpenAlex definitively has no such work
     if sc != 200:
