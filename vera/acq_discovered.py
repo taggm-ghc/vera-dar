@@ -227,6 +227,9 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
             "acq_source": "discovered", "discovery": e}
         if pmcid and ac is None:
             c["pmcid"] = pmcid
+        alt = s.get("arxiv_alt") or ((s.get("oa") or {}).get("arxiv_id") if isinstance(s.get("oa"), dict) else None)
+        if ac is None and doi and alt:  # PHYS-SUPPLY-1110: metadata-named arXiv version (vera/fulltext_routes.alt_arxiv)
+            c["arxiv_alt"] = alt
         if s.get("source_type"):
             c["source_type"] = s["source_type"]
         if len(cands) >= n:  # past discovered_max: an explicit deferral (held records never use up the cap)

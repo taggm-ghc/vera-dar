@@ -1616,6 +1616,15 @@ def _reuse_relevant(question, row, spans, acq, fdcfg, icfg):
         return REUSE_UNUSABLE
 
 
+def _arxiv_bound(cand: dict, acq) -> bool:
+    """The candidate will be read through the arXiv route (its Crawl-delay budget applies): an arXiv candidate, or
+    (PHYS-SUPPLY-1110) a journal DOI whose Europe PMC not_oa falls back to its arXiv version (vera.fulltext_routes). Metadata only."""
+    if isinstance(cand.get("arxiv"), dict):
+        return True
+    from vera import fulltext_routes
+    return fulltext_routes.reroutes_to_arxiv(cand, acq)
+
+
 def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl, queue_slots: bool = False):
     """The per-candidate evaluation closure shared by the legacy and the streamed pool. queue_slots (streamed path,
     PERF-MISS-1105-FIX2 F1): the candidate's limited fetches queue for a free per-portal slot within its own
@@ -1625,7 +1634,7 @@ def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl
         if not queue_slots:
             return _one(idx, score, doi, cand, isbn)
         pd = per_doc
-        if isinstance(cand.get("arxiv"), dict):
+        if _arxiv_bound(cand, acq):
             from vera import arxiv_fulltext
             pd = max(per_doc, arxiv_fulltext.doc_budget(acq, clock))
         with rate_limit.queue_scope(time.monotonic() + float(pd)):
@@ -1637,11 +1646,11 @@ def _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl
         job = aa.Job(question=question, trigger="inline", created=clock())
         try:
             pd = per_doc
-            if isinstance(cand.get("arxiv"), dict):  # P0DTA-ARXFIX C: 2 x crawl-delay + fetch timeout, not the flat bound
+            if _arxiv_bound(cand, acq):  # P0DTA-ARXFIX C: 2 x crawl-delay + fetch timeout, not the flat bound
                 from vera import arxiv_fulltext
                 pd = max(per_doc, arxiv_fulltext.doc_budget(acq, clock))
             dl = deadline
-            if isinstance(cand.get("arxiv"), dict):  # CONTROL-GAPS-1107 r2: + one Crawl-delay for a cold tdmrep.json
+            if _arxiv_bound(cand, acq):  # CONTROL-GAPS-1107 r2: + one Crawl-delay for a cold tdmrep.json
                 from vera import arxiv_fulltext
                 dl = deadline + arxiv_fulltext.deadline_extension(acq)
             plan, _isbn = aa.evaluate_candidate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock,
@@ -1769,7 +1778,7 @@ def _evaluate_parallel(question, ranked, acq, deps, icfg, fdcfg, clock, deadline
     one = _runner(question, acq, deps, icfg, fdcfg, clock, deadline, durs, per_doc, fl)
 
     collect_until = deadline
-    if any(isinstance(r[2], dict) and isinstance(r[2].get("arxiv"), dict) for r in ranked):
+    if any(isinstance(r[2], dict) and _arxiv_bound(r[2], acq) for r in ranked):
         # CONTROL-GAPS-1107 r2 SAFETY BOUND: + one Crawl-delay (<= 15 s) while tdmrep.json is cold, decided BEFORE
         # any fetch starts (a worker caching tdmrep.json must not shrink the window it needs)
         from vera import arxiv_fulltext
