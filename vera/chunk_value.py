@@ -10,15 +10,17 @@ Document level: document_flags(doc, cfg, words, chunk_result) and find_duplicate
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import unicodedata
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse, urlsplit
 
 # rule ids (the only named constants)
 C1, C2, C3, C4, C5, C6 = ("C1_section_kind", "C2_heading", "C3_boilerplate", "C4_reference_list", "C5_low_info",
                           "C6_near_dup")
 D1, D2, D3, D4 = "D1_arxiv", "D2_incomprehensible", "D3_incomplete", "D4_duplicate"
+D1P = "D1_portal_sourced"  # REPROV-W3-1110: stored row comes from a portal host or record (port of fulltext_loader.portal_verdict)
 CAP = "cap_exceeded"
 MASK_CHAR = " "
 
@@ -320,6 +322,302 @@ def d1_arxiv(doc: dict, cfg: dict) -> list:
     return []
 
 
+# ------------------------------------------------------------------------------------------------ D1 portal rule
+# REPROV-W3-1110 (review R1): a self-contained port of vera.fulltext_loader.portal_verdict and vera.host_role
+# (role_for_url, role_for_record) as at batch6-rc-1110 d3fe0fe, so the audit kit (which runs this file standalone, pinned by
+# sha256) selects exactly the rows the serve-time quarantine (CP5) refuses. The host-role table, the preprint DOI prefixes, the
+# record flags and types live in cfg["document"]["D1_portal_sourced"]["policy"] (a copy of config/host_roles.json at d3fe0fe).
+# tests/test_chunk_value_portal_parity_1110.py asserts verdict and rule id equal the original row for row. Pure; never raises.
+_PR_ROLES = ("ORIGINAL", "REPOSITORY_OF_RECORD", "PORTAL", "RESOLVER", "EXCLUDED")
+_PR_RANK = {"EXCLUDED": 0, "PORTAL": 1, "RESOLVER": 2, "REPOSITORY_OF_RECORD": 3, "ORIGINAL": 4}
+_PR_STRICT = {"EXCLUDED": 0, "PORTAL": 1, "UNKNOWN": 1.5, "RESOLVER": 2, "REPOSITORY_OF_RECORD": 3, "ORIGINAL": 4}
+_PR_DOI_HOSTS = ("doi.org", "dx.doi.org")
+_PR_NUMERIC_LABEL = re.compile(r"^(?:0x[0-9a-f]*|[0-9]+)$", re.I)
+_PR_SEP = re.compile(r"%(2f|5c|25)", re.I)
+_PR_CACHE: dict = {}  # id(policy dict) -> (policy, _PortalReg)
+
+
+class _PortalReg:
+    def __init__(self, cfg):
+        self.error = None
+        self.hosts, self.patterns, self.doi_rules, self.flags = [], [], [], []
+        self.type_portal: set = set()
+        self.rv: dict = {}
+        try:
+            self._build(cfg)
+        except Exception as e:  # noqa: BLE001 - any defect means fail closed
+            self.error = f"{type(e).__name__}: {e}"
+
+    def _build(self, cfg):
+        if not isinstance(cfg, dict):
+            raise ValueError("top level must be an object")
+        seen = set()
+        for i, row in enumerate(cfg.get("hosts") or []):
+            m = str(row.get("match", "")).strip().lower().strip(".")
+            if not m or "/" in m or " " in m:
+                raise ValueError(f"hosts[{i}]: bad match")
+            if row.get("role") not in _PR_ROLES or not row.get("kind"):
+                raise ValueError(f"hosts[{i}] {m}: bad role or kind")
+            pr = row.get("path_regex")
+            rx = re.compile(pr, re.I) if pr else None
+            if (m, pr) in seen:
+                raise ValueError("duplicate match")
+            seen.add((m, pr))
+            self.hosts.append({**row, "match": m, "_rx": rx, "_spec": (m.count(".") + 1) + (1000 if rx else 0),
+                               "_id": f"host:{m}" + (f"#{pr}" if pr else "")})
+        for i, row in enumerate(cfg.get("host_patterns") or []):
+            if row.get("role") not in _PR_ROLES or not row.get("id"):
+                raise ValueError(f"host_patterns[{i}]: bad role or id")
+            self.patterns.append({**row, "_rx": re.compile(row["regex"], re.I)})
+        for row in cfg.get("doi_prefix_roles") or []:
+            if row.get("role") not in _PR_ROLES:
+                raise ValueError("doi_prefix_roles: bad role")
+            self.doi_rules.append((re.compile(row["regex"], re.I), row["role"], str(row.get("id", "doi"))))
+        for row in cfg.get("source_flags") or []:
+            if row.get("role") not in _PR_ROLES:
+                raise ValueError("source_flags: bad role")
+            self.flags.append({**row, "value": str(row["value"]).upper()})
+        self.type_portal = {str(x).lower() for x in cfg.get("record_type_portal") or []}
+        rv = cfg.get("repository_version") or {}
+        self.rv = {k: {str(x).lower() for x in rv.get(k, [])} for k in ("portal_versions", "accepted_versions", "non_article_types")}
+        if not self.hosts:
+            raise ValueError("no host rows")
+
+
+def _pr_resolve(path: str, orig: str) -> str:
+    out: list = []
+    for seg in path.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(seg)
+    return "/" + "/".join(out) + ("/" if orig.endswith("/") and out else "")
+
+
+def _pr_norm_path(raw: str) -> str:
+    path = raw
+    for _ in range(3):
+        d = unquote(path)
+        if d == path:
+            break
+        path = d
+    return _pr_resolve(path.replace("\\", "/"), path)
+
+
+def _pr_literal_path(raw: str, decode: bool) -> str:
+    s = re.sub(r"%2e", ".", raw, flags=re.I)
+    if decode:
+        s = _PR_SEP.sub(lambda m: "\x00" + m.group(1), s)
+        s = unquote(s).replace("\x00", "%")
+    return _pr_resolve(s, s)
+
+
+def _pr_split(url):
+    """(host, [path readings], problem). host None when unusable."""
+    if not isinstance(url, str) or not url.strip() or len(url) > 4096 or re.search(r"[\x00-\x20\x7f\\]", url.strip()):
+        return None, [], "malformed_url"
+    u = url.strip()
+    if "://" not in u and not u.startswith("//"):
+        u = "//" + u
+    try:
+        p = urlsplit(u)
+        if p.scheme and p.scheme.lower() not in ("http", "https"):
+            return None, [], "malformed_url"
+        host = p.hostname
+        p.port  # noqa: B018 - validates the port
+    except Exception:  # noqa: BLE001
+        return None, [], "malformed_url"
+    if not host:
+        return None, [], "malformed_url"
+    host = re.sub("[。．｡]", ".", host.lower()).rstrip(".")
+    if not host or "." not in host or ".." in host or "%" in host:
+        return None, [], "malformed_url"
+    try:
+        host = host.encode("idna").decode("ascii").lower().rstrip(".")
+    except Exception:  # noqa: BLE001
+        return None, [], "malformed_url"
+    if not host or "." not in host or ".." in host:
+        return None, [], "malformed_url"
+    try:
+        ipaddress.ip_address(host)
+        return None, [], "ip_literal"
+    except ValueError:
+        pass
+    if _PR_NUMERIC_LABEL.match(host.rsplit(".", 1)[-1]) or all(_PR_NUMERIC_LABEL.match(x) for x in host.split(".")):
+        return None, [], "ip_literal"
+    raw = p.path or "/"
+    paths: list = []
+    for q in (_pr_norm_path(raw), _pr_literal_path(raw, False), _pr_literal_path(raw, True)):
+        if p.query and q == "/":
+            q = "/?" + p.query
+        if q not in paths:
+            paths.append(q)
+    return host, paths, ""
+
+
+def _pr_match_row(host, path, reg):
+    best = None
+    for row in reg.hosts:
+        if not (host == row["match"] or host.endswith("." + row["match"])):
+            continue
+        if row["_rx"] is not None and not row["_rx"].search(path):
+            continue
+        key = (-row["_spec"], -int(row.get("priority", 0)), _PR_RANK[row["role"]])
+        if best is None or key < best[0]:
+            best = (key, row)
+    for row in reg.patterns:
+        if row["_rx"].search(host):
+            key = (-1, 0, _PR_RANK[row["role"]])
+            if best is None or key < best[0]:
+                best = (key, row)
+    return best[1] if best else None
+
+
+def _pr_doi_of(text) -> str:
+    t = str(text or "").strip()
+    t = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", t, flags=re.I)
+    return unquote(t).strip()
+
+
+def _pr_doi_role(doi, reg):
+    d = _pr_doi_of(doi)
+    if d:
+        for rx, role, rid in reg.doi_rules:
+            if rx.search(d):
+                return (role, f"doi:{rid}")
+    return None
+
+
+def _pr_qualifies(reg, meta) -> bool:
+    m = meta if isinstance(meta, dict) else {}
+    ver = str(m.get("version") or "").strip().lower()
+    typ = str(m.get("type") or m.get("resource_type") or m.get("source_type") or "").strip().lower()
+    if typ in reg.type_portal or ver in reg.rv["portal_versions"] and ver:
+        return False
+    if ver in reg.rv["accepted_versions"]:
+        return True
+    return not ver and typ in reg.rv["non_article_types"]
+
+
+def _pr_role_for_path(host, path, reg, meta):
+    row = _pr_match_row(host, path, reg)
+    if row is None:
+        return ("UNKNOWN", "no_row")
+    if host in _PR_DOI_HOSTS or (row["role"] == "RESOLVER" and row.get("match") in _PR_DOI_HOSTS):
+        hit = _pr_doi_role(path.lstrip("/"), reg)
+        if hit:
+            return hit
+    rid = row.get("_id") or f"pattern:{row.get('id')}"
+    if row.get("version_gated") and not _pr_qualifies(reg, meta):
+        return ("PORTAL", f"version_unqualified:{rid}")
+    return (row["role"], rid)
+
+
+def _pr_role_for_url(url, reg, meta=None):
+    try:
+        if reg.error:
+            return ("PORTAL", "config_invalid")
+        host, paths, problem = _pr_split(url)
+        if host is None:
+            return ("UNKNOWN", problem)
+        best = None
+        for path in paths:
+            hr = _pr_role_for_path(host, path, reg, meta)
+            if best is None or _PR_STRICT.get(hr[0], 1.5) < _PR_STRICT.get(best[0], 1.5):
+                best = hr
+        return best
+    except Exception:  # noqa: BLE001
+        return ("PORTAL", "internal_error")
+
+
+def _pr_role_for_record(meta, reg):
+    try:
+        if reg.error:
+            return ("PORTAL", "config_invalid")
+        if not isinstance(meta, dict):
+            return ("UNKNOWN", "no_record")
+        hit = _pr_doi_role(meta.get("doi") or "", reg)
+        if hit:
+            return hit
+        oa = meta.get("oa") if isinstance(meta.get("oa"), dict) else {}
+        for f in reg.flags:
+            if f["value"] in (str(meta.get(f["field"]) or "").strip().upper(), str(oa.get(f["field"]) or "").strip().upper()):
+                return (f["role"], f"flag:{f.get('id', f['field'])}")
+        ptypes = meta.get("pub_types") or meta.get("pubTypeList") or []
+        ptypes = ptypes.get("pubType", []) if isinstance(ptypes, dict) else ptypes
+        ptypes = [ptypes] if isinstance(ptypes, str) else list(ptypes or [])
+        typ = str(meta.get("source_type") or meta.get("type") or "").strip().lower()
+        if typ in reg.type_portal or any(str(p).strip().lower() in reg.type_portal for p in ptypes) or meta.get("is_preprint") is True:
+            return ("PORTAL", "record_type:preprint")
+        for k in ("url", "landing_url", "fulltext_url", "full_text_url"):
+            if meta.get(k):
+                return _pr_role_for_url(meta[k], reg, meta)
+        return ("UNKNOWN", "no_url")
+    except Exception:  # noqa: BLE001
+        return ("PORTAL", "internal_error")
+
+
+def _portal_policy(cfg):
+    return ((cfg or {}).get("document") or {}).get(D1P) or {}
+
+
+def _portal_reg(cfg) -> _PortalReg:
+    pol = _portal_policy(cfg).get("policy")
+    hit = _PR_CACHE.get(id(pol))
+    if hit is None or hit[0] is not pol:
+        hit = (pol, _PortalReg(pol))
+        _PR_CACHE.clear()
+        _PR_CACHE[id(pol)] = hit
+    return hit[1]
+
+
+def portal_verdict(item, prov=None, canonical_url=None, cfg=None):
+    """The host_role rule id when this stored row (item + provenance + canonical URL) is a PORTAL / EXCLUDED record, else
+    None; same decision and rule id as vera.fulltext_loader.portal_verdict at d3fe0fe. Never raises (an error counts as a
+    portal: "internal_error"; an invalid policy: "config_invalid")."""
+    try:
+        reg = _portal_reg(cfg or CONFIG or _default_cfg())
+        item = item if isinstance(item, dict) else {}
+        prov = prov if isinstance(prov, dict) else {}
+        acq = prov.get("acquisition") if isinstance(prov.get("acquisition"), dict) else {}
+        if isinstance(acq.get("arxiv"), dict) and acq["arxiv"].get("id"):
+            urls_extra = [f"https://arxiv.org/abs/{acq['arxiv']['id']}"]
+        else:
+            urls_extra = []
+        rec = {"doi": item.get("doi") or prov.get("doi") or "", "source": item.get("source") or "",
+               "source_type": item.get("source_type") or "", "pub_types": item.get("pub_types") or [],
+               "is_preprint": item.get("is_preprint")}
+        urls = [item.get("url"), item.get("landing_url"), item.get("fulltext_url"), prov.get("url"), prov.get("fulltext_url"),
+                (item.get("identifier") or {}).get("url") if isinstance(item.get("identifier"), dict) else None,
+                canonical_url, acq.get("abs_url")]
+        urls += urls_extra  # acquisition["url_chain"] is deliberately NOT checked (wire-A F1)
+        hr = _pr_role_for_record(rec, reg)
+        if hr[0] in ("PORTAL", "EXCLUDED"):
+            return hr[1]
+        for u in urls:
+            if isinstance(u, str) and u.lower().startswith(("http://", "https://")):
+                hr = _pr_role_for_url(u, reg)
+                if hr[0] in ("PORTAL", "EXCLUDED"):
+                    return hr[1]
+        return None
+    except Exception:  # noqa: BLE001
+        return "internal_error"
+
+
+def portal_rule_ids(cfg: dict) -> set:
+    """Every rule id portal_verdict can return for this policy (for sanitising audit output by membership, never by pattern)."""
+    reg = _portal_reg(cfg)
+    ids = {"internal_error", "config_invalid", "record_type:preprint"}
+    ids |= {r["_id"] for r in reg.hosts} | {f"version_unqualified:{r['_id']}" for r in reg.hosts}
+    ids |= {f"pattern:{r.get('id')}" for r in reg.patterns} | {f"version_unqualified:pattern:{r.get('id')}" for r in reg.patterns}
+    ids |= {f"doi:{rid}" for _, _, rid in reg.doi_rules}
+    ids |= {f"flag:{f.get('id', f['field'])}" for f in reg.flags}
+    return ids
+
+
 def normalise_extraction(text: str) -> str:
     """Repair common extraction artefacts before the dictionary and non-alnum metrics: soft hyphens removed, ligatures
     and compatibility forms folded (NFKC), line-break hyphens joined ("compre-\\nhension" -> "comprehension")."""
@@ -542,7 +840,7 @@ def _default_cfg() -> dict:
 
 
 def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> dict:
-    """Read-only audit entry. meta: {source_id, document_id, host, licence_id, doi, title_present, chars, text_sha256};
+    """Read-only audit entry. meta: {source_id, document_id, host, licence_id, doi, title_present, chars, text_sha256, optional portal: {item, prov, canonical_url}};
     chunks: [(span_id, start_index, end_index, text)] (stored partitions, contiguous). Sections are not available to the
     audit, so C1 and C2 (section rules) do not fire here; C3-C6 run on the rebuilt text with fmt=None.
     Returns {"d_flags": [{"rule": "D1|D2|D3", "metrics": {name: number}}], "dropped": {span_id: "C4"...}}: rule ids and
@@ -566,6 +864,18 @@ def audit_document(meta: dict, chunks, cfg: dict | None = None, words=None) -> d
            "rebuild_ok": mismatch == 0 and gaps == 0 and base == 0}
     if d1_arxiv(doc, cfg):
         d_flags.append({"rule": "D1", "severity": "purge", "metrics": {"arxiv": 1}})
+    if "portal" in meta:  # REPROV-W3-1110: stored-row inputs {item, prov, canonical_url}; absent for callers that do not supply them
+        pin = meta["portal"] if isinstance(meta["portal"], dict) else {}
+        prule = portal_verdict(pin.get("item"), pin.get("prov"), pin.get("canonical_url"), cfg)
+        if prule in ("internal_error", "config_invalid"):  # an undecidable row is never purged
+            d_flags.append({"rule": "RULES_ERROR", "severity": "unverified", "metrics": {"error_class_len": 0}})
+        elif prule:
+            prior = next((f for f in d_flags if f["rule"] == "D1"), None)  # one D1 flag per document: arXiv and portal merge
+            if prior is not None:
+                prior["metrics"]["portal"] = 1
+                prior["portal_rule"] = prule
+            else:
+                d_flags.append({"rule": "D1", "severity": "purge", "metrics": {"portal": 1}, "portal_rule": prule})
     hits, m = d2_incomprehensible(text, cfg, words)
     if hits:
         d_flags.append({"rule": "D2", "severity": d2_severity(m, hits),
