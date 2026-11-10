@@ -504,6 +504,13 @@ def test_vector_fn_exception_falls_back_to_word_only():
     assert res["trace"]["branch_counts"]["vector"] == 0
 
 
+def _join_embed_threads(limit_s: float = 5.0) -> None:
+    import threading
+    for t in threading.enumerate():
+        if t.name == "hybrid-embed":
+            t.join(limit_s)
+
+
 def test_embed_timeout_is_an_overall_deadline(monkeypatch):
     import threading
     import time as _t
@@ -519,6 +526,7 @@ def test_embed_timeout_is_an_overall_deadline(monkeypatch):
     t0 = _t.perf_counter()
     v, code, _ = hr.query_vector("a slow question")
     gate.set()
+    _join_embed_threads()  # the orphaned call ends and charges now, not during the next test
     assert v is None and code == "embed_error:TimeoutError" and _t.perf_counter() - t0 < 2.0
 
 
@@ -536,3 +544,105 @@ def test_ask_count_restart_bound(monkeypatch):
         hr._STATE["ask_day"] = None
         hr._STATE["ask_boot"] = False  # a later day in the same process starts at 0
     assert hr._ask_used() == 0.0
+
+
+# ------------------------------------------------------------------------------------------------ HYBRID-HANG-1109
+def _in_thread(fn, limit_s):
+    """Run fn in a daemon thread; (finished, result). A hang shows up as finished=False instead of a hung suite."""
+    import threading
+    box = {}
+    t = threading.Thread(target=lambda: box.update(out=fn()), daemon=True)
+    t.start()
+    t.join(limit_s)
+    return not t.is_alive(), box.get("out")
+
+
+def test_failed_embedder_creation_never_deadlocks(monkeypatch):
+    """The hang: _embedder() called config() while holding the (then non-reentrant) _LOCK once an earlier creation had
+    failed (no Cloudflare credentials) -> the second ask blocked forever and every later ask with it."""
+    for k in CF_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(hr, "_taxo_cfg", lambda: dict(chunk_taxo.load_cfg(), embedder="cloudflare"))
+    c, table = _corpus()
+    lex = [x["span_id"] for x in c.retrieve(Q, 16, True)]  # flag off (fixture): word-only
+    hr.set_config_for_tests({"enabled": True, "rerank": {"enabled": True}})
+    hr.set_loader_for_tests(Loader(c, table))
+
+    def three_asks():
+        return [[x["span_id"] for x in c.retrieve(Q, 16, True)] for _ in range(3)]
+    done, outs = _in_thread(three_asks, 10)
+    assert done, "hybrid ask blocked (deadlock)"
+    assert all(o == lex for o in outs)  # word-only fallback, identical candidates
+    done2, st = _in_thread(lambda: (c.retrieve(Q, 16, True), hr.last_status())[1], 10)
+    assert done2 and st["status"].startswith("embedder:")
+
+
+def test_ask_never_waits_on_a_held_hybrid_lock(monkeypatch):
+    """Any hybrid lock held elsewhere (e.g. a stuck thread) costs an ask at most LOCK_TIMEOUT_S, then word-only."""
+    import threading
+    import time as _t
+    c, table = _corpus()
+    lex = [x["span_id"] for x in c.retrieve(Q, 16, True)]  # flag off (fixture): word-only
+    setup_hybrid(monkeypatch, c, table)
+    monkeypatch.setattr(hr, "LOCK_TIMEOUT_S", 0.3)
+    hr.reset_for_tests()  # drop the cached embedder and query cache so the ask needs the lock
+    hr.set_config_for_tests({"enabled": True})
+    hr.set_loader_for_tests(Loader(c, table))
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with hr._LOCK:
+            held.set()
+            release.wait(10)
+    threading.Thread(target=holder, daemon=True).start()
+    assert held.wait(5)
+    try:
+        t0 = _t.perf_counter()
+        done, out = _in_thread(lambda: [x["span_id"] for x in c.retrieve(Q, 16, True)], 10)
+        took = _t.perf_counter() - t0
+    finally:
+        release.set()
+    assert done and out == lex and took < 3.0
+
+
+def test_rerank_embed_has_an_overall_deadline(monkeypatch):
+    import threading
+    import time as _t
+    gate = threading.Event()
+
+    class SlowBatch(FakeEmbedder):
+        def embed(self, texts):
+            if len(texts) > 1:
+                gate.wait(5)
+            return super().embed(texts)
+    c, table, fake = _rr_corpus(monkeypatch, fake=SlowBatch(), timeout_s=0.3)
+    t0 = _t.perf_counter()
+    try:
+        res = fa.admit(Q, c, load_config())
+    finally:
+        gate.set()
+        _join_embed_threads()
+    assert _t.perf_counter() - t0 < 3.0
+    assert res.trace["hybrid"]["rerank"]["status"] == "embed_error:TimeoutError"
+
+
+def test_no_request_path_index_build(monkeypatch):
+    """ensure_index (request path) only starts the build thread; a slow vector load never delays the ask."""
+    import threading
+    import time as _t
+    c, table = _corpus()
+    fake, loader = setup_hybrid(monkeypatch, c, table)
+    gate = threading.Event()
+
+    class SlowLoader(Loader):
+        def vectors(self, ids, model):
+            gate.wait(5)
+            return super().vectors(ids, model)
+    c2, table2 = _corpus()
+    hr.set_loader_for_tests(SlowLoader(c2, table2))
+    t0 = _t.perf_counter()
+    try:
+        idx, code = hr.ensure_index(c2, MODEL)
+    finally:
+        gate.set()
+    assert idx is None and code == "not_ready" and _t.perf_counter() - t0 < 1.0

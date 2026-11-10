@@ -43,6 +43,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 
 log = logging.getLogger("vera.hybrid")
@@ -70,7 +71,25 @@ SQL_VECTORS = ("SELECT v.span_id, v.text_sha256, v.vec FROM vera_vjay.tax_chunk_
 SQL_NEURONS_TODAY = ("SELECT COALESCE(SUM(r.neurons_used), 0) FROM vera_vjay.tax_job_runs r "
                      "WHERE r.classifier_name = 'chunk_taxo_auto' AND r.utc_day = timezone('utc', now())::date")
 
-_LOCK = threading.Lock()
+# HYBRID-HANG-1109: re-entrant, and every request-path acquisition is bounded (_locked): no ask can wait on a hybrid lock
+# beyond LOCK_TIMEOUT_S. (The plain Lock self-deadlocked when _embedder called config() while holding it.)
+_LOCK = threading.RLock()
+LOCK_TIMEOUT_S = 2.0
+
+
+@contextmanager
+def _locked(lock=None, timeout: float | None = None):
+    """Acquire `lock` (default _LOCK) for at most `timeout` seconds (default LOCK_TIMEOUT_S); TimeoutError otherwise. The
+    request path catches it and falls back to word-only search."""
+    lk = _LOCK if lock is None else lock
+    if not lk.acquire(timeout=LOCK_TIMEOUT_S if timeout is None else timeout):
+        raise TimeoutError("hybrid_lock")
+    try:
+        yield
+    finally:
+        lk.release()
+
+
 _STATE: dict = {"cfg": None, "emb": None, "emb_reason": None, "emb_at": None, "cool_until": 0.0, "cool_code": None,
                 "emb2": None, "emb2_reason": None, "emb2_at": None, "rr_cool_until": 0.0, "rr_cool_code": None,
                 "ask_day": None, "ask_neurons": 0.0,
@@ -105,14 +124,19 @@ def _clean(raw) -> dict:
 
 
 def config() -> dict:
-    """The validated config (cached; a bad file or value means the default for that key; a bad file means OFF)."""
-    with _LOCK:
-        if _STATE["cfg"] is None:
-            try:
-                _STATE["cfg"] = _clean(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-            except Exception:  # noqa: BLE001  unreadable => off
-                _STATE["cfg"] = _clean({})
-        return _STATE["cfg"]
+    """The validated config (cached; a bad file or value means the default for that key; a bad file means OFF). Never
+    raises and never waits on the lock beyond LOCK_TIMEOUT_S: on a lock timeout it returns the cached config, else OFF."""
+    try:
+        with _locked():
+            if _STATE["cfg"] is None:
+                try:
+                    _STATE["cfg"] = _clean(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+                except Exception:  # noqa: BLE001  unreadable => off
+                    _STATE["cfg"] = _clean({})
+            return _STATE["cfg"]
+    except TimeoutError:
+        cached = _STATE["cfg"]
+        return cached if cached is not None else _clean({})
 
 
 def enabled() -> bool:
@@ -185,10 +209,11 @@ def _embedder(slot: str = "emb"):
     (rerank.timeout_s); each is a separate adapter instance (one attempt). Created once; a failed creation is retried after
     cooldown_s. Never raises."""
     now = _STATE["clock"]()
-    with _LOCK:
+    cooldown = float(config()["cooldown_s"])  # HYBRID-HANG-1109: outside the lock (this call under the lock deadlocked)
+    with _locked():
         if _STATE[slot] is not None:
             return _STATE[slot], "ok"
-        if _STATE[slot + "_at"] is not None and now - _STATE[slot + "_at"] < float(config()["cooldown_s"]):
+        if _STATE[slot + "_at"] is not None and now - _STATE[slot + "_at"] < cooldown:
             return None, _STATE[slot + "_reason"]
     try:
         from vera.chunk_taxo_embed import load_embedder
@@ -199,7 +224,7 @@ def _embedder(slot: str = "emb"):
     except Exception as exc:  # noqa: BLE001
         emb, why = None, "embedder_error"
         log.warning("hybrid embedder unavailable (%s)", type(exc).__name__)
-    with _LOCK:
+    with _locked():
         _STATE[slot], _STATE[slot + "_reason"], _STATE[slot + "_at"] = emb, why, now
     return emb, why
 
@@ -219,7 +244,7 @@ def _ask_used() -> float:
     Later days in the same process start at 0."""
     day = time.strftime("%Y-%m-%d", time.gmtime(_STATE["wall"]()))
     floor = max(0.0, _ask_share() - float(config().get("ask_restart_margin_neurons", 500)))  # outside the lock
-    with _LOCK:
+    with _locked():
         if _STATE["ask_day"] != day:
             boot = _STATE.get("ask_boot", True)
             _STATE["ask_boot"] = False
@@ -230,7 +255,7 @@ def _ask_used() -> float:
 
 def _ask_charge(neurons: float) -> None:
     _ask_used()
-    with _LOCK:
+    with _locked():
         _STATE["ask_neurons"] += max(0.0, float(neurons))
 
 
@@ -255,7 +280,7 @@ def model_name() -> str | None:
 
 
 def _cool(code: str, seconds: float) -> None:
-    with _LOCK:
+    with _locked():
         _STATE["cool_until"] = _STATE["clock"]() + max(0.0, float(seconds))
         _STATE["cool_code"] = code
 
@@ -264,13 +289,23 @@ def _embed_deadline(emb, text: str, timeout_s: float):
     """emb.embed([text]) under an OVERALL deadline (timeout_s covers connect, send, read and retries together, not each
     socket operation). The call runs in a daemon thread (its own socket timeout still bounds it); on expiry the ask moves on
     (TimeoutError -> word-only) and the thread's neurons are still charged when it ends."""
+    return _embed_many_deadline(emb, [text], timeout_s)
+
+
+def _embed_many_deadline(emb, texts: list, timeout_s: float, est: float | None = None):
+    """emb.embed(texts) under an overall deadline (see _embed_deadline). Charges the adapter's neuron delta to the ask-time
+    count; an adapter without stats_run is charged `est` (stage 2) or nothing. HYBRID-HANG-1109: stage 2 uses it too, so no
+    ask-path embedding call waits beyond its deadline."""
     box: dict = {}
 
     def run():
         try:
             n0 = _neurons_of(emb)
-            box["out"] = emb.embed([text])
-            _ask_charge(_neurons_of(emb) - n0)
+            box["out"] = emb.embed(list(texts))
+            if hasattr(emb, "stats_run") or est is None:
+                _ask_charge(max(_neurons_of(emb) - n0, 0.0))
+            else:
+                _ask_charge(est)
         except BaseException as exc:  # noqa: BLE001
             box["exc"] = exc
 
@@ -291,7 +326,7 @@ def query_vector(text: str):
     cfg = config()
     key = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
     now = _STATE["clock"]()
-    with _LOCK:
+    with _locked():
         hit = _QCACHE.get(key)
         if hit is not None and hit[0] >= now:
             _QCACHE.move_to_end(key)
@@ -326,7 +361,7 @@ def query_vector(text: str):
     ms = int(round((time.perf_counter() - t0) * 1000))
     if code != "ok":
         log.info("hybrid retrieval fell back to word-only search (%s)", code)
-    with _LOCK:
+    with _locked():
         _QCACHE[key] = (now + float(cfg["query_cache_ttl_s"]), vec, code, ms)
         _QCACHE.move_to_end(key)
         while len(_QCACHE) > int(cfg["query_cache_max"]):
@@ -411,7 +446,7 @@ class VectorIndex:
         import numpy as np
         allc = dar._all
         key = (id(allc), len(allc))
-        with self._mlock:
+        with _locked(self._mlock):
             hit = self._maps.get(key)
             if hit is not None:
                 return hit
@@ -424,7 +459,7 @@ class VectorIndex:
                 pidx[c.idx] = p
                 per[p].append(c.idx)
         out = (pidx, per)
-        with self._mlock:
+        with _locked(self._mlock):
             self._maps[key] = out
             while len(self._maps) > 4:
                 self._maps.popitem(last=False)
@@ -495,7 +530,7 @@ def build_index(corpus, model: str, loader=None) -> tuple:
 def _refresh_neurons(loader) -> None:
     try:
         v = float(loader.neurons_today())
-        with _LOCK:
+        with _locked():
             _STATE["neurons_today"] = v
     except Exception as exc:  # noqa: BLE001
         log.info("hybrid neurons_today unavailable (%s)", type(exc).__name__)
@@ -525,7 +560,7 @@ def _build_into(corpus, model: str, hs: dict) -> None:
 
 
 def _corpus_state(corpus) -> dict:
-    with _LOCK:
+    with _locked():
         hs = corpus.__dict__.get("_hybrid_state")
         if hs is None or hs.get("owner") != id(corpus):
             hs = {"owner": id(corpus), "lock": threading.Lock(), "index": None, "code": "not_ready", "at": None,
@@ -539,12 +574,13 @@ def ensure_index(corpus, model: str, sync: bool = False):
     index_refresh_s; the request never waits for it (sync=True is for tests and the measurement script)."""
     hs = _corpus_state(corpus)
     now = _STATE["clock"]()
+    refresh_s = float(config()["index_refresh_s"])
     start = False
-    with hs["lock"]:
+    with _locked(hs["lock"]):
         idx = hs["index"]
         if idx is not None and idx.model != model:
             hs["index"], idx = None, None
-        due = hs["at"] is None or now - hs["at"] >= float(config()["index_refresh_s"])
+        due = hs["at"] is None or now - hs["at"] >= refresh_s
         if due and not hs["building"]:
             hs["building"] = True
             start = True
@@ -553,7 +589,7 @@ def ensure_index(corpus, model: str, sync: bool = False):
             _build_into(corpus, model, hs)
         else:
             threading.Thread(target=_build_into, args=(corpus, model, hs), name="vera-hybrid-index", daemon=True).start()
-    with hs["lock"]:
+    with _locked(hs["lock"]):
         return hs["index"], ("ok" if hs["index"] is not None else hs["code"])
 
 
@@ -661,7 +697,7 @@ def passage_vectors(texts: list, model: str):
     rr = config()["rerank"]
     keys = [(hashlib.sha256(t.encode("utf-8")).hexdigest(), model) for t in texts]
     now = _STATE["clock"]()
-    with _LOCK:
+    with _locked():
         have = {k: _PCACHE[k] for k in keys if k in _PCACHE}
         for k in have:
             _PCACHE.move_to_end(k)
@@ -681,20 +717,18 @@ def passage_vectors(texts: list, model: str):
         est = neurons_estimate(mtexts, emb)
         if _ask_used() + est > _ask_share():
             code = "deferred:ask_share_reached"
-            with _LOCK:
+            with _locked():
                 _STATE["rr_cool_until"] = now + _seconds_to_midnight()
                 _STATE["rr_cool_code"] = code
             return None, code, est
         from vera.chunk_taxo_embed import Deferred, EmbedError
-        with _LOCK:
+        with _locked():
             day_used = _STATE["neurons_today"]
         if day_used is not None and hasattr(emb, "set_day_used"):
             emb.set_day_used(day_used)
         code, wait = None, float(rr["cooldown_s"])
         try:
-            n0 = _neurons_of(emb)
-            out = emb.embed(mtexts)
-            _ask_charge(max(_neurons_of(emb) - n0, 0.0) if hasattr(emb, "stats_run") else est)
+            out = _embed_many_deadline(emb, mtexts, float(rr["timeout_s"]), est)
             if not isinstance(out, list) or len(out) != len(mtexts):
                 raise EmbedError("bad_response")
             new = {}
@@ -711,14 +745,14 @@ def passage_vectors(texts: list, model: str):
         except Exception as e:  # noqa: BLE001
             code = "embed_error:" + type(e).__name__
         if code is not None:
-            with _LOCK:
+            with _locked():
                 _STATE["rr_cool_until"] = now + max(0.0, wait)
                 _STATE["rr_cool_code"] = code
             log.info("hybrid passage re-rank fell back to stage 1 (%s)", code)
             return None, code, est
         have.update(new)
         cap = int(rr["cache_max"])
-        with _LOCK:
+        with _locked():
             for k2, v in new.items():
                 if cap > 0:
                     _PCACHE[k2] = v
