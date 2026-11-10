@@ -300,18 +300,23 @@ WORK = {"id": "https://openalex.org/W1", "doi": f"https://doi.org/10.48550/arxiv
         "referenced_works": [f"https://openalex.org/W{i}" for i in range(20, 35)]}
 
 
-def test_openalex_one_call_per_record_gives_the_published_version_only(monkeypatch):
+def test_openalex_two_calls_per_record_give_the_published_version_and_reference_dois(monkeypatch):
+    # PORTAL-WIRE-B-1110 (owner: follow references): call 1 = the work, call 2 = ONE batched W-id -> DOI lookup
     from vera import search_providers as sp
     monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: False)
-    p = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a"])
+    p = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a", None, f"https://doi.org/10.48550/arxiv.{AID}"])
     counts = {}
     own, refs = _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 0.0, provider=p)
-    assert own == ["10.9999/synth.cs.journal"] and refs == []  # W-id references would need a second call: not made
-    assert len(p.calls) == 1 and counts["oa_calls"] == 1  # owner: ONE targeted lookup per arXiv record
+    assert own == ["10.9999/synth.cs.journal"] and refs == ["10.9999/synth.ref.a"]  # arXiv DOIs are not references
+    assert len(p.calls) == 2 and counts["oa_calls"] == 2 and counts["oa_ref_calls"] == 1
     assert p.calls[0]["filter"] == f"doi:https://doi.org/10.48550/arxiv.{AID}" and "api_key" not in p.calls[0]
-    assert set(p.calls[0]["select"].split(",")) == {"id", "doi", "locations"}  # identifiers only
+    assert set(p.calls[0]["select"].split(",")) == {"id", "doi", "locations", "referenced_works"}  # no abstract
+    assert p.calls[1]["select"] == "doi"  # identifiers only
+    assert p.calls[1]["filter"] == "openalex:" + "|".join(f"W{i}" for i in range(20, 30))  # first max_refs ids
     _REAL_OA(AID, 10, 5.0, counts, clock=lambda: 1.0, provider=p)
-    assert len(p.calls) == 1  # cached
+    assert len(p.calls) == 2  # cached
+    p0 = _OAProvider(WORK, ["https://doi.org/10.9999/synth.ref.a"])
+    assert _REAL_OA("2601.00010", 0, 5.0, {}, clock=lambda: 0.0, provider=p0)[1] == [] and len(p0.calls) == 1
 
 
 def test_openalex_quota_error_starts_the_shared_cooldown_and_unknown_work_yields_nothing(monkeypatch):
