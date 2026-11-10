@@ -1,5 +1,7 @@
-"""SEARCHCAPS-1110 (3): Wikipedia article discovery goes through Wikipedia's own search API, never a DuckDuckGo site:
-query (OD-1110-SEARCHCAPS). Offline: fake transports only."""
+"""SEARCHCAPS-1110 (3): Wikipedia article discovery never uses a DuckDuckGo site: query (OD-1110-SEARCHCAPS). Review F1
+(2026-11-10): en.wikipedia.org/robots.txt disallows /w/, so the en.wikipedia.org/w/api.php route is DENIED and ships
+with no endpoint: nothing is ever sent to en.wikipedia.org/w/. The api_search mechanics are tested with an injected
+endpoint and fake transport only. Offline: fake transports only."""
 import json
 
 import pytest
@@ -20,6 +22,7 @@ def offline(monkeypatch):
     api_permissions.set_policy_for_tests(None)
     yield
     rate_limit.set_registry_for_tests(None)
+    api_permissions.set_policy_for_tests(None)
 
 
 class R:
@@ -31,15 +34,20 @@ def _body(*titles):
     return json.dumps({"batchcomplete": True, "query": {"search": [{"ns": 0, "title": t} for t in titles]}}).encode()
 
 
-def _cfg():
+def _shipped():
     c = w.load_config()
     assert c["enabled"] is False  # the shipped portal stays OFF; tests opt in on a copy
     return {**c, "enabled": True}
 
 
+def _cfg():  # mechanics only: an injected endpoint on the article host (the shipped config has none)
+    c = _shipped()
+    return {**c, "search_api": {**c["search_api"], "endpoint": "https://en.wikipedia.org/w/api.php"}}
+
+
 def test_shipped_search_api_config():
     a = w.load_config()["search_api"]
-    assert a["endpoint"] == "https://en.wikipedia.org/w/api.php"
+    assert "endpoint" not in a  # review F1: robots.txt Disallow: /w/
     p = a["params"]
     assert p["list"] == "search" and p["srprop"] == "" and p["srnamespace"] == "0" and p["maxlag"] == "5"
     ua = w.load_config()["user_agent"]
@@ -86,15 +94,45 @@ def test_discover_uses_the_api_not_duckduckgo(monkeypatch):
     assert counts["search"] == 1 and counts["articles_found"] == 1 and counts["robots_denied"] == 1
 
 
-def test_permission_entry_metadata_only():
+def test_permission_entry_is_denied_robots_first():
     url = "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=x"
     d = api_permissions.decide(url, "metadata")
-    assert d.allowed and d.entry == "wikipedia_search_api" and d.conditions["rate_portal"] == "wikipedia"
+    assert not d.allowed and d.entry == "wikipedia_search_api" and d.why == "owner_deny"
     assert not api_permissions.decide(url, "fulltext").allowed
     assert not api_permissions.decide("https://en.wikipedia.org/w/index.php?title=X", "fulltext").allowed
 
 
+def _record_pinned(monkeypatch, sent, body):
+    def fake_pinned(url, *, headers=None, timeout=None, allow_redirects=False, stream=False, params=None,
+                    api_purpose=None):
+        sent.append(url)
+        return R(body=body)
+    monkeypatch.setattr(selective_fetch, "pinned_get", fake_pinned)
+
+
+def test_nothing_is_sent_to_w_while_denied(monkeypatch):
+    sent, pages = [], []
+    _record_pinned(monkeypatch, sent, _body("Photosynthesis"))
+    # shipped config (no endpoint): discovery sends nothing at all
+    cands, _l, counts = w.discover("photosynthesis light", _shipped(), http_get=lambda u, **k: pages.append(u),
+                                   url_check=lambda u: (True, "ok"), robots_ok=lambda u: True)
+    assert cands == [] and counts["articles_found"] == 0 and sent == [] and pages == []
+    # even with the endpoint injected, the denied permission entry stops the call before anything is sent
+    with pytest.raises(api_permissions.ApiDenied):
+        w.api_search("photosynthesis", HOST, 3, _cfg())
+    assert sent == [] and rate_limit.get_registry().portal("wikipedia").n["requests"] == 0
+    assert not any("/w/" in u for u in sent + pages)
+
+
+def _permit_for_test(monkeypatch):
+    pol = api_permissions.load_policy()
+    e = dict(pol.entries["wikipedia_search_api"], owner_switch="permit", owner_decision="OD-1110-SEARCHCAPS")
+    api_permissions.set_policy_for_tests(api_permissions.Policy(entries={**pol.entries, "wikipedia_search_api": e},
+                                                                api_hosts=pol.api_hosts))
+
+
 def test_gated_call_goes_through_the_wikipedia_portal_with_the_entry_ua(monkeypatch):
+    _permit_for_test(monkeypatch)  # mechanics only: a test-local permit, never the shipped policy
     sent = []
 
     def fake_pinned(url, *, headers=None, timeout=None, allow_redirects=False, stream=False, params=None,

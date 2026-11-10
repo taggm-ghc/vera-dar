@@ -6,9 +6,11 @@ first and default-deny; never violate robots, terms or a deny-list.
 
 Flow (no page under /w/, /api/ or Special: is ever fetched; en.wikipedia.org/robots.txt disallows them for `*`):
 
-  1. DISCOVER articles with ONE call to Wikipedia's own search API (SEARCHCAPS-1110, owner OD-1110-SEARCHCAPS
-     "Keep low, use it better": Wikipedia lookups go through Wikipedia's API instead of a DuckDuckGo `site:` query,
-     which keeps DuckDuckGo's small daily cap for visitor questions). The call is the MediaWiki Action API
+  1. DISCOVER articles with ONE call to a Wikipedia search API configured in cfg["search_api"]["endpoint"]
+     (SEARCHCAPS-1110). SHIPPED WITH NO ENDPOINT (review F1, 2026-11-10): en.wikipedia.org/robots.txt disallows /w/
+     for `*`, so the en.wikipedia.org/w/api.php route is denied (api_permissions owner_switch deny) and discovery
+     returns nothing; there is no DuckDuckGo fallback. The design below applies only to an endpoint whose robots and
+     terms permit it. It was the MediaWiki Action API
      list=search (titles only: srprop is empty, so no snippet or prose is returned), gated by config/api_permissions.json
      entry wikipedia_search_api (owner_switch permit, OD-1110-SEARCHCAPS; the API is judged on its documented API
      terms, OD-1107-HITL), sent serially through the "wikipedia" rate portal with the project's descriptive
