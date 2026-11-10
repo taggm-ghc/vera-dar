@@ -115,7 +115,15 @@ def _default_pmid(pmid: str, cfg: Mapping, acq: Mapping) -> dict | None:
 def _journal_doi(v) -> str | None:
     m = _DOI.match(str(v or "").strip())
     d = m.group(1).lower() if m else None
-    return d if d and not _ARXIV_DOI.match(d) else None
+    if not d or _ARXIV_DOI.match(d):
+        return None
+    try:  # PORTAL-RULE-1110 Q4: every preprint-server DOI prefix (config arxiv_portal.openalex.preprint_doi_prefixes), not only arXiv's
+        from vera import arxiv_portal
+        if d.startswith(arxiv_portal._preprint_prefixes()):
+            return None
+    except Exception:  # noqa: BLE001  config unreadable: the host_role refusal in _run still applies
+        pass
+    return d
 
 
 def _api_get(url: str, params: dict, timeout_s: float):
@@ -216,6 +224,7 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
             continue
         kind, val = p
         cand: dict = {}
+        rec = None
         try:
             if kind == "arxiv":  # portal only: resolve to the journal original; never arXiv text
                 if n_arxiv >= int(cfg["max_arxiv_lookups_per_call"]):
@@ -251,6 +260,17 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
             continue
         if cand.get("doi") and _ARXIV_DOI.match(cand["doi"]):  # belt and braces: never route an arXiv DOI to the pipeline
             out(raw, kind, "arxiv_no_original")
+            continue
+        try:  # PORTAL-RULE-1110 Q4: a portal/excluded record (DOI prefix, Europe PMC PPR source, preprint type) is never queued.
+            # Only the record's own DOI, source and publication types decide; a URL item is not refused for its host.
+            from vera import host_role
+            role = host_role.role_for_record({
+                "doi": cand.get("doi") or "", "source": (rec or {}).get("source") or "",
+                "pub_types": (rec or {}).get("pub_types") or (rec or {}).get("pubTypeList") or []}).role
+        except Exception:  # noqa: BLE001  fail closed
+            role = "PORTAL"
+        if role in ("PORTAL", "EXCLUDED"):
+            out(raw, kind, "portal")
             continue
         ref = ("doi:" + cand["doi"]) if cand.get("doi") else ("pmc:" + cand["pmcid"])
         if ref in seen:

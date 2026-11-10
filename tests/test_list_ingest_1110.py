@@ -288,3 +288,42 @@ def test_topic_is_the_relevance_target_and_outcome_shows_decisive_code(monkeypat
 def test_bad_topic_is_refused_before_any_work(monkeypatch):
     r = _ingest(["10.9999/t.1"], monkeypatch, resolvers=Rv(), topic="x" * 400)
     assert codes(r) == ["invalid-topic"] and auto_acquire._S.queue is None
+
+
+# PORTAL-RULE-1110 (Q4): a portal/excluded record is refused before it takes a queue slot; a URL host is never the reason.
+def test_preprint_doi_is_refused_as_portal_and_takes_no_slot(monkeypatch):
+    r = _ingest(["10.1101/2024.01.02.123456", "10.9999/journal.5"], monkeypatch, resolvers=Rv())
+    assert codes(r) == ["refused-portal", "queued"]
+    assert len(list(auto_acquire._S.queue.queue)) == 1
+    assert len(list_ingest._ACCEPTED) == 1
+
+
+def test_pmid_whose_record_is_a_preprint_is_refused_as_portal(monkeypatch):
+    rv = Rv(pmid={"333": {"pmcid": "PMC1234567", "doi": "10.9999/p.2", "source": "PPR"},
+                  "334": {"pmcid": "PMC1234568", "pub_types": ["Preprint"]}})
+    r = _ingest(["pmid:333", "pmid:334"], monkeypatch, resolvers=rv)
+    assert codes(r) == ["refused-portal", "refused-portal"]
+    assert not list_ingest._ACCEPTED
+
+
+def test_journal_doi_rejects_every_preprint_prefix_not_only_arxiv():
+    from vera import arxiv_portal
+    prefixes = arxiv_portal._preprint_prefixes()
+    assert "10.1101/" in prefixes and "10.48550/" in prefixes
+    for p in prefixes:
+        assert list_ingest._journal_doi(p + "abc.123") is None
+    assert list_ingest._journal_doi("https://doi.org/10.9999/Journal.77") == "10.9999/journal.77"
+
+
+def test_arxiv_id_resolving_to_a_preprint_doi_reports_no_original(monkeypatch):
+    rv = Rv(arxiv={"2301.12345": "10.1101/2024.01.02.123456"})
+    r = _ingest(["arXiv:2301.12345"], monkeypatch, resolvers=rv)
+    assert codes(r) == ["no-route-arxiv-original-not-found"]
+    assert not list_ingest._ACCEPTED
+
+
+def test_url_item_is_not_refused_for_its_portal_host(monkeypatch):
+    r = _ingest(["https://pubmed.ncbi.nlm.nih.gov/12345/", "https://europepmc.org/article/MED/12345",
+                 "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC555556/"], monkeypatch, resolvers=Rv())
+    assert "refused-portal" not in codes(r)
+    assert codes(r)[2] == "queued"
