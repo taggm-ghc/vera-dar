@@ -52,6 +52,9 @@ class Job:
     # CONT-1023: candidates a request found but could not finish (inline deadline / candidate cut / transient
     # failure). None = the ordinary job (it searches); a list = evaluate exactly these, no search (memory only).
     cands: list | None = None
+    # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): the origin of the request that queued the job ("visitor" or "seed"). A seed
+    # job runs under request_origin.scope("seed") (seed share only, never DuckDuckGo) and at low priority (_worker_loop).
+    origin: str = "visitor"
 
 
 class _State:
@@ -120,10 +123,14 @@ def enqueue(question: str, trigger: str, *, cfg: dict | None = None, env=os.envi
             if len(_S.jobs_hour) >= int(acq_config.bound(cfg, "jobs_per_hour")) or \
                     len(_S.jobs_day) >= int(acq_config.bound(cfg, "jobs_per_day")):
                 return acq_config.reason(cfg, "rate")
+            origin = _origin()
+            if origin != "visitor" and \
+                    int(acq_config.bound(cfg, "jobs_per_hour")) - len(_S.jobs_hour) < BG_MIN_FREE_HOURLY_JOBS:
+                return acq_config.reason(cfg, "rate")  # SEARCHCAPS-1110: a seed job never takes the last hourly slots
             if _S.queue is None:
                 _S.queue = queue.Queue(maxsize=int(acq_config.bound(cfg, "queue_max")))
             try:
-                _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now))
+                _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now, origin=origin))
             except queue.Full:
                 return acq_config.reason(cfg, "queue_full")
             _S.recent[key] = now
@@ -196,7 +203,8 @@ def _pkey(k: str) -> str:
 
 
 def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, env=os.environ,
-                       clock=time.monotonic, start_worker: bool = True, deps_factory=None) -> dict:
+                       clock=time.monotonic, start_worker: bool = True, deps_factory=None,
+                       trigger: str = "continue", reserve_slots: int = 0) -> dict:
     """CONT-1023: hand candidates a request found but could not finish to the EXISTING background queue and worker, so
     returned search results do not end the acquisition effort. Never raises, never blocks.
 
@@ -229,6 +237,7 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
             out["status"], out["refused"] = acq_config.reason(cfg, "intent_denied"), idx
             return out
         now = clock()
+        origin = _origin()
         per_job = max(1, int(acq_config.bound(cfg, "max_docs_per_job")))
         with _S.lock:
             win = float(acq_config.bound(cfg, "dedupe_window_s"))
@@ -255,8 +264,11 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
                     why = acq_config.reason(cfg, "rate")
                 else:
                     try:
-                        _S.queue.put_nowait(Job(question=str(question), trigger="continue", created=now,
-                                                cands=[cands[i] for i in part]))
+                        if reserve_slots and origin != "visitor" and \
+                                _S.queue.qsize() >= int(acq_config.bound(cfg, "queue_max")) - int(reserve_slots):
+                            raise queue.Full  # LIST-INGEST-1110 F1: keep reserve_slots queue places for visitor jobs
+                        _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now,
+                                                cands=[cands[i] for i in part], origin=origin))
                         why = None
                     except queue.Full:
                         why = acq_config.reason(cfg, "queue_full")
@@ -286,7 +298,48 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
         return out
 
 
+def _list_topic(cands) -> bool:
+    return any(isinstance(c, dict) and c.get("li_topic") for c in cands or ())
+
+
+LIST_TRIGGER = "list"  # LIST-INGEST-1110: a job queued by vera.list_ingest (identifiers only; no search, no question)
 BG_MIN_FREE_HOURLY_JOBS = 2  # P0DTA-PRIO D4: background hand-off needs >= 2 free hourly jobs (leaves >= 1 for search)
+
+
+def _origin() -> str:
+    from vera import request_origin
+    return request_origin.current()
+
+
+def _visitor_waiting(q) -> bool:
+    """SEARCHCAPS-1110: True when a visitor job is waiting in q (read under the queue's own lock; nothing is removed)."""
+    with q.mutex:
+        return any(getattr(j, "origin", "visitor") == "visitor" for j in q.queue)
+
+
+def _defer_seed(q, job) -> bool:
+    """SEARCHCAPS-1110 low priority: a seed job taken while a visitor job waits goes back to the END of the queue (True).
+    Visitor jobs therefore always run first; a seed job runs once no visitor job waits. A full queue runs it now."""
+    if getattr(job, "origin", "visitor") == "visitor" or not _visitor_waiting(q):
+        return False
+    try:
+        q.put_nowait(job)
+    except queue.Full:
+        return False
+    return True
+
+
+def _run_in_origin(job: Job, cfg, deps, clock, env) -> dict:
+    from vera import request_origin
+    with request_origin.scope(job.origin if job.origin in request_origin.ORIGINS else request_origin.SEED):
+        res = run_job(job, cfg, deps, clock=clock, env=env)
+    if job.trigger == LIST_TRIGGER:  # LIST-INGEST-1110: record the item's outcome code (memory only; never raises)
+        try:
+            from vera import list_ingest
+            list_ingest.record_outcome(job.cands, res)
+        except Exception:  # noqa: BLE001
+            logger.warning("list-ingest outcome not recorded")
+    return res
 
 
 def _worker_loop(cfg, env, clock, deps_factory) -> None:
@@ -300,10 +353,13 @@ def _worker_loop(cfg, env, clock, deps_factory) -> None:
                     _S.worker = None
                     return
             continue
+        if _defer_seed(q, job):
+            q.task_done()  # the same job object is queued again; it is counted again there
+            continue
         deps = None
         try:
             deps = (deps_factory or default_deps)(cfg, env)
-            run_job(job, cfg, deps, clock=clock, env=env)
+            _run_in_origin(job, cfg, deps, clock, env)
         except Exception as e:  # noqa: BLE001  (class only: never the message, which may quote a URL)
             logger.warning("autoacq job failed (%s)", type(e).__name__)
         finally:
@@ -322,8 +378,11 @@ def drain_for_tests(cfg, deps, clock=time.monotonic, env=None) -> list:
     q = _S.queue
     while q is not None and not q.empty():
         job = q.get_nowait()
+        if _defer_seed(q, job):
+            q.task_done()
+            continue
         try:
-            out.append(run_job(job, cfg, deps, clock=clock, env=env))
+            out.append(_run_in_origin(job, cfg, deps, clock, env))
         finally:
             job.question, job.cands = "", None
             q.task_done()
@@ -1229,7 +1288,10 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     plan = build_plan(rec, item, meta, cfg, job, score, value, isbn, now_iso)
     if disc is not None:
         acq_discovered.annotate(plan, cand, res, route, chain, cfg)
-    n_adm = relevance_gate(job.question, plan, cfg, icfg, fdcfg)
+    # LIST-INGEST-1110: a list job has no question; the content check runs against the document's own title (the
+    # converter's body/span thresholds and every filter above still apply)
+    n_adm = relevance_gate((item.get("title") or "") if (job.trigger == LIST_TRIGGER and not cand.get("li_topic"))
+                           else job.question, plan, cfg, icfg, fdcfg)
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
@@ -1331,6 +1393,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
 
     def count(code):
         codes[code] = codes.get(code, 0) + 1
+        tel["last_code"] = code  # LIST-INGEST-1110: the decisive (last) code, kept for the list outcome record
 
     def done():
         return _done(job, codes, stored, dur, t0, clock, tel)
@@ -1379,7 +1442,8 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         icfg = acq_config.ingest_cfg(fl.load_config(), cfg)
         served = set(deps.corpus_keys() or ())
         from vera.dar_corpus import doc_key_set
-        ranked = rank_candidates(job.question, cands, cfg, served, fdcfg, count)
+        ranked = rank_candidates(job.question if (job.trigger != LIST_TRIGGER or _list_topic(job.cands)) else "",
+                                 cands, cfg, served, fdcfg, count)
         searched = True  # ROUNDS-1028: the search ran, so this job counts toward its topic's round
         for score, doi, cand, isbn in ranked:
             if stored >= budget:
@@ -1420,7 +1484,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
                 logger.warning("autoacq refresh failed (%s)", type(e).__name__)
     except Exception as e:  # noqa: BLE001
         count(f"R-ACQ-ERR-{type(e).__name__}"[:40])
-    if searched:  # ROUNDS-1028 (observational; never raises): job result -> per-topic round
+    if searched and job.trigger != LIST_TRIGGER:  # ROUNDS-1028 (observational; never raises): job result -> per-topic round
         from vera import acq_rounds
         acq_rounds.observe(job.question, cfg, stored, not left_over and stored < budget, "background")  # a filled job budget is not exhaustion
     return done()
@@ -1431,6 +1495,8 @@ def _done(job, codes, stored, dur, t0, clock, tel=None) -> dict:
     n_elig = int((tel or {}).get("answer_eligible", 0))
     out = {"codes": dict(sorted(codes.items())), "stored": stored, "durations_ms": dur, "trigger": job.trigger,
            "n_answer_eligible": n_elig, "n_persisted": stored}
+    if (tel or {}).get("last_code"):
+        out["last_code"] = tel["last_code"]
     _log("job", stored=stored, trigger=job.trigger, n_answer_eligible=n_elig, n_persisted=stored,
          **{f"n_{k}": v for k, v in out["codes"].items()}, **{f"ms_{k}": v for k, v in dur.items()})
     return out

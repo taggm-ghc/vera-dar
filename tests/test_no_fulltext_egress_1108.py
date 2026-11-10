@@ -29,6 +29,8 @@ AUDITED_ROUTES = {
     ("GET", "/diag/header-shape"): "owner only: header shapes",
     ("POST", "/ask/stream"): "same response object as /ask",
     ("GET", "/ask/progress/{rid}"): "stage events and counts only",
+    ("POST", "/ingest/list"): "per-item result codes only (identifier echo, kind, code); no source text",
+    ("GET", "/ingest/list/outcomes"): "ref (doi:/pmc: identifier), state and job reason code only; no source text",
 }
 # response-model field names that would carry raw source text
 _TEXT_FIELDS = {"text", "snippet", "abstract", "full_text", "fulltext", "body", "chunk", "chunk_text", "passage",

@@ -179,8 +179,10 @@ def test_no_url_with_w_path_is_ever_requested_and_guard_refuses():
     with pytest.raises(w.PortalError):
         w.get_article("https://en.wikipedia.org/w/api.php", cfg(), http_get=HTTP(), url_check=OK,
                       clock=lambda: 0.0, deadline=None)
-    live = {k: v for k, v in w.load_config().items() if not k.startswith("_")}
+    live = {k: v for k, v in w.load_config().items() if not k.startswith("_") and k != "search_api"}
     assert "api_url" not in live and "/w/" not in str(live)
+    # SEARCHCAPS-1110 review F1: robots.txt disallows /w/, so the search API ships with no endpoint (nothing under /w/)
+    assert "endpoint" not in w.load_config()["search_api"] and "/w/" not in str(w.load_config()["search_api"]["params"])
 
 
 def test_request_shape_user_agent_no_redirect():

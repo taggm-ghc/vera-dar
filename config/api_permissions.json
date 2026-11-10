@@ -126,6 +126,17 @@
       "evidence": [{"url": "https://hn.algolia.com/api", "read_level": "summarizer", "read": "2026-11-03", "provenance": "config/rate_limits.json"}],
       "read_level": "summarizer", "read": "2026-11-03", "review_by": "2026-12-07"
     },
+    "wikipedia_search_api": {
+      "host": "en.wikipedia.org", "path_prefix": "/w/api.php", "verdict": "PERMITTED-WITH-CONDITIONS",
+      "owner_switch": "deny", "owner_decision": "SEARCHCAPS-1110 review F1 (2026-11-10): denied; en.wikipedia.org/robots.txt (read 2026-11-10) has Disallow: /w/ for User-agent: * (only action=mobileview allowed), and the owner's robots-first rule applies",
+      "conditions": {"rate_portal": "wikipedia", "max_rate_per_s": 1.0, "max_concurrency": 1, "respect_429": true,
+                     "user_agent": "VERA-DAR-wiki-ref-portal/0.2 (non-commercial educational research assistant; reference-list discovery only; https://github.com/taggm-ghc/vera-dar)",
+                     "send_email": false, "content_scope": ["metadata"],
+                     "_note": "DENIED (SEARCHCAPS-1110 review F1, 2026-11-10): en.wikipedia.org/robots.txt, read 2026-11-10, disallows /w/ for User-agent: * (only action=mobileview is allowed), so this API path is not called under the robots-first rule; kept as a record. api.wikimedia.org is a separate question (its robots and terms are being checked separately). Original intent: SEARCHCAPS-1110 (owner OD-1110-SEARCHCAPS, 2026-11-10): Wikipedia lookups go through Wikipedia's own API instead of DuckDuckGo site: queries. Used only by vera/wiki_ref_portal.api_search: list=search, titles only (no snippet, no prose), one call per question, serial at 1 req/s or slower, maxlag, descriptive User-Agent with the project URL as contact (no email), Retry-After / 429 honoured by the rate portal. robots.txt disallows /w/ for website crawling; per OD-1107-HITL robots does not by itself settle API use, and Wikimedia documents this API for programmatic clients under its API etiquette and rate-limit pages (evidence below). Shipped with the portal itself still OFF (config/wiki_ref_portal.json enabled false)."},
+      "evidence": [{"url": "https://www.mediawiki.org/wiki/API:Etiquette", "read_level": "summarizer", "read": "2026-10-21", "provenance": "config/rate_limits.json portal wikipedia"},
+                   {"url": "https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits", "read_level": "summarizer", "read": "2026-10-21", "provenance": "config/rate_limits.json portal wikipedia"}],
+      "read_level": "summarizer", "read": "2026-10-21", "review_by": "2026-12-10"
+    },
     "inspire_literature": {
       "host": "inspirehep.net", "path_prefix": "/api/literature",
       "verdict": "PERMITTED-WITH-CONDITIONS", "owner_switch": "deny", "owner_decision": "OD-1108-SRC (cleared for metadata; shipped denied, owner flips to permit at activation)",

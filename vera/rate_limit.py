@@ -194,6 +194,17 @@ def parse_config(raw, env: Mapping | None = None) -> dict:
             c["max_wait_stream_s"] = c["max_wait_s"]  # absent everywhere: the portal's own max_wait_s (unchanged)
         cap = p.get("daily_cap")
         c["daily_cap"] = None if cap is None else _num(f"portals.{name}.daily_cap", cap, int, 1, 10**7)
+        # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): per-origin share of the daily caps (vera/request_origin.py).
+        sdc = p.get("search_daily_cap")
+        c["search_daily_cap"] = None if sdc is None else _num(f"portals.{name}.search_daily_cap", sdc, int, 1, 10**7)
+        org = p.get("origin") or {}
+        if not isinstance(org, dict) or not isinstance(org.get("seed_allowed", True), bool):
+            raise RateLimitConfigError(f"portals.{name}.origin: {{seed_allowed: bool, visitor_reserve_frac: 0..1}}")
+        c["seed_allowed"] = org.get("seed_allowed", True)
+        c["visitor_reserve_frac"] = float(_num(f"portals.{name}.origin.visitor_reserve_frac",
+                                               org.get("visitor_reserve_frac", 0.0), float
+                                               if isinstance(org.get("visitor_reserve_frac", 0.0), float) else int,
+                                               0, 1))
         c["enabled"] = p.get("enabled", True)
         if not isinstance(c["enabled"], bool):
             raise RateLimitConfigError(f"portals.{name}.enabled: true or false")
@@ -400,6 +411,11 @@ class PortalAdapter:
             return self._skip("deadline")
         self._roll_day()
         cap = self.c["daily_cap"]
+        from vera import request_origin  # SEARCHCAPS-1110: seed requests get the seed share only, never an excluded portal
+        if request_origin.is_seed() and not self.c.get("seed_allowed", True):
+            return self._skip("seed_excluded")
+        if cap is not None and request_origin.is_seed():
+            cap = request_origin.seed_cap(cap, self.c.get("visitor_reserve_frac", 0.0))
         if cap is not None and self.day_used >= cap:
             nxt = (math.floor(self._wall() / _DAY_S) + 1) * _DAY_S - self._wall()
             return self._skip("daily_cap", nxt)

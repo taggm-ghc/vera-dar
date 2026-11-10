@@ -2,13 +2,14 @@ import asyncio
 import contextvars
 import json
 import logging
+import secrets
 import os
 import queue
 import threading
 import time
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AuthenticationError, OpenAIError, RateLimitError
@@ -186,6 +187,19 @@ class AskRequest(APIModel):
     mode: Literal["normal"] = "normal"  # single-valued; kept for API compatibility, anything else is a 422
     # SELFQ-RELEVANCE-1108: false = "search as typed" after a clarification round (per request only; never stored)
     spell_check: bool = True
+    # SEARCHCAPS-1110 (OD-1110-SEARCHCAPS): "seed" marks a proactive seeding question sent by an authenticated API
+    # caller (X-API-Key) to POST /ask. Seed requests use only the seed share of each search service and never
+    # DuckDuckGo, and their background jobs run at low priority (vera/request_origin.py, vera/auto_acquire.py). The
+    # public UI never sends it (vera.public_mode._ask_body), and POST /ask/stream refuses it. Per request only: never
+    # stored, never tied to a caller.
+    origin: Literal["visitor", "seed"] = "visitor"
+
+
+def _req_origin(req) -> str:
+    """SEARCHCAPS-1110: the validated AskRequest.origin; anything that is not an AskRequest value (internal callers,
+    test doubles) is a visitor request."""
+    v = getattr(req, "origin", "visitor")
+    return v if isinstance(v, str) and v in ("visitor", "seed") else "visitor"
 
 
 class AskSource(BaseModel):
@@ -778,7 +792,9 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, re
             token = progress.SINK.set(rec)
             progress.emit(progress.Stage.RECEIVED, progress.State.DONE)
         _t0 = time.monotonic()
-        resp = _ask_impl(req, request, background_tasks)
+        from vera import request_origin
+        with request_origin.scope(_req_origin(req)):  # SEARCHCAPS-1110: covers the whole request
+            resp = _ask_impl(req, request, background_tasks)
         if rec is not None:
             st = progress.outcome(resp)
             progress.emit(progress.Stage.DONE, st, **progress.terminal_counts(st, rec))
@@ -797,6 +813,49 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, re
         if token is not None:
             progress.SINK.reset(token)
         request_trace.end_context()
+
+
+# ------------------------------------------------------------------------------------------------ LIST-INGEST-1110
+def verify_ingest_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    """LIST-INGEST-1110: /ingest/list uses its OWN key (env VERA_INGEST_API_KEY, set on the API service only), never
+    VERA_API_KEY (which the public UI server also holds). Unset, weak or equal to VERA_API_KEY = route disabled (503)."""
+    from vera import list_ingest
+    ingest_key = os.getenv(list_ingest.load_config()["ingest_key_env"])
+    if classify_vera_api_key(ingest_key) != "ok" or ingest_key == os.getenv("VERA_API_KEY"):
+        raise HTTPException(status_code=503, detail="list-ingest disabled: VERA_INGEST_API_KEY is not set to a usable, dedicated secret")
+    if not x_api_key or not secrets.compare_digest(x_api_key.encode(), ingest_key.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+class ListIngestRequest(APIModel):
+    """LIST-INGEST-1110: identifiers only (DOI, PMCID, "pmid:N", arXiv id, https URL). There is deliberately no origin
+    field: the route is seed-only and the origin is forced server-side (vera/list_ingest.py)."""
+    identifiers: list[str] = Field(..., min_length=1, max_length=500)
+    topic: str | None = Field(default=None, max_length=1000)  # optional relevance target; default = each document's title
+
+
+@app.post("/ingest/list", dependencies=[Depends(verify_ingest_key)])
+def ingest_list(req: ListIngestRequest):
+    """Search-free list ingest (SEED-SCI-1110 S10, CHUNK-VALUE-1110 H.8). Same X-API-Key auth as POST /ask; never used by
+    the public UI. Each identifier is queued through the existing acquisition gates at seed priority; the response has one
+    result code per item (queued, duplicate-already-stored, no-route, ...). More than max_items_per_call = 413."""
+    from vera import list_ingest
+    try:
+        return list_ingest.ingest(req.identifiers, topic=req.topic)
+    except ValueError as e:
+        if str(e) == "too_many":
+            raise HTTPException(status_code=413, detail="Too many identifiers in one call") from None
+        raise
+    except list_ingest.ListIngestConfigError:
+        logger.error("list ingest config unusable")
+        raise HTTPException(status_code=500, detail="Server misconfigured") from None
+
+
+@app.get("/ingest/list/outcomes", dependencies=[Depends(verify_ingest_key)])
+def ingest_list_outcomes(limit: int = 200):
+    """Final job codes recorded in memory for queued list items (best effort; lost on restart)."""
+    from vera import list_ingest
+    return {"outcomes": list_ingest.outcomes(max(1, min(int(limit), 2000)))}
 
 
 # ------------------------------------------------------------------------------------------------ RENDER-XFF-1031 echo
@@ -1023,6 +1082,8 @@ async def ask_stream(req: AskRequest, request: Request):
     run as dependencies, before any streaming; one POST = one cap slot. Nothing about the question or answer is stored; when the owner-gated live-stats flag is on,
     one anonymous aggregate row (enums and counts only) is written after a successful result."""
     from vera import stream_ctx
+    if _req_origin(req) != "visitor":  # SEARCHCAPS-1110: origin=seed is accepted on POST /ask only (the UI's path is this one)
+        raise HTTPException(status_code=422, detail="origin is accepted on POST /ask only")
     try:
         ctx = stream_ctx.StreamCtx(stall_s=_stream_stall_s())
     except Exception as exc:  # noqa: BLE001
