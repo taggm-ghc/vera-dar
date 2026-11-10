@@ -1,5 +1,7 @@
 {
   "_note": "DDG-REDUCE-1110 (owner OD-1110-SEARCHCAPS 'Keep low, use it better'; plan work/DDG-REDUCE-1110/plan.md in the root workspace). Each switch ships true = the new behaviour; false restores the previous behaviour of that one path. They lower the visitor DuckDuckGo POSTs per question (counts: vera/ddg_meter.py). The daily cap (config/vera_eval_run.json search.duckduckgo_lite.daily_query_cap 8) is unchanged. Planner priors, UNCALIBRATED: what would change them is the per-site POST counts in the request trace (search/ddg_<site>) over a few days of real questions.",
   "domain_branches_scholarly_only": true,
-  "_domain_branches_scholarly_only_note": "C1: domain-routing branches search with the non-DuckDuckGo providers only; the base (unrestricted) search keeps DuckDuckGo."
+  "_domain_branches_scholarly_only_note": "C1: domain-routing branches search with the non-DuckDuckGo providers only; the base (unrestricted) search keeps DuckDuckGo.",
+  "variant_rounds_no_ddg": true,
+  "_variant_rounds_no_ddg_note": "C2: acquisition variant rounds (news questions included) spend no DuckDuckGo; a news question's variant rounds keep the reporting lane (GDELT) and the other routes."
 }

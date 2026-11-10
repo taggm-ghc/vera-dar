@@ -156,6 +156,7 @@ def test_acquisition_round0_with_the_same_question_is_served_from_the_cache(rig)
 
 
 def _variant_round(rig, news: bool):
+    no_ddg = ddg_reduce.NO_DDG.set(ddg_reduce.on("variant_rounds_no_ddg"))  # exactly what inline_acquire._extra_rounds does
     ddg_fn = lambda q, n, t: rig.ddg.parse(rig.ddg.call(q, n, t), n)  # noqa: E731
     cfg = {"search": {"ddg_first": {"enabled": True}, "europepmc": {"enabled": False}}, "bounds": {"max_search_calls_per_job": 6}}
     search = sp.acquisition_search(lambda q, n, t: [], cfg, ddg_search=ddg_fn)
@@ -165,6 +166,7 @@ def _variant_round(rig, news: bool):
             search("coding assistants funding rounds 2026 reported", 5, 5.0)
     finally:
         sp.SCHOLARLY_ONLY.reset(so)
+        ddg_reduce.NO_DDG.reset(no_ddg)
 
 
 def test_news_variant_round_costs_two_posts_a_non_news_round_costs_none(rig):
@@ -223,3 +225,27 @@ def test_c1_branches_still_search_the_scholarly_provider(rig, monkeypatch):
 
 def test_c1_shipped_config_defaults_on():
     assert ddg_reduce.CONFIG_PATH.exists() and __import__("json").loads(ddg_reduce.CONFIG_PATH.read_text())["domain_branches_scholarly_only"] is True
+
+
+# ------------------------------------------------------------------------------------------------------------- C2
+def test_c2_news_variant_rounds_spend_no_duckduckgo(rig, monkeypatch):
+    set_flags(monkeypatch, variant_rounds_no_ddg=True)
+    for _ in range(2):                     # a news question with 2 variant rounds: 4 POSTs before, 0 now
+        _variant_round(rig, news=True)
+    assert rig.posts == [] and posts_by_site() == {}
+
+
+def test_c2_switch_off_restores_two_posts_per_news_round(rig, monkeypatch):
+    set_flags(monkeypatch, variant_rounds_no_ddg=False)
+    for _ in range(2):
+        rig.ddg._mem.clear()
+        _variant_round(rig, news=True)
+    assert len(rig.posts) == 4 and posts_by_site() == {"variant": 4}
+
+
+def test_c2_extra_rounds_set_no_ddg_for_the_search_call(monkeypatch):
+    """The real inline_acquire._extra_rounds loop sets NO_DDG (and the variant label) around deps.search."""
+    import inspect
+    from vera import inline_acquire
+    src = inspect.getsource(inline_acquire._extra_rounds)
+    assert 'ddg_reduce.NO_DDG.set(ddg_reduce.on("variant_rounds_no_ddg"))' in src and 'ddg_meter.SITE.set("variant")' in src

@@ -40,7 +40,7 @@ from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from vera import acq_config, acq_rounds, ddg_meter, rate_limit
+from vera import acq_config, acq_rounds, ddg_meter, ddg_reduce, rate_limit
 from vera import auto_acquire as aa
 from vera import request_trace as rt
 from vera import research_outcome, search_providers, source_type, stream_ctx
@@ -1381,11 +1381,13 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
                 # web results it finds go through the same A6-W web route gates as round 0.
                 so_tok = search_providers.SCHOLARLY_ONLY.set(not news)
                 site_tok = ddg_meter.SITE.set("variant")  # DDG-REDUCE-1110 WP0: counted as a variant round
+                nd_tok = ddg_reduce.NO_DDG.set(ddg_reduce.on("variant_rounds_no_ddg"))  # C2: news rounds keep GDELT, not DDG
                 try:
                     cands = list(_with_parts(None, deps.search, q, int(s.get("results_per_provider", 10)),
                                              float(s.get("timeout_s", 20)) if ctx is not None else
                                              max(1.0, min(float(s.get("timeout_s", 20)), deadline - clock() - per_doc))) or [])
                 finally:
+                    ddg_reduce.NO_DDG.reset(nd_tok)
                     ddg_meter.SITE.reset(site_tok)
                     search_providers.SCHOLARLY_ONLY.reset(so_tok)
                 if not pl:

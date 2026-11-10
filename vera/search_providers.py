@@ -1569,6 +1569,11 @@ def _search_parts(base_search: Callable, parts: list, B: Mapping, question: str,
     return out
 
 
+def ddg_reduce_no_ddg() -> bool:
+    from vera import ddg_reduce
+    return ddg_reduce.NO_DDG.get()
+
+
 def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callable | None = None,
                        terms_fn: Callable | None = None, ddg_search: Callable | None = None,
                        get: Callable | None = None, url_check: Callable | None = None,
@@ -1592,6 +1597,9 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         b = _budget(cap, n_parts)
         if SCHOLARLY_ONLY.get():  # NONASK-1103 N3: variant rounds never call DDG, its id lookup or Wikipedia
             b = dict(b, ddg=False, wiki=False, lookup=0)
+        from vera import ddg_reduce
+        if ddg_reduce.NO_DDG.get():  # DDG-REDUCE-1110 C2/C4: this call site spends no DuckDuckGo (nothing else changes)
+            b = dict(b, ddg=False)
         from vera import request_origin
         if request_origin.is_seed() and not request_origin.policy("duckduckgo")["seed_allowed"]:
             b = dict(b, ddg=False)  # SEARCHCAPS-1110: seed requests never call DuckDuckGo (OD-1110-SEARCHCAPS)
@@ -1652,7 +1660,7 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
         multi = len(parts) > 1 and (s.get("subquery") or {}).get("enabled") is True
         from vera import request_origin
         B = budget(subquery_budget(cfg, len(parts)), len(parts)) if multi else \
-            (budget(cap0) if SCHOLARLY_ONLY.get() or request_origin.is_seed() else B0)
+            (budget(cap0) if SCHOLARLY_ONLY.get() or request_origin.is_seed() or ddg_reduce_no_ddg() else B0)
         use_ddg, use_epmc, use_wiki, use_arxiv, lookup_left = B["ddg"], B["epmc"], B["wiki"], B["arxiv"], B["lookup"]
         terms, profile = None, None
         pool = cf.ThreadPoolExecutor(max_workers=3, thread_name_prefix="acq-search")
