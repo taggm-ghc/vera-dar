@@ -15,7 +15,7 @@
 --                    deletes a chunk or an association: the app roles have no DELETE and the chunk stays globally searchable.
 --   matched = a relevance survivor of the admission pass that produced the delivered answer; selected = admitted as evidence for it; used = cited in it.
 -- PRIVACY: counts, weights and dates only. No question text, run id, session, user, or time of day is stored (the plan's privacy rule).
--- Written by the API rw login through best-effort batched upserts (vera/chunk_usage.py, SQL in db/app_sql/); no other writer. FK ON DELETE
+-- Written by the API rw login through best-effort batched upserts (vera/chunk_usage.py, SQL in vera/chunk_usage_sql/); no other writer. FK ON DELETE
 -- RESTRICT: the known-bad purge deletes these rows first. App roles get no DELETE.
 -- REQUIRES: PostgreSQL 16 or newer; vera_vjay.evidence_spans (003) with BIGINT PK span_id; group roles vera_vjay_rw/_ro/_wo and the app logins.
 --   INDEPENDENT of 020, 022 and 024.

@@ -27,7 +27,7 @@ Association weight (owner 2026-11-10: lower the weight, then soft-remove the ass
   * removed_at is set (soft) when weight < remove_below (times initial_weight when assoc.relative, the default); a use that lifts weight back
     to or above the threshold clears it; restore_association() clears it by hand. Nothing deletes a row or a chunk: the app roles hold no DELETE
     and the chunk stays globally searchable.
-  * The SQL lives in db/app_sql/chunk_usage_upsert_*.sql and is the exact text the migration rehearsal executes; step() is its Python statement.
+  * The SQL lives in vera/chunk_usage_sql/chunk_usage_upsert_*.sql and is the exact text the migration rehearsal executes; step() is its Python statement.
 Read API for the router: association(), weight_ratio(), removed_associations() (an in-memory snapshot refreshed off the request path).
 
 Safety contract (never slows or fails an ask): every request-path function takes its lock with a short timeout, appends to a bounded
@@ -60,7 +60,10 @@ NODE_KINDS = {"dar_domain": 1, "tax_domain": 2, "tax_topic": 3, "tax_subtopic": 
 
 def _sql(name: str) -> str:
     """The app SQL file without comment lines and the trailing semicolon (SQLAlchemy text form)."""
-    lines = (_ROOT / "db" / "app_sql" / name).read_text(encoding="utf-8").splitlines()
+    try:
+        lines = (Path(__file__).resolve().parent / "chunk_usage_sql" / name).read_text(encoding="utf-8").splitlines()
+    except OSError:  # missing file => "" => the writer stays inert (flush_once skips an empty statement); import never fails
+        return ""
     return "\n".join(x for x in lines if not x.lstrip().startswith("--")).strip().rstrip(";")
 
 
@@ -159,7 +162,7 @@ def demotion_scale() -> float:
 
 def step(state: dict, s: int, u: int, cfg: dict | None = None) -> dict:
     """The association upsert's arithmetic for one commit: s selections and u uses. state = {initial, weight, ssu, removed}.
-    Pure; db/app_sql/chunk_usage_upsert_assoc.sql is the same rule in SQL (the rehearsal runs the SQL itself)."""
+    Pure; vera/chunk_usage_sql/chunk_usage_upsert_assoc.sql is the same rule in SQL (the rehearsal runs the SQL itself)."""
     a = (cfg or config())["assoc"]
     init, w, ssu, rem = float(state["initial"]), float(state["weight"]), int(state["ssu"]), bool(state["removed"])
     if u > 0:
@@ -572,7 +575,7 @@ def flush_once() -> int:
                             continue
                         params.append(dict(g, span_id=k[0], node_kind=k[1], node_id=k[2], m=v[0], s=v[1], u=v[2],
                                            ssu0=(0 if v[2] > 0 else v[1]), init=init))
-                if not params:
+                if not params or not sql:
                     continue
                 try:
                     from sqlalchemy import text  # noqa: PLC0415

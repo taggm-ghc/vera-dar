@@ -277,7 +277,7 @@ def test_kit_sql_copy_matches_the_repo_files_when_present():
     kit = Path(__file__).resolve().parents[3] / "work" / "CHUNK-USAGE-MIG025-1110" / "sql"
     for name in ("chunk_usage_upsert_assoc.sql", "chunk_usage_upsert_total.sql"):
         if (kit / name).exists():
-            assert (kit / name).read_bytes() == (Path(cu.__file__).resolve().parent.parent / "db" / "app_sql" / name).read_bytes()
+            assert (kit / name).read_bytes() == (Path(cu.__file__).resolve().parent / "chunk_usage_sql" / name).read_bytes()
 
 
 def test_similarity_helpers_accept_only_cosine_kinds():
