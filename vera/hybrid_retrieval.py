@@ -501,6 +501,12 @@ class _DbLoader:
         for r in self._rows(SQL_VECTORS, {"model": model, "ids": [int(i) for i in ids]}):
             yield int(r[0]), str(r[1]), r[2]
 
+    def links(self, ids):
+        """TAXO-ROUTE-1110: (span_id, domain_id) active links, via topics, for the router (one RO SELECT per page)."""
+        from vera import taxo_router
+        for r in self._rows(taxo_router.SQL_DOMAIN_LINKS, {"ids": [int(i) for i in ids]}):
+            yield int(r[0]), r[1]
+
     def neurons_today(self) -> float:
         rows = self._rows(SQL_NEURONS_TODAY, {})
         return float(rows[0][0]) if rows and rows[0][0] is not None else 0.0
@@ -593,6 +599,7 @@ def build_index(corpus, model: str, loader=None) -> tuple:
     cap = int(float(cfg["max_index_mb"]) * 1024 * 1024)
     page = int(cfg["page_ids"])
     rows, mat, n, dim = [], None, 0, None
+    sids = []
     ids = [sid for sid, _d, _s, _e in spans]
     stale = 0
     for lo in range(0, len(ids), page):
@@ -619,11 +626,14 @@ def build_index(corpus, model: str, loader=None) -> tuple:
                 continue
             mat[n] = v / nv
             rows.append(loc)
+            sids.append(int(sid))
             n += 1
     if n == 0:
         return None, "no_vectors"
     idx = VectorIndex(model, rows, mat[:n], _STATE["wall"](), len(spans))
     idx.stale = stale
+    idx.span_ids = sids  # TAXO-ROUTE-1110: span id per row (router build)
+    idx.router = None
     return idx, "ok"
 
 
@@ -636,6 +646,21 @@ def _refresh_neurons(loader) -> None:
         log.info("hybrid neurons_today unavailable (%s)", type(exc).__name__)
 
 
+def _build_router(idx, loader) -> None:
+    """TAXO-ROUTE-1110: attach idx.router (mode off => nothing; any failure => None => global). Off the request path."""
+    try:
+        from vera import taxo_router
+        if taxo_router.mode() == "off" or not hasattr(loader, "links"):
+            return
+        page, links = int(config()["page_ids"]), []
+        for lo in range(0, len(idx.span_ids), page):
+            links.extend(loader.links(idx.span_ids[lo:lo + page]))
+        idx.router = taxo_router.build(idx, links)
+    except Exception as exc:  # noqa: BLE001
+        idx.router = None
+        log.info("taxo router build failed (%s)", type(exc).__name__)
+
+
 def _build_into(corpus, model: str, hs: dict) -> None:
     try:
         loader = _loader()
@@ -643,6 +668,8 @@ def _build_into(corpus, model: str, hs: dict) -> None:
         idx, code = build_index(corpus, model, loader)
         if idx is not None and getattr(corpus, "_dar", None) is not None:
             idx.chunk_map(corpus._dar, corpus._key_to_doc)  # pre-warm the chunk map here, not on the request path
+        if idx is not None:
+            _build_router(idx, loader)  # before publication: the router is immutable once the index is visible
         with hs["lock"]:
             if idx is not None:
                 hs["index"] = idx
@@ -694,6 +721,15 @@ def ensure_index(corpus, model: str, sync: bool = False):
 
 
 # ------------------------------------------------------------------------------------------------ retrieval hook
+def _shadow_route(idx, q, pidx, scores, out, k) -> None:
+    try:
+        from vera import taxo_router
+        if taxo_router.mode() != "off":
+            taxo_router.shadow(getattr(idx, "router", None), idx, q, pidx, scores, [c.idx for c in out], k)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def vector_fn(corpus, question: str):
     """Called by FullDocCorpus.retrieve when enabled(). Returns (fn | None, sim_of | None) and sets this thread's status.
     fn(dar, scores) -> ranked chunk list for the vector branch; sim_of(chunk_idx) -> cosine or None. vector_fn itself never raises (fn may; its call site catches)."""
@@ -751,6 +787,7 @@ def vector_fn(corpus, question: str):
                 if len(out) >= k:
                     break
             out = out[:k]
+            _shadow_route(idx, q, pidx, scores, out, k)  # TAXO-ROUTE-1110: shadow only, results unchanged
             rr = cfg["rerank"]
             if rr.get("enabled") is not True:
                 return out

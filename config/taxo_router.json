@@ -1,0 +1,9 @@
+{
+  "_note": "TAXO-ROUTE-1110 R3. Taxonomy-routed retrieval, SHADOW stage. mode: off (default; no computation, nothing recorded) | shadow (computes the routed set per ask and records counts and recall against the global candidates; results are never changed) | on (reserved: today behaves as shadow; the routed mask is not applied until a later, measured release). Owner D2/D3 (2026-11-10): generous, multi-membership, recall over precision; the saving comes from excluding clearly unrelated domains. All numbers below are structural starting values, PENDING CAL (records/memory/feedback_threshold_calibration_rule.md): tighten only if a measurement shows a real compute cost, never below 100% recall on globally admitted evidence.",
+  "mode": "off",
+  "route_rel_margin": 0.10,
+  "route_abs_floor": 0.20,
+  "neighbour_cos": 0.70,
+  "min_routed_scored": 40,
+  "time_budget_ms": 50
+}
