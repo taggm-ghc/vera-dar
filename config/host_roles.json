@@ -1,0 +1,1269 @@
+{
+ "_doc": "PORTAL-RULE-1110 WP1: reviewed POLICY file read only by vera/host_role.py. One role per host: ORIGINAL | REPOSITORY_OF_RECORD | PORTAL | RESOLVER | EXCLUDED. Precedence: specificity (host+path > host > suffix; more labels first), then priority, then EXCLUDED > PORTAL > RESOLVER > REPOSITORY_OF_RECORD > ORIGINAL. A PORTAL verdict is never reopened by any other config flag; only a reviewed edit of this file changes a role. Unknown host: deny for store, allow for answer (deny-list design, plan 2.1). Not wired into any lane yet (WP3-WP7).",
+ "version": 1,
+ "owner_rule": "OD-1110-PORTALS-ALL",
+ "reviewed": "2026-11-10",
+ "review_by": "2027-02-10",
+ "use_defaults": {
+  "unknown_host": {
+   "store": "deny",
+   "answer": "allow"
+  },
+  "invalid_config": {
+   "store": "deny",
+   "answer": "deny"
+  }
+ },
+ "hosts": [
+  {
+   "match": "arxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "arXiv is a preprint server (OD-1110-ARXIV-PORTAL, I3)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "export.arxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "arXiv is a preprint server (OD-1110-ARXIV-PORTAL, I3)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "xxx.lanl.gov",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "arXiv is a preprint server (OD-1110-ARXIV-PORTAL, I3)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "ar5iv.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "mirror of arXiv; portal text is never evidence on mirrors (I4)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "arxiv-vanity.com",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "mirror of arXiv; portal text is never evidence on mirrors (I4)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "alphaxiv.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "mirror of arXiv; portal text is never evidence on mirrors (I4)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "scirate.com",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "mirror of arXiv; portal text is never evidence on mirrors (I4)",
+   "decided_by": "OD-1110-ARXIV-PORTAL"
+  },
+  {
+   "match": "huggingface.co",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "arXiv mirror pages (/papers/)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/papers(/|$)"
+  },
+  {
+   "match": "biorxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "medrxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ssrn.com",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "chemrxiv.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "researchsquare.com",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "preprints.org",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "psyarxiv.com",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "preprint server (I3)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "osf.io",
+   "role": "PORTAL",
+   "kind": "preprint_server",
+   "basis": "OSF preprints",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/preprints(/|$)"
+  },
+  {
+   "match": "openalex.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "inspirehep.net",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "crossref.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "doaj.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "openaire.eu",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "unpaywall.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "semanticscholar.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "pubmed.ncbi.nlm.nih.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "core.ac.uk",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "base-search.net",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ui.adsabs.harvard.edu",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "science.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "data.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "usa.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "aggregator or index (I3); yields identifiers and links only",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "www.ncbi.nlm.nih.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "NCBI PubMed index pages",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/pubmed(/|$)"
+  },
+  {
+   "match": "europepmc.org",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "Europe PMC web app: index records; article full-text rows below override",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "www.ebi.ac.uk",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "Europe PMC REST search/lookup endpoints (the fullTextXML row overrides)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/europepmc/webservices/rest/"
+  },
+  {
+   "match": "eric.ed.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "ERIC index records; full-text ED rows below override",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "regulations.gov",
+   "role": "PORTAL",
+   "kind": "index",
+   "basis": "third-party public comments are not the agency's own text (plan 1c; default PORTAL)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/comment(/|$)"
+  },
+  {
+   "match": "duckduckgo.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or index (links only)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "scholar.google.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or index (links only)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "bing.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or index (links only)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "hn.algolia.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or index (links only)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "gdeltproject.org",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "search engine or index (links only)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "google.com",
+   "role": "PORTAL",
+   "kind": "search_engine",
+   "basis": "Google search results",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/search"
+  },
+  {
+   "match": "wikipedia.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikidata.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikinews.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikibooks.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikiquote.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikisource.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikiversity.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikivoyage.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wiktionary.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikimedia.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "mediawiki.org",
+   "role": "PORTAL",
+   "kind": "wiki",
+   "basis": "Wikipedia ruling (owner 10-22) and its family; en.wikinews.org per plan 1c",
+   "decided_by": "project_wikipedia_portal_only; OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikiwand.com",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "Wikipedia mirror",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "wikiwix.com",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "Wikipedia mirror",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "web.archive.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.ph",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.today",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.is",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.li",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.vn",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.md",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.fo",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "webcitation.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ghostarchive.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "web-archive mirror: a copy, not the original (I4 covers mirrors)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "archive.org",
+   "role": "PORTAL",
+   "kind": "mirror",
+   "basis": "Wayback paths only",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/(web|wayback)/"
+  },
+  {
+   "match": "researchgate.net",
+   "role": "PORTAL",
+   "kind": "uploader",
+   "basis": "uploader platforms: no deposit or version-of-record verification (plan 1c)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "academia.edu",
+   "role": "PORTAL",
+   "kind": "uploader",
+   "basis": "uploader platforms: no deposit or version-of-record verification (plan 1c)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "news.google.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (plan E11)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "news.yahoo.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (plan E11)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "msn.com",
+   "role": "PORTAL",
+   "kind": "syndicator",
+   "basis": "news aggregator (plan E11)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "britannica.com",
+   "role": "PORTAL",
+   "kind": "encyclopedia",
+   "basis": "commercial general encyclopedia: tertiary, PORTAL by the spirit of the Wikipedia ruling",
+   "decided_by": "PLANNER-DEFAULT D-a",
+   "pending": "D-a"
+  },
+  {
+   "match": "encyclopedia.com",
+   "role": "PORTAL",
+   "kind": "encyclopedia",
+   "basis": "commercial general encyclopedia: tertiary, PORTAL by the spirit of the Wikipedia ruling",
+   "decided_by": "PLANNER-DEFAULT D-a",
+   "pending": "D-a"
+  },
+  {
+   "match": "plato.stanford.edu",
+   "role": "ORIGINAL",
+   "kind": "encyclopedia",
+   "basis": "SEP: entries refereed by subject editors, author-signed, versioned archives (plato.stanford.edu/info.html; orchestrator expert-consensus read 2026-11-10, summarizer level)",
+   "decided_by": "D-a consensus 2026-11-10",
+   "pending": "D-a"
+  },
+  {
+   "match": "scholarpedia.org",
+   "role": "PORTAL",
+   "kind": "encyclopedia",
+   "basis": "default PORTAL: review process could not be verified (site certificate expired); unverified, revisit",
+   "decided_by": "D-a consensus 2026-11-10",
+   "pending": "D-a"
+  },
+  {
+   "match": "doi.org",
+   "role": "RESOLVER",
+   "kind": "resolver",
+   "basis": "redirect hop with no content; the final host decides",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "dx.doi.org",
+   "role": "RESOLVER",
+   "kind": "resolver",
+   "basis": "redirect hop with no content; the final host decides",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "hdl.handle.net",
+   "role": "RESOLVER",
+   "kind": "resolver",
+   "basis": "redirect hop with no content; the final host decides",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "identifiers.org",
+   "role": "RESOLVER",
+   "kind": "resolver",
+   "basis": "redirect hop with no content; the final host decides",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "openstax.org",
+   "role": "EXCLUDED",
+   "kind": "excluded",
+   "basis": "ruled out by terms (config/portal_hosts.json excluded rows; LibreTexts copies OpenStax)",
+   "decided_by": "portal_hosts.json"
+  },
+  {
+   "match": "oapen.org",
+   "role": "EXCLUDED",
+   "kind": "excluded",
+   "basis": "ruled out by terms (config/portal_hosts.json excluded rows; LibreTexts copies OpenStax)",
+   "decided_by": "portal_hosts.json"
+  },
+  {
+   "match": "cds.cern.ch",
+   "role": "EXCLUDED",
+   "kind": "excluded",
+   "basis": "ruled out by terms (config/portal_hosts.json excluded rows; LibreTexts copies OpenStax)",
+   "decided_by": "portal_hosts.json"
+  },
+  {
+   "match": "libretexts.org",
+   "role": "EXCLUDED",
+   "kind": "excluded",
+   "basis": "ruled out by terms (config/portal_hosts.json excluded rows; LibreTexts copies OpenStax)",
+   "decided_by": "portal_hosts.json"
+  },
+  {
+   "match": "www.ebi.ac.uk",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "Europe PMC full text of PMC records (I2)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/europepmc/webservices/rest/PMC\\d+/fullTextXML/?$",
+   "priority": 10
+  },
+  {
+   "match": "europepmc.org",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "Europe PMC PMC article pages",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/(articles/PMC\\d+|article/PMC/(?:PMC)?\\d+)(/|$)",
+   "priority": 10
+  },
+  {
+   "match": "pmc.ncbi.nlm.nih.gov",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "PubMed Central (I2)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "www.ncbi.nlm.nih.gov",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "PMC and Bookshelf",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/(pmc|books)(/|$)",
+   "priority": 10
+  },
+  {
+   "match": "osti.gov",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "US federal technical report repositories (plan 1b class rule)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ntrs.nasa.gov",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "US federal technical report repositories (plan 1b class rule)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "eric.ed.gov",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "ERIC full-text ED documents",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "path_regex": "^/(fulltext/ED\\d+\\.pdf|\\?id=ED\\d+)",
+   "priority": 10
+  },
+  {
+   "match": "zenodo.org",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "repository of record with a per-record version test: preprint, submitted or unknown version is PORTAL (fail closed)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true,
+   "status": "pending"
+  },
+  {
+   "match": "hal.science",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "repository of record with a per-record version test: preprint, submitted or unknown version is PORTAL (fail closed)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true,
+   "status": "pending"
+  },
+  {
+   "match": "hal.archives-ouvertes.fr",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "repository of record with a per-record version test: preprint, submitted or unknown version is PORTAL (fail closed)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true,
+   "status": "pending"
+  },
+  {
+   "match": "theses.hal.science",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "repository of record with a per-record version test: preprint, submitted or unknown version is PORTAL (fail closed)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true,
+   "status": "pending"
+  },
+  {
+   "match": "repo.scoap3.org",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "repository",
+   "basis": "SCOAP3 repository: articles CC BY, metadata CC0 (orchestrator consensus 2026-11-10); route off, decision D-c",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "status": "pending",
+   "pending": "D-c"
+  },
+  {
+   "match": "journals.aps.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "sciencedirect.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "iopscience.iop.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "link.aps.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "dl.acm.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "ieeexplore.ieee.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "link.springer.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "springer.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "onlinelibrary.wiley.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "nature.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "mdpi.com",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "aclanthology.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "journals.plos.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "api.plos.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "pnas.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "science.org",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "publisher of record (resolve.scholarly_hosts, PLOS). api.plos.org abstracts are excluded by the body-only admission rule",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "openreview.net",
+   "role": "ORIGINAL",
+   "kind": "publisher",
+   "basis": "venue-published version is ORIGINAL; submissions and other versions are PORTAL (fail closed)",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true
+  },
+  {
+   "match": "govinfo.gov",
+   "role": "ORIGINAL",
+   "kind": "agency",
+   "basis": "GPO / agency documents; regulations.gov comments overridden by path row",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "regulations.gov",
+   "role": "ORIGINAL",
+   "kind": "agency",
+   "basis": "GPO / agency documents; regulations.gov comments overridden by path row",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "github.com",
+   "role": "ORIGINAL",
+   "kind": "platform",
+   "basis": "author's own code and docs (residual: curated link lists)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "creativecommons.org",
+   "role": "ORIGINAL",
+   "kind": "platform",
+   "basis": "author's own code and docs (residual: curated link lists)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "docs.aws.amazon.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "aws.amazon.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "azure.microsoft.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "cloud.google.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "docs.cloud.google.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "developer.nvidia.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "docs.nvidia.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "docs.snowflake.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "kafka.apache.org",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "pulsar.apache.org",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "kubernetes.io",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "learn.microsoft.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "support.microsoft.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "support.zoom.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "slack.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "api.slack.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "www.aboutamazon.com",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "www.postgresql.org",
+   "role": "ORIGINAL",
+   "kind": "vendor",
+   "basis": "official-lane registry host (the vendor is the author)",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "apnews.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "bbc.co.uk",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "bbc.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "chalkbeat.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "cnn.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "commondreams.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "democracynow.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "foxnews.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "globalvoices.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "kffhealthnews.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "nbcnews.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "npr.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "nytimes.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "pbs.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "politico.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "propublica.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "reuters.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "texastribune.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "theconversation.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "theguardian.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "truthout.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "usatoday.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "voanews.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "votebeat.org",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "washingtonpost.com",
+   "role": "ORIGINAL",
+   "kind": "outlet",
+   "basis": "reporting-lane outlet (config/reporting_lane.json); ORIGINAL role only, terms verdicts live in that file",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "gov",
+   "role": "ORIGINAL",
+   "kind": "agency",
+   "basis": "federal and government agency pages: the agency is the author (plan 1c). Index and repository hosts above override by specificity",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "match": "mil",
+   "role": "ORIGINAL",
+   "kind": "agency",
+   "basis": "federal and government agency pages: the agency is the author (plan 1c). Index and repository hosts above override by specificity",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  }
+ ],
+ "host_patterns": [
+  {
+   "id": "hp-shadow-libs",
+   "regex": "(^|\\.)(sci-hub|libgen|z-lib|zlibrary|annas-archive)\\.[a-z.]+$",
+   "role": "EXCLUDED",
+   "kind": "excluded",
+   "basis": "shadow libraries",
+   "decided_by": "OD-1110-PORTALS-ALL"
+  },
+  {
+   "id": "hp-inst-repo",
+   "regex": "^(dspace|eprints|repository|repositorio|openaccess|scholarworks|escholarship)\\.[a-z0-9.-]+\\.[a-z]+$",
+   "role": "REPOSITORY_OF_RECORD",
+   "kind": "institutional_repository",
+   "basis": "institutional repository (DSpace / EPrints) by host label: heuristic; per-record version test applies",
+   "decided_by": "OD-1110-PORTALS-ALL",
+   "version_gated": true,
+   "status": "heuristic"
+  }
+ ],
+ "doi_prefix_roles": [
+  {
+   "id": "doi-preprint",
+   "role": "PORTAL",
+   "regex": "^(?:10\\.48550/|10\\.1101/(?:\\d{4}\\.\\d{2}\\.\\d{2}\\.)?\\d{6,}(?:v\\d+)?$|10\\.2139/ssrn|10\\.21203/rs\\.|10\\.20944/preprints|10\\.31219/osf|10\\.31234/osf|10\\.26434/chemrxiv)",
+   "basis": "preprint-server DOI prefixes (moved from acq_discovered._PREPRINT_DOI)"
+  }
+ ],
+ "source_flags": [
+  {
+   "id": "src-ppr",
+   "field": "source",
+   "value": "PPR",
+   "role": "PORTAL",
+   "basis": "Europe PMC preprint records (incl. NIH preprint pilot with a PMCID) hold a preprint"
+  }
+ ],
+ "record_type_portal": [
+  "preprint",
+  "posted-content"
+ ],
+ "repository_version": {
+  "portal_versions": [
+   "preprint",
+   "submitted",
+   "submittedversion",
+   "draft",
+   "unknown",
+   "",
+   "none"
+  ],
+  "accepted_versions": [
+   "published",
+   "publishedversion",
+   "vor",
+   "accepted",
+   "acceptedversion",
+   "camera-ready",
+   "cameraready"
+  ],
+  "non_article_types": [
+   "dataset",
+   "report",
+   "software",
+   "thesis",
+   "book",
+   "presentation",
+   "poster",
+   "lesson",
+   "image",
+   "video",
+   "other"
+  ],
+  "fail_closed": true,
+  "basis": "plan 1c: undecidable version is PORTAL"
+ },
+ "pending_decisions": [
+  {
+   "id": "D-a",
+   "status": "pending (consensus applied)",
+   "topic": "encyclopedias other than Wikipedia",
+   "default": "commercial general encyclopedias PORTAL; SEP ORIGINAL (expert consensus); Scholarpedia PORTAL (unverified, revisit)",
+   "alternative": "all PORTAL",
+   "effect": "rows with pending=D-a"
+  },
+  {
+   "id": "D-b",
+   "status": "pending",
+   "topic": "targeted identifier lookups (Crossref is-preprint-of / OpenAlex) for bioRxiv, medRxiv, SSRN",
+   "default": "off; no role is affected, preprint servers stay PORTAL. Consensus: bioRxiv/medRxiv API exposes published_doi but no published terms or rate limits found, so not called. Resolution goes via Crossref relations (has-preprint / is-preprint-of), public pool 5/s single-record, concurrency 1, polite pool only with an already-configured project contact. Follow-up adapter, not WP1",
+   "effect": "lookup lane WP10 only"
+  },
+  {
+   "id": "D-c",
+   "status": "pending",
+   "topic": "repo.scoap3.org as a repository-of-record physics route",
+   "default": "repo.scoap3.org REPOSITORY_OF_RECORD, publisher article pages ORIGINAL (per-article licence still decided by the licence gate); SCOAP3 API needs a registration token, not used; route off",
+   "effect": "row repo.scoap3.org status=pending"
+  }
+ ]
+}
