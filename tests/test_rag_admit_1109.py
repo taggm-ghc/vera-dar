@@ -1,5 +1,5 @@
 """RAG-ADMIT-1109: "What are the components of RAG?" must not need the word "component" in every passage.
-admission.relevance.question_structural_terms (component(s), parts, elements, types, kinds): kept in the retrieval query
+admission.relevance.question_structural_terms (component(s), parts, elements; types/kinds are generic terms, dropped earlier): kept in the retrieval query
 and in the content stems, not required by the matched-stem floor. Offline: synthetic
 documents, fake embedder, no network, no DB. Hybrid-on cases use tests/test_hybrid_retrieval_1109 helpers."""
 from __future__ import annotations
@@ -132,7 +132,7 @@ QCHEM = "What are the elements of group 1?"
 CHEM_ON = ["Group 1 of the periodic table holds lithium, sodium and potassium; each group 1 metal has one valence "
            "electron and reacts readily with water. ",
            "Moving down group 1 the atoms grow larger, so potassium gives up its single electron more easily than "
-           "lithium does. "]  # two passages: the one-stem relaxed rule needs two passing spans in the document
+           "lithium does. "]  # two passages: with "elements" structural, "group" is the one content stem, so the relaxed guard needs two passing spans
 CHEM_OFF = ["Group dynamics in small teams depend on trust, and a group that meets weekly settles disputes faster. "]
 
 
@@ -149,3 +149,23 @@ def test_elements_structural_but_other_content_word_still_drives_admission():
     # a passage with no content word of the question is still rejected
     c2, _t2 = _corpus(NEITHER)
     assert fa.admit(QCHEM, c2, load_config()).admitted == ()
+
+
+ONE_MENTION = ["Office workers in the diet study ate lunch at noon; one participant mentioned riding a horse on weekends, "
+               "but the study measured only calories, sleep and step counts across the twelve weeks of the trial. ",
+               "Granite weathers slowly in dry climates and the resulting sand is carried by wind across the plain each spring. "]
+HORSE_TWO = ["The horse is a large mammal; a horse has a head, neck, withers, back, croup, legs and hooves. "
+             + "Granite weathers slowly in dry climates and sand is carried by wind across the plain each spring. " * 12,
+             "Each horse leg ends in a single hoof, and the horse withers sit above the shoulders. "
+             + "Basalt flows cooled quickly at the coast and formed columns that visitors walk along on tours. " * 12]
+
+
+@pytest.mark.parametrize("q", ["What are the parts of a horse?", "What are the components of a horse?"])
+def test_structural_term_keeps_one_stem_guard_1110(q):
+    """R1: structural terms leave q_n=2 but the floor at 1; the single-content-word guard must still apply."""
+    c, _t = _corpus(ONE_MENTION)
+    assert fa.admit(q, c, load_config()).admitted == ()
+    c2, _t = _corpus(ONE_MENTION, title="The horse")  # stem in the title: admitted
+    assert fa.admit(q, c2, load_config()).admitted
+    c3, _t = _corpus(HORSE_TWO)  # >= 2 matching passages: admitted
+    assert fa.admit(q, c3, load_config()).admitted

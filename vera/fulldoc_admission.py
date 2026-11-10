@@ -734,13 +734,16 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
         except (TypeError, ValueError):
             score = 0.0
         scored.append((-rel, -score, str(sid), c, dict(d, _attribution=attr), rel))
-        if adaptive and not weighted and q_n == 1 and need < min_hits:
+        if adaptive and not weighted and ((q_n == 1 and need < min_hits)
+                                          or (sx and q_n - len(sx) == 1 and f_need < min_hits)):
+            # RAG-ADMIT-V2-1110 (review R1): a structural term ("parts of X") leaves q_n at 2 but the floor at 1, so the
+            # question is really one-content-stem and the guard below must apply to it too.
             relaxed[id(c)] = did_s
     if relaxed:
         # INT-1022-B (fix2 verifier must-fix 2): a ONE-content-stem question admitted under the relaxed floor needs
         # >= 2 passing spans in the same document, or that stem in the document's title; a single passing mention
         # (e.g. "horse" in an office-worker diet study) is not enough.
-        q1 = _q_stems(question, icfg, stem_n, tg)
+        q1 = _q_stems(question, icfg, stem_n, tg) - sx  # sx is empty unless structural terms are active
         per = {}
         for v in relaxed.values():
             per[v] = per.get(v, 0) + 1
