@@ -147,43 +147,47 @@ def config_error() -> str | None:
 
 
 # ------------------------------------------------------------------------------------------------ URL handling
-def _split(url) -> tuple[str | None, str, str]:
+def _split(url) -> tuple[str | None, list, str]:
     """(host, path, problem). host None when unusable."""
     if not isinstance(url, str) or not url.strip() or len(url) > 4096 or re.search(r"[\x00-\x20\x7f\\]", url.strip()):
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     u = url.strip()
     if "://" not in u and not u.startswith("//"):
         u = "//" + u
     try:
         p = urlsplit(u)
         if p.scheme and p.scheme.lower() not in ("http", "https"):
-            return None, "", "malformed_url"
+            return None, [], "malformed_url"
         host = p.hostname
         p.port  # noqa: B018 - validates the port
     except Exception:  # noqa: BLE001
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     if not host:
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     host = re.sub("[\u3002\uff0e\uff61]", ".", host.lower()).rstrip(".")
     if not host or "." not in host or ".." in host or "%" in host:
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     try:
         host = host.encode("idna").decode("ascii").lower().rstrip(".")  # strip again: IDNA can map to "."
     except Exception:  # noqa: BLE001
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     if not host or "." not in host or ".." in host:
-        return None, "", "malformed_url"
+        return None, [], "malformed_url"
     try:
         ipaddress.ip_address(host)
-        return None, "", "ip_literal"
+        return None, [], "ip_literal"
     except ValueError:
         pass
     if _NUMERIC_LABEL.match(host.rsplit(".", 1)[-1]) or all(_NUMERIC_LABEL.match(x) for x in host.split(".")):
-        return None, "", "ip_literal"  # inet_aton forms such as 0x7f.1, 2130706433
-    path = _norm_path(p.path or "/")
-    if p.query and path == "/":
-        path = "/?" + p.query  # ERIC-style /?id=ED123
-    return host, path, ""
+        return None, [], "ip_literal"  # inet_aton forms such as 0x7f.1, 2130706433
+    raw = p.path or "/"
+    paths = []
+    for q in (_norm_path(raw), _literal_path(raw, decode=False), _literal_path(raw, decode=True)):
+        if p.query and q == "/":
+            q = "/?" + p.query  # ERIC-style /?id=ED123
+        if q not in paths:
+            paths.append(q)
+    return host, paths, ""
 
 
 _NUMERIC_LABEL = re.compile(r"^(?:0x[0-9a-f]*|[0-9]+)$", re.I)
@@ -197,8 +201,25 @@ def _norm_path(raw: str) -> str:
         if d == path:
             break
         path = d
+    return _resolve(path.replace("\\", "/"), path)
+
+
+_SEP = re.compile(r"%(2f|5c|25)", re.I)
+
+
+def _literal_path(raw: str, decode: bool) -> str:
+    """A reading that keeps encoded separators (%2f, %5c, %25) literal, so they cannot form dot segments:
+    decode=False decodes only %2e; decode=True also decodes everything else once."""
+    s = re.sub(r"%2e", ".", raw, flags=re.I)
+    if decode:
+        s = _SEP.sub(lambda m: "\x00" + m.group(1), s)
+        s = unquote(s).replace("\x00", "%")
+    return _resolve(s, s)
+
+
+def _resolve(path: str, orig: str) -> str:
     out: list[str] = []
-    for seg in path.replace("\\", "/").split("/"):
+    for seg in path.split("/"):
         if seg in ("", "."):
             continue
         if seg == "..":
@@ -206,7 +227,7 @@ def _norm_path(raw: str) -> str:
                 out.pop()
             continue
         out.append(seg)
-    return "/" + "/".join(out) + ("/" if path.endswith("/") and out else "")
+    return "/" + "/".join(out) + ("/" if orig.endswith("/") and out else "")
 
 
 def _suffix_ok(host: str, match: str) -> bool:
@@ -265,9 +286,25 @@ def role_for_url(url, meta=None) -> HostRole:
         reg = get_registry()
         if reg.error:
             return HostRole("PORTAL", "config_invalid")
-        host, path, problem = _split(url)
+        host, paths, problem = _split(url)
         if host is None:
             return HostRole(UNKNOWN, problem)
+        # classify every reading of the path (fully decoded; encoded separators kept literal) and keep the stricter
+        best = None
+        for path in paths:
+            hr = _role_for_path(host, path, reg, meta)
+            if best is None or _STRICT.get(hr.role, 1.5) < _STRICT.get(best.role, 1.5):
+                best = hr
+        return best
+    except Exception:  # noqa: BLE001
+        return HostRole("PORTAL", "internal_error")
+
+
+_STRICT = {"EXCLUDED": 0, "PORTAL": 1, UNKNOWN: 1.5, "RESOLVER": 2, "REPOSITORY_OF_RECORD": 3, "ORIGINAL": 4}
+
+
+def _role_for_path(host: str, path: str, reg: Registry, meta) -> HostRole:
+    if True:
         row = _match_row(host, path, reg)
         if row is None:
             return HostRole(UNKNOWN, "no_row")
@@ -279,8 +316,6 @@ def role_for_url(url, meta=None) -> HostRole:
         if row.get("version_gated") and not _qualifies(row, reg, meta):
             return HostRole("PORTAL", f"version_unqualified:{rid}")
         return HostRole(row["role"], rid)
-    except Exception:  # noqa: BLE001
-        return HostRole("PORTAL", "internal_error")
 
 
 def role_for_record(meta) -> HostRole:

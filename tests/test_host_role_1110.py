@@ -219,6 +219,16 @@ class HostRoleTests(unittest.TestCase):
         # store re-checks the final host: a resolver hop alone is not evidence
         self.assertFalse(hr.is_evidence_allowed("https://doi.org/10.1038/x", "store"))
 
+    def test_encoded_separators_f5(self):
+        n = "https://www.ncbi.nlm.nih.gov"
+        for path in ["/pubmed%2f..%2fpmc/x", "/pubmed%252f..%252fpmc/x", "/pubmed/..%2fpmc/x", "/pubmed%5c..%5cpmc/x",
+                     "/pubmed%255c..%255cpmc/x", "/pubmed%2F%2e%2e%2Fpmc/x", "/pubmed/%2e%2e%2fpmc/x"]:
+            self.assertEqual(role(n + path), P, path)
+            self.assertFalse(hr.is_evidence_allowed(n + path, "store"), path)
+        self.assertEqual(role(n + "/pubmed\\..\\pmc/x"), U)  # raw backslash: malformed
+        self.assertEqual(role(n + "/pmc/articles/PMC1/"), R)  # honest paths still classify
+        self.assertEqual(role(n + "/pmc/a%20b/"), R)
+
     def test_bare_host_and_userinfo(self):
         self.assertEqual(role("arxiv.org/abs/1"), P)
         self.assertEqual(role("https://user:pw@arxiv.org/abs/1"), P)
