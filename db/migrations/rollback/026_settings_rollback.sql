@@ -1,5 +1,5 @@
 -- 026_settings rollback. SETTINGS-W2-1110 DRAFT. NOT EXECUTED. OWNER-ONLY, admin-run, never via db/apply_migrations.py.
--- A prepared undo path that is never expected to run (OD-1031-ROLLBACK-KEEP). Drops the seven 026 relations (view, six tables) and the five
+-- A prepared undo path that is never expected to run (OD-1031-ROLLBACK-KEEP). Drops the seven 026 relations (view, six tables) and the six
 -- set_* functions in vera_vjay. Nothing else is touched: no CASCADE; every role and every other table is unchanged.
 -- DATA-SAFE: it REFUSES while any row exists BEYOND THE SEED: any set_settings, set_settings_hist, set_deny or set_deny_hist row, or any
 -- set_keys / set_deny_lists row not registered by the pinned seed (registered_in_seed <> the seed sha below). To roll back anyway, the owner
@@ -12,8 +12,9 @@
 BEGIN;
 SELECT set_config('vera026rb.purge', :'purge_rows', true);
 SET LOCAL lock_timeout = '5s';
+SET LOCAL search_path = pg_catalog, pg_temp;
 -- BEGIN GENERATED SEED (manifest sha256 211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008)
-SELECT set_config('vera026rb.seed_sha', '211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008', true), set_config('vera026rb.seed_keys', '167', true), set_config('vera026rb.seed_deny_lists', '2', true);
+SELECT set_config('vera026rb.seed_sha', '211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008', true), set_config('vera026rb.seed_keys', '153', true), set_config('vera026rb.seed_deny_lists', '2', true);
 -- END GENERATED SEED
 
 DO $$
@@ -58,6 +59,7 @@ DROP FUNCTION vera_vjay.set_deny_guard_fn();
 DROP FUNCTION vera_vjay.set_settings_hist_fn();
 DROP FUNCTION vera_vjay.set_settings_guard_fn();
 DROP FUNCTION vera_vjay.set_block_fn();
+DROP FUNCTION vera_vjay.set_hist_insert_fn();
 
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace

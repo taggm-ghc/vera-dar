@@ -40,10 +40,10 @@ def test_object_counts():
     assert re.findall(r"CREATE VIEW vera_vjay\.(\w+)", t) == ["set_deny_active"]
     assert "security_invoker = true" in t
     assert re.findall(r"CREATE (?:UNIQUE )?INDEX (\w+)", t) == ["set_settings_active_uq", "set_deny_list_exp_idx"]
-    assert len(re.findall(r"CREATE FUNCTION", t)) == 5
-    assert len(re.findall(r"CREATE TRIGGER", t)) == 16
+    assert len(re.findall(r"CREATE FUNCTION", t)) == 6
+    assert len(re.findall(r"CREATE TRIGGER", t)) == 18
     head = t[: t.index("CREATE FUNCTION")]
-    assert len(re.findall(r"\bCONSTRAINT\s+\w+", head)) == 35
+    assert len(re.findall(r"\bCONSTRAINT\s+\w+", head)) == 37
 
 
 def test_one_active_version_and_append_only_history():
@@ -85,7 +85,7 @@ def test_rollback_refuses_rows_beyond_the_seed_and_has_no_cascade():
     t = _code(RBK)
     assert "rollback refused" in t and "purge_rows" in t and "registered_in_seed <> $1" in t
     assert re.findall(r"DROP TABLE vera_vjay\.(\w+);", t) == ["set_deny_hist", "set_deny", "set_deny_lists", "set_settings_hist", "set_settings", "set_keys"]
-    assert len(re.findall(r"DROP FUNCTION", t)) == 5 and "DROP VIEW vera_vjay.set_deny_active" in t
+    assert len(re.findall(r"DROP FUNCTION", t)) == 6 and "DROP VIEW vera_vjay.set_deny_active" in t
 
 
 def test_seed_is_generated_and_pinned():
@@ -108,4 +108,22 @@ def test_kit_matches_repo_files_when_present():
     assert r.returncode == 0, r.stdout + r.stderr
     sums = (KIT / "scripts" / "SHA256SUMS").read_text()
     common = (KIT / "scripts" / "tax_common_026.sh").read_text()
-    assert "9|35|5|16" in common or "present 9|35|5|16" in common
+    assert "9|37|6|18" in common
+
+
+def test_policy_prefix_layer_and_history_insert_guard():
+    t = _code(FWD)
+    assert t.count("_policy_prefix_chk CHECK (key !~ '") == 2
+    m = re.search(r"set_keys_policy_prefix_chk CHECK \(key !~ '(.*)'\),", t)
+    rx = re.compile(m.group(1))
+    for k in ("fair_use.a.b", "licence_allowlist.x.y", "source_withdrawals.x.y", "crawl_delay.a.b", "auto_acquire.landing_route.a",
+              "reference_portals.adapters.openalex_rw.per_page", "reference_portals.caps.enabled", "reference_portals.x.owner_switch",
+              "reference_portals.x.mode", "reference_portals.x.allow_hosts"):
+        assert rx.search(k), k
+    for k in ("reference_portals.caps.timeout_s", "reference_portals.relevance.min_hits", "auto_acquire.micro_topic.registry_table.cache_ttl_seconds",
+              "rate_limits.defaults.increase_frac"):
+        assert not rx.search(k), k
+    seeded = re.findall(r"^  \('([a-z0-9_.-]+)', '[a-z0-9_-]+', '(?:int|float|bool)'", FWD.read_text(), flags=re.M)
+    assert not [k for k in seeded if rx.search(k)]
+    assert len(re.findall(r"BEFORE INSERT ON vera_vjay\.set_(settings|deny)_hist", t)) == 2 and "pg_trigger_depth() < 2" in t
+    assert "SET LOCAL search_path = pg_catalog, pg_temp" in t and "SET LOCAL search_path = pg_catalog, pg_temp" in _code(RBK)

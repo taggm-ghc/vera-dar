@@ -23,6 +23,10 @@
 --   owner-run settings scripts (W3c), so a compromised public app cannot retune itself. No new DB account (10-01 "no more DB accounts").
 -- SEED: generated from work/SETTINGS-TABLE-1110/manifest/manifest.json by work/SETTINGS-MIG026-1110/scripts/gen_seed_026.py (hash-pinned in the
 --   block below and in SHA256SUMS). set_settings itself is NOT seeded: the shipped file value stays the baseline until the owner writes a version.
+-- POLICY KEYS (plan 9.1, revised 2026-11-10 after the 026 review F1): set_keys_policy_prefix_chk (and the same test on set_settings.key) refuses any key under a
+--   policy prefix even if someone tries to register it: api_permissions, licence_rules, fair_use, purpose_grants, robots_ai, source_permissions, us_federal_pd,
+--   env_precedence, licence_allowlist, source_withdrawals, crawl_delay, auto_acquire.landing_route, and, key-level inside reference_portals, any key ending
+--   enabled/owner_switch/mode, anything under adapters., and any segment containing hosts or allow. The seed generator drops such registry keys.
 -- REQUIRES: PostgreSQL 16 or newer (security_invoker views need 15; same floor as 024/025); schema vera_vjay; group roles vera_vjay_rw/_ro/_wo and the app logins.
 --   INDEPENDENT of 020, 022, 024 and 025. Strictly additive: no existing table is altered.
 -- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
@@ -37,6 +41,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL standard_conforming_strings = on;
+SET LOCAL search_path = pg_catalog, pg_temp;   -- every reference below is schema-qualified; this also pins CHECK/default binding at CREATE time
 SELECT set_config('vera026.rw', :'app_rw_login', true), set_config('vera026.ro', :'app_ro_login', true);
 
 -- Preflight 1: PG16+; schema exists; nothing this file creates exists.
@@ -106,6 +111,7 @@ CREATE TABLE vera_vjay.set_keys (
     created_at         timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT set_keys_pk PRIMARY KEY (key),
     CONSTRAINT set_keys_key_chk CHECK (key ~ '^[a-z0-9_-]+(\.[a-z0-9_-]+)+$' AND length(key) <= 160),
+    CONSTRAINT set_keys_policy_prefix_chk CHECK (key !~ '^((api_permissions|licence_rules|fair_use|purpose_grants|robots_ai|source_permissions|us_federal_pd|env_precedence|licence_allowlist|source_withdrawals|crawl_delay)\.|auto_acquire\.landing_route\.|reference_portals\.(adapters\.|(.*\.)?(enabled|owner_switch|mode)$|(.*\.)?[a-z0-9_-]*(hosts|allow)[a-z0-9_-]*(\.|$)))'),
     CONSTRAINT set_keys_module_chk CHECK (module ~ '^[a-z0-9_-]+$'),
     CONSTRAINT set_keys_type_chk CHECK (value_type IN ('int', 'float', 'bool', 'enum', 'string')),
     CONSTRAINT set_keys_oneway_chk CHECK (one_way IN ('none', 'lower_only', 'raise_only')),
@@ -148,6 +154,7 @@ CREATE TABLE vera_vjay.set_settings (
     CONSTRAINT set_settings_pk PRIMARY KEY (setting_id),
     CONSTRAINT set_settings_key_fk FOREIGN KEY (key) REFERENCES vera_vjay.set_keys (key) ON DELETE RESTRICT,
     CONSTRAINT set_settings_key_version_uq UNIQUE (key, version),
+    CONSTRAINT set_settings_policy_prefix_chk CHECK (key !~ '^((api_permissions|licence_rules|fair_use|purpose_grants|robots_ai|source_permissions|us_federal_pd|env_precedence|licence_allowlist|source_withdrawals|crawl_delay)\.|auto_acquire\.landing_route\.|reference_portals\.(adapters\.|(.*\.)?(enabled|owner_switch|mode)$|(.*\.)?[a-z0-9_-]*(hosts|allow)[a-z0-9_-]*(\.|$)))'),
     CONSTRAINT set_settings_version_chk CHECK (version >= 1),
     CONSTRAINT set_settings_state_chk CHECK (state IN ('active', 'retired')),
     CONSTRAINT set_settings_retired_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL)),
@@ -223,11 +230,19 @@ CREATE TABLE vera_vjay.set_deny_hist (
 );
 
 -- ---------------------------------------------------------------------------------------------------------------------------------
--- 2. Functions (5) and triggers (16). search_path is pinned; every reference is schema-qualified.
+-- 2. Functions (6) and triggers (18). search_path is pinned; every reference is schema-qualified.
 -- ---------------------------------------------------------------------------------------------------------------------------------
 CREATE FUNCTION vera_vjay.set_block_fn() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   RAISE EXCEPTION 'vera_vjay.%: % is not allowed (insert-only or append-only table)', TG_TABLE_NAME, TG_OP USING ERRCODE = 'insufficient_privilege';
+END $$;
+
+CREATE FUNCTION vera_vjay.set_hist_insert_fn() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  IF pg_trigger_depth() < 2 THEN
+    RAISE EXCEPTION 'vera_vjay.%: rows are written only by the set_settings / set_deny triggers (direct INSERT refused)', TG_TABLE_NAME USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
 END $$;
 
 CREATE FUNCTION vera_vjay.set_settings_guard_fn() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
@@ -253,7 +268,10 @@ BEGIN
   END IF;
   vt := jsonb_typeof(NEW.value);
   IF k.value_type = 'int' THEN
-    IF vt <> 'number' OR (NEW.value #>> '{}')::numeric <> trunc((NEW.value #>> '{}')::numeric) THEN
+    IF vt <> 'number' THEN
+      RAISE EXCEPTION 'set_settings: key % needs an integer (got %)', NEW.key, NEW.value;
+    END IF;
+    IF (NEW.value #>> '{}')::numeric <> trunc((NEW.value #>> '{}')::numeric) THEN
       RAISE EXCEPTION 'set_settings: key % needs an integer (got %)', NEW.key, NEW.value;
     END IF;
   ELSIF k.value_type = 'float' THEN
@@ -342,12 +360,14 @@ CREATE TRIGGER set_settings_hist_trg AFTER INSERT OR UPDATE ON vera_vjay.set_set
 CREATE TRIGGER set_settings_block_trg BEFORE DELETE ON vera_vjay.set_settings FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_block_fn();
 CREATE TRIGGER set_settings_trunc_trg BEFORE TRUNCATE ON vera_vjay.set_settings FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.set_block_fn();
 CREATE TRIGGER set_settings_hist_block_trg BEFORE UPDATE OR DELETE ON vera_vjay.set_settings_hist FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_block_fn();
+CREATE TRIGGER set_settings_hist_ins_trg BEFORE INSERT ON vera_vjay.set_settings_hist FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_hist_insert_fn();
 CREATE TRIGGER set_settings_hist_trunc_trg BEFORE TRUNCATE ON vera_vjay.set_settings_hist FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.set_block_fn();
 CREATE TRIGGER set_deny_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.set_deny FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_deny_guard_fn();
 CREATE TRIGGER set_deny_hist_trg AFTER INSERT OR UPDATE ON vera_vjay.set_deny FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_deny_hist_fn();
 CREATE TRIGGER set_deny_block_trg BEFORE DELETE ON vera_vjay.set_deny FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_block_fn();
 CREATE TRIGGER set_deny_trunc_trg BEFORE TRUNCATE ON vera_vjay.set_deny FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.set_block_fn();
 CREATE TRIGGER set_deny_hist_block_trg BEFORE UPDATE OR DELETE ON vera_vjay.set_deny_hist FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_block_fn();
+CREATE TRIGGER set_deny_hist_ins_trg BEFORE INSERT ON vera_vjay.set_deny_hist FOR EACH ROW EXECUTE FUNCTION vera_vjay.set_hist_insert_fn();
 CREATE TRIGGER set_deny_hist_trunc_trg BEFORE TRUNCATE ON vera_vjay.set_deny_hist FOR EACH STATEMENT EXECUTE FUNCTION vera_vjay.set_block_fn();
 
 -- ---------------------------------------------------------------------------------------------------------------------------------
@@ -361,8 +381,22 @@ CREATE VIEW vera_vjay.set_deny_active WITH (security_invoker = true) AS
 -- ---------------------------------------------------------------------------------------------------------------------------------
 -- 4. Seed (generated; do not edit by hand).
 -- ---------------------------------------------------------------------------------------------------------------------------------
--- BEGIN GENERATED SEED (gen_seed_026.py; manifest sha256 211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008; registry file sha256 fc8b5e12073a827db0205401f0a9fdb1c1abb3d7de4cb3b33176024b594677ff; set_keys 167; set_deny_lists 2; registry keys not seeded 0)
-SELECT set_config('vera026.seed_sha', '211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008', true), set_config('vera026.seed_keys', '167', true), set_config('vera026.seed_deny_lists', '2', true);
+-- BEGIN GENERATED SEED (gen_seed_026.py; manifest sha256 211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008; registry file sha256 fc8b5e12073a827db0205401f0a9fdb1c1abb3d7de4cb3b33176024b594677ff; set_keys 153; set_deny_lists 2; registry keys not seeded 14)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.cache_max (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.cache_ttl_s (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.cooldown_min_s (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.max_query_terms (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.max_refs_per_seed (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.max_response_bytes (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.inspire_refs.size (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.cache_max (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.cache_ttl_s (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.max_calls_per_question (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.max_seeds (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.or_seeds (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.openalex_rw.per_page (policy key refused by set_keys_policy_prefix_chk)
+--   NOT SEEDED: reference_portals.adapters.wikipedia_title.max_title_tries (policy key refused by set_keys_policy_prefix_chk)
+SELECT set_config('vera026.seed_sha', '211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008', true), set_config('vera026.seed_keys', '153', true), set_config('vera026.seed_deny_lists', '2', true);
 INSERT INTO vera_vjay.set_keys (key, module, value_type, min_value, max_value, allowed, one_way, file_value, description, registered_in_seed) VALUES
   ('ask-provider-chain.corpus_description.subject_areas.chunk_chars', 'ask-provider-chain', 'int', 100, 8000, NULL, 'none', '1200'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
   ('ask-provider-chain.corpus_description.subject_areas.chunks_per_doc', 'ask-provider-chain', 'int', 1, 200, NULL, 'none', '16'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
@@ -463,20 +497,6 @@ INSERT INTO vera_vjay.set_keys (key, module, value_type, min_value, max_value, a
   ('rate_limits.defaults.max_wait_s', 'rate_limits', 'float', 0.0, 2.0, NULL, 'lower_only', '2.0'::jsonb, 'internal pacing/breaker parameter, clamped by the per-portal ceilings in the file', current_setting('vera026.seed_sha')),
   ('rate_limits.defaults.min_rate_factor', 'rate_limits', 'float', 0.001, 0.05, NULL, 'lower_only', '0.05'::jsonb, 'internal pacing/breaker parameter, clamped by the per-portal ceilings in the file', current_setting('vera026.seed_sha')),
   ('rate_limits.defaults.poll_s', 'rate_limits', 'float', 0.001, 0.05, NULL, 'lower_only', '0.05'::jsonb, 'internal pacing/breaker parameter, clamped by the per-portal ceilings in the file', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.cache_max', 'reference_portals', 'int', 0, 256, NULL, 'lower_only', '256'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.cache_ttl_s', 'reference_portals', 'int', 0, 86400, NULL, 'lower_only', '86400'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.cooldown_min_s', 'reference_portals', 'int', 5, 50, NULL, 'raise_only', '5'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.max_query_terms', 'reference_portals', 'int', 1, 6, NULL, 'lower_only', '6'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.max_refs_per_seed', 'reference_portals', 'int', 1, 30, NULL, 'lower_only', '30'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.max_response_bytes', 'reference_portals', 'int', 1, 4000000, NULL, 'lower_only', '4000000'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.inspire_refs.size', 'reference_portals', 'int', 1, 3, NULL, 'lower_only', '3'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.cache_max', 'reference_portals', 'int', 0, 512, NULL, 'lower_only', '512'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.cache_ttl_s', 'reference_portals', 'int', 0, 86400, NULL, 'lower_only', '86400'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.max_calls_per_question', 'reference_portals', 'int', 1, 1, NULL, 'lower_only', '1'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.max_seeds', 'reference_portals', 'int', 1, 3, NULL, 'lower_only', '3'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.or_seeds', 'reference_portals', 'bool', NULL, NULL, '[true, false]'::jsonb, 'none', 'true'::jsonb, 'behaviour toggle (no access/licence/safety effect found in consumer)', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.openalex_rw.per_page', 'reference_portals', 'int', 0, 50, NULL, 'lower_only', '50'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
-  ('reference_portals.adapters.wikipedia_title.max_title_tries', 'reference_portals', 'int', 1, 2, NULL, 'lower_only', '2'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
   ('reference_portals.caps.max_candidates_per_question', 'reference_portals', 'int', 1, 30, NULL, 'lower_only', '30'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
   ('reference_portals.caps.max_hops', 'reference_portals', 'int', 1, 2, NULL, 'lower_only', '2'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
   ('reference_portals.caps.max_hrefs_scanned', 'reference_portals', 'int', 1, 5000, NULL, 'lower_only', '5000'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
@@ -552,7 +572,7 @@ REVOKE ALL ON vera_vjay.set_keys, vera_vjay.set_settings, vera_vjay.set_settings
               vera_vjay.set_deny_hist, vera_vjay.set_deny_active FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
 REVOKE ALL ON SEQUENCE vera_vjay.set_settings_setting_id_seq, vera_vjay.set_settings_hist_hist_id_seq, vera_vjay.set_deny_deny_id_seq,
                        vera_vjay.set_deny_hist_hist_id_seq FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
-REVOKE ALL ON FUNCTION vera_vjay.set_block_fn(), vera_vjay.set_settings_guard_fn(), vera_vjay.set_settings_hist_fn(),
+REVOKE ALL ON FUNCTION vera_vjay.set_block_fn(), vera_vjay.set_hist_insert_fn(), vera_vjay.set_settings_guard_fn(), vera_vjay.set_settings_hist_fn(),
                        vera_vjay.set_deny_guard_fn(), vera_vjay.set_deny_hist_fn() FROM PUBLIC;
 DO $$ BEGIN
   EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.set_keys, vera_vjay.set_settings, vera_vjay.set_settings_hist, vera_vjay.set_deny_lists, vera_vjay.set_deny, vera_vjay.set_deny_hist, vera_vjay.set_deny_active FROM %I, %I',
