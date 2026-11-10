@@ -61,7 +61,7 @@ def test_resource_limited_only_with_full_budget_and_working_search():
 def test_notice_states_each_cause_counts_only(status, words):
     line = ue.acquisition_notice_line({"contract": {"inline_acquisition": {"acquisition": {
         "status": status, "stored": 1, "target": 6}}}})
-    assert line.startswith("VERA-DAR obtained 1 new full documents for this question (aim: at least 6)") and words in line
+    assert line.startswith("VERA-DAR obtained 1 new full document for this question (aim: at least 6)") and words in line
     for bad in ("http", "openalex", "europe", "duckduckgo", "arxiv", "kill", "switch", "R-ACQ"):
         assert bad not in line.lower()
 

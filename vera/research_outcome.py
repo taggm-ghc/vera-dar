@@ -249,6 +249,8 @@ _CAUSE_TEXT = {
     "unreachable": "a source found could not be reached",  # DDGFIX-1023 DF-4; ARCH-FIX-1110 D: transport error, non-200 or redirect overflow
     "unreachable_timeout": "a source found did not respond in time",  # ARCH-FIX-1110 D
     "unreachable_ownlimit": "a source found was not fetched because VERA-DAR's own rate limit for that site was reached",  # ARCH-FIX-1110 D: nothing was sent
+    "unreachable_paced": "a source found was not fetched because the wait needed to respect that site's rate limit was too long",  # ARCHFIX-V2 R1: -DEADLINE
+    "unreachable_breaker": "a source found was left for later because the site failed repeatedly, so VERA-DAR paused requests to it",  # ARCHFIX-V2 R1: -BREAKER_OPEN / -HALF_OPEN_BUSY
     "unreachable_throttled": "a source found asked VERA-DAR to slow down, so it was left for later",  # ARCH-FIX-1110 D: the site's own 429
 }
 
@@ -284,7 +286,14 @@ def unreachable_class(code) -> str:
     """ARCH-FIX-1110 D: the cause key for a queued candidate whose detail code is a fetch failure."""
     c = str(code or "").strip().upper()
     if c.startswith("R-ACQ-RATELIMITED"):
-        return "unreachable_throttled" if c.endswith("-THROTTLED") else "unreachable_ownlimit"
+        # ARCHFIX-V2 R1: "own limit" only for codes where VERA-DAR's limiter was hit; the base code is the site throttling robots/tdmrep
+        if c.endswith(("-BREAKER_OPEN", "-HALF_OPEN_BUSY")):
+            return "unreachable_breaker"
+        if c.endswith("-DEADLINE"):
+            return "unreachable_paced"
+        if c == "R-ACQ-RATELIMITED" or c.endswith("-THROTTLED"):
+            return "unreachable_throttled"
+        return "unreachable_ownlimit"
     if c.startswith("R-ACQ-ERR-") and "TIMEOUT" in c:
         return "unreachable_timeout"
     return "unreachable"

@@ -134,8 +134,8 @@ def test_7_notice_ledger_goldens_and_legacy():
     assert line({**z, "counted": 3, "full_text": 3, "scholarly": 1, "news": 2}) == (
         "VERA-DAR obtained 3 documents for this question (aim: at least 6) (scholarly 1, news 2); supply was limited.")
     assert line({**z, "counted": 6, "full_text": 6, "news": 6}) is None
-    assert line(None) == "VERA-DAR obtained 1 new full documents for this question (aim: at least 6); supply was limited."
-    assert line({"counted": "x"}) == "VERA-DAR obtained 1 new full documents for this question (aim: at least 6); supply was limited."
+    assert line(None) == "VERA-DAR obtained 1 new full document for this question (aim: at least 6); supply was limited."
+    assert line({"counted": "x"}) == "VERA-DAR obtained 1 new full document for this question (aim: at least 6); supply was limited."
 
 
 def test_8_need_to_know_public_summary_and_trace():

@@ -21,6 +21,10 @@ def test_own_cap_names_service():
     ("R-ACQ-ERR-ConnectionError", "unreachable", "could not be reached"),
     ("R-ACQ-RATELIMITED-PACING", "unreachable_ownlimit", "not fetched because VERA-DAR's own rate limit for that site was reached"),
     ("R-ACQ-RATELIMITED-COOLDOWN", "unreachable_ownlimit", "not fetched because VERA-DAR's own rate limit"),
+    ("R-ACQ-RATELIMITED", "unreachable_throttled", "asked VERA-DAR to slow down"),
+    ("R-ACQ-RATELIMITED-BREAKER_OPEN", "unreachable_breaker", "the site failed repeatedly"),
+    ("R-ACQ-RATELIMITED-HALF_OPEN_BUSY", "unreachable_breaker", "the site failed repeatedly"),
+    ("R-ACQ-RATELIMITED-DEADLINE", "unreachable_paced", "the wait needed to respect that site's rate limit was too long"),
     ("R-ACQ-RATELIMITED-THROTTLED", "unreachable_throttled", "asked VERA-DAR to slow down"),
 ])
 def test_fetch_failure_wording_by_code(code, key, words):
