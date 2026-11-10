@@ -223,3 +223,49 @@ def test_arxiv_crawl_delay_15_is_kept_for_the_rerouted_doi(monkeypatch):
     urls = [u for u, _h, _k in web.calls]
     assert X.ABS_URL in urls and X.HTML_URL in urls, (urls, disc(o))
     assert waits and min(waits) >= 15 - 1e-6 and len(waits) >= 2  # abs and html each waited the full Crawl-delay
+
+
+# ------------------------------------------------------------------------------------------------ F1 / F2 (review)
+def _abs_with(doi=None, title=None):
+    body = X.abs_page().decode()
+    if title is not None:
+        body = body.replace(f'content="{X.TITLE}"', f'content="{title}"', 1)
+    if doi is not None:
+        body = body.replace("</head>", f'<meta name="citation_doi" content="{doi}" /></head>', 1)
+    return body.encode()
+
+
+def _web_abs(body):
+    return Router({}, {}, X.routes(abs_body=body))
+
+
+def test_f1_stated_doi_equal_to_journal_doi_is_admitted_and_f2_provenance_records_it():
+    web = _web_abs(_abs_with(doi="https://doi.org/" + PRD.upper()))  # normalised, case-insensitive
+    o, store = run(cfg_on(), [_src(arxiv_alt={"id": X.AID + X.VER, "source": "inspire"})], web)
+    assert disc(o)["outcome"] == "admitted", disc(o)
+    a = store.plans[0]["source"]["provenance"]["acquisition"]
+    assert a["journal_doi"] == PRD and a["arxiv_via"] == "journal_doi_alt"
+    assert store.plans[0]["source"]["provenance"]["doi"] == X.DOI  # the stored text is the arXiv version
+
+
+@pytest.mark.parametrize("body,src_kw", [
+    (_abs_with(doi="10.9999/synth.someother.7"), {}),  # wrong arXiv id: the abs page names another DOI
+    (_abs_with(title="An unrelated synthetic paper on something else"), {}),  # no DOI stated, title differs
+    (_abs_with(), {"title": ""}),  # no DOI stated and no journal title to compare (e.g. an INSPIRE candidate)
+])
+def test_f1_wrong_arxiv_version_is_rejected_and_nothing_stored_or_read(body, src_kw):
+    web = _web_abs(body)
+    o, store = run(cfg_on(), [_src(arxiv_alt={"id": X.AID + X.VER}, **src_kw)], web)
+    assert disc(o)["reason"] == "R-ACQ-IDENTITY_MISMATCH" and store.plans == []
+    assert X.HTML_URL not in [u for u, _h, _k in web.calls]  # refused on the abs page, before any content fetch
+    last = arxiv_fulltext.last_attempts(X.AID + X.VER)[-1]
+    assert last["status"] == "refused" and "journal record" in last["reason"]
+
+
+def test_f1_check_applies_only_to_rerouted_journal_dois():
+    page = arxiv_fulltext.parse_abs(_abs_with(doi="10.9999/synth.someother.7"))
+    assert arxiv_fulltext.version_mismatch(page, {"journal_doi": PRD, "title": X.TITLE})
+    assert arxiv_fulltext.version_mismatch(page, {"journal_doi": "10.9999/SYNTH.SOMEOTHER.7"}) is None
+    web = Router({}, {}, X.routes(abs_body=_abs_with(doi="10.9999/synth.someother.7")))
+    o, _store = run(cfg_on(), [X.discovery_src()], web)  # a plain arXiv discovery record: unchanged behaviour
+    assert disc(o)["outcome"] == "admitted"
