@@ -21,7 +21,7 @@ from vera import chunk_taxo_store as store
 
 DIM = 64
 N_CLUSTER, PER = 6, 50
-CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_AI_TOKEN": "TOKEN-SECRET-VALUE"}
+CF_ENV = {"CLOUDFLARE_ACCOUNT_ID": "acct123", "CLOUDFLARE_API_TOKEN": "TOKEN-SECRET-VALUE"}
 WORDS = [("quantum", "entanglement", "qubit", "photon"), ("genome", "sequencing", "protein", "enzyme"),
          ("glacier", "permafrost", "arctic", "sediment"), ("tariff", "inflation", "currency", "bonds"),
          ("telescope", "galaxy", "nebula", "pulsar"), ("scholarship", "curriculum", "teacher", "classroom")]
