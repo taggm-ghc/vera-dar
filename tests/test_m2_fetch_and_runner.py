@@ -154,7 +154,9 @@ def test_deadline_demotes_fetches_to_deferred():
 
 def test_cost_log_written_when_env_set(tmp_path, monkeypatch):
     import json
-    log = tmp_path / "cost.jsonl"
+    import vera.m2_runner as m2r
+    monkeypatch.setattr(m2r, "COST_LOG_ROOT", tmp_path / "logs")  # ENV-PATHS-1110: the fixed root; created by the code
+    log = tmp_path / "logs" / "cost.jsonl"
     monkeypatch.setenv("VERA_COST_LOG", str(log))
     run_m2("q", 7, MemStore(), search_fn=fake_search, score_fn=fake_score, fetch_fn=fake_fetch)
     line = json.loads(log.read_text())

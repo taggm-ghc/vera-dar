@@ -46,3 +46,6 @@ Dockerfile
 .claude/
 AGENTS.md
 CLAUDE.md
+
+# ENV-PATHS-1110: cost-log lines hold queries
+logs/

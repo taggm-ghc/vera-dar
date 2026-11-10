@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from sqlalchemy import text
@@ -31,7 +32,10 @@ from vera.search_and_fetch import normalize_url, search_question
 from vera.selective_fetch import fetch_candidate
 
 SCHEMA = "vera_vjay"
+from vera.safe_path import PathRefused, append_text, safe_path
+
 logger = logging.getLogger("vera")
+COST_LOG_ROOT = Path(__file__).resolve().parent.parent / "logs"  # ENV-PATHS-1110: the only place VERA_COST_LOG may point
 
 
 @dataclass
@@ -124,14 +128,20 @@ class PostgresStore:
 
 
 def _append_cost_log(run_id, iteration, q, ledger: CostLedger) -> None:
-    path = os.getenv("VERA_COST_LOG")
+    raw = os.getenv("VERA_COST_LOG")
     line = {"stage": "m2", "run_id": run_id, "iteration": iteration, "query": q,
             "total_usd": ledger.total_usd(), "unknown_cost_calls": ledger.unknown_cost_calls(),
             "calls": ledger.as_dicts()}
     logger.info("m2 cost: %s", json.dumps({k: line[k] for k in ("run_id", "iteration", "total_usd")}))
-    if path:
-        with open(path, "a") as f:
-            f.write(json.dumps(line) + "\n")
+    if raw:
+        # ENV-PATHS-1110: the value must resolve inside <repo root>/logs (fixed in code, created here, never from env).
+        # A refused value is logged by key and reason code only; the append is skipped and M2 continues.
+        try:
+            COST_LOG_ROOT.mkdir(parents=False, exist_ok=True)
+            path = safe_path(raw, [COST_LOG_ROOT], key="VERA_COST_LOG", mode="append")
+            append_text(path, json.dumps(line) + "\n")
+        except (PathRefused, OSError):
+            logger.warning("m2 cost log skipped")
 
 
 def run_m2(

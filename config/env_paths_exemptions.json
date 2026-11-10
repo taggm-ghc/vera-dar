@@ -1,0 +1,16 @@
+{
+ "_doc": "ENV-PATHS-1110 exemptions for scripts/check_env_paths.py. Key: file + function + env + sink + sha256 of the enclosing function. reason is one of selector, denied-name, db-url-not-file, test-only-runner-set, pending-decision. reviewer must be an independent Verifier or owner id (not the implementer); PENDING-* is counted as UNREVIEWED in the checker summary. This file's sha256 is pinned in tests/test_env_paths_guard.py.",
+ "exemptions": [
+  {
+   "file": "vera/fulldoc_corpus.py",
+   "function": "get_corpus",
+   "env": "?",
+   "sink": "read_bytes",
+   "func_sha256": "8c93d6a05c0bd00bd3d2ad7b93e2223a6a13be68fa3b5cf509554e8ff90fed39",
+   "reason": "pending-decision",
+   "reviewer": "PENDING-VERIFIER",
+   "review_by": "2026-11-17",
+   "note": "VERA_FULLDOC_BUNDLE_DIR (config bundle_dir_env) names a bundle directory; manifest and sums are read and then sha256-pinned. Not one of the three planned sites; no allowed root named in the plan. Needs an orchestrator decision: wire safe_path with a named root, or accept on the pin."
+  }
+ ]
+}

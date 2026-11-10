@@ -166,7 +166,7 @@ Update 2026-10-07:
 
 ## What the pipeline persists, and what it does not (code read 2026-10-02; live rows not queried)
 - Persisted: `gate_c_decisions` (decision and full detail per attempt; thresholds are code constants and are not stored with the rows); `claims.detailed_status` and `issues` (M5 fine-grained status); answers by stage with tokens, cost and latency; relations (`span1_id`, `span2_id`, `relation_type`, `confidence` only; `rationale` and `run_id` are not written by that insert); appraisals with rubric/policy version.
-- Not persisted: M2 search cost (returned in memory; appended to the file named by `$VERA_COST_LOG` only if set); the appraisal values and years behind an M5 `weak` label; relations dropped by the 60-cap or as malformed.
+- Not persisted: M2 search cost (returned in memory; appended to the file named by `$VERA_COST_LOG` only if set, and only if that file lies inside the repo-root `logs/` directory (ENV-PATHS-1110: any other value is refused, logged by key and reason code, and the append is skipped)); the appraisal values and years behind an M5 `weak` label; relations dropped by the 60-cap or as malformed.
 - Not created by any production code: `runs` rows (only tests insert them), and `sub_question_ids` (read by Gate C, set by nothing). The pipeline therefore could not run end to end as of that date (history; not re-assessed).
 
 ## Migration 007 (domain registry, DRAFT) role order
