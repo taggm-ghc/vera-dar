@@ -55,7 +55,7 @@ VECTOR = "vector"  # branch name in vera.dar_corpus.retrieve
 DEFAULTS = {"enabled": False, "timeout_s": 3.0, "rrf_k": 60, "vector_k": None, "chunks_per_partition": 2,
             "stem_floor_sim": None, "stem_floor_min_hits": 1, "cooldown_s": 60, "query_cache_max": 32,
             "query_cache_ttl_s": 120, "index_refresh_s": 3600, "max_index_mb": 96, "page_ids": 256,
-            "ask_restart_margin_neurons": 500}
+            "ask_restart_margin_neurons": 500, "lock_budget_s": 3.0}
 # Stage 2 (orchestrator decision within OD-1109-HYBRID): ask-time passage re-rank inside the top partitions. Own flag.
 RERANK_DEFAULTS = {"enabled": False, "top_partitions": 3, "max_passages": 48, "max_chars": 2000, "timeout_s": 3.0,
                    "cooldown_s": 60, "cache_max": 2048, "reserve_slots": 2}
@@ -64,7 +64,8 @@ _RR_BOUNDS = {"top_partitions": (1, 20), "max_passages": (1, 64), "max_chars": (
 _BOUNDS = {"timeout_s": (0.2, 30), "rrf_k": (1, 1000), "vector_k": (1, 1000), "chunks_per_partition": (1, 100),
            "stem_floor_sim": (-1.0, 1.0), "stem_floor_min_hits": (1, 20), "cooldown_s": (0, 86400),
            "query_cache_max": (1, 4096), "query_cache_ttl_s": (0, 86400), "index_refresh_s": (10, 10**7),
-           "max_index_mb": (1, 400), "page_ids": (1, 5000), "ask_restart_margin_neurons": (0, 10**6)}
+           "max_index_mb": (1, 400), "page_ids": (1, 5000), "ask_restart_margin_neurons": (0, 10**6),
+           "lock_budget_s": (0.2, 30)}
 
 SQL_VECTORS = ("SELECT v.span_id, v.text_sha256, v.vec FROM vera_vjay.tax_chunk_vectors v "
                "WHERE v.model = :model AND v.span_id = ANY(:ids) ORDER BY v.span_id")
@@ -75,16 +76,43 @@ SQL_NEURONS_TODAY = ("SELECT COALESCE(SUM(r.neurons_used), 0) FROM vera_vjay.tax
 # beyond LOCK_TIMEOUT_S. (The plain Lock self-deadlocked when _embedder called config() while holding it.)
 _LOCK = threading.RLock()
 LOCK_TIMEOUT_S = 2.0
+LOCK_BUDGET_S = 3.0  # default per-ask total of all lock waits (config lock_budget_s overrides)
 INFLIGHT_STALE_S = 30.0  # HYBRID-SINGLEFLIGHT-1109: an embedder creation older than this is presumed dead
 _INFLIGHT: dict = {}  # slot -> (Event, started monotonic); guarded by _LOCK
 
 
+def _begin_ask_budget(seconds: float) -> None:
+    """HYBRID-HARDEN-1109: start this thread's per-ask lock-wait budget (lock acquisitions and the embedder single-flight
+    wait share it, so the worst case is bounded per ask, not per acquisition). Separate from the embed deadlines."""
+    _TL.lock_left = max(0.0, float(seconds))
+
+
+def _wait_left() -> float | None:
+    """Seconds of lock-wait budget left for this thread's ask, or None when no ask budget is active."""
+    return getattr(_TL, "lock_left", None)
+
+
+def _spend_wait(dt: float) -> None:
+    left = getattr(_TL, "lock_left", None)
+    if left is not None:
+        _TL.lock_left = max(0.0, left - max(0.0, dt))
+
+
 @contextmanager
-def _locked(lock=None, timeout: float | None = None):
-    """Acquire `lock` (default _LOCK) for at most `timeout` seconds (default LOCK_TIMEOUT_S); TimeoutError otherwise. The
-    request path catches it and falls back to word-only search."""
+def _locked(lock=None, timeout: float | None = None, budgeted: bool = True):
+    """Acquire `lock` (default _LOCK) for at most `timeout` seconds (default LOCK_TIMEOUT_S), and, inside an ask, no more
+    than the ask's remaining lock-wait budget (an exhausted budget still tries once without waiting); TimeoutError
+    otherwise. The request path catches it and falls back to word-only search."""
     lk = _LOCK if lock is None else lock
-    if not lk.acquire(timeout=LOCK_TIMEOUT_S if timeout is None else timeout):
+    t = LOCK_TIMEOUT_S if timeout is None else timeout
+    left = _wait_left() if budgeted else None
+    if left is not None:
+        t = min(t, left)
+    t0 = time.monotonic()
+    ok = lk.acquire(timeout=t) if t > 0 else lk.acquire(blocking=False)
+    if budgeted:
+        _spend_wait(time.monotonic() - t0)
+    if not ok:
         raise TimeoutError("hybrid_lock")
     try:
         yield
@@ -128,6 +156,9 @@ def _clean(raw) -> dict:
 def config() -> dict:
     """The validated config (cached; a bad file or value means the default for that key; a bad file means OFF). Never
     raises and never waits on the lock beyond LOCK_TIMEOUT_S: on a lock timeout it returns the cached config, else OFF."""
+    cached = _STATE["cfg"]
+    if cached is not None:  # HYBRID-HARDEN-1109: lock-free fast path (a single dict read; the cfg dict is replaced, never mutated)
+        return cached
     try:
         with _locked():
             if _STATE["cfg"] is None:
@@ -210,7 +241,8 @@ def _text_chars() -> int:
 def _embedder(slot: str = "emb"):
     """(embedder | None, reason). slot "emb" = the question embedder (timeout_s), "emb2" = the stage-2 passage embedder
     (rerank.timeout_s); each is a separate adapter instance (one attempt). Created once; a failed creation is retried after
-    cooldown_s. Never raises."""
+    cooldown_s. Does not raise for a failed creation; the lock waits in it can raise TimeoutError (hybrid_lock) when the
+    lock is held elsewhere past the budget, which callers treat as word-only."""
     now = _STATE["clock"]()
     cooldown = float(config()["cooldown_s"])  # HYBRID-HANG-1109: outside the lock (this call under the lock deadlocked)
     with _locked():
@@ -228,7 +260,10 @@ def _embedder(slot: str = "emb"):
             creator = False
     if not creator:
         # HYBRID-SINGLEFLIGHT-1109: one creator per slot; waiters wait at most LOCK_TIMEOUT_S, then fall back to word-only.
-        flight[0].wait(LOCK_TIMEOUT_S)
+        left = _wait_left()
+        t0 = time.monotonic()
+        flight[0].wait(LOCK_TIMEOUT_S if left is None else min(LOCK_TIMEOUT_S, left))
+        _spend_wait(time.monotonic() - t0)
         try:
             with _locked():
                 if _STATE[slot] is not None:
@@ -259,8 +294,14 @@ def _embedder(slot: str = "emb"):
                 if owner:
                     del _INFLIGHT[slot]
         except TimeoutError:
-            if _INFLIGHT.get(slot) is flight:  # best effort; waiters time out and the stale rule frees the slot
-                _INFLIGHT.pop(slot, None)
+            # HYBRID-HARDEN-1109: ownership check and pop under the lock, bounded (0.5 s, outside the ask budget); if the lock
+            # is still unavailable the entry is left and the stale rule frees it (a pop without the lock raced a takeover).
+            try:
+                with _locked(timeout=0.5, budgeted=False):
+                    if _INFLIGHT.get(slot) is flight:
+                        del _INFLIGHT[slot]
+            except TimeoutError:
+                pass
         flight[0].set()
     return emb, why
 
@@ -357,7 +398,9 @@ def _embed_many_deadline(emb, texts: list, timeout_s: float, est: float | None =
 
 def query_vector(text: str):
     """(unit float32 vector | None, code, embed_ms). One embedding call per distinct question text (cached by its sha256).
-    Never raises; the text is never logged."""
+    Embedding failures are returned as a code, not raised. It can raise TimeoutError (hybrid_lock) when a hybrid lock is
+    held elsewhere past the ask's lock budget; vector_fn (its caller) catches that and the ask goes word-only. The text is
+    never logged."""
     import numpy as np
     cfg = config()
     key = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
@@ -632,9 +675,11 @@ def ensure_index(corpus, model: str, sync: bool = False):
 # ------------------------------------------------------------------------------------------------ retrieval hook
 def vector_fn(corpus, question: str):
     """Called by FullDocCorpus.retrieve when enabled(). Returns (fn | None, sim_of | None) and sets this thread's status.
-    fn(dar, scores) -> ranked chunk list for the vector branch; sim_of(chunk_idx) -> cosine or None. Never raises."""
+    fn(dar, scores) -> ranked chunk list for the vector branch; sim_of(chunk_idx) -> cosine or None. vector_fn itself never raises (fn may; its call site catches)."""
     try:
+        _begin_ask_budget(LOCK_BUDGET_S)  # HYBRID-HARDEN-1109: the ask's lock-wait budget (re-read from config just below)
         cfg = config()
+        _begin_ask_budget(float(cfg.get("lock_budget_s", LOCK_BUDGET_S)))
         if getattr(corpus, "_dar", None) is None or not getattr(corpus, "stamps", None):
             _set_status(status="no_stored_spans", vectors=0)
             return None, None
@@ -728,7 +773,9 @@ def passage_vectors(texts: list, model: str):
     """(float32 unit matrix rows in `texts` order | None, code, neurons_est). Cached per (sha256(text), model) in an LRU of
     rerank.cache_max entries (process memory only; no DB writes). The uncached texts go out in ONE batched call (at most
     rerank.max_passages <= 64, the adapter batch size), checked against the ask-time share of the daily budget first.
-    Never raises; texts are never logged."""
+    Embedding failures are returned as a code, not raised. It can raise TimeoutError (hybrid_lock) when a hybrid lock is held
+    elsewhere past the ask's lock budget; the stage-2 caller sits under vector_fn's retrieve try and the ask goes word-only.
+    Texts are never logged."""
     import numpy as np
     rr = config()["rerank"]
     keys = [(hashlib.sha256(t.encode("utf-8")).hexdigest(), model) for t in texts]
