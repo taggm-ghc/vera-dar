@@ -14,6 +14,10 @@ from tests import fulltext_synth as fs
 from vera import acq_config, acq_discovered, arxiv_fulltext, auto_acquire, inline_acquire, search_providers as sp
 from vera import search_query, wiki_ref_portal
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 ROOT = Path(__file__).resolve().parent.parent
 Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
 RUN = json.loads((ROOT / "config" / "vera_eval_run.json").read_text())["search"]

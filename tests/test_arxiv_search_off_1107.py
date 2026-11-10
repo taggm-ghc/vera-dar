@@ -35,7 +35,10 @@ class _Spy:
 def test_shipped_flags_are_off_and_fulltext_route_stays_on():
     assert _cfg("vera_eval_run.json")["search"]["arxiv"]["enabled"] is False
     assert "arxiv" not in _cfg("auto_acquire.json")["search"]["providers"]
-    assert _cfg("auto_acquire.json")["arxiv_route"]["enabled"] is True
+    # ARXIV-PORTAL-1110 (owner 2026-11-10: "arxiv is a portal to sources, not a source, itself"): the full-text route
+    # is now OFF in config and closed in code
+    from vera import arxiv_fulltext
+    assert _cfg("auto_acquire.json")["arxiv_route"]["enabled"] is False and arxiv_fulltext.PORTAL_ONLY is True
 
 
 def test_shipped_chain_has_no_arxiv_provider():

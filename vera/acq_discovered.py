@@ -209,6 +209,20 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
                 "outcome": "dropped", "reason": acq_config.reason(acq, "irrelevant")})
             continue
         from vera import arxiv_fulltext  # ARX-A2: arXiv records (no journal DOI) -> arXiv route when enabled
+        aid = arxiv_fulltext.arxiv_ident(s) if arxiv_fulltext.PORTAL_ONLY else None
+        if aid is not None and (not doi or arxiv_fulltext._ARXIV_DOI.match(doi)):
+            # ARXIV-PORTAL-1110: an arXiv record without a journal DOI is a PORTAL seed (vera/arxiv_portal.py): followed
+            # to its published version and references, never read; ranking drops it with R-ACQ-ARXIV_PORTAL
+            # (a held portal entry, not a candidate: nothing is read; `_portal_seed` is taken off by inline_acquire and
+            # handed to arxiv_portal.extend, never shown)
+            seed = {"doi": f"10.48550/arxiv.{aid[0]}", "url": f"https://arxiv.org/abs/{aid[0]}{aid[1] or ''}",
+                    "arxiv_id": aid[0], "title": " ".join(str(s.get("title") or "").split()),
+                    "snippet": " ".join(str(s.get("snippet") or "").split()), "acq_source": "discovered"}
+            held.append({**e, "gate_a": {"decision": "portal", "factors": {
+                "identifier": "arxiv", "portal": "arXiv record: followed to its published version and its references; "
+                                                 "never read"}, "uncertainty": []},
+                "outcome": "portal", "reason": acq_config.reason(acq, "arxiv_portal"), "_portal_seed": seed})
+            continue
         ac = arxiv_fulltext.discovered_candidate(s, doi, kind, e, acq)
         if ac is None and (kind == "record" or (kind == "arxiv" and not doi)):  # D1: no route reads the paper's own licence
             held.append({**e, "gate_a": {"decision": "reject", "factors": {"identifier": "doi" if doi else "none",
@@ -275,6 +289,11 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         elif (drops or {}).get(id(c)) == irrelevant:  # DDFIX-1023/REL: off-topic before the cut (title + abstract)
             f["relevance"] = "no key concept of the question in the title or abstract (deterministic, lexical)"
             dec, reason = "reject", irrelevant
+        elif (drops or {}).get(id(c)) == acq_config.reason(acq, "arxiv_portal"):
+            # ARXIV-PORTAL-1110: an arXiv record is a portal entry (followed to its published version and references by
+            # vera/arxiv_portal.py), never a source to acquire
+            f["portal"] = "arXiv record: followed to its published version and its references; never read"
+            dec, reason = "portal", drops[id(c)]
         elif (drops or {}).get(id(c)) in (acq_config.reason(acq, "duplicate"), acq_config.reason(acq, "no_doi")):
             # WP7 (MIDTERMS-WP7-1106 c): the ranking stage's own reason (an in-request duplicate, no identifier) is
             # reported as it is, not folded into the candidate-cut label below
@@ -291,7 +310,7 @@ def gate_a(disc: list, merged: list, ranked: list, served: set, acq: dict, drops
         e = {**c["discovery"], "gate_a": {"decision": dec, "factors": f, "uncertainty": unc}}
         c["_gate_a"] = {"decision": dec, "factors": copy.deepcopy(f), "uncertainty": list(unc)}  # for provenance
         if reason:
-            e["outcome"], e["reason"] = ("deferred" if dec == "defer" else "rejected"), reason
+            e["outcome"], e["reason"] = ({"defer": "deferred", "portal": "portal"}.get(dec, "rejected")), reason
         out[id(c)] = e
     return out
 

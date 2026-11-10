@@ -19,6 +19,10 @@ from tests.test_acq_serve import _decide, h  # noqa: F401  (h is a fixture)
 from tests.test_dar_inline_acquire import OFF_Q, rig  # noqa: F401  (rig is a fixture)
 from vera import acq_config, arxiv_fulltext, fulltext_loader, licence_gate
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 _REAL_DECISION = licence_gate.licence_decision
 ROBOTS = "https://arxiv.org/robots.txt"
 TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt

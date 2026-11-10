@@ -4,6 +4,12 @@ import copy
 from tests import acq_support as A
 from vera import acq_config, auto_acquire, search_providers as sp
 
+import pytest
+
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 Q = "llm multi agent orchestration frameworks"
 
 

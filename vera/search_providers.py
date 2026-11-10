@@ -1790,6 +1790,8 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
             from vera import reference_portal  # off = no work; shadow = background, logs only; on = merged last
             merged = reference_portal.extend(question, merged, base=base, ddg_raw=got.get("ddg"), clock=clock,
                                              deadline=t_end)
+        from vera import arxiv_portal  # ARXIV-PORTAL-1110: arXiv seeds -> published version + references (metadata only)
+        merged = arxiv_portal.extend(question, merged, clock=clock, deadline=t_end)
         by = {}
         for c in merged:
             by[acq_source(c)] = by.get(acq_source(c), 0) + 1

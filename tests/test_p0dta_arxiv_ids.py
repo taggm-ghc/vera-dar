@@ -76,6 +76,10 @@ def test_arxiv_id_candidate_field_is_string():
 # ---- defect C: robots Crawl-delay: 15, cold robots cache, fake clock (live case arXiv:2605.23989v1)
 from tests import acq_support as A  # noqa: E402
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 ROBOTS = "https://arxiv.org/robots.txt"
 
 

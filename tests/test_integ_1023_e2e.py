@@ -15,6 +15,10 @@ from tests.test_route_ddg_first_r2 import (  # noqa: F401  (h, rig, clock, no_db
     ddg_row, epmc_row, h, no_db_no_socket, oa_rec, rig, world)
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 
 def _ft(body):
     """OD-1109-SIX: a grounded answer now also carries the new_documents trigger (freshness.always_acquire_new); the

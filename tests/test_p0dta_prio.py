@@ -10,6 +10,10 @@ from tests import fulltext_synth as fs
 from tests.test_acq_discovered import Router, oa_src
 from vera import acq_config, arxiv_fulltext, auto_acquire, inline_acquire, search_providers
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 
 class Clock:
     def __init__(self, t=1000.0):

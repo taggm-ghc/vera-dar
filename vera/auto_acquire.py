@@ -1049,6 +1049,12 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
                 drops[id(c)] = why_no
             continue
         ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
+        from vera import arxiv_portal
+        if arxiv_portal.is_seed(c, cfg):  # ARXIV-PORTAL-1110: an arXiv record is a portal entry, never read
+            count(acq_config.reason(cfg, "arxiv_portal"))
+            if drops is not None:
+                drops[id(c)] = acq_config.reason(cfg, "arxiv_portal")
+            continue
         why = search_providers.acq_prefilter(c)  # YIELD-1021: licence/OA pre-filter BEFORE the cut (metadata only)
         if why:
             count(acq_config.reason(cfg, "not_oa" if why == "not_oa" else "no_licence"))
@@ -1166,6 +1172,11 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     from vera import fulltext_routes  # OA-4: route registry (arXiv first, Europe PMC the default; unchanged order)
     route, cand, doi = fulltext_routes.select(cand, doi, cfg)
     plan, isbn = route.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur, min_spans)
+    if cand.get("portal_via"):  # ARXIV-PORTAL-1110: found through an arXiv record ("via arXiv <id>"), read on its own host
+        try:
+            plan["source"]["provenance"]["acquisition"]["portal_via"] = str(cand["portal_via"])
+        except Exception:  # noqa: BLE001  (a label never blocks an acquisition)
+            logger.warning("portal_via provenance label skipped")
     from vera import work_key  # OA-3c: discovery events + version link in the provenance JSON (mode "on" only)
     if work_key.mode() == "on":
         try:

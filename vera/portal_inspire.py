@@ -80,7 +80,9 @@ def parse(body: bytes, acfg: Mapping) -> list:
         md = h.get("metadata") if isinstance(h, Mapping) else None
         if not isinstance(md, Mapping):
             continue
-        out += _ids_of(md.get("dois"), "doi")[:1] + _ids_of(md.get("arxiv_eprints"), "arxiv")[:1]
+        # ARXIV-PORTAL-1110: a hit's journal DOI when it has one, else its arXiv id (then an arXiv portal seed, followed
+        # by vera/arxiv_portal.py); the same DOI-first rule as for references
+        out += _ids_of(md.get("dois"), "doi")[:1] or _ids_of(md.get("arxiv_eprints"), "arxiv")[:1]
         n = 0
         for r in md.get("references") or () if isinstance(md.get("references"), list) else ():
             ref = r.get("reference") if isinstance(r, Mapping) else None
@@ -170,7 +172,92 @@ def adapter(question: str, base, cfg: Mapping, deps, counts: dict, clock: Callab
     return out
 
 
+ARXIV_FIELDS = ("dois.value", "references.reference.dois")
+_ARX_CACHE: dict = {}
+
+
+def parse_arxiv_record(body: bytes, max_refs: int) -> tuple[list, list]:
+    """INSPIRE JSON for ONE arXiv e-print -> ([journal DOIs], [reference DOIs]) (DOIs only; arXiv-only references are
+    not followed: they would be further portals). Any shape error -> ([], []) (fail closed)."""
+    try:
+        hits = json.loads(body.decode("utf-8"))["hits"]["hits"]
+        md = hits[0]["metadata"] if isinstance(hits, list) and hits and isinstance(hits[0], Mapping) else None
+        if not isinstance(md, Mapping):
+            return [], []
+    except Exception:  # noqa: BLE001
+        return [], []
+    own = [i["doi"] for i in _ids_of(md.get("dois"), "doi")[:1]]
+    refs: list = []
+    for r in md.get("references") if isinstance(md.get("references"), list) else ():
+        ref = r.get("reference") if isinstance(r, Mapping) else None
+        if len(refs) >= max_refs or not isinstance(ref, Mapping):
+            continue
+        refs += [i["doi"] for i in _ids_of(ref.get("dois"), "doi")[:1] if i["doi"] not in refs and i["doi"] not in own]
+    return own, refs[:max_refs]
+
+
+def lookup_arxiv(aid: str, endpoint: str, max_refs: int, timeout_s: float, counts: dict, clock: Callable = time.monotonic,
+                 get: Callable | None = None, cache_ttl_s: float = 86400.0, max_bytes: int = 4000000):
+    """ARXIV-PORTAL-1110: ONE INSPIRE metadata call for an arXiv e-print (q=arxiv:<id>, identifier fields only) ->
+    ([journal DOIs], [reference DOIs]) or None when nothing was obtained. Through the same gate as the portal adapter
+    (_default_get: api_permissions inspire_literature, purpose metadata, rate portal inspire); cached; a 429 starts the
+    shared cooldown (at least 5 s) and is never retried. Never raises."""
+    now = clock()
+    with _LOCK:
+        hit = _ARX_CACHE.get(aid)
+    if hit is not None and now - hit[0] < cache_ttl_s:
+        counts["arxivportal_cache_hit"] = counts.get("arxivportal_cache_hit", 0) + 1
+        return hit[1]
+    if now < _COOL["until"]:
+        counts["arxivportal_cooldown"] = counts.get("arxivportal_cooldown", 0) + 1
+        return None
+    if timeout_s <= 0.5:
+        counts["arxivportal_deadline"] = counts.get("arxivportal_deadline", 0) + 1
+        return None
+    params = {"q": f"arxiv:{aid}", "size": 1, "fields": ",".join(ARXIV_FIELDS)}
+    counts["arxivportal_calls"] = counts.get("arxivportal_calls", 0) + 1
+    resp = None
+    try:
+        resp = (get or _default_get)(endpoint, params, timeout_s)
+        st = int(getattr(resp, "status_code", 0) or 0)
+        if st == 429:
+            ra = (getattr(resp, "headers", None) or {}).get("Retry-After")
+            try:
+                wait = max(5.0, float(ra))
+            except (TypeError, ValueError):
+                wait = 5.0
+            _COOL["until"] = clock() + wait
+            counts["arxivportal_429"] = counts.get("arxivportal_429", 0) + 1
+            return None
+        if st != 200:
+            counts["arxivportal_failed"] = counts.get("arxivportal_failed", 0) + 1
+            return None
+        body = b""
+        for chunk in resp.iter_content(65536):
+            body += chunk
+            if len(body) > max_bytes:
+                counts["arxivportal_too_large"] = counts.get("arxivportal_too_large", 0) + 1
+                return None
+        got = parse_arxiv_record(body, max_refs)
+    except Exception as e:  # noqa: BLE001  ApiDenied, RateLimited, ImportError, transport errors: no retry, nothing more
+        k = "arxivportal_" + (getattr(e, "code", None) or type(e).__name__).lower().replace("-", "_")
+        counts[k] = counts.get(k, 0) + 1
+        return None
+    finally:
+        try:
+            if resp is not None and hasattr(resp, "close"):
+                resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+    with _LOCK:
+        _ARX_CACHE[aid] = (now, got)
+        while len(_ARX_CACHE) > 512:
+            _ARX_CACHE.pop(next(iter(_ARX_CACHE)))
+    return got
+
+
 def reset_for_tests() -> None:
     with _LOCK:
         _CACHE.clear()
+        _ARX_CACHE.clear()
     _COOL["until"] = 0.0

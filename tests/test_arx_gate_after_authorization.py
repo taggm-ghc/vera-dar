@@ -18,6 +18,10 @@ from tests.test_acq_serve import _decide, h  # noqa: F401  (h is a fixture)
 from tests.test_dar_inline_acquire import OFF_Q, rig  # noqa: F401  (rig is a fixture)
 from vera import arxiv_fulltext, auto_acquire, fulldoc_db, licence_gate
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 HTML = "https://arxiv.org/html/2605.23989v1"
 CC = "https://creativecommons.org/licenses/{}/4.0/"
 

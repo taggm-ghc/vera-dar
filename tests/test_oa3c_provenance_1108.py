@@ -9,6 +9,10 @@ from tests import acq_support as A
 from tests import arxiv_synth as X
 from vera import arxiv_fulltext, auto_acquire, search_providers, work_key
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 PMC = "PMC7300031"
 E1 = {"title": "SYNTHETIC alpha", "doi": "10.9999/oa3c.a", "pmcid": PMC, "provider": "europepmc",
       "acq_source": "europepmc", "url": "https://doi.org/10.9999/oa3c.a"}

@@ -29,6 +29,10 @@ from tests._gap_support import http_ask
 from vera import arxiv_fulltext, auto_acquire, inline_acquire
 from vera import search_providers as sp
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 ROOT = Path(__file__).resolve().parent.parent
 Q = e2e.Q_EPI
 
@@ -175,7 +179,7 @@ def test_00_owner_gate_files_and_flags():
     ndg = json.loads((ROOT / "config" / "fulldoc_answer.json").read_text(encoding="utf-8"))["answer"]["nd_guard"]
     assert hashlib.sha256(json.dumps(ndg, sort_keys=True, separators=(",", ":")).encode()).hexdigest().startswith("ccf74d81")
     acq = json.loads((ROOT / "config" / "auto_acquire.json").read_text(encoding="utf-8"))
-    assert acq["search"]["ddg_first"]["enabled"] is True and acq["arxiv_route"]["enabled"] is True
+    assert acq["search"]["ddg_first"]["enabled"] is True and acq["arxiv_route"]["enabled"] is False  # ARXIV-PORTAL-1110
     reg = json.loads((ROOT / "config" / "portal_registry.json").read_text(encoding="utf-8"))
     rec = reg.get("recorder") or {}
     print("DDGFLOW-OBS " + json.dumps({"scenario": "00", "recorder": {k: rec.get(k) for k in ("enabled", "backend",

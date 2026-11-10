@@ -10,6 +10,10 @@ from tests.test_acq_serve import h  # noqa: F401  (fixture)
 from vera import acq_config, ask_service, auto_acquire, fulldoc_corpus, inline_acquire
 from vera.dar_corpus import doc_key_set
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 DOI = "10.9999/acq.epi4"
 
 

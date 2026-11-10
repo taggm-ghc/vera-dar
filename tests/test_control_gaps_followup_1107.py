@@ -15,6 +15,10 @@ from tests.test_p0dta_arxiv_ids import ROBOTS, _crawl_run, clk  # noqa: F401  (c
 from vera import acq_discovered, arxiv_fulltext, ask_service, inline_acquire
 from vera import memory_store as ms
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 
 class _SyncPool:
     """Runs each job AT SUBMIT (deterministic): by the time submit() returns, a worker has already cached arxiv.org's

@@ -56,8 +56,16 @@ def rcfg(acq) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+# Owner 2026-11-10 (ARXIV-PORTAL-1110), verbatim: "arxiv is a portal to sources, not a source, itself". arXiv text of
+# ANY licence (CC included) never becomes stored or answer evidence: this module's evidence route is closed in CODE, so
+# flipping config arxiv_route.enabled cannot reopen it. arXiv records are portals only (vera/arxiv_portal.py: their
+# published version and their references through metadata routes). Only a reviewed code change with a new owner
+# decision may set this False; tests of the dormant route set it through the legacy_arxiv_route fixture.
+PORTAL_ONLY = True
+
+
 def route_on(acq) -> bool:
-    return rcfg(acq).get("enabled") is True
+    return not PORTAL_ONLY and rcfg(acq).get("enabled") is True
 
 
 def last_attempts(key: str) -> list:
@@ -402,6 +410,8 @@ def evaluate(job, score, doi, cand, isbn, acq, deps, icfg, fdcfg, clock=time.mon
     from vera import auto_acquire as aa
     from vera import fulltext_loader as fl
     from vera import jats_text
+    if PORTAL_ONLY:  # ARXIV-PORTAL-1110: unreachable as evidence whatever config says; nothing is requested
+        raise aa._Stop(acq_config.reason(acq, "arxiv_portal"))
     dur = {} if dur is None else dur
     r = rcfg(acq)
     aid = str((cand.get("arxiv") or {}).get("id") or "")

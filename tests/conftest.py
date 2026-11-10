@@ -356,3 +356,21 @@ def _no_spell_vocabulary_for_unrelated_tests(request, monkeypatch):
         monkeypatch.setattr(spell_clarify, "_corpora", lambda: ())
     yield
     spell_clarify.reset_for_tests()
+
+
+@pytest.fixture
+def legacy_arxiv_route(monkeypatch):
+    """ARXIV-PORTAL-1110: tests of the DORMANT arXiv evidence route (closed in code by the owner rule "arxiv is a portal
+    to sources, not a source, itself"). Reopens it for the test only: arxiv_fulltext.PORTAL_ONLY False and
+    arxiv_route.enabled true in every loaded acquisition config, i.e. the pre-1110 shipped state those tests pin."""
+    from vera import acq_config, arxiv_fulltext
+    monkeypatch.setattr(arxiv_fulltext, "PORTAL_ONLY", False)
+    real = acq_config.load_config
+
+    def load(*a, **k):
+        c = real(*a, **k)
+        if isinstance(c, dict) and isinstance(c.get("arxiv_route"), dict):
+            c = {**c, "arxiv_route": {**c["arxiv_route"], "enabled": True}}
+        return c
+    monkeypatch.setattr(acq_config, "load_config", load)
+    yield

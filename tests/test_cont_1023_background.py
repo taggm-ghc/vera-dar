@@ -281,10 +281,10 @@ def test_offtopic_notice_discloses_background_acquisition(h, monkeypatch, bg):
     # ANS-LAYERS-1101: the notice is the answer; the background disclosure travels as a "background" note, not answer text
     assert inline_acquire.BACKGROUND_NOTE not in r.answer
     assert {"kind": "background", "text": inline_acquire.BACKGROUND_NOTE} in list(r.notes)
-    # INTEG-1023: with the ARX-A2 route enabled the fixture's arXiv record is a candidate too (formerly held by
-    # acq_discovered); unfinished at the deadline, it is queued like the other (its job still meets every gate).
+    # ARXIV-PORTAL-1110 (was INTEG-1023: the fixture's arXiv record was a candidate and queued too): an arXiv record is
+    # a portal entry, never a source, so only the DOI candidate is queued.
     qc = _queued_cands()
-    assert len(qc) == 2 and sum(str(c.get("doi") or "").startswith("10.48550/arxiv") for c in qc) == 1
+    assert len(qc) == 1 and not any(str(c.get("doi") or "").startswith("10.48550/arxiv") for c in qc)
 
 
 def test_url_only_queued_cause_is_awaiting_route_not_budget(bg):

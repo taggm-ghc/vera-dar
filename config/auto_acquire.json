@@ -238,7 +238,8 @@
   },
   "arxiv_route": {
     "_doc": "ARX-A2 (vera/arxiv_fulltext.py): discovered arXiv records without a journal DOI are no longer held blindly. abs page (identity, metadata, the paper's own licence link) -> representations in order (html; pdf is recorded as not attempted: no PDF extractor exists) -> the existing HTML converter restricted to <article> -> every unchanged gate. SECURITY-CONFIG CHANGE (needs security review): hosts is the arXiv route's OWN fetch allowlist (exact host, https, checked on every redirect hop by auto_acquire._guarded_get with the public-address check and the pinned transport); fetch.allowed_hosts (Europe PMC) is not widened. Requests to arxiv.org are paced by the rate_limits.json arxiv portal (1 request / 3 s, one connection). licence_gate.py still rejects arXiv HTML (R-ACQ-ARXIV_HTML_POLICY) until the owner decides otherwise. enabled=false restores the D1 hold (R-ACQ-PREPRINT_LICENCE_UNVERIFIED).",
-    "enabled": true,
+    "enabled": false,
+    "_portal_only_note": "ARXIV-PORTAL-1110, owner 2026-11-10 verbatim: \"arxiv is a portal to sources, not a source, itself\". Off, and closed in code as well (vera/arxiv_fulltext.PORTAL_ONLY): true here does NOT reopen the route. arXiv records are followed to their published version and their references by arxiv_portal below.",
     "hosts": ["arxiv.org"],
     "content_types": ["text/html"],
     "representations": ["html", "pdf"],
@@ -330,6 +331,7 @@
     "encoding": "R-ACQ-ENCODING",
     "format_unsupported": "R-ACQ-FORMAT_UNSUPPORTED",
     "identity_mismatch": "R-ACQ-IDENTITY_MISMATCH",
+    "arxiv_portal": "R-ACQ-ARXIV_PORTAL",
     "licence_absent": "R-ACQ-LICENCE_ABSENT",
     "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
     "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",
@@ -339,6 +341,13 @@
     "_note": "CONTROL-GAPS-1107 r2, H-5 (approved OD-1107-HITL; see _h5_note, which supersedes the shipped-false sentence below): when enforce_on_acquisition is exactly true, the robots.txt Crawl-delay (own UA, * and AI-agent groups; vera.robots_ai.crawl_delay) of each host is honoured on auto_acquire._guarded_get and acq_discovered._b_get: a request waits until Crawl-delay seconds after the previous request to that host; a wait past the job deadline stops with R-ACQ-CRAWL_DELAY (no request sent, not an attempt). Ships false = unchanged pacing (rate_limits.json portals only; the arXiv route keeps its own Crawl-delay spacing). Not a threshold: the delay is the host's own published value.",
     "_h5_note": "H5-CRAWL-1107, owner OD-1107-HITL (2026-11-07) H-5(a) approved, verbatim: \"Crawl-delay: Approve H-5(a), with applicable source rate restrictions enforced. Permit compliant inline acquisition and use background queues where pacing exceeds the request budget. Do not claim deferred acquisition will resolve the current question without an implemented mechanism.\" Ships true. Every acquisition request to a host (robots.txt, tdmrep.json, DOI landing, Europe PMC REST, full text) books the host's next slot under one lock (vera.acq_discovered.crawl_wait), so concurrent inline workers are serialized per host. Spacing = the stricter of the host's robots Crawl-delay and 1 / rate_per_s of its config/rate_limits.json portal; a host with no Crawl-delay is paced by its rate_limits.json token bucket alone. A slot past the per-document or job deadline (less min_call_s) is not booked: R-ACQ-CRAWL_DELAY, nothing sent, not an attempt, handed to the existing best-effort in-memory background queue (vera.auto_acquire.enqueue_candidates) when that queue is enabled. A server 429 on a document request is R-ACQ-RATELIMITED-THROTTLED (not an attempt; other statuses, 503 included, unchanged). Not a threshold: the delay is the host's own published value; no new cap.",
     "enforce_on_acquisition": true
+  },
+  "arxiv_portal": {
+    "_doc": "ARXIV-PORTAL-1110 (vera/arxiv_portal.py). An arXiv-only candidate (an arXiv id and no journal DOI; from search, DuckDuckGo, the Wikipedia or INSPIRE portal, or a discovered record) is a PORTAL: it is never read, and ranking drops it with R-ACQ-ARXIV_PORTAL. Its published version (journal DOI) and its references (DOIs) are looked up through INSPIRE-HEP metadata only (vera/portal_inspire.lookup_arxiv: api_permissions inspire_literature, rate portal inspire, cached, a 429 cooldown shared with the INSPIRE portal adapter) and added as ordinary candidates labelled portal_via 'via arXiv <id>'; each goes through the unchanged acquisition gates (route, robots/TDM, rate, licence) on its original host. Nothing is fetched from arxiv.org (no /abs, /api or /e-print). Off when INSPIRE is not permitted (reference_portal.inspire_permitted).",
+    "enabled": true,
+    "max_records_per_call": 3,
+    "max_refs_per_record": 10,
+    "_calibration_note": "Structural bounds, not decision thresholds (no live data measured): max_records_per_call 3 = at most 3 INSPIRE calls per search call at the inspire portal's 1 request/s, inside the 5 s portal timeout budget; max_refs_per_record 10 caps candidates per arXiv record so references cannot crowd the 31-candidate cut (bounds.max_candidates_resolved). What would change them: 'autoacq arxivportal' counts (lookups, journal DOIs, refs added) and the downstream admit rate of portal_via candidates over live questions."
   },
   "repository_pdf_route": {
     "_note": "H20-PDF-1106 D-CFG. Flag ships OFF. Off, missing or non-boolean enabled = off; no env override. Caps and the exact-host list live in config/repository_pdf.json (required controls, PROVISIONAL values). mode answer_only: listed-host PDFs are used for answers only; ingest needs an explicit allowed licence (Q2, orchestrator 2026-11-05).",

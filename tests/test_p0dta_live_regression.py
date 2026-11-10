@@ -18,6 +18,10 @@ from tests._pipeline_support import GROUND, PRICING, DiscSearch, Router, _decide
 from vera import acq_discovered, arxiv_fulltext, ask_service, inline_acquire, search_providers
 from vera import research_outcome as ro
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 Q_LIVE = "Which are the prevailing proven-useful archetypes for agentic AI orchestrated agents?"
 ROBOTS = "https://arxiv.org/robots.txt"
 OTHER_DOI = "10.9999/p0dta.agentic.closed"  # the second (OpenAlex) candidate: no open-access route

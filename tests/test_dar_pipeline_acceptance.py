@@ -25,6 +25,10 @@ from tests._pipeline_support import (ABSTRACT_SENTINEL, DOI, PMC, PRIVATE_IP, Q_
                                      passages_sent_to_model, reason_code, rig, stored_text, GROUND, PRICING)
 from vera import acq_config, acq_discovered, ask_service, auto_acquire, grounded_ask, inline_acquire, selective_fetch
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 EPMC_SEARCH = "/rest/search"
 EPMC_FULLTEXT = f"/{PMC}/fullTextXML"
 

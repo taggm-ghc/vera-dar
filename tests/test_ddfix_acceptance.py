@@ -28,6 +28,10 @@ from tests._pipeline_support import PRICING, DiscSearch, h, rig  # noqa: F401  (
 from tests.test_dar_inline_acquire import GROUND
 from vera import acq_config, acq_discovered, arxiv_fulltext, ask_service, discovery_panel, scope_router
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 Q = "What are the de facto status quo best practices agent archetypes used in multi-agent orchestration?"
 REAL_ROUTE = scope_router.route  # captured before the rig replaces it with a fixed decision
 # The layer-2 classifier's realistic verdict under the shipped prompt (multi-agent orchestration is not a listed field)

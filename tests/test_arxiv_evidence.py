@@ -15,6 +15,10 @@ from tests import arxiv_synth as X
 from tests.test_acq_discovered import Router, _direct, cfg_on, disc, redirect, run  # noqa: F401  (_direct: autouse)
 from vera import arxiv_fulltext, auto_acquire, fulldoc_db, fulltext_loader, licence_gate
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 ROBOTS = "https://arxiv.org/robots.txt"
 TDMREP = "https://arxiv.org/.well-known/tdmrep.json"  # CONTROL-GAPS-1107: the hop gate reads it after robots.txt
 CC_BY_HTTPS = "https://creativecommons.org/licenses/by/4.0/"

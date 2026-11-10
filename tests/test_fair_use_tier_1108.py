@@ -11,6 +11,10 @@ from tests import arxiv_synth as X
 from tests.test_acq_discovered import Router, _direct, cfg_on, disc, run  # noqa: F401  (_direct: autouse)
 from vera import arxiv_fulltext, auto_acquire, fair_use, fulldoc_db, fulltext_loader, licence_gate
 
+# ARXIV-PORTAL-1110: these tests pin the DORMANT arXiv evidence route (closed in code: arxiv_fulltext.PORTAL_ONLY);
+# the fixture reopens it per test. Portal-only behaviour: tests/test_arxiv_portal_1110.py.
+pytestmark = pytest.mark.usefixtures("legacy_arxiv_route")
+
 SHIPPED = fair_use.load()
 ON = {**SHIPPED, "enabled": True}
 ARR, ARX = "LicenseRef-all-rights-reserved", "LicenseRef-arxiv-nonexclusive-distrib-1.0"
