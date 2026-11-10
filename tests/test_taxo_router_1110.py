@@ -202,6 +202,30 @@ def test_finish_counts_admitted_outside_routed_set():
     assert tr.last_shadow() is None and tr.finish(["s0"]) is None
 
 
+def test_finish_checks_merged_passages_member_by_member():
+    ix, r = _router()
+    tr.set_config_for_tests(CFG)
+    tr.shadow(r, ix, _unit(1, .1, 0, 0), PIDX, _scores(0, 3), [], 5)
+    tr.note_candidate("m0", 0)  # inside
+    tr.note_candidate("m1", 1)  # inside
+    tr.note_candidate("m3", 3)  # routed out
+    rec = tr.finish([{"span_id": "D:0-9", "merged_span_ids": ("m0", "m1")},
+                     {"span_id": "D:10-19", "merged_span_ids": ("m1", "m3")},   # one routed-out member
+                     {"span_id": "D:20-29", "merged_span_ids": ("zz",)}])      # no known member
+    assert rec["admitted_total"] == 3 and rec["missed_admitted"] == 1 and rec["admitted_unmapped"] == 1
+
+
+def test_gate_and_version_fallbacks_still_record_the_counterfactual():
+    ix, _ = _router()
+    tr.set_config_for_tests(CFG)
+    for js, code in (({"version": "v1", "display_ok": False}, "global:display_gate_failed"),
+                     ({"version": None, "display_ok": True}, "global:job_version_unknown")):
+        r = tr.build(ix, LINKS, dict(tr.DEFAULTS, **CFG), job_state=js)
+        tr.shadow(r, ix, _unit(1, .1, 0, 0), PIDX, _scores(0, 3), [], 5)
+        s = tr.last_shadow()
+        assert s["route"] == code and s["recall_candidates"] is None and s["missed_candidates"] == 1
+
+
 def test_thread_safety_shared_router_per_thread_records():
     ix, r = _router()
     tr.set_config_for_tests(CFG)
@@ -347,10 +371,10 @@ def test_offline_global_vs_masked_comparison_harness(monkeypatch):
     qs = {"synthetic_cross_domain": "How do worker and supervisor agents relate to orchestration state across agent turns?",
           "synthetic_outlier": "Which agent archetypes are used in multi-agent orchestration?",
           "synthetic_unrelated": "What is the capital of a country nobody mentions?"}
-    p = Path(__file__).resolve().parents[3] / "work" / "ASK-REGRESSION-1108" / "cases.json"
-    ask = []
-    if p.is_file():
-        ask = [x["question"] for x in json.loads(p.read_text(encoding="utf-8"))["cases"] if x.get("question")]
+    p = Path(__file__).resolve().parent / "taxo_router_ask_questions.json"
+    assert p.is_file(), "tests/taxo_router_ask_questions.json missing"  # fail loudly
+    ask = [x["question"] for x in json.loads(p.read_text(encoding="utf-8"))["questions"]]
+    assert len(ask) == 19, len(ask)
     rows = compare(c, list(qs.values()) + ask)
     assert len(rows) == len(qs) + len(ask)
     for r in rows:

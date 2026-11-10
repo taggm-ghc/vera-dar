@@ -1,0 +1,81 @@
+{
+ "_note": "Copy of the questions (ids and text only) of work/ASK-REGRESSION-1108/cases.json (19 Ask-check cases), 2026-11-10. The test boundary blocks reading files outside the tree, so the offline router harness reads this copy.",
+ "questions": [
+  {
+   "id": "magops",
+   "question": "What is Vera dar magops?"
+  },
+  {
+   "id": "vera_origin",
+   "question": "from where did vera come?"
+  },
+  {
+   "id": "what_is_vera_dar",
+   "question": "What is VERA-DAR?"
+  },
+  {
+   "id": "epidemic",
+   "question": "How accurate are epidemic forecasting models?"
+  },
+  {
+   "id": "offcorpus_lava",
+   "question": "What are the latest findings on lunar lava tube habitat engineering?"
+  },
+  {
+   "id": "neg_aloe",
+   "question": "Is aloe vera good for burns?"
+  },
+  {
+   "id": "neg_brittain",
+   "question": "Who was Vera Brittain?"
+  },
+  {
+   "id": "stopwords",
+   "question": "where did it come from?"
+  },
+  {
+   "id": "q3_offdomain",
+   "question": "What is the capital of France?"
+  },
+  {
+   "id": "q5_false_premise",
+   "question": "Why did Albert Einstein win the Nobel Prize for his theory of relativity?"
+  },
+  {
+   "id": "q6_news_links",
+   "question": "What are the latest developments in epidemic forecasting?"
+  },
+  {
+   "id": "q7_ambiguous",
+   "question": "Tell me about models"
+  },
+  {
+   "id": "typo_vrea",
+   "question": "What is vrea?"
+  },
+  {
+   "id": "typo_vare",
+   "question": "what is vare dar?"
+  },
+  {
+   "id": "hadrons",
+   "question": "What are hadrons?"
+  },
+  {
+   "id": "quarks",
+   "question": "What are quarks?"
+  },
+  {
+   "id": "leptons",
+   "question": "What are leptons?"
+  },
+  {
+   "id": "rag_components",
+   "question": "What are components of RAG?"
+  },
+  {
+   "id": "midterms_keep",
+   "question": "What are implications of the US 2026 Midterm elections? Keep searching until you find an answer"
+  }
+ ]
+}

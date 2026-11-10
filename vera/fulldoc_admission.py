@@ -918,7 +918,7 @@ def admit(question: str, corpus, cfg: dict) -> EvidenceBundle:
     if hy is not None:  # TAXO-ROUTE-1110: shadow router record (codes and counts only); None unless mode is shadow/on
         try:
             from vera import taxo_router as _tr
-            rshadow = _tr.finish([a.get("span_id") for a in admitted])
+            rshadow = _tr.finish(list(admitted))
         except Exception:  # noqa: BLE001
             rshadow = None
     return EvidenceBundle(

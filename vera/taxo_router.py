@@ -189,12 +189,13 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
         if router.idx_id != id(idx) or router.n_rows != len(idx):
             out["route"] = "global:version_mismatch"
             return out
+        # TODO(pre-"on", R2-4): during a taxonomy job pass the links can mix old and new versions; the build-time
+        # before/after version check only covers one build. Before "on", add a per-ask version check (or rebuild on change).
+        pending = None  # a job-version / display-gate fallback still computes the counterfactual routed set below
         if router.job_version is None:
-            out["route"] = "global:job_version_unknown"
-            return out
-        if not router.display_ok:
-            out["route"] = "global:display_gate_failed"
-            return out
+            pending = "global:job_version_unknown"
+        elif not router.display_ok:
+            pending = "global:display_gate_failed"
         if q is None:
             out["route"] = "global:no_vector"
             return out
@@ -222,6 +223,9 @@ def route(router, idx, q, pidx, scores: dict, cfg: dict | None = None) -> dict:
         out["n_chunks"], out["n_routed"] = n, int(R.sum())
         out["n_unlinked"] = int((~has).sum() + (pm[pidx[has]] == 0).sum())  # |U|: no vector, or no link
         out["R"] = R  # kept for the counterfactual even when the route falls back to global
+        if pending:
+            out["route"] = pending
+            return out
         if n_sel >= nd:
             out["route"] = "global:no_domain_excluded"
             return out
@@ -263,22 +267,32 @@ def note_candidate(span_id, chunk_idx) -> None:
         pass
 
 
-def finish(admitted_span_ids) -> dict | None:
-    """End of ask: count admitted evidence that falls outside the routed set (plan gate Q1). Returns the record for the ask
-    trace (codes and counts only), or None when shadow did not run. Never raises."""
+def finish(admitted) -> dict | None:
+    """End of ask: count admitted evidence that falls outside the routed set (plan gate Q1). `admitted` holds admitted dicts
+    (or bare span ids). A merged passage is checked member by member (merged_span_ids): it counts as missed when any known
+    member is outside R, and as unmapped only when no member is known. Returns the record for the ask trace (codes and
+    counts only), or None when shadow did not run. Never raises."""
     try:
         rec = getattr(_TL, "shadow", None)
         if not isinstance(rec, dict):
             return None
         cand = getattr(_TL, "cand", None)
-        ids = list(admitted_span_ids or ())
+        items = list(admitted or ())
         if cand is not None and getattr(_TL, "R", None) is not None:
-            known = [i for i in ids if i in cand]
-            rec["admitted_total"] = len(ids)
-            rec["admitted_unmapped"] = len(ids) - len(known)
-            rec["missed_admitted"] = sum(1 for i in known if not cand[i])
+            missed = unmapped = 0
+            for a in items:
+                if isinstance(a, dict):
+                    members = list(a.get("merged_span_ids") or ()) or [a.get("span_id")]
+                else:
+                    members = [a]
+                known = [m for m in members if m in cand]
+                if not known:
+                    unmapped += 1
+                elif any(not cand[m] for m in known):
+                    missed += 1
+            rec["admitted_total"], rec["admitted_unmapped"], rec["missed_admitted"] = len(items), unmapped, missed
         else:
-            rec["admitted_total"], rec["admitted_unmapped"], rec["missed_admitted"] = len(ids), len(ids), None
+            rec["admitted_total"], rec["admitted_unmapped"], rec["missed_admitted"] = len(items), len(items), None
         log.info("taxo router shadow: route=%s selected=%s/%s routed=%s/%s missed_admitted=%s", rec.get("route"),
                  rec.get("n_selected"), rec.get("n_domains"), rec.get("n_routed"), rec.get("n_chunks"),
                  rec.get("missed_admitted"))
