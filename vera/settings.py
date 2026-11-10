@@ -30,7 +30,7 @@ _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 CONFIG_PATH = _CONFIG_DIR / "settings.json"
 REGISTRY_PATH = _CONFIG_DIR / "settings_registry.json"
 # Pin of the registry `keys` object (canonical JSON). Regenerate the registry and change this in the same release.
-REGISTRY_SHA256 = "87e9374cfee9d6941c1140a600bb10a08d433beec8c546f67bb21e52b2dacc8e"
+REGISTRY_SHA256 = "2b11abf2232e4bd8dc08776afd4ca46c40b7db6691ddc7a91372c3aea0308216"
 # Second layer: never DB-eligible, whatever the registry says.
 REFUSED_STEMS = frozenset({"api_permissions", "licence_rules", "licence_allowlist", "fair_use", "purpose_grants",
                            "robots_ai", "source_permissions", "source_withdrawals", "us_federal_pd",
