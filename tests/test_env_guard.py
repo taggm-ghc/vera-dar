@@ -1377,6 +1377,9 @@ EXPECTED_SPAWN_SITES = {
     # H20 D-FIX 2026-11-05: child runs python -I with env={} in an empty tmp cwd under scratch; reviewed by
     # orchestrator; D-SEC re-reviews
     "test_pdf_extract_worker.py": {"subprocess.run"},
+    # SETTINGS-MIG026-1110 staging3: one [sys.executable, -I, <kit>/scripts/gen_seed_026.py, --check] child under the
+    # Popen wrapper (the guard's scrubbed env applies; the script is stdlib-only and offline); skipped when no kit exists.
+    "test_settings_mig026_1110.py": {"subprocess.run"},
     # K18W review: object constructions inside fakes (D-B5-1 binding tests), not process creation
     "test_release_gate_evidence_binding.py": {"subprocess.CompletedProcess", "subprocess.TimeoutExpired"},
 }

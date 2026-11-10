@@ -360,7 +360,9 @@ def test_FIX_abstractless_original_keeps_its_identifiers_for_acquisition():
                  "discovered_via": "openalex"}]
     cfg = _ground_cfg(resolve={"enabled": True, "max_results_to_resolve": 4, "deadline_s": 5})
     out, unused = grounded_ask.retrieve_all("q", cfg, search=lambda q: linked, resolver=resolver)
-    assert out == [] and len(unused) == 1  # never grounded on (holds today and after)
+    # PORTAL-WIRE-B-V5 F1: a resolved abstract-less original is LISTED as one ineligible entry (no dar_span), never evidence.
+    assert len(out) == 1 and out[0].get("evidence_eligible") is False and len(unused) == 1
+    assert grounded_ask.grounding_sources(out) == []  # never grounded on
     assert unused[0].get("doi") == DOI
 
 
@@ -377,8 +379,10 @@ def test_FIX_abstractless_original_is_handed_to_acquisition(rig):
                  "discovered_via": "openalex"}]
     cfg = _ground_cfg(resolve={"enabled": True, "max_results_to_resolve": 4, "deadline_s": 5})
     out, unused = grounded_ask.retrieve_all("q", cfg, search=lambda q: linked, resolver=resolver)
-    # the seam is built from the abstract-less originals (`unused`), independently of `out` (which stays empty: never evidence)
-    assert out == [] and len(unused) == 1
+    # the seam is built from the abstract-less originals (`unused`); `out` lists the original as ONE ineligible entry
+    # (PORTAL-WIRE-B-V5 F1) that never grounds
+    assert len(out) == 1 and out[0].get("evidence_eligible") is False and grounded_ask.grounding_sources(out) == []
+    assert len(unused) == 1
     web, _ = epmc_web()
     r, _ds = ask_offtopic(rig, unused, web=web)
     assert [u for u in rig.web.urls if EPMC_SEARCH in u and "acq.epi4" in u], "an abstract-less record never reached acquisition"

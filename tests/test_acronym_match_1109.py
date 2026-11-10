@@ -94,16 +94,20 @@ def test_definitions_learned_from_corpus_only_when_initials_match():
 def test_rag_question_admits_general_docs_that_spell_it_out():
     docs = {"spec": ("VLM-guided RAG for robot action prediction", [SPEC, DEFN]),
             "g1": ("Retrieval-augmented generation", [GEN_HY]),
-            "g2": ("A survey", [GEN_SP])}
+            "g2": ("A survey", [GEN_SP, GEN_HY])}  # two passages: "components of RAG" is a one-content-stem question
+    # RAG-ADMIT-V2-1110: a structural word ("components") no longer lifts the INT-1022-B one-stem guard, so a document
+    # needs the stem in its title or >= 2 passing passages; g1 has it in its title, g2 in two passages.
     for signal in ("legacy", "idf_weighted"):
         off = fa.admit(Q, Corpus(docs), cfg(False, signal))
         on = fa.admit(Q, Corpus(docs), cfg(True, signal))
         assert "g1" not in docs_of(off) and "g2" not in docs_of(off), signal  # the live failure, reproduced
         assert {"spec", "g1", "g2"} <= docs_of(on), signal
+    one = dict(docs, g2=("A survey", [GEN_SP]))  # one mention under a generic title: still not enough (guard kept)
+    assert "g2" not in docs_of(fa.admit(Q, Corpus(one), cfg(True)))
 
 
 def test_no_corpus_definition_no_expansion_by_default():
-    docs = {"spec": ("t", [SPEC]), "g1": ("t", [GEN_HY])}
+    docs = {"spec": ("t", [SPEC]), "g1": ("t", [GEN_HY, GEN_SP])}  # two passages: the one-stem guard (V2-1110)
     assert "g1" not in docs_of(fa.admit(Q, Corpus(docs), cfg(True)))
     c = cfg(True)
     c["admission"]["acronym_match"]["bare_initials"] = True  # opt-in bare initials (>= min_scan_len letters)
