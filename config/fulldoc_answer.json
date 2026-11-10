@@ -167,6 +167,8 @@
       ],
       "stem_len": 5,
       "question_generic_terms": ["his", "her", "him", "she", "hers", "did", "does", "doing", "done", "key", "main", "major", "types", "type", "kinds", "kind", "different", "differences", "difference", "best", "better", "good", "bad", "common", "important", "explain", "describe", "tell", "give", "make", "get", "know", "versus", "similar", "similarities", "really", "much", "many", "exactly", "come", "comes", "came", "coming", "go", "goes", "went", "gone", "going"],
+      "question_lead_verbs": ["explain", "describe", "tell", "give", "make", "get", "know", "did", "does", "do", "done", "doing"],
+      "_question_lead_verbs_note": "FILLER-CLEANUP-1109: a capitalised first word of the question or of a later sentence/sub-question that is listed here is not name evidence in retrieval_kept_words (vera.fulldoc_admission); moved from code. Remove the key to treat every capitalised word as evidence.",
       "_question_generic_terms_note": "NINE-DOCS-RC4-1108 (2026-11-08): added the light-verb forms of come and go (come, comes, came, coming, go, goes, went, gone, going), which carry no topic in questions such as \"from where did X come\"; a list rule, not a threshold; reading-list items must share a content stem with the question (vera.grounded_ask). DAR-TRACE-1022 (orchestrator decision 2026-10-21): question words and generic wording removed from the QUESTION's stems before relevance, matched-stem count and coverage (stem_len prefixes, so 'different' also drops 'differentiation'). Content-bearing words (effect, cause, impact, role, work, compare) are deliberately NOT listed. Calibration: work/dar-trace-1022/CALIBRATION.md. Remove the key to restore the previous behaviour."
     },
     "evidence_section_kinds": [
