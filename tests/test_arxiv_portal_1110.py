@@ -296,7 +296,7 @@ class _OAProvider:
 
 WORK = {"id": "https://openalex.org/W1", "doi": f"https://doi.org/10.48550/arxiv.{AID}",
         "locations": [{"landing_page_url": f"https://arxiv.org/abs/{AID}"},
-                      {"landing_page_url": "https://doi.org/10.9999/synth.cs.journal"}],
+                      {"landing_page_url": "https://doi.org/10.9999/synth.cs.journal", "version": "publishedVersion"}],
         "referenced_works": [f"https://openalex.org/W{i}" for i in range(20, 35)]}
 
 
@@ -400,3 +400,46 @@ def test_d1_own_seed_share_refusal_never_starts_the_cooldown_and_visitor_search_
     with request_origin.scope(request_origin.VISITOR):  # the visitor reserve is untouched
         prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize("host", ["arxiv。org", "arxiv．org", "export.arxiv｡org", "ａrxiv.org", "ARXIV.ORG.", "Export.ArXiv.Org"])
+def test_s1_is_arxiv_host_normalises_like_host_role(host):
+    assert arxiv_portal.is_arxiv_host(host) is True
+    from vera import web_route
+    assert web_route.is_web_candidate({"url": f"https://{host}/abs/2101.00001", "title": "t"}) is False
+
+
+def test_s1_non_arxiv_hosts_stay_false():
+    for h in ("", None, "notarxiv.org", "arxiv.org.evil.example", "example.org"):
+        assert arxiv_portal.is_arxiv_host(h) is False
+
+
+import itertools
+_N = itertools.count()
+
+
+def _oa_one(monkeypatch, locations, work_doi=f"https://doi.org/10.48550/arxiv.{AID}"):
+    from vera import search_providers as sp
+    monkeypatch.setattr(sp._QUOTA, "blocked", lambda now: False)
+    w = {"id": "https://openalex.org/W1", "doi": work_doi, "locations": locations}
+    return _REAL_OA(AID + "x" + str(next(_N)), 10, 5.0, {}, clock=lambda: 0.0, provider=_OAProvider(w, []))
+
+
+def test_s2_only_published_version_locations_count(monkeypatch):
+    loc = lambda d, v: {"landing_page_url": f"https://doi.org/{d}", "version": v}  # noqa: E731
+    assert _oa_one(monkeypatch, [loc("10.9999/j.1", "submittedVersion")]) == ([], [])
+    assert _oa_one(monkeypatch, [loc("10.9999/j.1", None)]) == ([], [])
+    assert _oa_one(monkeypatch, [{"landing_page_url": "https://doi.org/10.9999/j.1"}]) == ([], [])
+    assert _oa_one(monkeypatch, [loc("10.9999/j.1", "publishedVersion")]) == (["10.9999/j.1"], [])
+    # the work DOI is never taken as the published version
+    assert _oa_one(monkeypatch, [], work_doi="https://doi.org/10.9999/j.2") == ([], [])
+
+
+@pytest.mark.parametrize("doi", ["10.1101/2020.01.01.123", "10.48550/arXiv.2101.1", "10.21203/rs.3.rs-1/v1", "10.20944/preprints1.v1",
+                                 "10.31219/osf.io/abc", "10.31234/osf.io/abc", "10.31235/osf.io/abc", "10.2139/ssrn.1", "10.26434/chemrxiv-1"])
+def test_s2_preprint_prefixes_excluded_even_when_marked_published(monkeypatch, doi):
+    assert _oa_one(monkeypatch, [{"landing_page_url": f"https://doi.org/{doi}", "version": "publishedVersion"}]) == ([], [])
+
+
+def test_s2_prefixes_live_in_config():
+    assert "10.1101/" in arxiv_portal._preprint_prefixes() and "10.2139/" in arxiv_portal._preprint_prefixes()
