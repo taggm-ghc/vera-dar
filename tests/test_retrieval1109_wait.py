@@ -91,7 +91,7 @@ def test_stream_wait_never_beyond_cap_or_deadline():
     with rate_limit.stream_wait_scope(True), rate_limit.deadline_scope(ft2.t + 5.0):
         ad2.acquire(deadline=ft2.t + 5.0).record(status=200)
         s2 = ad2.acquire(deadline=ft2.t + 5.0)
-    assert isinstance(s2, rate_limit.Skip) and s2.reason == "deadline" and ft2.sleeps == []
+    assert isinstance(s2, rate_limit.Skip) and s2.reason == "wait_too_long" and ft2.sleeps == []
 
 
 @pytest.mark.parametrize("state", ["cooldown", "daily_cap"])

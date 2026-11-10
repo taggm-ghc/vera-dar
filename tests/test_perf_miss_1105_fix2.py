@@ -199,7 +199,7 @@ def test_f1_queue_scope_admits_all_within_budget_and_skips_at_deadline():
     ts[1].start()
     [t.join() for t in ts]
     assert "ok" in out and len(out) == 2
-    assert set(out) - {"ok"} <= {"concurrency", "deadline"}  # bounded: never waits past its own budget; never "busy"
+    assert set(out) - {"ok"} <= {"concurrency", "wait_too_long", "deadline_passed"}  # bounded: never waits past its own budget; never "busy"
     assert not (set(out) & rate_limit.PROVIDER_BUSY_REASONS)
 
 

@@ -408,7 +408,7 @@ class PortalAdapter:
             self.n["requests"] += 1
             return Permit(self)
         if budget < 0:
-            return self._skip("deadline")
+            return self._skip("deadline_passed")  # POLISH-1110: budget already negative
         self._roll_day()
         cap = self.c["daily_cap"]
         from vera import request_origin  # SEARCHCAPS-1110: seed requests get the seed share only, never an excluded portal
@@ -438,7 +438,7 @@ class PortalAdapter:
             cap = float(self.c["max_wait_s"])
             if STREAM_WAIT.get():  # RETRIEVAL-1109: a deadline that cut the streamed cap is a deadline skip
                 cap = max(cap, float(self.c.get("max_wait_stream_s", cap)))
-            return self._skip("deadline" if budget < cap or QUEUE.get() else "pacing", wait)
+            return self._skip("wait_too_long" if budget < cap or QUEUE.get() else "pacing", wait)  # POLISH-1110: the required wait exceeds the time left
         self.tokens -= 1.0  # reserved now (may go negative): later callers queue behind this one
         self.inflight += 1
         self.probes += 1 if probe else 0
