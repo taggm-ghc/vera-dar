@@ -231,6 +231,22 @@ def _vera_boundary_item(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _request_trace_writer_per_test():
+    """TEST-ISO-1110 (P-1110-10): the request_trace writer is a process singleton whose daemon thread caches the DB engine
+    it first built (and the env it was created with). A boundary probe that put a sentinel DB URL in the environment and
+    ran /ask left a writer holding a sentinel engine, so every later test's trace flush hit the DB boundary
+    ("test boundary violation ... DB access attempt(s) refused"). Stop and drop any writer at both edges of each test,
+    keeping the active config, so no writer, engine or queued row outlives the test that made it."""
+    def _drop_writer():
+        rt = _sys.modules.get("vera.request_trace")
+        if rt is not None and getattr(rt, "_WRITER", None) is not None:
+            rt.configure(rt.CFG)
+    _drop_writer()
+    yield
+    _drop_writer()
+
+
+@pytest.fixture(autouse=True)
 def _offline_wiki_portal_and_fresh_rate_limits(request, monkeypatch):
     """INT-1022-B: the Wikipedia reference portal ships enabled; offline tests keep it OFF in acquisition_search unless
     marked `wiki_portal` (they then inject wiki_get). Each test gets a fresh rate-limit registry (no pacing leak)."""
