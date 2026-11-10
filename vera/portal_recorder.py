@@ -24,7 +24,10 @@ logger = logging.getLogger("vera.discovery")
 
 # research_record._PORTAL_STATUS plus the raw search_providers statuses -> discovery_event.status
 _STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "skipped", "own_cap": "skipped", "robots": "skipped",
-           "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped"}
+           "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped",
+           # OPENALEX-FIX-1110: nothing was sent for these; provider_quota is the provider's own allowance
+           "terms_gate": "skipped", "terms_gate_config_invalid": "skipped", "provider_quota": "quota",
+           "retry_limit": "skipped"}
 _RELEVANT_OUTCOMES = ("admitted", "reused", "not_used")  # not_used = admitted but over the document budget
 _ATTEMPTED_OUTCOMES = ("admitted", "rejected", "not_used")
 _ADMISSION_REJECTIONS = ("licence_rejected", "provenance_rejected", "injection_rejected", "relevance_rejected",

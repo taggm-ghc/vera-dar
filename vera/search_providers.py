@@ -21,8 +21,11 @@ import contextvars
 import hashlib
 import json
 from vera import ddg_reduce, strict_json
+import logging
 import re
 import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
@@ -368,6 +371,205 @@ def _scrub_resp_url(resp, key: str) -> None:
             pass
 
 
+# ----------------------------------------------------------------------------------------- OpenAlex metered client
+# OPENALEX-FIX-1110 (plan work/OPENALEX-TERMS-1110/PLAN-fixes.md WP-A and WP-C; decision records CL-OPENALEX-METER and
+# CL-OPENALEX-GATE). EVERY OpenAlex request goes through openalex_request(): /ask search (R1), acquisition search (R2),
+# link resolution (R3, vera/source_resolver.py), the arXiv-portal lookups (R4, vera/arxiv_portal.py and
+# vera/portal_follow.py), the list-ingest arXiv lookup (R5, vera/list_ingest.py) and the referenced-works adapter (R6,
+# vera/reference_portal.py). The client: (1) checks the terms gate, the shared cooldown, the per-item retry limit and the
+# budget, in that order, before anything is sent; (2) sends the key when one is configured (never logged, redacted
+# from errors and resp.url); (3) meters the response: only a 2xx is charged, X-RateLimit-* headers (same UTC day and
+# fresh) replace the request count, Remaining <= 0 is the provider-quota path (cooldown until Reset).
+_OA_LOG = logging.getLogger("vera.openalex")
+OA_HOST = "api.openalex.org"
+OA_TERMS_GATE_VALUES = ("legacy", "off", "on")
+# purpose -> gate scope. "search" = the calls VERA-DAR made before the terms question (R1-R3); "lookup" = the newer
+# identifier/reference lookups (R4-R6), which wait for the owner's terms ruling (OD-1110-ARXIV-OPENALEX).
+OA_PURPOSES = {"search": "search", "acquisition": "search", "resolve": "search",
+               "arxiv_lookup": "lookup", "list_ingest": "lookup", "refs": "lookup"}
+_OA_GATE_ALLOWS = {"legacy": frozenset({"search"}), "on": frozenset({"search", "lookup"}), "off": frozenset()}
+OA_TERMS_PENDING_TEXT = "OpenAlex is not in use pending a terms review"
+OA_CONFIG_INVALID_TEXT = "OpenAlex is off: its configuration setting is invalid"
+OA_PROVIDER_QUOTA_TEXT = "OpenAlex's daily allowance is used up until {reset}"
+OA_RETRY_LIMIT_TEXT = "VERA-DAR stopped retrying OpenAlex for this item after repeated failed requests"
+_OA_MARK = re.compile(r"\[oa-refusal ([a-z_]+)\]")
+_OA_CFG_CACHE: dict = {}
+_OA_CFG_LOCK = threading.Lock()
+
+
+class OpenAlexRefused(ProviderUnavailable):
+    """A refusal of an OpenAlex request BEFORE anything was sent. `code`:
+      terms_gate | terms_gate_config_invalid | retry_limit | own_cap | seed_share  (VERA-DAR's own decisions: never
+        start a cooldown, review D1);
+      provider_quota | cooldown  (the provider's state: a cooldown already holds after a provider quota or 429).
+    The text carries the marker "[oa-refusal <code>]" so the code survives the search chain's note strings."""
+
+    def __init__(self, code: str, text: str):
+        self.code = code
+        super().__init__(f"{text} [oa-refusal {code}]")
+
+
+def oa_refusal_code(e) -> str | None:
+    """The OpenAlexRefused code of an exception or note text, else None."""
+    c = getattr(e, "code", None)
+    if isinstance(e, OpenAlexRefused) and isinstance(c, str):
+        return c
+    m = _OA_MARK.search(str(e or ""))
+    return m.group(1) if m else None
+
+
+def _oa_raw_portal() -> dict:
+    """config/rate_limits.json portals.openalex, read raw (so a bad gate value cannot break the rate-limit config) and
+    cached by file mtime. {} when unreadable."""
+    from vera import rate_limit
+    path = Path(rate_limit.CONFIG_PATH)
+    try:
+        mt = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    with _OA_CFG_LOCK:
+        hit = _OA_CFG_CACHE.get("raw")
+        if hit and hit[0] == mt:
+            return hit[1]
+    try:
+        raw = (json.loads(path.read_text(encoding="utf-8")).get("portals") or {}).get("openalex")
+    except Exception:  # noqa: BLE001
+        raw = None
+    raw = raw if isinstance(raw, dict) else {}
+    with _OA_CFG_LOCK:
+        _OA_CFG_CACHE["raw"] = (mt, raw)
+    return raw
+
+
+def openalex_terms_gate() -> str | None:
+    """WP-C: portals.openalex.terms_gate, or None when it is missing or not EXACTLY one of legacy | off | on (no case
+    folding, no whitespace stripping; a non-string is invalid). None means off with terms_gate_config_invalid."""
+    v = _oa_raw_portal().get("terms_gate")
+    ok = isinstance(v, str) and v in OA_TERMS_GATE_VALUES
+    with _OA_CFG_LOCK:
+        seen = _OA_CFG_CACHE.get("gate_logged")
+        if seen != (ok, v if ok else None):
+            _OA_CFG_CACHE["gate_logged"] = (ok, v if ok else None)
+            if ok:
+                _OA_LOG.info("R-OA-GATE terms_gate=%s", v)  # a fixed config value, never a secret
+            else:
+                _OA_LOG.error("R-OA-GATE-CONFIG-INVALID")  # rule id only
+    return v if ok else None
+
+
+def openalex_gate_allows(scope: str) -> bool:
+    g = openalex_terms_gate()
+    return g is not None and scope in _OA_GATE_ALLOWS[g]
+
+
+def _oa_meter_cfg() -> dict | None:
+    """portals.openalex.meter, validated; None when missing or invalid (then every request is refused with
+    terms_gate_config_invalid: OpenAlex is off, its configuration setting is invalid)."""
+    m = _oa_raw_portal().get("meter")
+    try:
+        age, win = m["fresh_header_max_age_s"], m["attempt_window_s"]
+        att = m["max_attempts"]
+        if m["charge_statuses"] != "2xx":
+            return None
+        for x in (age, win):
+            if isinstance(x, bool) or not isinstance(x, (int, float)) or not (0 < x <= 86400):
+                return None
+        if not isinstance(att, dict) or set(att) != set(OA_PURPOSES):
+            return None
+        for v in att.values():
+            if isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= 10):
+                return None
+        return {"fresh_header_max_age_s": float(age), "attempt_window_s": float(win), "max_attempts": dict(att)}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _oa_portal_c() -> Mapping:
+    try:
+        from vera import rate_limit
+        return rate_limit.get_registry().portal("openalex").c
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+_OA_NUM = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _oa_num(v) -> float | None:
+    s = str(v).strip() if v is not None else ""
+    return float(s) if _OA_NUM.fullmatch(s) else None
+
+
+def parse_openalex_headers(headers) -> dict | None:
+    """X-RateLimit-Limit / -Remaining / -Reset of one response -> {"limit", "remaining", "reset"} or None. The whole
+    response is ignored (None) when Limit or Remaining is missing or unparseable, Limit <= 0, or Reset is present but
+    unparseable or negative. Reset absent = None (the base cooldown then applies)."""
+    from vera import rate_limit
+    if not headers:
+        return None
+    lim, rem = _oa_num(rate_limit._hget(headers, "x-ratelimit-limit")), _oa_num(rate_limit._hget(headers, "x-ratelimit-remaining"))
+    raw_rst = rate_limit._hget(headers, "x-ratelimit-reset")
+    if lim is None or rem is None or lim <= 0:
+        return None
+    rst = None
+    if raw_rst is not None:
+        rst = _oa_num(raw_rst)
+        if rst is None or rst < 0:
+            return None
+    return {"limit": lim, "remaining": rem, "reset": rst}
+
+
+def _has_oa_headers(headers) -> bool:
+    from vera import rate_limit
+    return bool(headers) and any(rate_limit._hget(headers, h) is not None
+                                 for h in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"))
+
+
+_FALLBACK_OA = None
+_FALLBACK_LOCK = threading.Lock()
+
+
+def shared_openalex_provider():
+    """The shared /ask OpenAlexProvider instance (search chain), so every route draws on ONE meter; when the chain has
+    no OpenAlex entry, one process-wide instance built from the same settings (search.openalex)."""
+    global _FALLBACK_OA
+    try:
+        from vera import search_and_fetch
+        p = next((x for x in search_and_fetch.cached_chain()[0] if getattr(x, "name", None) == "openalex"), None)
+        if p is not None and hasattr(p, "metered_request"):
+            return p
+    except Exception:  # noqa: BLE001  chain unbuildable: the fallback instance still meters
+        pass
+    with _FALLBACK_LOCK:
+        if _FALLBACK_OA is None:
+            from vera.eval_config import load_eval_config
+            s = load_eval_config().search
+            _FALLBACK_OA = OpenAlexProvider(s["openalex"], query_terms=s.get("query_terms"))
+        return _FALLBACK_OA
+
+
+def reset_openalex_client_for_tests() -> None:
+    global _FALLBACK_OA
+    with _FALLBACK_LOCK:
+        _FALLBACK_OA = None
+    with _OA_CFG_LOCK:
+        _OA_CFG_CACHE.clear()
+    _QUOTA.reset()
+
+
+def openalex_request(url: str, params: Mapping, *, purpose: str, timeout_s: float, item=None, provider=None,
+                     transport: Callable | None = None):
+    """THE OpenAlex client (A1): every OpenAlex request in vera/ goes through here. `purpose` is one of OA_PURPOSES
+    (it selects the gate scope and the retry limit); `item` names the thing being looked up (question, DOI, filter) for
+    the per-item retry limit. Raises OpenAlexRefused with nothing sent, or what the transport raises (redacted when a
+    key was sent). Returns the response (any status; the caller decides what a non-200 means)."""
+    if purpose not in OA_PURPOSES:
+        raise ValueError("unknown OpenAlex purpose")
+    p = provider if provider is not None else shared_openalex_provider()
+    return p.metered_request(str(url), dict(params), float(timeout_s), purpose=purpose,
+                             item=item, transport=transport)
+
+
 def reconstruct_abstract(inverted: Mapping | None, max_chars: int) -> str:
     """OpenAlex stores abstracts as {word: [positions]}; rebuild the text in position order and truncate."""
     if not isinstance(inverted, Mapping) or not inverted:
@@ -446,7 +648,8 @@ class OpenAlexProvider:
     required_env: tuple[str, ...] = ()
 
     def __init__(self, settings: Mapping, *, transport: Callable | None = None, query_terms: Mapping | None = None,
-                 today: Callable[[], str] | None = None):
+                 today: Callable[[], str] | None = None, clock: Callable[[], float] | None = None,
+                 wall: Callable[[], float] | None = None):
         self.s = settings
         self.endpoint = settings["endpoint"]
         self.max_bytes = int(settings["max_response_bytes"])
@@ -459,7 +662,15 @@ class OpenAlexProvider:
         self.last_relaxed = False
         self._settings_budget = int(settings["daily_search_budget"])
         self._today = today or (lambda: datetime.now(timezone.utc).date().isoformat())
-        self._day, self._used = None, 0
+        self._day, self._used = None, 0  # fallback request count: 2xx responses only (OPENALEX-FIX-1110)
+        self._clock = clock or time.monotonic
+        self._wall = wall or time.time
+        self._mlock = threading.Lock()
+        self._hdr: dict | None = None  # last valid X-RateLimit-* reading {"day", "at", "limit", "remaining", "reset_at"}
+        self._attempts: OrderedDict = OrderedDict()  # (purpose, item) -> [first monotonic t, uncharged attempts]
+        self._quota_until_wall = 0.0  # provider quota (Remaining <= 0) holds until this wall time
+        self.oa_counts: dict = {}  # log-only counters (codes and numbers, never ids)
+        self.oa_credits: dict = {}  # X-RateLimit-Credits-Used summed per origin, log only (unit unverified)
 
     @property
     def _budget(self) -> int:
@@ -469,20 +680,164 @@ class OpenAlexProvider:
         v = request_origin.policy("openalex").get("search_daily_cap")
         return int(v) if isinstance(v, int) and not isinstance(v, bool) and v > 0 else self._settings_budget
 
-    def _spend(self) -> None:
+    def _bump(self, k: str, n: int = 1) -> None:
+        self.oa_counts[k] = self.oa_counts.get(k, 0) + n
+
+    def _refuse(self, code: str, text: str):
+        self._bump("oa_own_" + code if code not in ("provider_quota", "cooldown") else "oa_" + code)
+        raise OpenAlexRefused(code, text)
+
+    def _admit(self, purpose: str, item: str, mcfg: dict) -> None:
+        """Pre-send checks, in order: terms gate, shared cooldown, per-item retry limit, budget. Raises
+        OpenAlexRefused; nothing is charged and no cooldown is started by a refusal here (D1)."""
         from vera import request_origin
+        gate = openalex_terms_gate()
+        if gate is None:
+            self._refuse("terms_gate_config_invalid", "openalex terms gate setting invalid; non-retryable; "
+                         + OA_CONFIG_INVALID_TEXT)
+        if OA_PURPOSES[purpose] not in _OA_GATE_ALLOWS[gate]:
+            self._refuse("terms_gate", f"openalex terms gate ({OA_PURPOSES[purpose]}) closed; non-retryable; "
+                         + OA_TERMS_PENDING_TEXT)
+        now, wall = self._clock(), self._wall()
+        if _QUOTA.blocked(now):
+            if wall < self._quota_until_wall:
+                reset = datetime.fromtimestamp(self._quota_until_wall, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                self._refuse("provider_quota", OA_PROVIDER_QUOTA_TEXT.format(reset=reset) + " (not an attempt)")
+            self._refuse("cooldown", "openalex cooldown after a provider refusal (not an attempt)")
+        key = (purpose, item)
+        with self._mlock:
+            ent = self._attempts.get(key)
+            if ent is not None and now - ent[0] > mcfg["attempt_window_s"]:
+                self._attempts.pop(key, None)
+                ent = None
+        if ent is not None and ent[1] >= int(mcfg["max_attempts"][purpose]):
+            self._refuse("retry_limit", OA_RETRY_LIMIT_TEXT + "; non-retryable")
         day = self._today()
-        if day != self._day:
-            self._day, self._used = day, 0
-        cap = self._budget
-        why = request_origin.refusal("openalex", self._used, cap)
-        if why == "cap":
-            raise ProviderUnavailable(f"openalex daily search budget of {cap} spent for {day} "
-                                      "(per-process guard; non-retryable)")
-        if why:  # SEARCHCAPS-1110: a seed request reached its share; the rest is reserved for visitors
-            raise ProviderUnavailable(f"openalex daily search budget (seed share of {cap}) spent for {day} "
-                                      "(visitor reserve; non-retryable)")
-        self._used += 1
+        with self._mlock:
+            if day != self._day:
+                self._day, self._used = day, 0
+            used, hdr = self._used, self._hdr
+        # fresh = same UTC day, not older than fresh_header_max_age_s, and its reset (if any) not yet passed
+        fresh = (bool(hdr) and hdr["day"] == day and 0.0 <= wall - hdr["at"] <= mcfg["fresh_header_max_age_s"]
+                 and (hdr["reset_at"] is None or wall < hdr["reset_at"]))
+        if fresh:
+            if hdr["remaining"] <= 0:  # the provider's allowance (normally already a cooldown from the response)
+                hold = float(_oa_portal_c().get("base_cooldown_s", 900.0))
+                self._quota_until_wall = max(self._quota_until_wall, wall + hold)
+                _QUOTA.block(now, hold)
+                reset = datetime.fromtimestamp(self._quota_until_wall, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                self._refuse("provider_quota", OA_PROVIDER_QUOTA_TEXT.format(reset=reset) + " (not an attempt)")
+            if request_origin.is_seed():
+                pol = request_origin.policy("openalex")
+                if not pol["seed_allowed"] or hdr["remaining"] <= hdr["limit"] * float(pol["visitor_reserve_frac"]):
+                    lim = int(hdr["limit"])
+                    self._refuse("seed_share", f"openalex daily search budget (seed share of {lim}) spent for {day} "
+                                 "(visitor reserve; non-retryable)")
+        # The request count is the budget when no fresh header is known, and stays the floor without a key (keyless
+        # headers may describe a shared egress IP: plan review advisory).
+        if not fresh or not openalex_api_key(self.s):
+            cap = self._budget
+            why = request_origin.refusal("openalex", used, cap)
+            if why == "cap":
+                self._refuse("own_cap", f"openalex daily search budget of {cap} spent for {day} "
+                             "(per-process guard; non-retryable)")
+            if why:  # SEARCHCAPS-1110: a seed request reached its share; the rest is reserved for visitors
+                self._refuse("seed_share", f"openalex daily search budget (seed share of {cap}) spent for {day} "
+                             "(visitor reserve; non-retryable)")
+
+    def _meter(self, purpose: str, item: str, resp, error) -> None:
+        """Post-send: charge a 2xx only; count an uncharged attempt for the retry limit; read the headers."""
+        from vera import rate_limit, request_origin
+        now, wall, day = self._clock(), self._wall(), self._today()
+        st = None if resp is None else getattr(resp, "status_code", None)
+        ok = error is None and isinstance(st, int) and 200 <= st < 300
+        key = (purpose, item)
+        with self._mlock:
+            if day != self._day:
+                self._day, self._used = day, 0
+            if ok:
+                self._used += 1
+                self._attempts.pop(key, None)
+            else:
+                ent = self._attempts.get(key) or [now, 0]
+                ent[1] += 1
+                self._attempts[key] = ent
+                self._attempts.move_to_end(key)
+                while len(self._attempts) > 2048:
+                    self._attempts.popitem(last=False)
+        if not ok:
+            self._bump(f"oa_uncharged_{st if isinstance(st, int) else 'error'}")
+        headers = getattr(resp, "headers", None) if resp is not None else None
+        h = parse_openalex_headers(headers)
+        c = _oa_portal_c()
+        base = float(c.get("base_cooldown_s", 900.0))
+        cap_s = float(c.get("retry_after_max_s", 86400.0))
+        if h is not None:
+            rst = h["reset"] if h["reset"] is not None else (base if h["remaining"] <= 0 else None)
+            with self._mlock:
+                self._hdr = {"day": day, "at": wall, "limit": h["limit"], "remaining": h["remaining"],
+                             "reset_at": None if rst is None else wall + min(rst, cap_s)}
+            cu = _oa_num(rate_limit._hget(headers, "x-ratelimit-credits-used"))
+            if cu is not None:
+                o = request_origin.current()
+                self.oa_credits[o] = self.oa_credits.get(o, 0.0) + cu
+            if h["remaining"] <= 0:  # provider-quota path: one cooldown until Reset (base cooldown without one)
+                hold = min(h["reset"] if h["reset"] is not None else base, cap_s)
+                self._quota_until_wall = max(self._quota_until_wall, wall + hold)
+                _QUOTA.block(now, hold)
+                self._bump("oa_provider_quota_seen")
+                _OA_LOG.info("R-OA-PROVIDER-QUOTA")
+        elif _has_oa_headers(headers):
+            self._bump("oa_header_ignored")
+            _OA_LOG.info("R-OA-HEADER-IGNORED")  # rule id only; the fallback count applies
+        if st == 429:  # one cooldown: Retry-After, else Reset, else the base cooldown
+            ra = rate_limit.parse_retry_after(rate_limit._hget(headers, "retry-after"), wall) if headers else None
+            hold = ra if ra is not None else (h["reset"] if h is not None and h["reset"] is not None else base)
+            _QUOTA.block(now, min(hold, cap_s))
+            self._bump("oa_429")
+
+    def _send(self, url: str, params: dict, timeout_s: float, transport: Callable | None):
+        tx = transport or self._transport or openalex_default_transport
+        key = openalex_api_key(self.s)
+        if not key:
+            return tx(url, dict(params), {"User-Agent": USER_AGENT}, timeout_s)
+        from vera import acq_urls
+        try:  # YIELD-1021: OPTIONAL key (env only); never logged: any error text is redacted before it propagates
+            with acq_urls.quiet_urllib3([key]):  # ACQ-1027 K3: no DEBUG log of the raw keyed URL
+                resp = tx(url, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
+            _scrub_resp_url(resp, key)
+            return resp
+        except Exception as e:  # noqa: BLE001
+            from vera import api_permissions, rate_limit
+            if isinstance(e, (rate_limit.RateLimited, api_permissions.ApiDenied)) and key not in str(e):
+                raise  # nothing was sent; fixed texts without the key: keep the type (a skip is not an attempt)
+            msg = acq_urls.redact_text(str(e), [key])
+            try:
+                err = type(e)(msg)
+            except Exception:  # noqa: BLE001
+                err = ProviderUnavailable(msg)
+            raise err from None
+
+    def metered_request(self, url: str, params: dict, timeout_s: float, *, purpose: str, item=None,
+                        transport: Callable | None = None):
+        """OPENALEX-FIX-1110: one metered request (see openalex_request, the only caller)."""
+        from vera import api_permissions, rate_limit
+        mcfg = _oa_meter_cfg()
+        if mcfg is None:
+            _OA_LOG.error("R-OA-METER-CONFIG-INVALID")
+            self._refuse("terms_gate_config_invalid", "openalex meter setting invalid; non-retryable; "
+                         + OA_CONFIG_INVALID_TEXT)
+        it = str(item if item is not None else json.dumps([url, sorted(params.items())], default=str))[:500]
+        self._admit(purpose, it, mcfg)
+        try:
+            resp = self._send(url, params, timeout_s, transport)
+        except (rate_limit.RateLimited, api_permissions.ApiDenied):
+            raise  # nothing was sent: not an attempt, not charged
+        except Exception as e:
+            self._meter(purpose, it, None, e)
+            raise
+        self._meter(purpose, it, resp, None)
+        return resp
 
     def can_relax(self, query: str) -> bool:
         return can_relax(query, self.query_terms)
@@ -491,7 +846,6 @@ class OpenAlexProvider:
         profile = OPENALEX_PROFILE.get()
         search, mode = build_openalex_search(query, self.query_terms, relaxed=self.relaxed, profile=profile)
         self.last_query = {"query": search, "mode": mode, **({"relaxed": True} if self.relaxed else {})}
-        self._spend()  # every HTTP attempt counts, retries included
         shp = OPENALEX_SHAPE.get() or {}
         flt = (f"from_publication_date:{self.s['from_publication_date']},"
                f"to_publication_date:{self.s['to_publication_date']}")
@@ -511,46 +865,19 @@ class OpenAlexProvider:
             params["filter"] = flt
         if sort:
             params["sort"] = sort
-        tx = self._transport or openalex_default_transport
-        key = openalex_api_key(self.s)
-        if not key:
-            return tx(self.endpoint, params, {"User-Agent": USER_AGENT}, timeout_s)
-        from vera import acq_urls
-        try:  # YIELD-1021: OPTIONAL key (env only); never logged: any error text is redacted before it propagates
-            with acq_urls.quiet_urllib3([key]):  # ACQ-1027 K3: no DEBUG log of the raw keyed URL
-                resp = tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
-            _scrub_resp_url(resp, key)
-            return resp
-        except Exception as e:  # noqa: BLE001
-            msg = acq_urls.redact_text(str(e), [key])
-            try:
-                err = type(e)(msg)
-            except Exception:  # noqa: BLE001
-                err = ProviderUnavailable(msg)
-            raise err from None
+        # OPENALEX-FIX-1110: R2 (acquisition) is the call with the acquisition-only OA fields; R1 is /ask. One item =
+        # one question in one query form (AND profile or plain OR, review filter or not), so the zero-hit relaxed retry
+        # shares the item of its first call and the acquisition OR retry is its own item.
+        purpose = "acquisition" if OPENALEX_OA_FIELDS.get() else "search"
+        item = json.dumps([query, profile is not None, bool(shp.get("review"))])
+        return openalex_request(self.endpoint, params, purpose=purpose, timeout_s=timeout_s, item=item, provider=self)
 
-    def metadata_get(self, params: dict, timeout_s: float):
+    def metadata_get(self, params: dict, timeout_s: float, *, purpose: str = "arxiv_lookup", item=None):
         """ARXIV-PORTAL-1110 (OD-1110-ARXIV-OPENALEX): ONE targeted metadata call (filter + select, no search text)
-        through the same daily budget and visitor/seed split (_spend), transport (API allowlist + openalex rate portal)
-        and optional OPENALEX_API_KEY as call(). The key is never logged."""
-        self._spend()
-        tx = self._transport or openalex_default_transport
-        key = openalex_api_key(self.s)
-        if not key:
-            return tx(self.endpoint, dict(params), {"User-Agent": USER_AGENT}, timeout_s)
-        from vera import acq_urls
-        try:
-            with acq_urls.quiet_urllib3([key]):
-                resp = tx(self.endpoint, {**params, "api_key": key}, {"User-Agent": USER_AGENT}, timeout_s)
-            _scrub_resp_url(resp, key)
-            return resp
-        except Exception as e:  # noqa: BLE001
-            msg = acq_urls.redact_text(str(e), [key])
-            try:
-                err = type(e)(msg)
-            except Exception:  # noqa: BLE001
-                err = ProviderUnavailable(msg)
-            raise err from None
+        through the metered client (OPENALEX-FIX-1110: terms gate scope "lookup", budget with the visitor/seed split,
+        2xx-only charging, one cooldown), the API allowlist + openalex rate portal and the optional key (never logged)."""
+        return openalex_request(self.endpoint, params, purpose=purpose, timeout_s=timeout_s,
+                                item=item if item is not None else params.get("filter"), provider=self)
 
     def parse(self, resp, n: int) -> list[dict]:
         body = resp.text or ""
@@ -1416,12 +1743,25 @@ class _QuotaGate:
         self.until, self.lock = 0.0, threading.Lock()
 
     def blocked(self, now: float) -> bool:
+        """OPENALEX-FIX-1110 (one cooldown): also True while the openalex rate portal cools down (a 429 or a provider
+        quota seen by ANY route, link resolution included)."""
         with self.lock:
-            return now < self.until
+            if now < self.until:
+                return True
+        try:
+            from vera import rate_limit
+            return rate_limit.get_registry().portal("openalex").cooling_down()
+        except Exception:  # noqa: BLE001  config unreadable: the own timer alone
+            return False
 
     def block(self, now: float, s: float) -> None:
         with self.lock:
             self.until = max(self.until, now + max(0.0, s))
+        try:  # the same hold on the rate portal, so every OpenAlex route sees one cooldown
+            from vera import rate_limit
+            rate_limit.get_registry().portal("openalex").hold(s)
+        except Exception:  # noqa: BLE001
+            pass
 
     def reset(self) -> None:
         with self.lock:
@@ -1435,6 +1775,8 @@ def _is_rate_skip(e: Exception) -> bool:
     """RATE-1022: a portal skip (vera.rate_limit.RateLimited, or the search chain's 'rate_limited (...; not an
     attempt)' note): nothing was sent, so it is never a 429 and never starts the fallback quota cooldown."""
     from vera import rate_limit
+    if oa_refusal_code(e) in ("provider_quota", "cooldown"):  # OPENALEX-FIX-1110: refused by the client, nothing sent
+        return True
     return isinstance(e, rate_limit.RateLimited) or "not an attempt" in str(e).lower()
 
 
@@ -1451,6 +1793,13 @@ def _own_decision(e: Exception):
     from vera import rate_limit
     t = str(e)
     tl = t.lower()
+    oc = oa_refusal_code(e)  # OPENALEX-FIX-1110: the metered client's own refusals, each with its own code
+    if oc in ("own_cap", "seed_share"):
+        return "own_cap"
+    if oc in ("terms_gate", "terms_gate_config_invalid", "retry_limit"):
+        return oc
+    if oc in ("provider_quota", "cooldown"):
+        return None  # the provider's state, not our decision
     if "r-acq-robots" in tl:
         return "robots"
     if isinstance(e, rate_limit.RateLimited):
@@ -1764,8 +2113,11 @@ def acquisition_search(base_search: Callable, cfg: Mapping, *, transport: Callab
                 base_err = e
                 st_oa = "timeout" if _is_timeout(e) else "failed"
                 own = _own_decision(e)
-                if own in ("own_cap", "robots"):  # OUTCOME-LABELS-1108: our own decision, never "a search service failed"
-                    st_oa = own
+                if own in ("own_cap", "robots", "terms_gate", "terms_gate_config_invalid", "retry_limit"):
+                    st_oa = own  # OUTCOME-LABELS-1108 / OPENALEX-FIX-1110: our own decision, never "a service failed"
+                elif oa_refusal_code(e) == "provider_quota":  # OPENALEX-FIX-1110: the provider's daily allowance
+                    counts["openalex_provider_quota"] = 1
+                    st_oa = "provider_quota"
                 elif _is_rate_skip(e):  # RATE-1022 D1: the openalex adapter skipped (nothing sent); it owns the cooldown
                     counts["openalex_skipped_quota"] = 1
                     st_oa = "paced" if _own_pacing(e) else "skipped_quota"

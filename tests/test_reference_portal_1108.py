@@ -462,24 +462,25 @@ def test_openalex_quota_error_starts_cooldown_and_is_not_retried(monkeypatch):
 
 def test_default_openalex_lookup_is_keyless_cited_by_with_oa_fields(monkeypatch):
     sent = {}
+    from vera.eval_config import load_eval_config
 
-    class P:
-        name = "openalex"
-        endpoint = "https://api.openalex.org/works"
-
-        def _spend(self):
-            sent["spent"] = True
-
+    class P(sp.OpenAlexProvider):  # OPENALEX-FIX-1110: the real metered provider (the old fake only stubbed _spend)
         def parse(self, resp, n):
             return [{"doi": "10.9999/x"}]
+    prov = P(load_eval_config().search["openalex"])
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
     from vera import search_and_fetch
-    monkeypatch.setattr(search_and_fetch, "cached_chain", lambda *a, **k: ([P()], 1, "m"))
+    monkeypatch.setattr(search_and_fetch, "cached_chain", lambda *a, **k: ([prov], 1, "m"))
     monkeypatch.setattr(sp, "openalex_default_transport",
                         lambda url, params, headers, timeout: (sent.update(params=params, headers=headers), Resp(200))[1])
+    with pytest.raises(sp.OpenAlexRefused):  # gate scope "lookup": refused under the shipped "legacy", nothing sent
+        rp._default_openalex_lookup(["W1", "W2"], 50, 3.0)
+    assert sent == {} and prov._used == 0
+    monkeypatch.setattr(sp, "openalex_terms_gate", lambda: "on")
     assert rp._default_openalex_lookup(["W1", "W2"], 50, 3.0) == [{"doi": "10.9999/x"}]
-    assert sent["params"]["filter"] == "cited_by:W1|W2" and "api_key" not in sent["params"]
+    assert sent["params"]["filter"] == "cited_by:W1|W2" and "api_key" not in sent["params"]  # no key configured here
     assert "referenced_works" not in sent["params"]["select"] and "open_access" in sent["params"]["select"]
-    assert sent["spent"] is True and "@" not in sent["headers"]["User-Agent"]
+    assert prov._used == 1 and "@" not in sent["headers"]["User-Agent"]  # metered: the 200 was charged once
     monkeypatch.setattr(sp, "openalex_default_transport", lambda *a, **k: Resp(429))
     with pytest.raises(sp.ProviderResponseError, match="429"):
         rp._default_openalex_lookup(["W1"], 50, 3.0)

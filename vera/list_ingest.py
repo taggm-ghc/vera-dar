@@ -154,12 +154,18 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
                         return j
     except Exception as e:  # noqa: BLE001
         logger.info("list-ingest inspire lookup failed (%s)", type(e).__name__)
-    r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
-                 {"select": "doi,locations"}, t)
+    # OPENALEX-FIX-1110 (R5): through the metered client (terms gate scope "lookup": refused with nothing sent until the
+    # owner's terms ruling sets the gate "on"; key when configured; budget and seed share; no retry), and WP-B: only a
+    # location OpenAlex marks publishedVersion counts (the shared S2 rule, decision record CL-LISTINGEST-PUBVER).
+    from vera import arxiv_portal, search_providers as sp
+    # The transport stays this module's gated, public-IP-pinned GET (_api_get): one rate slot, unchanged hop rules.
+    r = sp.openalex_request(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
+                            {"select": "doi,locations"}, purpose="list_ingest", timeout_s=t, item="arxiv:" + arxiv_id,
+                            transport=lambda u, p, h, tt: _api_get(u, p, tt))
     if getattr(r, "status_code", 0) != 200:
         return None
-    for loc in r.json().get("locations") or ():
-        j = _journal_doi((loc or {}).get("landing_page_url"))
+    for d in arxiv_portal.published_version_dois(r.json().get("locations")):
+        j = _journal_doi(d)
         if j:
             return j
     return None
@@ -258,6 +264,14 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
                     continue
                 cand = {k: c2[k] for k in ("doi", "pmcid") if c2.get(k)} | {"url": val}
         except Exception as e:  # noqa: BLE001  transport/permission/rate failure on an identifier lookup
+            from vera import search_providers as _sp
+            oc = _sp.oa_refusal_code(e)  # OPENALEX-FIX-1110: the OpenAlex terms gate has its own codes
+            if kind == "arxiv" and oc == "terms_gate":
+                out(raw, kind, "arxiv_lookup_gated")
+                continue
+            if kind == "arxiv" and oc == "terms_gate_config_invalid":
+                out(raw, kind, "arxiv_lookup_config_invalid")
+                continue
             logger.info("list-ingest lookup failed (%s)", type(e).__name__)
             out(raw, kind, "no_route")
             continue

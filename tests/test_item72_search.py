@@ -150,7 +150,9 @@ def test_relaxed_retry_failure_is_recorded_not_raised_and_budget_counts():
     items = sf._attempts(p, Q, 5, ledger=None, max_retries=1, backoff_s=0, deadline_at=1e12, timeout_s=1,
                          sleep=lambda s: None, clock=lambda: 0.0)
     assert items == [] and "network error" in p.last_relax_error and p.relaxed is False
-    assert p._used == 2                                           # the retry spent the daily allowance
+    # OPENALEX-FIX-1110 A3 (plan WP-A, CL-OPENALEX-METER): only a 2xx is charged. Was `== 2` (every attempt charged); the
+    # first call returned 200 and the relaxed retry raised a transport error, so exactly 1 is charged now.
+    assert p._used == 1
 
 
 def test_builders_and_validator():

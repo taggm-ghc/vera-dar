@@ -23,9 +23,14 @@ def always_new(cfg: dict | None) -> bool:
 _BUDGET_STATUSES = frozenset({"rate", "daily_cap", "deadline", "budget_unknown", "busy"})
 _PORTAL_STATUS = {"completed": "completed", "timeout": "timeout", "quota": "quota", "skipped_quota": "quota", "paced": "paced", "own_cap": "own_cap", "robots": "robots",
                   "failed": "error", "error": "error", "skipped_budget": "skipped", "skipped": "skipped",
-                  "not_attempted": "skipped"}
+                  "not_attempted": "skipped",
+                  # OPENALEX-FIX-1110: the metered OpenAlex client's own outcomes
+                  "terms_gate": "terms_gate", "terms_gate_config_invalid": "terms_gate_config_invalid",
+                  "provider_quota": "provider_quota", "retry_limit": "retry_limit"}
 # ROUTE-R3: public statuses (contract completed|timeout|quota|error|skipped|not_attempted)
-_PUBLIC_STATUS = {**_PORTAL_STATUS, "paced": "skipped", "own_cap": "skipped", "robots": "skipped", "skipped_budget": "not_attempted", "not_attempted": "not_attempted"}
+_PUBLIC_STATUS = {**_PORTAL_STATUS, "paced": "skipped", "own_cap": "skipped", "robots": "skipped", "skipped_budget": "not_attempted", "not_attempted": "not_attempted",
+                  "terms_gate": "skipped", "terms_gate_config_invalid": "skipped", "provider_quota": "quota",
+                  "retry_limit": "skipped"}
 
 
 ANSWER_BASES = ("generated_new_evidence", "generated_existing_only", "abstained", "not_attempted")

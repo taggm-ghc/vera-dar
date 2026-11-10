@@ -23,6 +23,8 @@
     "no_route": "no-route",
     "arxiv_no_original": "no-route-arxiv-original-not-found",
     "arxiv_lookup_limit": "arxiv-lookup-limit",
+    "arxiv_lookup_gated": "no-route-arxiv-lookup-paused",
+    "arxiv_lookup_config_invalid": "no-route-arxiv-lookup-config-invalid",
     "portal": "refused-portal",
     "invalid_topic": "invalid-topic",
     "rate_limited": "rate-limited",

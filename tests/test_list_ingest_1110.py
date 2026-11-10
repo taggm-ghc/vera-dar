@@ -348,7 +348,8 @@ def _openalex_transport(monkeypatch, rate_cfg=None):
         headers = {}
 
         def json(self):
-            return {"locations": [{"landing_page_url": "https://doi.org/10.1234/journal.x"}]}
+            # OPENALEX-FIX-1110 WP-B: real OpenAlex locations carry `version`; only publishedVersion counts now (M8)
+            return {"locations": [{"landing_page_url": "https://doi.org/10.1234/journal.x", "version": "publishedVersion"}]}
 
         def close(self):
             pass
@@ -369,6 +370,11 @@ def test_openalex_lookup_takes_one_rate_slot_and_returns_doi(monkeypatch):
         sent.clear()
         monkeypatch.setattr(list_ingest, "_api_get", lambda url, params, t, _o=list_ingest._api_get:
                             _o(url, params, t) if "openalex" in url else (_ for _ in ()).throw(OSError("skip inspire")))
+        from vera import search_providers as sp
+        with pytest.raises(sp.OpenAlexRefused) as ei:  # OPENALEX-FIX-1110: the shipped gate "legacy" refuses R5
+            list_ingest._default_arxiv_original("2101.00001", cfg)
+        assert ei.value.code == "terms_gate" and sent == []
+        monkeypatch.setattr(sp, "openalex_terms_gate", lambda: "on")  # after the owner's terms ruling
         assert list_ingest._default_arxiv_original("2101.00001", cfg) == "10.1234/journal.x"
         assert len(sent) == 1
     finally:

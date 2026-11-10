@@ -339,6 +339,13 @@ def test_openalex_runs_only_when_inspire_does_not_know_the_record(inspire, monke
                         lambda aid, *a, **k: inspire["oa_calls"].append(aid) or (["10.9999/synth.cs.journal"], []))
     on = A.cfg()
     on["arxiv_portal"]["openalex"]["enabled"] = True  # ships off (T1); the owner flips it after the terms review
+    from vera import search_providers as sp
+    arxiv_portal.extend("q", [seed], on, clock=lambda: 0.0)  # OPENALEX-FIX-1110: the shipped gate "legacy" ANDs it off
+    assert inspire["oa_calls"] == []
+    portal_inspire.reset_for_tests()
+    arxiv_portal.reset_for_tests()
+    inspire["calls"].clear()
+    monkeypatch.setattr(sp, "openalex_terms_gate", lambda: "on")  # the owner's ruling sets the gate "on" (WP-C)
     out = arxiv_portal.extend("q", [seed], on, clock=lambda: 0.0)
     assert inspire["oa_calls"] == [AID] and len(inspire["calls"]) == 1
     new = out[1:]
@@ -370,6 +377,10 @@ def test_metadata_get_uses_the_shared_budget_split_and_optional_key(monkeypatch)
     sent = []
     from tests.test_searchcaps_1110_openalex_key import CFG
     prov = sp.OpenAlexProvider(CFG["openalex"], transport=lambda u, p, h, t: sent.append(dict(p)) or _OAResp({"results": []}))
+    with pytest.raises(sp.OpenAlexRefused):  # OPENALEX-FIX-1110: R4 is refused by the shipped gate "legacy"
+        prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
+    assert sent == [] and prov._used == 0
+    monkeypatch.setattr(sp, "openalex_terms_gate", lambda: "on")  # after the owner's terms ruling (WP-C)
     monkeypatch.setenv("OPENALEX_API_KEY", "synthetic-test-key-000")
     prov.metadata_get({"filter": "doi:x", "select": "id"}, 1.0)
     assert sent[-1]["api_key"] == "synthetic-test-key-000" and prov._used == 1
@@ -393,6 +404,7 @@ def test_d1_own_seed_share_refusal_never_starts_the_cooldown_and_visitor_search_
     sent = []
     prov = sp.OpenAlexProvider(CFG["openalex"], transport=lambda u, p, h, t: sent.append(dict(p)) or _OAResp({"results": []}))
     monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    monkeypatch.setattr(sp, "openalex_terms_gate", lambda: "on")  # OPENALEX-FIX-1110: R4 runs only with the gate "on"
     prov._day, prov._used = prov._today(), request_origin.seed_cap(prov._budget, 0.5)  # the seed share is spent
     blocked = []
     real_block = sp._QUOTA.block

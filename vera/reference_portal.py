@@ -671,7 +671,7 @@ def openalex_rw(base, cfg: Mapping, deps: Deps, counts: dict, clock: Callable, d
         try:
             recs = list(deps.openalex_lookup(seeds, int(a["per_page"]), left) or [])
         except Exception as e:  # noqa: BLE001  never retried in this question
-            if sp._is_quota_error(e) and not sp._is_rate_skip(e):
+            if sp._own_decision(e) is None and sp._is_quota_error(e) and not sp._is_rate_skip(e):  # D1: provider only
                 sp._QUOTA.block(clock(), float(_openalex_cooldown()))
                 counts["openalex_429"] = 1
             else:
@@ -702,17 +702,20 @@ def _openalex_cooldown() -> float:
 
 
 def _default_openalex_lookup(seeds: list, per_page: int, timeout_s: float) -> list:
-    """The shared /ask OpenAlex provider instance (its daily budget), keyless, through the openalex rate portal:
-    filter cited_by:<seeds> with the OA fields; parsed by OpenAlexProvider.parse. No key is ever sent."""
+    """The shared /ask OpenAlex provider instance (its meter), through the metered client and the openalex rate
+    portal: filter cited_by:<seeds> with the OA fields; parsed by OpenAlexProvider.parse. OPENALEX-FIX-1110: the key is
+    sent when configured (never logged), as on every OpenAlex route."""
     from vera import search_and_fetch, search_providers as sp
     chain = search_and_fetch.cached_chain()[0]
     p = next((x for x in chain if getattr(x, "name", None) == "openalex"), None)
     if p is None:
         return []
-    p._spend()
     params = {"filter": "cited_by:" + "|".join(seeds), "per_page": int(per_page),
               "select": sp.OPENALEX_SELECT + "," + sp.OPENALEX_OA_SELECT_EXTRA}
-    resp = sp.openalex_default_transport(p.endpoint, params, {"User-Agent": sp.USER_AGENT}, float(timeout_s))
+    # OPENALEX-FIX-1110 (R6): through the metered client (gate scope "lookup", key when configured, 2xx-only charging,
+    # no retry). The adapter itself stays off (RETRIEVAL-1109 H-3).
+    resp = sp.openalex_request(p.endpoint, params, purpose="refs", timeout_s=float(timeout_s),
+                               item="cited_by:" + "|".join(seeds), provider=p)
     st = int(getattr(resp, "status_code", 200) or 200)
     if st == 429:
         raise sp.ProviderResponseError("openalex 429 quota")

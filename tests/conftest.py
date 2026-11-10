@@ -247,9 +247,22 @@ def _offline_wiki_portal_and_fresh_rate_limits(request, monkeypatch):
     import vera.api_permissions as ap  # API-ALLOW-1107: the shipped policy, re-read per test (no override leaks)
     rl.set_registry_for_tests(None)
     ap.set_policy_for_tests(None)
+    _reset_openalex_client(sp)  # OPENALEX-FIX-1110: the shared meter (counts, headers, retry items) never leaks
     yield
     rl.set_registry_for_tests(None)
     ap.set_policy_for_tests(None)
+    _reset_openalex_client(sp)
+
+
+def _reset_openalex_client(sp):
+    if hasattr(sp, "reset_openalex_client_for_tests"):
+        sp.reset_openalex_client_for_tests()
+    saf = _sys.modules.get("vera.search_and_fetch")
+    for hit in list(getattr(saf, "_CHAIN_CACHE", {}).values()) if saf is not None else ():
+        for p in hit[0]:
+            if getattr(p, "name", None) == "openalex" and hasattr(p, "metered_request"):
+                p._day, p._used, p._hdr, p._quota_until_wall = None, 0, None, 0.0
+                p._attempts.clear()
 
 
 @pytest.fixture(autouse=True)
