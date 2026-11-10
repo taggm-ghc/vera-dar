@@ -381,21 +381,7 @@ CREATE VIEW vera_vjay.set_deny_active WITH (security_invoker = true) AS
 -- ---------------------------------------------------------------------------------------------------------------------------------
 -- 4. Seed (generated; do not edit by hand).
 -- ---------------------------------------------------------------------------------------------------------------------------------
--- BEGIN GENERATED SEED (gen_seed_026.py; manifest sha256 211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008; registry file sha256 fc8b5e12073a827db0205401f0a9fdb1c1abb3d7de4cb3b33176024b594677ff; set_keys 153; set_deny_lists 2; registry keys not seeded 14)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.cache_max (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.cache_ttl_s (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.cooldown_min_s (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.max_query_terms (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.max_refs_per_seed (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.max_response_bytes (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.inspire_refs.size (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.cache_max (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.cache_ttl_s (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.max_calls_per_question (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.max_seeds (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.or_seeds (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.openalex_rw.per_page (policy key refused by set_keys_policy_prefix_chk)
---   NOT SEEDED: reference_portals.adapters.wikipedia_title.max_title_tries (policy key refused by set_keys_policy_prefix_chk)
+-- BEGIN GENERATED SEED (gen_seed_026.py; manifest sha256 211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008; registry file sha256 dad10f3e3a22b994de35fbbff6584bfa2b1125f81415aba4bf19af02bbea5297; set_keys 153; set_deny_lists 2; registry keys not seeded 0)
 SELECT set_config('vera026.seed_sha', '211617211f635e175aba00281febbc2b56514357a845e10389fa43d2152e9008', true), set_config('vera026.seed_keys', '153', true), set_config('vera026.seed_deny_lists', '2', true);
 INSERT INTO vera_vjay.set_keys (key, module, value_type, min_value, max_value, allowed, one_way, file_value, description, registered_in_seed) VALUES
   ('ask-provider-chain.corpus_description.subject_areas.chunk_chars', 'ask-provider-chain', 'int', 100, 8000, NULL, 'none', '1200'::jsonb, 'numeric tunable', current_setting('vera026.seed_sha')),
