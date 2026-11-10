@@ -120,6 +120,23 @@ def test_f2_switch_off_counts_raw_candidates(rig, monkeypatch):
     assert rig.posts == []
 
 
+def test_f2b_three_off_topic_hits_count_zero_and_the_fallback_fires(rig, monkeypatch):
+    set_flags(monkeypatch, **C4, ddg_fallback_relevant_only=True)
+    off = [{"title": t, "snippet": ""} for t in (OFF1, OFF2, "Medieval trade routes across the northern Baltic region")]
+    assert ddg_reduce.usable_count(Q_PLAIN, off) == 0       # no pool-relative fallback: nothing matches any concept
+    _acq(rig, [OFF1, OFF2, "Medieval trade routes across the northern Baltic region"])
+    assert len(rig.posts) == 1
+
+
+def test_f2b_question_without_key_concepts_has_zero_usable_and_the_fallback_fires(rig, monkeypatch):
+    from vera import search_query
+    set_flags(monkeypatch, **C4, ddg_fallback_relevant_only=True)
+    monkeypatch.setattr(search_query, "key_concepts", lambda *a, **k: ((), {}))
+    assert ddg_reduce.usable_count(Q_PLAIN, [{"title": REL}, {"title": REL + " 2"}, {"title": REL + " 3"}]) == 0
+    _acq(rig, [REL, REL + " (2)", REL + " (3)"])
+    assert len(rig.posts) == 1
+
+
 def test_f2_the_same_rule_in_the_reading_list_fan_out(rig, monkeypatch):
     import vera.search_and_fetch as sf
     set_flags(monkeypatch, **C4, ddg_fallback_relevant_only=True)
@@ -236,6 +253,8 @@ def test_g4_the_shipped_config_has_every_switch_on():
 
 def test_g4_real_config_reading_list_enough_candidates_no_post_too_few_one_post(rig):
     ddg_meter.reset()
+    rig.chain[1].parse = lambda resp, n: [{"url": u, "title": f"{REL} (study {i})", "snippet": "an abstract",
+                                           "source_type": "journal_article"} for i, u in enumerate(resp.payload)][:n]   # F2b: candidates must match the question
     rig.scholar_n = 3
     reading_list(rig, Q_PLAIN)
     assert rig.posts == []

@@ -49,17 +49,21 @@ def fallback_min_remaining_s() -> float:
 
 def usable_count(question: str, cands, extra_generic=()) -> int:
     """C6 (F2): how many of `cands` (dicts with title / snippet, url) count toward ddg_fallback_min_results. With
-    ddg_fallback_relevant_only on, a candidate the EXISTING pre-filters would drop (search_query.relevance_tiers tier 2,
-    the DDFIX-1023 off-topic test; search_providers.acq_prefilter nd / not_oa) does not count, so loosely matched hits do
-    not suppress the fallback. No new heuristic. Never raises: on any error every candidate counts."""
+    ddg_fallback_relevant_only on, a candidate counts only if its own title + snippet match at least one of the question's
+    key concepts (search_query.matched_concepts, the DDFIX-1023 scorer) and the existing acq_prefilter (nd / not_oa) does
+    not drop it, so loosely matched hits do not suppress the fallback. A question with no key concepts has 0 usable
+    candidates (the fallback may fire); there is no pool-relative fallback. No new heuristic. Never raises: on any
+    error every candidate counts."""
     items = [c for c in (cands or ()) if isinstance(c, dict)]
     if not on("ddg_fallback_relevant_only"):
         return len(list(cands or ()))
     try:
         from vera import search_providers, search_query
         kc = search_query.key_concepts(question, extra_generic=tuple(extra_generic or ()))
-        tiers = search_query.relevance_tiers(kc, [f"{c.get('title') or ''} {c.get('snippet') or ''}" for c in items])
-        return sum(1 for c, t in zip(items, tiers) if t != 2 and not search_providers.acq_prefilter(c))
+        if not kc[0]:
+            return 0
+        return sum(1 for c in items if search_query.matched_concepts(kc, f"{c.get('title') or ''} {c.get('snippet') or ''}")
+                   and not search_providers.acq_prefilter(c))
     except Exception:  # noqa: BLE001
         return len(items)
 
