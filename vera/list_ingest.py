@@ -47,9 +47,13 @@ class ListIngestConfigError(ValueError):
 def load_config(path: Path | None = None) -> dict:
     try:
         c = json.loads((path or CFG_PATH).read_text(encoding="utf-8"))
-        for k in ("max_items_per_call", "max_items_per_hour", "max_items_per_day", "lookup_timeout_s", "outcomes_kept"):
+        for k in ("max_items_per_call", "max_items_per_hour", "max_items_per_day", "lookup_timeout_s", "outcomes_kept",
+                  "max_arxiv_lookups_per_call", "topic_max_len"):
             if not isinstance(c.get(k), (int, float)) or isinstance(c.get(k), bool) or c[k] <= 0:
                 raise ValueError(k)
+        if not isinstance(c.get("queue_reserve_for_visitors"), int) or c["queue_reserve_for_visitors"] < 0 or \
+                not isinstance(c.get("ingest_key_env"), str):
+            raise ValueError("reserve")
         if not isinstance(c.get("result_codes"), dict) or not isinstance(c.get("enabled"), bool):
             raise ValueError("shape")
         return c
@@ -155,20 +159,41 @@ def _default_known(deps_factory, cfg, env) -> Callable:
 
 
 # ------------------------------------------------------------------------------------------------ the route
-def ingest(items, *, cfg: dict | None = None, acq: dict | None = None, env=os.environ, clock=time.monotonic,
-           resolvers: Resolvers | None = None, deps_factory=None, start_worker: bool = True) -> dict:
+def ingest(items, *, topic: str | None = None, cfg: dict | None = None, acq: dict | None = None, env=os.environ,
+           clock=time.monotonic, resolvers: Resolvers | None = None, deps_factory=None, start_worker: bool = True) -> dict:
     """Queue each identifier; returns {"results": [{"input", "kind", "code"}...], "counts": {code: n}}. Never raises
-    for a per-item problem. Raises ValueError("too_many") when len(items) > max_items_per_call (nothing is queued)."""
-    from vera import acq_config, auto_acquire, request_origin
+    for a per-item problem. Raises ValueError("too_many") when len(items) > max_items_per_call (nothing is queued).
+    The whole call (identifier lookups included) runs under origin=seed. `topic` (optional) is the relevance target for
+    the content check; absent = each document's own title."""
+    from vera import acq_config, request_origin
     cfg = cfg if cfg is not None else load_config()
     acq = acq if acq is not None else acq_config.load_config()
     rc = cfg["result_codes"]
     items = list(items or ())
     if len(items) > int(cfg["max_items_per_call"]):
         raise ValueError("too_many")
-    rv = resolvers or Resolvers()
+    topic = (str(topic).strip() if topic is not None else "") or None
+    if topic is not None:  # same intent rule as a question; never stored or logged
+        from vera import scope_router
+        if len(topic) > int(cfg["topic_max_len"]) or not scope_router.intent_clean(topic):
+            c = rc.get("invalid_topic", "invalid-topic")
+            return {"results": [{"input": str(r)[:200], "kind": None, "code": c} for r in items],
+                    "counts": {c: len(items)}}
+    with request_origin.scope(request_origin.SEED):  # F2: forced; nothing from the caller selects the origin
+        results = _run(items, topic, cfg, acq, rc, env, clock, resolvers or Resolvers(), deps_factory, start_worker)
+    counts: dict = {}
+    for x in results:
+        counts[x["code"]] = counts.get(x["code"], 0) + 1
+    logger.info("listingest %s", json.dumps({"n": len(results), **{k.replace("-", "_"): v for k, v in counts.items()}},
+                                             sort_keys=True))
+    return {"results": results, "counts": counts}
+
+
+def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker) -> list:
+    from vera import acq_config, auto_acquire
     known = rv.known or _default_known(deps_factory, acq, env)
     results, seen = [], set()
+    n_arxiv = 0
 
     def out(raw, kind, code):
         results.append({"input": str(raw)[:200], "kind": kind, "code": rc.get(code, code)})
@@ -185,6 +210,10 @@ def ingest(items, *, cfg: dict | None = None, acq: dict | None = None, env=os.en
         cand: dict = {}
         try:
             if kind == "arxiv":  # portal only: resolve to the journal original; never arXiv text
+                if n_arxiv >= int(cfg["max_arxiv_lookups_per_call"]):
+                    out(raw, kind, "arxiv_lookup_limit")
+                    continue
+                n_arxiv += 1
                 doi = (rv.arxiv_original or (lambda a: _default_arxiv_original(a, cfg)))(val)
                 doi = _journal_doi(doi)
                 if not doi:
@@ -227,26 +256,35 @@ def ingest(items, *, cfg: dict | None = None, acq: dict | None = None, env=os.en
         except Exception:  # noqa: BLE001  lookup unavailable: the job re-checks (known stage) before any fetch
             pass
         now = clock()
-        with _LOCK:
+        with _LOCK:  # F3: check and reserve in one critical section; released below if nothing was queued
             while _ACCEPTED and now - _ACCEPTED[0] >= 86400.0:
                 _ACCEPTED.popleft()
             hour = sum(1 for t in _ACCEPTED if now - t < 3600.0)
             if hour >= int(cfg["max_items_per_hour"]) or len(_ACCEPTED) >= int(cfg["max_items_per_day"]):
                 out(raw, kind, "rate_limited")
                 continue
+            _ACCEPTED.append(now)
         cand["li_ref"] = ref
-        with request_origin.scope(request_origin.SEED):  # forced; nothing from the caller selects the origin
-            r = auto_acquire.enqueue_candidates(QUESTION, [cand], cfg=acq, env=env, clock=clock, start_worker=start_worker,
-                                                deps_factory=deps_factory, trigger=auto_acquire.LIST_TRIGGER)
+        if topic:
+            cand["li_topic"] = True
+        r = auto_acquire.enqueue_candidates(topic or QUESTION, [cand], cfg=acq, env=env, clock=clock,
+                                            start_worker=start_worker, deps_factory=deps_factory,
+                                            trigger=auto_acquire.LIST_TRIGGER,
+                                            reserve_slots=int(cfg["queue_reserve_for_visitors"]))
         if r["queued"]:
             with _LOCK:
-                _ACCEPTED.append(now)
-                _OUTCOMES[ref] = {"state": "queued", "code": None}
+                _OUTCOMES[ref] = {"state": "queued", "code": None, "target": "topic" if topic else "title"}
                 _OUTCOMES.move_to_end(ref)
                 while len(_OUTCOMES) > int(cfg["outcomes_kept"]):
                     _OUTCOMES.popitem(last=False)
             out(raw, kind, "queued")
-        elif r["already"] or r["status"] == "already_queued":
+            continue
+        with _LOCK:  # not queued: give the reserved slot back
+            try:
+                _ACCEPTED.remove(now)
+            except ValueError:
+                pass
+        if r["already"] or r["status"] == "already_queued":
             out(raw, kind, "duplicate_queued")
         elif r["status"] == acq_config.reason(acq, "queue_full"):
             out(raw, kind, "queue_full")
@@ -254,12 +292,7 @@ def ingest(items, *, cfg: dict | None = None, acq: dict | None = None, env=os.en
             out(raw, kind, "rate_limited")
         else:
             out(raw, kind, "disabled")
-    counts: dict = {}
-    for x in results:
-        counts[x["code"]] = counts.get(x["code"], 0) + 1
-    logger.info("listingest %s", json.dumps({"n": len(results), **{k.replace("-", "_"): v for k, v in counts.items()}},
-                                             sort_keys=True))
-    return {"results": results, "counts": counts}
+    return results
 
 
 def record_outcome(cands, job_result: Mapping) -> None:
@@ -269,9 +302,9 @@ def record_outcome(cands, job_result: Mapping) -> None:
         return
     codes = dict((job_result or {}).get("codes") or {})
     stored = int((job_result or {}).get("stored") or 0)
-    final = "stored" if stored else (sorted(codes)[0] if codes else "no-result")
+    final = "stored" if stored else (str((job_result or {}).get("last_code") or "") or (sorted(codes)[0] if codes else "no-result"))
     with _LOCK:
-        _OUTCOMES[ref] = {"state": "done", "code": final, "stored": stored}
+        _OUTCOMES[ref] = {**_OUTCOMES.get(ref, {}), "state": "done", "code": final, "stored": stored}
         _OUTCOMES.move_to_end(ref)
 
 

@@ -11,12 +11,14 @@ from tests import fulltext_synth
 from vera import auto_acquire, list_ingest, public_mode as pm, request_origin, search_providers
 
 KEY = "k" * 20
-H = {"X-API-Key": KEY}
+IKEY = "i" * 24
+H = {"X-API-Key": IKEY}
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch):
     monkeypatch.setenv("VERA_API_KEY", KEY)
+    monkeypatch.setenv("VERA_INGEST_API_KEY", IKEY)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-" + "o" * 40)
     monkeypatch.setenv("VERA_DB_URL_WO", "postgresql://wo.invalid/x")
     monkeypatch.setenv("VERA_DB_URL_RO", "postgresql://ro.invalid/x")
@@ -67,6 +69,18 @@ def test_unauthenticated_is_401_and_wrong_key_too():
     assert c.post("/ingest/list", json={"identifiers": ["10.9999/a.b"]}).status_code == 401
     assert c.post("/ingest/list", json={"identifiers": ["10.9999/a.b"]}, headers={"X-API-Key": "x" * 20}).status_code == 401
     assert c.get("/ingest/list/outcomes").status_code == 401
+
+
+def test_dedicated_key_required_and_vera_api_key_refused(monkeypatch):
+    c = TestClient(main.app, raise_server_exceptions=False)
+    body = {"identifiers": ["10.9999/a.b"]}
+    assert c.post("/ingest/list", json=body, headers={"X-API-Key": KEY}).status_code == 401  # the /ask key is not enough
+    assert c.get("/ingest/list/outcomes", headers={"X-API-Key": KEY}).status_code == 401
+    monkeypatch.delenv("VERA_INGEST_API_KEY")  # unset = disabled with a clear code
+    r = c.post("/ingest/list", json=body, headers={"X-API-Key": KEY})
+    assert r.status_code == 503 and "VERA_INGEST_API_KEY" in r.json()["detail"]
+    monkeypatch.setenv("VERA_INGEST_API_KEY", KEY)  # equal to VERA_API_KEY = refused too
+    assert c.post("/ingest/list", json=body, headers={"X-API-Key": KEY}).status_code == 503
 
 
 def test_origin_cannot_be_sent_by_the_caller():
@@ -198,3 +212,79 @@ def test_public_ui_never_references_the_route():
     root = pathlib.Path(main.__file__).parent
     for f in [root / "streamlit_app.py", *(root / "pages").glob("*.py"), root / "vera" / "public_mode.py"]:
         assert "/ingest/list" not in f.read_text(encoding="utf-8"), f
+
+
+def test_visitor_job_still_queues_after_a_full_list_call(monkeypatch):
+    acq = A.cfg(queue_max=4, jobs_per_hour=100, jobs_per_day=1000)
+    r = _ingest([f"10.9999/f.{i}" for i in range(8)], monkeypatch, acq=acq, resolvers=Rv())
+    assert codes(r).count("queued") == 2 and codes(r).count("queue-full") == 6  # queue_max 4 - reserve 2
+    v = auto_acquire.enqueue_candidates("visitor question about outbreak", [A.cand("10.9999/v.1")], cfg=acq, start_worker=False)
+    assert v["queued"] == [0]
+
+
+def test_lookups_run_under_seed_origin_and_arxiv_lookups_are_capped(monkeypatch):
+    seen = []
+
+    def arx(a):
+        seen.append(request_origin.current())
+        return "10.9999/j." + a.replace(".", "")
+    pm_seen = []
+
+    def pmid(p):
+        pm_seen.append(request_origin.current())
+        return None
+    cfg = list_ingest.load_config()
+    cfg["max_arxiv_lookups_per_call"] = 2
+    rv = list_ingest.Resolvers(arxiv_original=arx, pmid=pmid, known=lambda d, u: False)
+    r = _ingest([f"arxiv:2301.0000{i}" for i in range(4)] + ["pmid:5"], monkeypatch, cfg=cfg, resolvers=rv)
+    assert seen == ["seed", "seed"] and pm_seen == ["seed"]
+    assert codes(r)[:4] == ["queued", "queued", "arxiv-lookup-limit", "arxiv-lookup-limit"]
+    assert request_origin.current() == "visitor"
+
+
+def test_caps_hold_under_concurrent_calls(monkeypatch):
+    import threading
+    import time as _t
+    _no_worker(monkeypatch)
+    cfg = list_ingest.load_config()
+    cfg["max_items_per_hour"] = cfg["max_items_per_day"] = 10
+    acq = A.cfg(queue_max=200, jobs_per_hour=1000, jobs_per_day=10000)
+    real = auto_acquire.enqueue_candidates
+
+    def slow(*a, **k):
+        _t.sleep(0.01)
+        return real(*a, **k)
+    monkeypatch.setattr(auto_acquire, "enqueue_candidates", slow)
+    res = []
+
+    def call(n):
+        res.append(list_ingest.ingest([f"10.9999/p{n}.{i}" for i in range(5)], cfg=cfg, acq=acq, resolvers=Rv(),
+                                      start_worker=False))
+    ts = [threading.Thread(target=call, args=(n,)) for n in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sum(codes(r).count("queued") for r in res) == 10
+
+
+def test_topic_is_the_relevance_target_and_outcome_shows_decisive_code(monkeypatch):
+    doi = "10.9999/acq.epi4"
+    web, _raw = A.epi_setup(doi)
+    A.seed_access("www.ebi.ac.uk")
+    store = A.Store()
+    _ingest([doi], monkeypatch, resolvers=Rv(), topic=A.Q_EPI)
+    assert list_ingest.outcomes()[-1]["target"] == "topic"
+    res = auto_acquire.drain_for_tests(A.cfg(), A.deps([], web, store=store), env=A.ENV_ON)
+    assert res[0]["stored"] == 1 and list_ingest.outcomes()[-1]["code"] == "stored"
+    # an off-topic topic makes the same document fail the content check
+    web2, _ = A.epi_setup("10.9999/acq.epi5")
+    store2 = A.Store()
+    _ingest(["10.9999/acq.epi5"], monkeypatch, resolvers=Rv(), topic="medieval cathedral architecture and stained glass")
+    res2 = auto_acquire.drain_for_tests(A.cfg(), A.deps([], web2, store=store2), env=A.ENV_ON)
+    assert res2[0]["stored"] == 0 and not store2.plans
+    o = list_ingest.outcomes()[-1]
+    assert o["state"] == "done" and o["code"] == res2[0]["last_code"]
+
+
+def test_bad_topic_is_refused_before_any_work(monkeypatch):
+    r = _ingest(["10.9999/t.1"], monkeypatch, resolvers=Rv(), topic="x" * 400)
+    assert codes(r) == ["invalid-topic"] and auto_acquire._S.queue is None

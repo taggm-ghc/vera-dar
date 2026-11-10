@@ -2,13 +2,14 @@ import asyncio
 import contextvars
 import json
 import logging
+import secrets
 import os
 import queue
 import threading
 import time
 from typing import Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import AuthenticationError, OpenAIError, RateLimitError
@@ -815,20 +816,32 @@ def ask(req: AskRequest, request: Request, background_tasks: BackgroundTasks, re
 
 
 # ------------------------------------------------------------------------------------------------ LIST-INGEST-1110
+def verify_ingest_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    """LIST-INGEST-1110: /ingest/list uses its OWN key (env VERA_INGEST_API_KEY, set on the API service only), never
+    VERA_API_KEY (which the public UI server also holds). Unset, weak or equal to VERA_API_KEY = route disabled (503)."""
+    from vera import list_ingest
+    ingest_key = os.getenv(list_ingest.load_config()["ingest_key_env"])
+    if classify_vera_api_key(ingest_key) != "ok" or ingest_key == os.getenv("VERA_API_KEY"):
+        raise HTTPException(status_code=503, detail="list-ingest disabled: VERA_INGEST_API_KEY is not set to a usable, dedicated secret")
+    if not x_api_key or not secrets.compare_digest(x_api_key.encode(), ingest_key.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
 class ListIngestRequest(APIModel):
     """LIST-INGEST-1110: identifiers only (DOI, PMCID, "pmid:N", arXiv id, https URL). There is deliberately no origin
     field: the route is seed-only and the origin is forced server-side (vera/list_ingest.py)."""
     identifiers: list[str] = Field(..., min_length=1, max_length=500)
+    topic: str | None = Field(default=None, max_length=1000)  # optional relevance target; default = each document's title
 
 
-@app.post("/ingest/list", dependencies=[Depends(verify_api_key)])
+@app.post("/ingest/list", dependencies=[Depends(verify_ingest_key)])
 def ingest_list(req: ListIngestRequest):
     """Search-free list ingest (SEED-SCI-1110 S10, CHUNK-VALUE-1110 H.8). Same X-API-Key auth as POST /ask; never used by
     the public UI. Each identifier is queued through the existing acquisition gates at seed priority; the response has one
     result code per item (queued, duplicate-already-stored, no-route, ...). More than max_items_per_call = 413."""
     from vera import list_ingest
     try:
-        return list_ingest.ingest(req.identifiers)
+        return list_ingest.ingest(req.identifiers, topic=req.topic)
     except ValueError as e:
         if str(e) == "too_many":
             raise HTTPException(status_code=413, detail="Too many identifiers in one call") from None
@@ -838,7 +851,7 @@ def ingest_list(req: ListIngestRequest):
         raise HTTPException(status_code=500, detail="Server misconfigured") from None
 
 
-@app.get("/ingest/list/outcomes", dependencies=[Depends(verify_api_key)])
+@app.get("/ingest/list/outcomes", dependencies=[Depends(verify_ingest_key)])
 def ingest_list_outcomes(limit: int = 200):
     """Final job codes recorded in memory for queued list items (best effort; lost on restart)."""
     from vera import list_ingest

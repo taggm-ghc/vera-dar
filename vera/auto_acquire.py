@@ -204,7 +204,7 @@ def _pkey(k: str) -> str:
 
 def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, env=os.environ,
                        clock=time.monotonic, start_worker: bool = True, deps_factory=None,
-                       trigger: str = "continue") -> dict:
+                       trigger: str = "continue", reserve_slots: int = 0) -> dict:
     """CONT-1023: hand candidates a request found but could not finish to the EXISTING background queue and worker, so
     returned search results do not end the acquisition effort. Never raises, never blocks.
 
@@ -264,6 +264,9 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
                     why = acq_config.reason(cfg, "rate")
                 else:
                     try:
+                        if reserve_slots and origin != "visitor" and \
+                                _S.queue.qsize() >= int(acq_config.bound(cfg, "queue_max")) - int(reserve_slots):
+                            raise queue.Full  # LIST-INGEST-1110 F1: keep reserve_slots queue places for visitor jobs
                         _S.queue.put_nowait(Job(question=str(question), trigger=trigger, created=now,
                                                 cands=[cands[i] for i in part], origin=origin))
                         why = None
@@ -293,6 +296,10 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
         out["status"] = "R-ACQ-ERROR"
         out["refused"] = [i for i in range(len(cands or ())) if i not in out["queued"]]
         return out
+
+
+def _list_topic(cands) -> bool:
+    return any(isinstance(c, dict) and c.get("li_topic") for c in cands or ())
 
 
 LIST_TRIGGER = "list"  # LIST-INGEST-1110: a job queued by vera.list_ingest (identifiers only; no search, no question)
@@ -1283,7 +1290,8 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
         acq_discovered.annotate(plan, cand, res, route, chain, cfg)
     # LIST-INGEST-1110: a list job has no question; the content check runs against the document's own title (the
     # converter's body/span thresholds and every filter above still apply)
-    n_adm = relevance_gate((item.get("title") or "") if job.trigger == LIST_TRIGGER else job.question, plan, cfg, icfg, fdcfg)
+    n_adm = relevance_gate((item.get("title") or "") if (job.trigger == LIST_TRIGGER and not cand.get("li_topic"))
+                           else job.question, plan, cfg, icfg, fdcfg)
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
@@ -1385,6 +1393,7 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
 
     def count(code):
         codes[code] = codes.get(code, 0) + 1
+        tel["last_code"] = code  # LIST-INGEST-1110: the decisive (last) code, kept for the list outcome record
 
     def done():
         return _done(job, codes, stored, dur, t0, clock, tel)
@@ -1433,7 +1442,8 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         icfg = acq_config.ingest_cfg(fl.load_config(), cfg)
         served = set(deps.corpus_keys() or ())
         from vera.dar_corpus import doc_key_set
-        ranked = rank_candidates("" if job.trigger == LIST_TRIGGER else job.question, cands, cfg, served, fdcfg, count)
+        ranked = rank_candidates(job.question if (job.trigger != LIST_TRIGGER or _list_topic(job.cands)) else "",
+                                 cands, cfg, served, fdcfg, count)
         searched = True  # ROUNDS-1028: the search ran, so this job counts toward its topic's round
         for score, doi, cand, isbn in ranked:
             if stored >= budget:
@@ -1485,6 +1495,8 @@ def _done(job, codes, stored, dur, t0, clock, tel=None) -> dict:
     n_elig = int((tel or {}).get("answer_eligible", 0))
     out = {"codes": dict(sorted(codes.items())), "stored": stored, "durations_ms": dur, "trigger": job.trigger,
            "n_answer_eligible": n_elig, "n_persisted": stored}
+    if (tel or {}).get("last_code"):
+        out["last_code"] = tel["last_code"]
     _log("job", stored=stored, trigger=job.trigger, n_answer_eligible=n_elig, n_persisted=stored,
          **{f"n_{k}": v for k, v in out["codes"].items()}, **{f"ms_{k}": v for k, v in dur.items()})
     return out
