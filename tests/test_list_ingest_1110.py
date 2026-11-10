@@ -446,3 +446,25 @@ def test_default_arxiv_lookup_transient_vs_definitive(monkeypatch):
             _lookup_with(monkeypatch, inspire, oa)
     assert _lookup_with(monkeypatch, OSError("t"), _resp(200, {"locations": [
         {"landing_page_url": "https://doi.org/10.1234/j.x"}]})) == "10.1234/j.x"
+
+
+# LI-TRANSIENT-CODES-1110 round 7 (S7-1): a permission denial is terminal (lookup-denied), not retryable.
+def test_permission_denial_is_lookup_denied_not_unavailable(monkeypatch):
+    from vera import api_permissions
+
+    def denied(x):
+        raise api_permissions.ApiDenied("R-API-DENIED", "inspire", "no entry")
+    rv = list_ingest.Resolvers(pmid=denied, arxiv_original=denied, known=lambda d, u: False)
+    r = _ingest(["pmid:111", "arXiv:2301.12345"], monkeypatch, resolvers=rv)
+    assert codes(r) == ["lookup-denied", "lookup-denied"]
+    assert not list_ingest._ACCEPTED
+
+
+def test_http_401_403_from_lookup_services_is_denied(monkeypatch):
+    ok_empty = _resp(200, {"hits": {"hits": []}})
+    for inspire, oa in ((_resp(403), ok_empty), (_resp(401), ok_empty), (ok_empty, _resp(403)), (ok_empty, _resp(401))):
+        with pytest.raises(list_ingest.LookupDenied):
+            _lookup_with(monkeypatch, inspire, oa)
+    rv = list_ingest.Resolvers(arxiv_original=lambda a: _lookup_with(monkeypatch, _resp(403), ok_empty), known=lambda d, u: False)
+    assert codes(_ingest(["arXiv:2301.12345"], monkeypatch, resolvers=rv)) == ["lookup-denied"]
+    assert list_ingest._is_denied(OSError("t")) is False

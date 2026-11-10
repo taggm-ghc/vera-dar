@@ -140,6 +140,20 @@ def _api_get(url: str, params: dict, timeout_s: float):
                                     allow_redirects=False)
 
 
+class LookupDenied(RuntimeError):
+    """The lookup service refused us (HTTP 401/403): a permission outcome, not a transient failure."""
+
+
+def _is_denied(e: BaseException) -> bool:
+    try:
+        from vera import api_permissions
+        if isinstance(e, api_permissions.ApiDenied):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return isinstance(e, LookupDenied)
+
+
 def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
     """The journal DOI of an arXiv id through INSPIRE, then OpenAlex (metadata-only identifier lookups through the
     existing api_permissions entries; no search, no body text)."""
@@ -147,6 +161,8 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
     incomplete = False  # INSPIRE could not answer: "nothing found" is then not definitive
     try:
         r = _api_get(cfg["inspire"]["url"], {"q": f"arxiv:{arxiv_id}", "fields": "dois", "size": 1}, t)
+        if getattr(r, "status_code", 0) in (401, 403):
+            raise LookupDenied(f"inspire status {r.status_code}")
         if getattr(r, "status_code", 0) == 200:
             for h in (r.json().get("hits") or {}).get("hits") or ():
                 for d in (h.get("metadata") or {}).get("dois") or ():
@@ -156,11 +172,15 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
         else:
             incomplete = True
     except Exception as e:  # noqa: BLE001
+        if _is_denied(e):
+            raise  # permission denial is terminal (lookup-denied), not "incomplete"
         incomplete = True
         logger.info("list-ingest inspire lookup failed (%s)", type(e).__name__)
     r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
                  {"select": "doi,locations"}, t)
     sc = getattr(r, "status_code", 0)
+    if sc in (401, 403):
+        raise LookupDenied(f"openalex status {sc}")
     if sc == 404 and not incomplete:
         return None  # OpenAlex definitively has no such work
     if sc != 200:
@@ -268,7 +288,7 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
                 cand = {k: c2[k] for k in ("doi", "pmcid") if c2.get(k)} | {"url": val}
         except Exception as e:  # noqa: BLE001  transport/permission/rate failure: not definitive, nothing stored, retryable
             logger.info("list-ingest lookup failed (%s)", type(e).__name__)
-            out(raw, kind, "lookup_unavailable")
+            out(raw, kind, "lookup_denied" if _is_denied(e) else "lookup_unavailable")
             continue
         if cand.get("doi") and _ARXIV_DOI.match(cand["doi"]):  # belt and braces: never route an arXiv DOI to the pipeline
             out(raw, kind, "arxiv_no_original")

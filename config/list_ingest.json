@@ -25,6 +25,7 @@
     "arxiv_lookup_limit": "arxiv-lookup-limit",
     "portal": "refused-portal",
     "lookup_unavailable": "lookup-unavailable",
+    "lookup_denied": "lookup-denied",
     "check_unavailable": "check-unavailable",
     "invalid_topic": "invalid-topic",
     "rate_limited": "rate-limited",
