@@ -115,7 +115,11 @@ class HostRoleTests(unittest.TestCase):
         self.assertEqual(role(z, {"version": "submittedVersion"}), P)
         self.assertEqual(role(z, {"type": "preprint"}), P)
         self.assertEqual(role(z, {"version": "publishedVersion"}), R)
-        self.assertEqual(role(z, {"version": "acceptedVersion"}), R)
+        # PVFIX-A-1110 (CL-1110-PVFIX-A, orchestrator P2): flipped R -> P. OD-1110-PORTALS-ALL admits the deposited "version of
+        # record" only, so accepted manuscripts / camera-ready are removed from accepted_versions (fail closed; AAM is a
+        # separate open research question). Positive coverage stays: publishedVersion above is R.
+        self.assertEqual(role(z, {"version": "acceptedVersion"}), P)
+        self.assertEqual(role(z, {"version": "camera-ready"}), P)
         self.assertEqual(role(z, {"type": "dataset"}), R)
         self.assertEqual(role(z, {"type": "report"}), R)
         self.assertEqual(role("https://hal.science/hal-1", {"version": "published"}), R)

@@ -1452,11 +1452,7 @@
   "accepted_versions": [
    "published",
    "publishedversion",
-   "vor",
-   "accepted",
-   "acceptedversion",
-   "camera-ready",
-   "cameraready"
+   "vor"
   ],
   "non_article_types": [
    "dataset",
