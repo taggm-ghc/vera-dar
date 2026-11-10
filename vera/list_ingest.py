@@ -124,7 +124,10 @@ def _api_get(url: str, params: dict, timeout_s: float):
     nothing sent when the entry is missing, denied or limited."""
     from vera import api_permissions
     from vera import selective_fetch as sf
-    with api_permissions.purpose_scope("metadata", url):
+    # call() takes the entry's rate portal; holding() tells pinned_get it is already held, so exactly one slot is taken
+    # (same pattern as vera.portal_inspire). require() raises ApiDenied with nothing sent when there is no entry.
+    portal = str(api_permissions.require(url, "metadata").conditions["rate_portal"])
+    with api_permissions.purpose_scope("metadata", url), api_permissions.holding(portal):
         return api_permissions.call(sf.pinned_get, url, params=params, timeout=timeout_s, purpose="metadata",
                                     allow_redirects=False)
 

@@ -288,3 +288,64 @@ def test_topic_is_the_relevance_target_and_outcome_shows_decisive_code(monkeypat
 def test_bad_topic_is_refused_before_any_work(monkeypatch):
     r = _ingest(["10.9999/t.1"], monkeypatch, resolvers=Rv(), topic="x" * 400)
     assert codes(r) == ["invalid-topic"] and auto_acquire._S.queue is None
+
+
+# ------------------------------------------------------------------------------------------------ F-LI1: one rate slot
+def _openalex_transport(monkeypatch, rate_cfg=None):
+    """DEFAULT lookup path: real api_permissions + rate_limit + pinned_get; only the network is faked (DNS + Session.get)."""
+    import socket
+
+    import requests
+
+    from vera import rate_limit
+    rc = rate_limit.load_config(rate_limit.CONFIG_PATH)
+    if rate_cfg:
+        rc["portals"]["openalex"].update(rate_cfg)
+    rate_limit.set_registry_for_tests(rate_limit.Registry(rc))
+    sent = []
+
+    class Resp:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"locations": [{"landing_page_url": "https://doi.org/10.1234/journal.x"}]}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("151.101.3.42", 443))])
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, **kw: sent.append(url) or Resp())
+    return sent
+
+
+def test_openalex_lookup_takes_one_rate_slot_and_returns_doi(monkeypatch):
+    from vera import rate_limit
+    sent = _openalex_transport(monkeypatch)
+    try:
+        cfg = list_ingest.load_config()
+        r = list_ingest._api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv.2101.00001",
+                                 {"select": "doi,locations"}, 5.0)
+        assert r.status_code == 200 and len(sent) == 1
+        sent.clear()
+        monkeypatch.setattr(list_ingest, "_api_get", lambda url, params, t, _o=list_ingest._api_get:
+                            _o(url, params, t) if "openalex" in url else (_ for _ in ()).throw(OSError("skip inspire")))
+        assert list_ingest._default_arxiv_original("2101.00001", cfg) == "10.1234/journal.x"
+        assert len(sent) == 1
+    finally:
+        rate_limit.set_registry_for_tests(None)
+
+
+def test_openalex_lookup_still_refused_when_slot_exhausted(monkeypatch):
+    from vera import rate_limit
+    sent = _openalex_transport(monkeypatch, {"rate_per_s": 0.0001, "burst": 1})
+    try:
+        cfg = list_ingest.load_config()
+        url = cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv.2101.00001"
+        list_ingest._api_get(url, {"select": "doi,locations"}, 5.0)  # takes the only token
+        assert len(sent) == 1
+        with pytest.raises(rate_limit.RateLimited):
+            list_ingest._api_get(url, {"select": "doi,locations"}, 5.0)
+        assert len(sent) == 1  # nothing sent when limited
+    finally:
+        rate_limit.set_registry_for_tests(None)
