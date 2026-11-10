@@ -232,7 +232,7 @@ _CAUSE_TEXT = {
     "timeout": "a search service timed out",
     "quota": "a search service's request limit was reached",
     "paced": "VERA-DAR skipped a call to a source because the wait needed to respect that source's rate limit was too long",  # F4a: our own limiter, not the source's
-    "own_cap": "VERA-DAR's daily search allowance for one search service had already been used up by earlier searches",  # OUTCOME-LABELS-1108: our own cap
+    "own_cap": "VERA-DAR's daily search allowance for one search service had already been used up by earlier searches",  # ARCH-FIX-1110 B: _cause_text names the service  # OUTCOME-LABELS-1108: our own cap
     "robots": "VERA-DAR skipped a source because its robots rules do not permit it",  # OUTCOME-LABELS-1108: our own gate
     "error": "a search service had a failure",
     "unknown": "a search service gave a status VERA-DAR could not interpret, so it is not known whether it failed",  # NOANSWER-1109 A4
@@ -246,8 +246,57 @@ _CAUSE_TEXT = {
     "budget_unknown": "the time needed for a new search could not be determined",
     "fetch_timeout": "a source took too long to respond",
     "crawl_delay": "a source asks crawlers to wait longer than this search could",
-    "unreachable": "a source found could not be reached in time",  # DDGFIX-1023 DF-4: queued after a fetch failure
+    "unreachable": "a source found could not be reached",  # DDGFIX-1023 DF-4; ARCH-FIX-1110 D: transport error, non-200 or redirect overflow
+    "unreachable_timeout": "a source found did not respond in time",  # ARCH-FIX-1110 D
+    "unreachable_ownlimit": "a source found was not fetched because VERA-DAR's own rate limit for that site was reached",  # ARCH-FIX-1110 D: nothing was sent
+    "unreachable_paced": "a source found was not fetched because the wait needed to respect that site's rate limit was too long",  # ARCHFIX-V2 R1: -DEADLINE
+    "unreachable_breaker": "a source found was left for later because the site failed repeatedly, so VERA-DAR paused requests to it",  # ARCHFIX-V2 R1: -BREAKER_OPEN / -HALF_OPEN_BUSY
+    "unreachable_throttled": "a source found asked VERA-DAR to slow down, so it was left for later",  # ARCH-FIX-1110 D: the site's own 429
 }
+
+# ARCH-FIX-1110 B: public display names of the search services (portal ids as recorded by the portal recorder).
+_SERVICE_NAMES = {"duckduckgo": "DuckDuckGo", "openalex": "OpenAlex", "doaj": "DOAJ", "europe_pmc": "Europe PMC",
+                  "europepmc": "Europe PMC", "arxiv": "arXiv", "crossref": "Crossref", "wikipedia": "Wikipedia",
+                  "semantic_scholar": "Semantic Scholar", "core": "CORE", "pubmed": "PubMed"}
+
+
+def service_name(portal) -> str | None:
+    p = str(portal or "").strip().lower()
+    for k, v in _SERVICE_NAMES.items():
+        if p == k or p.startswith(k + "_") or p.startswith(k + "-"):
+            return v
+    return None
+
+
+def _cause_text(code: str, attempts=()) -> str:
+    """The sentence for one cause; own_cap names the service(s) whose daily allowance ran out (ARCH-FIX-1110 B)."""
+    if code == "own_cap":
+        names = []
+        for a in attempts or ():
+            n = service_name(a.portal) if getattr(a, "status", None) == "own_cap" else None
+            if n and n not in names:
+                names.append(n)
+        if names:
+            who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            return f"VERA-DAR's daily search allowance for {who} had already been used up by earlier searches"
+    return _CAUSE_TEXT[code]
+
+
+def unreachable_class(code) -> str:
+    """ARCH-FIX-1110 D: the cause key for a queued candidate whose detail code is a fetch failure."""
+    c = str(code or "").strip().upper()
+    if c.startswith("R-ACQ-RATELIMITED"):
+        # ARCHFIX-V2 R1: "own limit" only for codes where VERA-DAR's limiter was hit; the base code is the site throttling robots/tdmrep
+        if c.endswith(("-BREAKER_OPEN", "-HALF_OPEN_BUSY")):
+            return "unreachable_breaker"
+        if c.endswith("-DEADLINE"):
+            return "unreachable_paced"
+        if c == "R-ACQ-RATELIMITED" or c.endswith("-THROTTLED"):
+            return "unreachable_throttled"
+        return "unreachable_ownlimit"
+    if c.startswith("R-ACQ-ERR-") and "TIMEOUT" in c:
+        return "unreachable_timeout"
+    return "unreachable"
 
 
 def queued_unreachable(code) -> bool:
@@ -263,7 +312,7 @@ def _awaiting_route(candidates) -> bool:
                for c in candidates)
 
 
-def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable: bool = False) -> list[str]:
+def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable=False) -> list[str]:
     out: list[str] = []
     for a in attempts:
         if a.status in ("timeout", "quota", "paced", "own_cap", "robots", "error", "unknown") and a.status not in out:
@@ -271,21 +320,23 @@ def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachabl
     if budget_exhausted:
         out.append("budget")
     if unreachable:
-        out.append("unreachable")
+        for k in (unreachable if isinstance(unreachable, (list, tuple)) else ["unreachable"]):
+            if k not in out:
+                out.append(k)
     if awaiting:
         out.append("awaiting_route")
     return out
 
 
-def _cause_phrase(causes: list[str]) -> str:
+def _cause_phrase(causes: list[str], attempts=()) -> str:
     """NOANSWER-PAGE-1108 D7: one plain list built from the cause codes ("a, b and c"), never "a and b and c"."""
-    parts = [_CAUSE_TEXT[c] for c in causes]
+    parts = [_cause_text(c, attempts) for c in causes]
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
 
 
-def _cause_sentences(causes) -> str:
+def _cause_sentences(causes, attempts=()) -> str:
     """NOANSWER-1109: one short sentence per cause, never one run-on list."""
-    return " ".join(t[0].upper() + t[1:] + "." for t in (_CAUSE_TEXT[c] for c in causes))
+    return " ".join(t[0].upper() + t[1:] + "." for t in (_cause_text(c, attempts) for c in causes))
 
 
 def _detail(attempts, candidates, kind, complete, causes) -> dict:
@@ -317,13 +368,19 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
     extra = [x for x in extra_causes if x in _CAUSE_TEXT]  # P0DTA-DIAG: specific stop causes (own sentences)
     complete = bool(applicable) and all(a.status == "completed" for a in applicable) \
         and not budget_exhausted and not awaiting and not source_unreachable and not extra
-    causes = _causes(attempts, budget_exhausted, awaiting, source_unreachable)
+    ucls = []  # ARCH-FIX-1110 D: one cause per fetch-failure class among the queued candidates
+    for c in candidates:
+        if c.terminal_reason == "queued_background" and queued_unreachable(c.detail):
+            k = unreachable_class(c.detail)
+            if k not in ucls:
+                ucls.append(k)
+    causes = _causes(attempts, budget_exhausted, awaiting, (ucls or ["unreachable"]) if source_unreachable else False)
     causes += [x for x in extra if x not in causes]
     if not applicable and not budget_exhausted and not extra:
         causes = ["none_searched"]
     # Passage-level only: a candidate that passed the initial relevance check is not evidence used in the answer.
     admitted = bool(new_evidence_admitted)
-    why = (" Coverage was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT])
+    why = (" Coverage was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT], attempts)
            if causes and not complete and any(c in _CAUSE_TEXT for c in causes) else "")
 
     if admitted:
@@ -342,7 +399,7 @@ def summarize_outcome(attempts, candidates, *, budget_exhausted: bool,
     elif not complete:
         kind = "incomplete_search"
         if causes and causes != ["none_searched"]:
-            text = ("The search was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT])
+            text = ("The search was incomplete. " + _cause_sentences([c for c in causes if c in _CAUSE_TEXT], attempts)
                     + " No conclusion about available evidence can be drawn.")
         else:
             text = "No search could be run, so no conclusion about available evidence can be drawn."

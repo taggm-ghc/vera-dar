@@ -453,7 +453,7 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         c = led["counted"]
         if c >= t:
             return None
-        head = f"VERA-DAR obtained {c} documents for this question (aim: at least {t})"
+        head = f"VERA-DAR obtained {c} {'document' if c == 1 else 'documents'} for this question (aim: at least {t})"
         if aq.get("status") == "relevance_rejected":
             # NOANSWER-PAGE-1108 D3: the status also counts documents judged not relevant from their title or abstract
             # BEFORE any fetch (inline_acquire._supply_status), so the "fetched" clause is stated only for documents
@@ -480,7 +480,7 @@ def acquisition_notice_line(data: dict | None) -> str | None:
         return None
     if clause is None:  # review F2
         return _stop_clause(aq).strip() or None
-    return f"VERA-DAR obtained {n} new full documents for this question (aim: at least {t}); {clause}{_stop_clause(aq)}"
+    return f"VERA-DAR obtained {n} new full {'document' if n == 1 else 'documents'} for this question (aim: at least {t}); {clause}{_stop_clause(aq)}"
 
 
 def inline_counts_line(data: dict | None) -> str | None:

@@ -148,7 +148,7 @@ def _line(aq, ledger=None):
 
 def test_7_notice_stop_clauses_and_legacy_goldens():
     base = {"status": "resource_limited", "stored": 1, "target": 6}
-    assert _line(base) == "VERA-DAR obtained 1 new full documents for this question (aim: at least 6); supply was limited."
+    assert _line(base) == "VERA-DAR obtained 1 new full document for this question (aim: at least 6); supply was limited."
     assert _line({**base, "stop": "no_progress"}).endswith(
         'stopped after two further searches found nothing new; add "keep searching" to your question to try every '
         "remaining search.")

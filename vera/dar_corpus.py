@@ -216,6 +216,9 @@ def doc_from_admitted(cand: dict, outcome: str) -> dict:
 
 
 _DOI_IN_URL = re.compile(r"^https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/\S+)$", re.I)
+# ARCH-FIX-1110 A: an arxiv.org abs/pdf/html URL (any version) and its 10.48550/arXiv.<id> DOI are one document.
+_ARXIV_URL = re.compile(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/((?:\d{4}\.\d{4,5})|(?:[a-z\-]+(?:\.[a-z]{2})?/\d{7}))(?:v\d+)?(?:\.pdf)?$", re.I)
+_ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.(.+?)(?:v\d+)?$", re.I)
 
 
 def doc_key_set(doi=None, url=None, isbn=None) -> set:
@@ -228,13 +231,19 @@ def doc_key_set(doi=None, url=None, isbn=None) -> set:
         d = d[4:].strip()
     m = _DOI_IN_URL.match(d)
     d = m.group(1) if m else d
+    ma = _ARXIV_DOI.match(d)
+    if ma:
+        d = "10.48550/arxiv." + ma.group(1)
     if d:
         keys.add("doi:" + d)
     u = str(url or "").strip().lower().split("#")[0].rstrip("/")
     if u:
         m = _DOI_IN_URL.match(u)
+        ax = _ARXIV_URL.match(u)
         if m:
-            keys.add("doi:" + m.group(1).rstrip("/"))
+            keys.add("doi:" + _ARXIV_DOI.sub(r"10.48550/arxiv.\1", m.group(1).rstrip("/")))
+        elif ax:
+            keys.add("doi:10.48550/arxiv." + ax.group(1))
         else:
             keys.add("url:" + re.sub(r"^http://", "https://", u))
     # WED-ACQ2 (owner 2026-10-21, ISBN post-script): a validated ISBN-13 (hyphens removed) is a third membership key.
