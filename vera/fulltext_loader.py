@@ -349,6 +349,24 @@ def legacy_label_view(provenance: dict, meta: dict) -> dict:
 
 
 R_PORTAL = "R-ACQ-PORTAL"  # PORTAL-RULE-1110: the item / stored row comes from a portal host or portal record
+_EU_REPO_PREFIX = "info:eu-repo/semantics/"
+
+
+def _norm_version(v) -> str:
+    """PVFIX-A-1110: the item's own version string, with only the OpenAIRE/eu-repo prefix stripped (case-insensitive).
+    Anything else is left as is, so an unknown string ('v1.0') stays undecidable for host_role (fail closed). None / ''
+    mean 'no version' (""); a non-string, or a bare eu-repo prefix with nothing after it, is undecidable (S1), so it must
+    not read as 'no version' (which would let a dataset-typed row qualify)."""
+    if v is None or v == "":
+        return ""
+    if not isinstance(v, str):
+        return "undecidable"
+    v = v.strip()
+    if v.lower().startswith(_EU_REPO_PREFIX):
+        v = v[len(_EU_REPO_PREFIX):].strip()
+        if not v:
+            return "undecidable"
+    return v
 
 
 def portal_verdict(item: dict, prov: dict | None = None, canonical_url: str | None = None) -> str | None:
@@ -376,12 +394,18 @@ def portal_verdict(item: dict, prov: dict | None = None, canonical_url: str | No
         # route, so checking it quarantines every discovered row. The text-bearing URL is covered by fulltext_url / landing_url /
         # canonical_url / abs_url above, and each fetch hop was store-checked at acquisition time (acq_discovered._b_get).
         urls += urls_extra
+        # PVFIX-A-1110: the item's own version / type is meta for the URL role checks only (it can relax a version-gated
+        # repository row, never tighten anything; rec above is unchanged).
+        vmeta = {"version": _norm_version(item.get("version") if item.get("version") not in (None, "") else prov.get("version")),
+                 "type": item.get("type") or prov.get("type") or "",
+                 "resource_type": item.get("resource_type") or prov.get("resource_type") or "",
+                 "source_type": item.get("source_type") or ""}
         hr = host_role.role_for_record(rec)
         if hr.role in ("PORTAL", "EXCLUDED"):
             return hr.rule_id
         for u in urls:
             if isinstance(u, str) and u.lower().startswith(("http://", "https://")):
-                hr = host_role.role_for_url(u)
+                hr = host_role.role_for_url(u, vmeta)
                 if hr.role in ("PORTAL", "EXCLUDED"):
                     return hr.rule_id
         return None
