@@ -29,10 +29,10 @@ from vera.cost_ledger import CostLedger
 from vera.licence_gate import apply_licence_gate
 from vera.gate_a import GateAConfig, score_candidates
 from vera.search_and_fetch import normalize_url, search_question
+from vera.safe_path import PathRefused, append_text, safe_path
 from vera.selective_fetch import fetch_candidate
 
 SCHEMA = "vera_vjay"
-from vera.safe_path import PathRefused, append_text, safe_path
 
 logger = logging.getLogger("vera")
 COST_LOG_ROOT = Path(__file__).resolve().parent.parent / "logs"  # ENV-PATHS-1110: the only place VERA_COST_LOG may point
@@ -140,8 +140,8 @@ def _append_cost_log(run_id, iteration, q, ledger: CostLedger) -> None:
             COST_LOG_ROOT.mkdir(parents=False, exist_ok=True)
             path = safe_path(raw, [COST_LOG_ROOT], key="VERA_COST_LOG", mode="append")
             append_text(path, json.dumps(line) + "\n")
-        except (PathRefused, OSError):
-            logger.warning("m2 cost log skipped")
+        except (PathRefused, OSError) as e:
+            logger.warning("m2 cost log skipped (%s)", type(e).__name__)  # never the path
 
 
 def run_m2(

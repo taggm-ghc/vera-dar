@@ -387,3 +387,11 @@ def _ddg_meter_fresh_per_test():
     ddg_meter.reset()
     yield
     ddg_meter.reset()
+
+
+@pytest.fixture
+def allow_tmp_bundle(monkeypatch, tmp_path):
+    """ENV-PATHS-1110, opt-in (NOT autouse): let VERA_FULLDOC_BUNDLE_DIR name a bundle under tmp_path through the test-only hook."""
+    from vera import safe_path
+    monkeypatch.setattr(safe_path, "EXTRA_TEST_ROOTS", [tmp_path])
+    return tmp_path

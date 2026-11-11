@@ -205,7 +205,7 @@ def test_health_error_state_is_unknown_not_unavailable(monkeypatch):
     assert r["dar"] is None and r["routing"] is None and r["fallback"] is None
 
 
-def test_fulldoc_readiness_codes_and_counts_only(monkeypatch, tmp_path):
+def test_fulldoc_readiness_codes_and_counts_only(monkeypatch, tmp_path, allow_tmp_bundle):
     """C-3/S8: disabled / not_configured / ok / unusable / error; no path or title ever appears."""
     from vera import fulldoc_corpus as fc
     from tests.fulldoc_bundle_synth import synth_cfg, write_bundle

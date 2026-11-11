@@ -14,9 +14,9 @@ cep = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cep)
 
 # Pins (ENV-PATHS-1110): changing the checker or the exemption list must be a visible, reviewed change.
-PIN_EXEMPTIONS_SHA256 = "77a5fbd11e364e08945a0ab003c0296d9eb1d129c85182d1bde443ca1d3a5460"
-PIN_CHECKER_SHA256 = "94a40125dacd5ba4f3b1f9c6d729407c6503328220a76610c4798c314f30c4df"
-PIN_UNREVIEWED = 1  # exemptions still carrying a PENDING reviewer; the independent Verifier replaces them
+PIN_EXEMPTIONS_SHA256 = "b97629705d785a12cb62495b4f294c30797d02ef9c25b6ace2fdfbbc841a5a8d"
+PIN_CHECKER_SHA256 = "fd78b639d23ce895b0bb1ff5407cdc321b7fc57192835971006ac14e991db420"
+PIN_UNREVIEWED = 0  # exemptions still carrying a PENDING reviewer (none: the fulldoc site is wired)
 TODAY = dt.date(2026, 11, 10)
 
 
@@ -54,6 +54,7 @@ def test_repo_has_no_unexempt_unguarded_or_unanalysable_site():
     guarded = {(s["file"], s["env"]) for s in res["sites"] if s["verdict"] == "GUARDED"}
     assert ("vera/m2_runner.py", "VERA_COST_LOG") in guarded and ("vera/trace_viz.py", "VERA_TRACE_EVAL_RESULTS") in guarded
     assert any(f == "vera/trace_eval/ui.py" for f, _ in guarded)
+    assert any(f == "vera/fulldoc_corpus.py" for f, _ in guarded)
     assert res["unreviewed"] == PIN_UNREVIEWED
 
 

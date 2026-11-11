@@ -18,12 +18,15 @@ Known limits (false-negative classes, plan section D):
   4 getattr/**kwargs/setattr/vars/eval/exec: UNANALYSABLE when fed by taint (eval and exec included).
   5 cross-function: a function whose return value is tainted is a source for its callers (matched by name, iterated to a
     fixpoint). A tainted value passed INTO a function parameter is NOT followed (limit).
-  6 whole os.environ passed to a call or assigned to a container: UNANALYSABLE.
+  6 whole os.environ: UNANALYSABLE only when handed to a subprocess-family call (os.environ, dict(os.environ), os.environ.copy(),
+    {**os.environ}). Callees that take a Mapping are covered only when their parameter is named `environ` or defaults to
+    os.environ (it is then treated as the environment). Any other whole-environ hand-off (other parameter names, containers,
+    attribute stores) is NOT flagged.
   7 sinks via aliases: import aliases and module-level `name = module.attr` aliases are resolved; the sink list is SINKS and
     SINK_ATTRS below. A DSN-style call with a string constant holding sslrootcert/sslcert/sslkey/passfile is UNGUARDED.
   8 shell: grep for $VAR / ${VAR} as a path operand (redirect, cat/cp/mv/rm/tee/source/./mkdir/touch/ln); eval and ${!x}
     are UNANALYSABLE. Variables derived from other variables are missed.
-Not followed at all: attribute stores (self.x = tainted), tainted data passed into callee parameters, tests/ (by design),
+Not followed at all: whole-environ hand-offs other than class 6 above, attribute stores (self.x = tainted), tainted data passed into callee parameters, tests/ (by design),
 files whose name starts with .env and any directory named env (never opened; skipped by name).
 """
 from __future__ import annotations
@@ -56,7 +59,7 @@ DSN_CALLS = {"create_engine", "sqlalchemy.create_engine", "psycopg.connect", "ps
 DSN_FILE_PARAM = re.compile(r"(sslrootcert|sslcert|sslkey|passfile|file://)", re.I)
 DYNAMIC = {"getattr", "setattr", "vars", "eval", "exec", "__import__", "compile"}
 GUARD_NAMES = {"safe_path", "vera.safe_path.safe_path"}
-REASONS = {"selector", "denied-name", "db-url-not-file", "test-only-runner-set", "pending-decision"}  # last: open finding, not safe, owner decision
+REASONS = {"selector", "denied-name", "db-url-not-file", "test-only-runner-set"}
 PY_ROOTS = ("vera", "scripts", "main.py", "pages", "streamlit_app.py")
 SH_FILES = ("start.sh", "run.sh", "run_demo.sh")
 SKIP_DIRS = {"__pycache__", "tests", "env", ".git", "node_modules"}

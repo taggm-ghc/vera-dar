@@ -93,7 +93,7 @@ def test_echo_uses_longer_cooldown_and_is_distinct(monkeypatch):
     assert len(calls) == 3  # cluster, draft and check (labels) of the first run only; the echo cooldown blocks a second run
 
 
-def test_missing_fulldoc_enabled_key_is_disabled(monkeypatch, tmp_path):
+def test_missing_fulldoc_enabled_key_is_disabled(monkeypatch, tmp_path, allow_tmp_bundle):
     fulldoc_corpus.reset_for_tests()
     env = {"VERA_FULLDOC_BUNDLE_DIR": str(tmp_path)}
     base = {"bundle_dir_env": "VERA_FULLDOC_BUNDLE_DIR", "manifest_name": "m", "sums_name": "s"}

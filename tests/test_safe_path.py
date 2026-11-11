@@ -242,3 +242,77 @@ def test_cost_log_root_is_anchored_on_the_file_not_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     assert m2_runner.COST_LOG_ROOT == Path(m2_runner.__file__).resolve().parent.parent / "logs"
     assert os.path.isabs(m2_runner.COST_LOG_ROOT)
+
+
+# ---- VERA_FULLDOC_BUNDLE_DIR (fulldoc_corpus.get_corpus) -------------------------------------------------------------
+def _fd(monkeypatch, tmp_path):
+    from vera import fulldoc_corpus as fc
+    from tests.fulldoc_bundle_synth import synth_cfg, write_bundle
+    cfg = synth_cfg()
+    cfg.setdefault("fulldoc", {})["enabled"] = True
+    root = tmp_path / "bundleroot"
+    root.mkdir()
+    monkeypatch.setattr(fc, "BUNDLE_ROOT", root)
+    fc.reset_for_tests()
+    return fc, cfg, root, write_bundle
+
+
+def test_bundle_root_parity_with_test_runner():
+    import importlib.util
+    from vera import fulldoc_corpus as fc
+    spec = importlib.util.spec_from_file_location("vtr", Path(fc.__file__).resolve().parent.parent / "scripts" / "vera_test_runner.py")
+    vtr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vtr)
+    assert tuple(fc.BUNDLE_ROOT_REL) == tuple(vtr.RO_BUNDLE_REL)
+    assert fc.BUNDLE_ROOT == fc.ROOT.parent.joinpath(*vtr.RO_BUNDLE_REL)
+
+
+def test_bundle_inside_root_loads_without_the_hook(monkeypatch, tmp_path):
+    fc, cfg, root, write_bundle = _fd(monkeypatch, tmp_path)
+    b = write_bundle(root / "b")
+    c = fc.get_corpus(cfg, {cfg["bundle_dir_env"]: str(b)})
+    assert c is not None and c.status == fc.STATUS_OK and sp.refusal_counts() == {}
+
+
+def test_bundle_outside_root_is_r_bundle_path_counted_not_cached_value_not_logged(monkeypatch, tmp_path, caplog):
+    fc, cfg, root, write_bundle = _fd(monkeypatch, tmp_path)
+    out = write_bundle(tmp_path / f"{SECRET}-out")
+    caplog.set_level(logging.INFO)
+    env = {cfg["bundle_dir_env"]: str(out)}
+    c = fc.get_corpus(cfg, env)
+    assert c.status == fc.STATUS_UNUSABLE and [u["code"] if isinstance(u, dict) else u.code for u in c.unusable] == ["R-BUNDLE-PATH"]
+    assert sp.refusal_counts() == {(cfg["bundle_dir_env"], "outside_root"): 1}
+    assert SECRET not in caplog.text and "reason=outside_root" in caplog.text
+    assert not fc._CACHE  # nothing cached for a refused value
+    fc.get_corpus(cfg, env)
+    assert not fc._CACHE and sp.refusal_counts()[(cfg["bundle_dir_env"], "outside_root")] == 2
+
+
+def test_bundle_symlink_escaping_root_is_refused(monkeypatch, tmp_path):
+    fc, cfg, root, write_bundle = _fd(monkeypatch, tmp_path)
+    out = write_bundle(tmp_path / "out")
+    (root / "lnk").symlink_to(out)
+    c = fc.get_corpus(cfg, {cfg["bundle_dir_env"]: str(root / "lnk")})
+    assert c.status == fc.STATUS_UNUSABLE and sp.refusal_counts() == {(cfg["bundle_dir_env"], "outside_root"): 1}
+
+
+def test_bundle_value_with_whitespace_is_refused_not_stripped(monkeypatch, tmp_path):
+    fc, cfg, root, write_bundle = _fd(monkeypatch, tmp_path)
+    b = write_bundle(root / "b")
+    c = fc.get_corpus(cfg, {cfg["bundle_dir_env"]: str(b) + " "})
+    assert c.status == fc.STATUS_UNUSABLE and sp.refusal_counts() == {(cfg["bundle_dir_env"], "whitespace"): 1}
+    assert fc.get_corpus(cfg, {cfg["bundle_dir_env"]: "   "}) is None  # blank = unset, unchanged
+
+
+def test_bundle_both_sources_still_gives_r_source_first(monkeypatch, tmp_path):
+    fc, cfg, root, write_bundle = _fd(monkeypatch, tmp_path)
+    env = {cfg["bundle_dir_env"]: "/etc", fc._db_run_env(cfg): "7"}
+    c = fc.get_corpus(cfg, env)
+    assert [u["code"] if isinstance(u, dict) else u.code for u in c.unusable] == ["R-SOURCE"] and sp.refusal_counts() == {}
+
+
+def test_bundle_path_code_has_an_outcome_mapping():
+    from vera import research_outcome
+    assert research_outcome.__dict__  # module imports
+    src = Path(research_outcome.__file__).read_text(encoding="utf-8")
+    assert '"R-BUNDLE-PATH": "provenance_rejected"' in src
