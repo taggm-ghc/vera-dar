@@ -354,10 +354,18 @@ _EU_REPO_PREFIX = "info:eu-repo/semantics/"
 
 def _norm_version(v) -> str:
     """PVFIX-A-1110: the item's own version string, with only the OpenAIRE/eu-repo prefix stripped (case-insensitive).
-    Anything else is left as is, so an unknown string ('v1.0') stays undecidable for host_role (fail closed)."""
-    v = v.strip() if isinstance(v, str) else ""
+    Anything else is left as is, so an unknown string ('v1.0') stays undecidable for host_role (fail closed). None / ''
+    mean 'no version' (""); a non-string, or a bare eu-repo prefix with nothing after it, is undecidable (S1), so it must
+    not read as 'no version' (which would let a dataset-typed row qualify)."""
+    if v is None or v == "":
+        return ""
+    if not isinstance(v, str):
+        return "undecidable"
+    v = v.strip()
     if v.lower().startswith(_EU_REPO_PREFIX):
-        v = v[len(_EU_REPO_PREFIX):]
+        v = v[len(_EU_REPO_PREFIX):].strip()
+        if not v:
+            return "undecidable"
     return v
 
 
@@ -388,7 +396,7 @@ def portal_verdict(item: dict, prov: dict | None = None, canonical_url: str | No
         urls += urls_extra
         # PVFIX-A-1110: the item's own version / type is meta for the URL role checks only (it can relax a version-gated
         # repository row, never tighten anything; rec above is unchanged).
-        vmeta = {"version": _norm_version(item.get("version") or prov.get("version")),
+        vmeta = {"version": _norm_version(item.get("version") if item.get("version") not in (None, "") else prov.get("version")),
                  "type": item.get("type") or prov.get("type") or "",
                  "resource_type": item.get("resource_type") or prov.get("resource_type") or "",
                  "source_type": item.get("source_type") or ""}

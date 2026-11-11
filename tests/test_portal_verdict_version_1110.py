@@ -93,3 +93,20 @@ def test_shadow_library_with_version_still_excluded():
 def test_accepted_versions_config_is_published_only():
     reg = host_role.get_registry()
     assert reg.rv["accepted_versions"] == {"published", "publishedversion", "vor"}
+
+
+@pytest.mark.parametrize("ver", [1, 0, True, False, ["publishedVersion"], {"v": "published"}, "info:eu-repo/semantics/", "info:eu-repo/semantics/  "])
+@pytest.mark.parametrize("where", ["item", "prov"])
+def test_s1_undecidable_version_is_not_empty_even_for_dataset(ver, where):
+    item = zen(type="dataset")
+    prov = {}
+    if where == "item":
+        item["version"] = ver
+    else:
+        prov["version"] = ver
+    out = FL.portal_verdict(item, prov)
+    assert out and out.startswith("version_unqualified:")
+
+
+def test_trailing_space_published_is_trimmed_and_serves():
+    assert FL.portal_verdict(zen(version="PublishedVersion ")) is None
