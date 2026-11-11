@@ -24,7 +24,10 @@ def test_own_cap_names_service():
     ("R-ACQ-RATELIMITED", "unreachable_throttled", "asked VERA-DAR to slow down"),
     ("R-ACQ-RATELIMITED-BREAKER_OPEN", "unreachable_breaker", "the site failed repeatedly"),
     ("R-ACQ-RATELIMITED-HALF_OPEN_BUSY", "unreachable_breaker", "the site failed repeatedly"),
-    ("R-ACQ-RATELIMITED-DEADLINE", "unreachable_paced", "the wait needed to respect that site's rate limit was too long"),
+    ("R-ACQ-RATELIMITED-DEADLINE", "unreachable_paced", "required a longer wait than the time left for this question"),
+    ("R-ACQ-RATELIMITED-WAIT_TOO_LONG", "unreachable_paced", "rate limit required a longer wait than the time left for this question"),
+    ("R-ACQ-RATELIMITED-DEADLINE_PASSED", "unreachable_deadline_passed", "the time available for this question had already run out before another request to that site could be made"),
+    ("R-ACQ-RATELIMITED-SEED_EXCLUDED", "unreachable_seed", "background seeding does not use that service"),
     ("R-ACQ-RATELIMITED-THROTTLED", "unreachable_throttled", "asked VERA-DAR to slow down"),
 ])
 def test_fetch_failure_wording_by_code(code, key, words):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped", "paced", "own_cap", "robots")
+PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped", "paced", "own_cap", "seed_excluded", "robots")
 TERMINAL_REASONS = (
     "no_route", "fetch_failed", "extraction_failed", "licence_rejected",
     "provenance_rejected", "injection_rejected", "relevance_rejected",
@@ -235,6 +235,7 @@ _CAUSE_TEXT = {
     "timeout": "a search service timed out",
     "quota": "a search service's request limit was reached",
     "paced": "VERA-DAR skipped a call to a source because the wait needed to respect that source's rate limit was too long",  # F4a: our own limiter, not the source's
+    "seed_excluded": "background seeding does not use that search service",  # POLISH-1110: an exclusion, not a used-up allowance
     "own_cap": "VERA-DAR's daily search allowance for one search service had already been used up by earlier searches",  # ARCH-FIX-1110 B: _cause_text names the service  # OUTCOME-LABELS-1108: our own cap
     "robots": "VERA-DAR skipped a source because its robots rules do not permit it",  # OUTCOME-LABELS-1108: our own gate
     "error": "a search service had a failure",
@@ -252,7 +253,9 @@ _CAUSE_TEXT = {
     "unreachable": "a source found could not be reached",  # DDGFIX-1023 DF-4; ARCH-FIX-1110 D: transport error, non-200 or redirect overflow
     "unreachable_timeout": "a source found did not respond in time",  # ARCH-FIX-1110 D
     "unreachable_ownlimit": "a source found was not fetched because VERA-DAR's own rate limit for that site was reached",  # ARCH-FIX-1110 D: nothing was sent
-    "unreachable_paced": "a source found was not fetched because the wait needed to respect that site's rate limit was too long",  # ARCHFIX-V2 R1: -DEADLINE
+    "unreachable_paced": "a source found was not fetched because that site's rate limit required a longer wait than the time left for this question",  # POLISH-1110: -WAIT_TOO_LONG (and legacy -DEADLINE)
+    "unreachable_deadline_passed": "a source found was not fetched because the time available for this question had already run out before another request to that site could be made",  # POLISH-1110: -DEADLINE_PASSED
+    "unreachable_seed": "a source found was not fetched because background seeding does not use that service",  # POLISH-1110 P-1110-11: -SEED_EXCLUDED, no limit was reached
     "unreachable_breaker": "a source found was left for later because the site failed repeatedly, so VERA-DAR paused requests to it",  # ARCHFIX-V2 R1: -BREAKER_OPEN / -HALF_OPEN_BUSY
     "unreachable_throttled": "a source found asked VERA-DAR to slow down, so it was left for later",  # ARCH-FIX-1110 D: the site's own 429
 }
@@ -292,7 +295,11 @@ def unreachable_class(code) -> str:
         # ARCHFIX-V2 R1: "own limit" only for codes where VERA-DAR's limiter was hit; the base code is the site throttling robots/tdmrep
         if c.endswith(("-BREAKER_OPEN", "-HALF_OPEN_BUSY")):
             return "unreachable_breaker"
-        if c.endswith("-DEADLINE"):
+        if c.endswith("-SEED_EXCLUDED"):
+            return "unreachable_seed"
+        if c.endswith("-DEADLINE_PASSED"):
+            return "unreachable_deadline_passed"
+        if c.endswith(("-WAIT_TOO_LONG", "-DEADLINE")):  # legacy -DEADLINE kept
             return "unreachable_paced"
         if c == "R-ACQ-RATELIMITED" or c.endswith("-THROTTLED"):
             return "unreachable_throttled"
@@ -318,7 +325,7 @@ def _awaiting_route(candidates) -> bool:
 def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable=False) -> list[str]:
     out: list[str] = []
     for a in attempts:
-        if a.status in ("timeout", "quota", "paced", "own_cap", "robots", "error", "unknown") and a.status not in out:
+        if a.status in ("timeout", "quota", "paced", "own_cap", "seed_excluded", "robots", "error", "unknown") and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")

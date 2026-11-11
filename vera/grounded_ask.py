@@ -285,7 +285,9 @@ def retrieve_all(question: str, cfg: dict, search: Callable | None = None,
         src = {"n": len(out) + 1, "title": clean_text(r.get("title"), 300) or url, "url": url,
                "published": (str(r.get("published"))[:10] if r.get("published") else None),
                "snippet": snippet, "source_type": r.get("source_type"),
-               "evidence_eligible": evidence_eligible(r)}  # PORTAL-WIRE-B-1110: portal text is never evidence
+               "evidence_eligible": evidence_eligible(r)}
+        if r.get("landing_url"):  # POLISH-1110: carried through to the candidate record unchanged
+            src["landing_url"] = str(r["landing_url"])  # PORTAL-WIRE-B-1110: portal text is never evidence
         if r.get("discovered_via"):
             src["discovered_via"] = str(r["discovered_via"])
         for k in ("licence", "stored_text_kind", "doi", "pmcid", "openalex_id", "doaj_id", "provider", "admission_passed", "canonical_source_id", "source_id", "disposition", "in_corpus", "authors", "publisher", "container_title", "journal"):  # internal, for the corpus gauntlet (pmcid is published only via public_sources/_pmcid_of, PMCID-PUBLIC-1023)

@@ -112,16 +112,16 @@ def test_deadline_skip_never_sleeps_past_caller_budget():
     _reg, ad, c = make({"rate_per_s": 1.0, "burst": 1})
     ok(ad)
     s = ad.acquire(deadline=c.t + 1.5)  # 1.5 s left - min_call 1 s = 0.5 s budget < 1 s wait
-    assert not s.ok and s.reason == "deadline" and c.slept == []
+    assert not s.ok and s.reason == "wait_too_long" and c.slept == []
     s2 = ad.acquire(deadline=c.t + 0.5)  # less than min_call_s left: skip at once
-    assert not s2.ok and s2.reason == "deadline"
+    assert not s2.ok and s2.reason == "deadline_passed"
 
 
 def test_deadline_scope_contextvar():
     _reg, ad, c = make({"rate_per_s": 1.0, "burst": 1})
     ok(ad)
     with rl.deadline_scope(c.t + 1.2):
-        assert ad.acquire().reason == "deadline"
+        assert ad.acquire().reason == "wait_too_long"
     g = ad.acquire()
     assert g.ok
     g.release()

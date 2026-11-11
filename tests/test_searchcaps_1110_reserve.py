@@ -89,7 +89,7 @@ def test_ddg_never_used_by_seed():
     p, sent = _ddg()
     with request_origin.scope("seed"), pytest.raises(ProviderUnavailable) as ei:
         p.call("coral reef bleaching", 5, 5.0)
-    assert sent == [] and sp._own_decision(ei.value) == "own_cap"
+    assert sent == [] and sp._own_decision(ei.value) == "seed_excluded"  # POLISH-1110: SEED_NO_DDG is an exclusion for seeds, not a used-up allowance (was own_cap)
     p.call("coral reef bleaching", 5, 5.0)  # a visitor question still uses DuckDuckGo
     assert sent
 
@@ -109,7 +109,7 @@ def test_adapter_seed_share_and_exclusion():
     with request_origin.scope("seed"):
         sk = ddg.acquire(deadline=None)
     assert not sk.ok and sk.reason == "seed_excluded" and ddg.n["requests"] == 0
-    assert sp._own_decision(rate_limit.RateLimited("duckduckgo", sk.reason)) == "own_cap"
+    assert sp._own_decision(rate_limit.RateLimited("duckduckgo", sk.reason)) == "seed_excluded"
     pm = ddg.acquire(deadline=None)
     assert pm.ok
     pm.record(status=200)
