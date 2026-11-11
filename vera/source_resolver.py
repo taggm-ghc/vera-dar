@@ -101,14 +101,27 @@ def _record(doi: str, title, published) -> dict:
             "source_type": "scholarly", "doi": doi, "stored_text_kind": "metadata_only", "evidence_eligible": False}
 
 
+def _oa_get(url: str, params: dict, timeout_s: float, item: str, http_get):
+    """OPENALEX-FIX-1110 (R3): every OpenAlex request here goes through the metered client (terms gate scope "search",
+    key when configured, 2xx-only charging, budget and seed share, one cooldown, no retry). A refusal by the client
+    raises with nothing sent and is a miss (fail-closed item 5: lookup_doi then asks Semantic Scholar)."""
+    from vera import search_providers as sp
+    tx = None if http_get is _LIMITED_GET else (lambda u, p, h, t: http_get(u, params=p, headers=h, timeout=t))
+    return sp.openalex_request(url, params, purpose="resolve", timeout_s=timeout_s, item=item, transport=tx)
+
+
+def _oa_miss() -> tuple:
+    from vera import rate_limit, search_providers as sp
+    return (*_MISS, sp.ProviderUnavailable, rate_limit.RateLimited)
+
+
 def lookup_doi(doi: str, timeout_s: float, http_get=_LIMITED_GET) -> dict | None:
     """Original source for a DOI: OpenAlex metadata (title, date), else Semantic Scholar's. None when neither index
     knows the DOI. Never an abstract (PORTAL-WIRE-B-1110)."""
     try:
-        r = http_get(OPENALEX_WORK.format(doi=doi), params={"select": OPENALEX_FIELDS},
-                     headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
+        r = _oa_get(OPENALEX_WORK.format(doi=doi), {"select": OPENALEX_FIELDS}, timeout_s, "doi:" + doi, http_get)
         w = strict_json.response_json(r, keys="exact") if r.status_code == 200 else None
-    except _MISS:
+    except _oa_miss():
         w = None
     if w:
         return _record(doi, w.get("title"), w.get("publication_date"))
@@ -128,12 +141,12 @@ def lookup_title(title: str, timeout_s: float, min_match: float, http_get=_LIMIT
     if len(want) < 4:
         return None
     try:
-        r = http_get(OPENALEX_SEARCH, params={"search": title, "per-page": 3, "select": OPENALEX_FIELDS},
-                     headers={"User-Agent": USER_AGENT}, timeout=timeout_s)
+        r = _oa_get(OPENALEX_SEARCH, {"search": title, "per-page": 3, "select": OPENALEX_FIELDS}, timeout_s,
+                    "title:" + " ".join(sorted(want)), http_get)
         if r.status_code != 200:
             return None
         items = strict_json.response_json(r, keys="exact").get("results") or []
-    except _MISS:
+    except _oa_miss():
         return None
     for w in items:
         got = _words(w.get("title"))

@@ -205,7 +205,11 @@ RESEARCH_TRIGGER_LABEL = {"insufficient": "evidence insufficient", "stale": "evi
 RESEARCH_PORTAL_LABEL = {"openalex": "scholarly index", "europepmc": "scholarly index", "ddg": "web search",
                          "wikipedia": "reference portal"}
 RESEARCH_STATUS_LABEL = {"completed": "completed", "quota": "rate limit reached", "skipped_quota": "skipped (rate limit)", "paced": "paced by VERA-DAR", "own_cap": "daily allowance used up (VERA-DAR)", "seed_excluded": "not used for seeding", "robots": "skipped (robots rules)",
-                         "skipped_budget": "skipped (search budget)", "failed": "failed", "timeout": "timed out"}
+                         "skipped_budget": "skipped (search budget)", "failed": "failed", "timeout": "timed out",
+                         # OPENALEX-FIX-1110
+                         "terms_gate": "not in use pending a terms review",
+                         "terms_gate_config_invalid": "off (configuration setting invalid)",
+                         "provider_quota": "provider's daily allowance used up", "retry_limit": "retries stopped (VERA-DAR)"}
 RESEARCH_OUTCOME_LABEL = {"dropped": "not considered", "reused": "reused from the collection",
                           "reuse_rejected": "stored copy not used", "admitted": "acquired and checked",
                           "rejected": "checked and rejected", "not_evaluated": "not reached",

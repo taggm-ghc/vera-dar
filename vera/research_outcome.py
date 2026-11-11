@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped", "paced", "own_cap", "seed_excluded", "robots")
+PORTAL_STATUSES = ("completed", "timeout", "quota", "error", "skipped", "paced", "own_cap", "seed_excluded", "robots",
+                   # OPENALEX-FIX-1110: the metered OpenAlex client's distinct outcomes (each with its own sentence)
+                   "terms_gate", "terms_gate_config_invalid", "provider_quota", "retry_limit")
+_OA_CLIENT_STATUSES = ("terms_gate", "terms_gate_config_invalid", "provider_quota", "retry_limit")
 TERMINAL_REASONS = (
     "no_route", "fetch_failed", "extraction_failed", "licence_rejected",
     "provenance_rejected", "injection_rejected", "relevance_rejected",
@@ -239,6 +242,11 @@ _CAUSE_TEXT = {
     "own_cap": "VERA-DAR's daily search allowance for one search service had already been used up by earlier searches",  # ARCH-FIX-1110 B: _cause_text names the service  # OUTCOME-LABELS-1108: our own cap
     "robots": "VERA-DAR skipped a source because its robots rules do not permit it",  # OUTCOME-LABELS-1108: our own gate
     "error": "a search service had a failure",
+    # OPENALEX-FIX-1110: terms gate (WP-C), its misconfiguration, the provider's own allowance, our retry limit
+    "terms_gate": "OpenAlex is not in use pending a terms review",
+    "terms_gate_config_invalid": "OpenAlex is off: its configuration setting is invalid",
+    "provider_quota": "OpenAlex's daily allowance is used up until the provider resets it",
+    "retry_limit": "VERA-DAR stopped retrying OpenAlex after repeated failed requests",
     "unknown": "a search service gave a status VERA-DAR could not interpret, so it is not known whether it failed",  # NOANSWER-1109 A4
     "budget": "the search budget ran out",
     "awaiting_route": "some sources found have no identifier VERA-DAR can fetch automatically yet",  # CONT-1023: URL-only, queued to follow
@@ -325,7 +333,8 @@ def _awaiting_route(candidates) -> bool:
 def _causes(attempts, budget_exhausted: bool, awaiting: bool = False, unreachable=False) -> list[str]:
     out: list[str] = []
     for a in attempts:
-        if a.status in ("timeout", "quota", "paced", "own_cap", "seed_excluded", "robots", "error", "unknown") and a.status not in out:
+        if a.status in ("timeout", "quota", "paced", "own_cap", "seed_excluded", "robots", "error", "unknown",
+                        *_OA_CLIENT_STATUSES) and a.status not in out:
             out.append(a.status)
     if budget_exhausted:
         out.append("budget")

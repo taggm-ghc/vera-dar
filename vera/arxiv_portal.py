@@ -154,7 +154,10 @@ def openalex_work(flt: str, max_refs: int, timeout_s: float, counts: dict, clock
 
     def _fail(e) -> None:
         own_why = sp._own_decision(e)
-        if own_why is None and sp._is_quota_error(e) and not sp._is_rate_skip(e):  # D1: a provider quota only
+        oc = sp.oa_refusal_code(e)
+        if oc in ("provider_quota", "cooldown"):  # OPENALEX-FIX-1110: the client refused; a cooldown already holds
+            counts["oa_" + oc] = counts.get("oa_" + oc, 0) + 1
+        elif own_why is None and sp._is_quota_error(e) and not sp._is_rate_skip(e):  # D1: a provider quota only
             from vera import reference_portal
             sp._QUOTA.block(clock(), float(reference_portal._openalex_cooldown()))
             counts["oa_429"] = counts.get("oa_429", 0) + 1
@@ -183,11 +186,8 @@ def openalex_work(flt: str, max_refs: int, timeout_s: float, counts: dict, clock
         # S2 (review round 3): the published version is only a location OpenAlex marks version == "publishedVersion";
         # the work DOI itself is the arXiv DOI (or a preprint's) and is never taken as published. Preprint-server DOI
         # prefixes (config) are excluded on top.
-        pre = _preprint_prefixes()
-        pub = [d for d in (_doi_of(x.get("landing_page_url")) for x in (w.get("locations") or ())
-                           if isinstance(x, dict) and x.get("version") == "publishedVersion")
-               if d and not d.lower().startswith(pre)]
-        got = {"doi": _any_doi(w.get("doi")), "locations": locs, "published": list(dict.fromkeys(pub))[:1], "refs": []}
+        pub = published_version_dois(w.get("locations"))
+        got = {"doi": _any_doi(w.get("doi")), "locations": locs, "published": pub[:1], "refs": []}
         wids = []
         for r in w.get("referenced_works") or ():
             m = _W_ID.match(str(r or "").strip())
@@ -200,6 +200,9 @@ def openalex_work(flt: str, max_refs: int, timeout_s: float, counts: dict, clock
                 counts["oa_calls"] = counts.get("oa_calls", 0) + 1
                 counts["oa_ref_calls"] = counts.get("oa_ref_calls", 0) + 1
                 refs = _oa_get(p, {"filter": "openalex:" + "|".join(wids), "per_page": len(wids), "select": "doi"}, left)
+                if not refs:  # OPENALEX-FIX-1110 WP-D: the pipe-OR lookup asked for >= 1 id and got none: make it visible
+                    counts["oa_ref_empty"] = counts.get("oa_ref_empty", 0) + 1
+                    logger.info("R-OA-REF-EMPTY")
                 got["refs"] = list(dict.fromkeys(d for d in (_any_doi(r.get("doi")) for r in refs) if d))[: len(wids)]
             except Exception as e:  # noqa: BLE001  never retried; call 1's result stands
                 _fail(e)
@@ -207,6 +210,18 @@ def openalex_work(flt: str, max_refs: int, timeout_s: float, counts: dict, clock
     while len(_OA_CACHE) > 512:
         _OA_CACHE.pop(next(iter(_OA_CACHE)))
     return got
+
+
+def published_version_dois(locations) -> list:
+    """S2 rule, shared by this module and vera/list_ingest (OPENALEX-FIX-1110 WP-B; decision record
+    CL-LISTINGEST-PUBVER): the DOIs of OpenAlex `locations[]` that OpenAlex marks version == "publishedVersion" and
+    whose landing_page_url is a doi.org link (normalise_doi), excluding arXiv DOIs and every preprint-server prefix
+    (config arxiv_portal.openalex.preprint_doi_prefixes). In location order, de-duplicated. Pure: no request."""
+    pre = _preprint_prefixes()
+    pub = [d for d in (_doi_of(x.get("landing_page_url")) for x in (locations or ())
+                       if isinstance(x, dict) and x.get("version") == "publishedVersion")
+           if d and not d.lower().startswith(pre)]
+    return list(dict.fromkeys(pub))
 
 
 def _any_doi(v) -> str | None:
@@ -251,7 +266,10 @@ def switches(acq: dict | None = None) -> dict | None:
     insp = (rcfg.get("mode") == "on" and reference_portal.adapter_on(rcfg, "inspire_refs")
             and reference_portal.inspire_permitted())
     # the reference-portal subsystem's master mode governs both lookups (off = no portal request at all)
-    oa_on = rcfg.get("mode") == "on" and (pc.get("openalex") or {}).get("enabled") is True
+    # OPENALEX-FIX-1110 WP-C: AND the terms gate (portals.openalex.terms_gate must allow scope "lookup", i.e. "on")
+    from vera import search_providers as sp
+    oa_on = (rcfg.get("mode") == "on" and (pc.get("openalex") or {}).get("enabled") is True
+             and sp.openalex_gate_allows("lookup"))
     return {"pc": pc, "rcfg": rcfg, "insp": bool(insp), "oa_on": bool(oa_on)}
 
 

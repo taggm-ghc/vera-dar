@@ -34,6 +34,17 @@ _DOI = re.compile(r"^(?:doi:|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", r
 _PMCID = re.compile(r"^(?:pmcid:)?(PMC\d{4,9})$", re.I)
 _PMID = re.compile(r"^(?:pmid:)(\d{1,9})$", re.I)
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.", re.I)
+# OPENALEX-FOLLOWUPS-1110 F1: OpenAlexRefused code -> result_codes key. Every code has its own per-item code; none is the
+# terminal "no_route". terms_gate_config_invalid is a stop (operator fix); the rest are paused/pacing (retry later).
+_OA_ITEM_CODES = {
+    "terms_gate": "arxiv_lookup_gated",
+    "terms_gate_config_invalid": "arxiv_lookup_config_invalid",
+    "own_cap": "arxiv_lookup_own_cap",
+    "seed_share": "arxiv_lookup_seed_share",
+    "provider_quota": "arxiv_lookup_provider_quota",
+    "cooldown": "arxiv_lookup_cooldown",
+    "retry_limit": "arxiv_lookup_retry_limit",
+}
 
 _LOCK = threading.Lock()
 _ACCEPTED: deque = deque()  # monotonic times of items accepted by this route (hour/day caps)
@@ -180,10 +191,18 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
         if inspire_denied:
             raise LookupDenied(why)
         raise RuntimeError(why + "; inspire did not refuse, so not every lookup is denied")
+    # OPENALEX-FIX-1110 (R5): through the metered client (terms gate scope "lookup": refused with nothing sent until the
+    # owner's terms ruling sets the gate "on"; key when configured; budget and seed share; no retry), and WP-B: only a
+    # location OpenAlex marks publishedVersion counts (the shared S2 rule, decision record CL-LISTINGEST-PUBVER).
+    from vera import arxiv_portal, search_providers as sp
     try:
-        r = _api_get(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
-                     {"select": "doi,locations"}, t)
+        # The transport stays this module's gated, public-IP-pinned GET (_api_get): one rate slot, unchanged hop rules.
+        r = sp.openalex_request(cfg["openalex"]["url"] + "https://doi.org/10.48550/arxiv." + arxiv_id,
+                                {"select": "doi,locations"}, purpose="list_ingest", timeout_s=t, item="arxiv:" + arxiv_id,
+                                transport=lambda u, p, h, tt: _api_get(u, p, tt))
     except Exception as e:  # noqa: BLE001
+        if sp.oa_refusal_code(e):  # the OpenAlex gate/budget codes keep their own per-item code (see _run)
+            raise
         if _is_denied(e):
             _oa_denied("openalex denied")
         raise
@@ -194,8 +213,8 @@ def _default_arxiv_original(arxiv_id: str, cfg: Mapping) -> str | None:
         return None  # OpenAlex definitively has no such work
     if sc != 200:
         raise RuntimeError(f"openalex status {sc}")  # 429/5xx/other: the lookup did not complete (lookup-unavailable)
-    for loc in r.json().get("locations") or ():
-        j = _journal_doi((loc or {}).get("landing_page_url"))
+    for d in arxiv_portal.published_version_dois(r.json().get("locations")):
+        j = _journal_doi(d)
         if j:
             return j
     if incomplete:
@@ -296,6 +315,11 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
                     continue
                 cand = {k: c2[k] for k in ("doi", "pmcid") if c2.get(k)} | {"url": val}
         except Exception as e:  # noqa: BLE001  transport/permission/rate failure: not definitive, nothing stored, retryable
+            from vera import search_providers as _sp
+            oc = _sp.oa_refusal_code(e)  # OPENALEX-FIX-1110: the OpenAlex terms gate has its own codes
+            if kind == "arxiv" and oc in _OA_ITEM_CODES:  # F1: each OpenAlex refusal keeps its own per-item code
+                out(raw, kind, _OA_ITEM_CODES[oc])
+                continue
             logger.info("list-ingest lookup failed (%s)", type(e).__name__)
             out(raw, kind, "lookup_denied" if _is_denied(e) else "lookup_unavailable")
             continue

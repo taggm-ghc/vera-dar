@@ -374,6 +374,9 @@ REGISTRY: dict[str, tuple] = {
     "vera/list_ingest.py:_api_get": (API_GATE, "vera/list_ingest.py:_api_get", "api_permissions.call("),  # LIST-INGEST-1110 identifier-only metadata lookups
     "vera/source_resolver.py:_api_get": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:_s2": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
+    # OPENALEX-FIX-1110: the OpenAlex leg of link resolution goes through the metered client, whose transport is
+    # openalex_default_transport (api_permissions.call); a test's injected http_get replaces only the transport
+    "vera/source_resolver.py:_oa_get": (API_GATE, "vera/search_providers.py:openalex_default_transport", "api_permissions.call("),
     "vera/source_resolver.py:lookup_doi": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/source_resolver.py:lookup_title": (API_GATE, "vera/source_resolver.py:_api_get", "api_permissions.call("),
     "vera/reporting_lane.py:ReportingLane.__init__": (API_GATE, "vera/reporting_lane.py:_default_http_get", "api_permissions.require("),
@@ -604,5 +607,5 @@ def test_no_ungated_api_sites_remain():
     no entry may use any other class for an API site, and none may come back as ungated."""
     assert all(e[0] in (GATE, TRANSPORT, ROBOTS_FETCH, FIRST_PARTY, LLM_API, NO_REQUEST, API_GATE, TRACKED_GAP)
                for e in REGISTRY.values())
-    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 14  # SEARCHCAPS-1110: + wiki_ref_portal._api_get (Wikipedia search API); LIST-INGEST-1110: + list_ingest._api_get; PORTAL-WIRE-B-1110: - source_resolver.with_abstract
+    assert sum(1 for e in REGISTRY.values() if e[0] == API_GATE) == 15  # OPENALEX-FIX-1110: + source_resolver._oa_get; SEARCHCAPS-1110: + wiki_ref_portal._api_get (Wikipedia search API); LIST-INGEST-1110: + list_ingest._api_get; PORTAL-WIRE-B-1110: - source_resolver.with_abstract
     assert sum(1 for e in REGISTRY.values() if e[0] == TRACKED_GAP) == 0  # Wikipedia portal gated since e87ef55

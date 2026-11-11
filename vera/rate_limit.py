@@ -455,6 +455,14 @@ class PortalAdapter:
         with self._cond:
             return bool(self.c["enabled"]) and self._clock() < self.cooldown_until
 
+    def hold(self, seconds: float) -> None:
+        """OPENALEX-FIX-1110 (one cooldown): start or extend this portal's cooldown by `seconds` from now, clamped by
+        retry_after_max_s. Used by search_providers._QUOTA so a provider quota or 429 seen by any OpenAlex route blocks
+        every route through this portal. Never shortens an existing cooldown."""
+        with self._cond:
+            s = max(0.0, min(float(seconds), float(self.c["retry_after_max_s"])))
+            self.cooldown_until = max(self.cooldown_until, self._clock() + s)
+
     def acquire(self, deadline: float | None = None):
         """Permit or Skip. Blocks at most min(max_wait_s, deadline - now - min_call_s) (max_wait_stream_s instead of
         max_wait_s inside stream_wait_scope(), when larger); never longer."""
