@@ -38,12 +38,12 @@ class FakeStore:
 
 
 def test_gauntlet_admits_only_relevant_and_licensed():
-    srcs = [_src(1, "https://arxiv.org/abs/1"), _src(2, "https://doi.org/10.1/b", licence=None),
+    srcs = [_src(1, "https://www.nature.com/articles/1"), _src(2, "https://doi.org/10.1/b", licence=None),
             _src(3, "https://doi.org/10.1/c")]
     store = FakeStore()
     counts = ca.admit("visitor question", srcs, _llm([0.9, 0.9, 0.1]), CFG, store)
     by_url = {r["url"]: r for r in store.rows}
-    assert by_url["https://arxiv.org/abs/1"]["gate_a_decision"] == "fetch"
+    assert by_url["https://www.nature.com/articles/1"]["gate_a_decision"] == "fetch"
     assert by_url["https://doi.org/10.1/b"]["gate_a_decision"] == "defer"  # no declared licence: held for review
     assert by_url["https://doi.org/10.1/c"]["gate_a_decision"] == "reject"  # low score, low uncertainty
     assert counts == {"admitted": 1, "recorded_defer": 1, "recorded_reject": 1}
@@ -51,7 +51,7 @@ def test_gauntlet_admits_only_relevant_and_licensed():
 
 def test_visitor_question_is_never_passed_to_storage():
     store = FakeStore()
-    ca.admit("SECRET VISITOR TEXT", [_src(1, "https://arxiv.org/abs/1")], _llm([0.9]), CFG, store)
+    ca.admit("SECRET VISITOR TEXT", [_src(1, "https://www.nature.com/articles/1")], _llm([0.9]), CFG, store)
     assert "SECRET VISITOR TEXT" not in json.dumps(store.rows, default=str)
 
 
@@ -63,7 +63,7 @@ def test_admission_never_raises():
         def admit(self, c):
             raise RuntimeError("db down")
 
-    assert ca.admit("q", [_src(1, "https://arxiv.org/abs/1")], boom, CFG, BadStore())["error"] == "RuntimeError"
+    assert ca.admit("q", [_src(1, "https://www.nature.com/articles/1")], boom, CFG, BadStore())["error"] == "RuntimeError"
 
 
 def test_store_disabled_without_db_url():
@@ -82,7 +82,7 @@ def test_store_sql_is_write_only_compatible():
 
 def test_canonical_url_prefers_doi():
     assert ca.canonical_url({"doi": "10.1/X", "url": "https://x/"}) == "https://doi.org/10.1/x"
-    assert ca.canonical_url({"url": "https://arxiv.org/abs/1/"}) == "https://arxiv.org/abs/1"
+    assert ca.canonical_url({"url": "https://www.nature.com/articles/1/"}) == "https://www.nature.com/articles/1"
 
 
 def test_resolver_records_carry_no_portal_abstract():
@@ -112,7 +112,7 @@ def test_ask_schedules_admission_only_with_a_store(monkeypatch):
     import main
     from vera import public_mode as pm
     pm.reset_limiter(None)
-    src = [_src(1, "https://arxiv.org/abs/1")]
+    src = [_src(1, "https://www.nature.com/articles/1")]
     monkeypatch.setattr(main, "answer_via_chain", lambda q, e, g: (AskResult("A [1]", 5, 0.0, sources=tuple(src)), "groq:m"))
     calls = []
     monkeypatch.setattr(main, "admit_to_corpus", lambda *a: calls.append(a))
@@ -121,3 +121,27 @@ def test_ask_schedules_admission_only_with_a_store(monkeypatch):
     assert c.post("/ask", json={"question": "q"}, headers=h).status_code == 200 and calls == []
     monkeypatch.setattr(main, "store_from_env", lambda cfg: FakeStore())
     assert c.post("/ask", json={"question": "q"}, headers=h).status_code == 200 and len(calls) == 1
+
+
+def test_e6_portal_refused_ordinary_admitted():
+    portal = _src(1, "https://arxiv.org/abs/1")
+    ppr = dict(_src(2, "https://europepmc.org/article/PPR/PPR1"), source="PPR")
+    pre_doi = _src(3, "https://doi.org/10.1101/2020.01.01.123456")
+    pre_land = dict(_src(4, "https://doi.org/10.1/p"), landing_url="https://arxiv.org/abs/9")
+    jdoi = _src(5, "https://doi.org/10.1038/s41586-020-1")
+    unlisted = _src(6, "https://journal.unlisted-publisher.example/a")
+    jland = dict(_src(7, "https://doi.org/10.1/j"), landing_url="https://www.nature.com/articles/j", evidence_eligible=False)
+    store = FakeStore()
+    counts = ca.admit("q", [portal, ppr, pre_doi, pre_land, jdoi, unlisted, jland], _llm([0.9] * 3), CFG, store)
+    assert {r["url"] for r in store.rows} == {"https://doi.org/10.1038/s41586-020-1",
+                                              "https://journal.unlisted-publisher.example/a", "https://doi.org/10.1/j"}
+    assert counts == {"admitted": 3}
+
+
+def test_e6_store_level_backstop_refuses_before_db():
+    class Boom:
+        def begin(self):
+            raise AssertionError("DB touched")
+    st = ca.WoCorpusStore(Boom(), "q")
+    assert st.admit({"url": "https://arxiv.org/abs/1"}) == "skipped_host_role"
+    assert st.admit({"url": "https://doi.org/10.1101/2020.01.01.123456"}) == "skipped_host_role"

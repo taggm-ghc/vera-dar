@@ -111,6 +111,8 @@ class WoCorpusStore:
 
     def admit(self, cand: dict) -> str:
         """Record one scored candidate; store it as a source if admitted. Returns the outcome label."""
+        if _not_eligible(cand):  # E6: store-level backstop (same host-role check), before any DB access
+            return "skipped_host_role"
         rid = self.run_id()
         with self.engine.begin() as c:
             cid = self._insert_new(c, "INSERT INTO {S}.candidates (run_id, source_url, title, snippet, search_rank, "
@@ -170,13 +172,44 @@ def is_stored_document_source(src: dict) -> bool:
     return acquisition_state({"stored_text_kind": src.get("stored_text_kind"), "admission_passed": True}) == ACQ_ACQUIRED
 
 
+_ROLE_KEYS = ("doi", "url", "landing_url", "fulltext_url", "full_text_url", "source", "type", "source_type", "oa",
+              "pub_types", "pubTypeList", "is_preprint")
+
+
+_URL_KEYS = ("url", "landing_url", "fulltext_url", "full_text_url")
+
+
+def _not_eligible(src) -> bool:
+    """E6 (fail-closed on error): item #79 stores metadata, so only PORTAL and EXCLUDED records are refused (OD-1110-
+    PORTALS-ALL). The verdict is the strictest of: the record role from DOI prefix / source flag (Europe PMC PPR) /
+    preprint type or flag (no URL consulted), and the role of each of the url, landing and fulltext hosts. A doi.org URL
+    is judged by its DOI prefix plus the landing host if present. UNKNOWN and RESOLVER are admitted: full-text
+    acquisition re-checks the host before anything is stored as evidence. evidence_eligible is NOT the filter."""
+    try:
+        from vera import host_role
+        if not isinstance(src, dict):
+            return True
+        meta = {k: src[k] for k in _ROLE_KEYS if src.get(k) is not None}
+        bad = ("PORTAL", "EXCLUDED")
+        if host_role.role_for_record({k: v for k, v in meta.items() if k not in _URL_KEYS}).role in bad:
+            return True
+        for k in _URL_KEYS:
+            if meta.get(k) and host_role.role_for_url(meta[k], meta).role in bad:
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def gauntlet(question: str, sources: list[dict], llm_call, cfg: dict) -> list[dict]:
     """Gate A then the licence gate; returns scored candidates (copies), each with a final gate_a_decision."""
-    sources = [s for s in sources if not is_stored_document_source(s)]
+    sources = [s for s in sources if not is_stored_document_source(s) and not _not_eligible(s)]
     cands = [{"url": s["url"], "title": s.get("title"), "snippet": s.get("snippet"), "rank": s.get("n"),
               "licence": s.get("licence"), "stored_text_kind": s.get("stored_text_kind"), "doi": s.get("doi"),
               "published": s.get("published"), "discovered_via": s.get("discovered_via"),
-              "source_type": s.get("source_type")} for s in sources if s.get("snippet")]
+              "source_type": s.get("source_type"),
+              **{k: s[k] for k in _ROLE_KEYS if k in s and k not in ("doi", "url", "source_type")}}
+             for s in sources if s.get("snippet")]
     g = cfg.get("gate_a") or {}
     scored = score_candidates(question, cands, llm_call, cfg=GateAConfig(
         fetch_threshold=float(g.get("fetch_threshold", GateAConfig.fetch_threshold)),
