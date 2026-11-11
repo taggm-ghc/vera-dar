@@ -53,6 +53,8 @@ def _bundle(h, **kw):
     fulldoc_corpus.reset_for_tests()
     h.mp.setattr(fulldoc_corpus, "load_config", lambda *a, **k: cfg)
     h.mp.setenv("VERA_FULLDOC_BUNDLE_DIR", str(root))
+    from vera import safe_path
+    h.mp.setattr(safe_path, "EXTRA_TEST_ROOTS", [h.tmp])  # ENV-PATHS-1110 test-only hook
     return root
 
 

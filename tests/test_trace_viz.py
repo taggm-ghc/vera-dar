@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from streamlit.testing.v1 import AppTest
 
-from vera import trace_viz
+from vera import safe_path, trace_viz
 from vera.trace_eval import ui as tui
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +37,7 @@ def paths(tmp_path, monkeypatch):
     r.write_text(json.dumps(_results()))
     v.write_text(json.dumps(_val()))
     monkeypatch.setenv("VERA_TRACE_EVAL_RESULTS", str(r))
+    monkeypatch.setattr(safe_path, "EXTRA_TEST_ROOTS", [tmp_path])  # ENV-PATHS-1110 test-only hook
     monkeypatch.setattr(trace_viz, "VALIDATION_PATH", v)
     monkeypatch.setattr(trace_viz, "PUBLIC_PATH", tmp_path / "none.json")
     monkeypatch.setenv("VERA_API_KEY", "api-key-different-0123456789")
@@ -69,6 +70,7 @@ def test_public_endpoint_has_aggregates_and_no_sentinels(client):
 
 def test_public_endpoint_no_data_is_useful_not_blank(client, tmp_path, monkeypatch):
     monkeypatch.setenv("VERA_TRACE_EVAL_RESULTS", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(safe_path, "EXTRA_TEST_ROOTS", [tmp_path])  # ENV-PATHS-1110 test-only hook
     monkeypatch.setattr(trace_viz, "VALIDATION_PATH", tmp_path / "missing2.json")
     body = client.get("/trace/public").json()
     assert body["status"] == "no_run_results" and body["run"] is None and len(body["stages"]) == 9
@@ -109,6 +111,7 @@ def test_private_correct_key_returns_detail(client, monkeypatch):
 def test_private_correct_key_no_data_is_empty_not_error(client, monkeypatch, tmp_path):
     monkeypatch.setenv("VERA_TRACE_VIZ_KEY", KEY)
     monkeypatch.setenv("VERA_TRACE_EVAL_RESULTS", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(safe_path, "EXTRA_TEST_ROOTS", [tmp_path])  # ENV-PATHS-1110 test-only hook
     r = client.get("/trace/private", headers={"X-Viz-Key": KEY})
     assert r.status_code == 200 and r.json() == {"available": False, "traces": []}
 

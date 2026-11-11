@@ -7,8 +7,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-RESULTS_PATH = "eval_results/trace_eval_v1.json"
-VALIDATION_PATH = "eval_results/trace_eval_v1_validation.json"
+from vera.safe_path import PathRefused, safe_path
+
+# ENV-PATHS-1110: anchored on __file__, not cwd. Env-supplied paths must resolve inside <repo root>/eval_results.
+from vera.trace_viz import ROOT  # the same __file__-anchored repo root (no parents[n] climb outside env_files)
+RESULTS_ROOT = ROOT / "eval_results"
+RESULTS_PATH = str(RESULTS_ROOT / "trace_eval_v1.json")
+VALIDATION_PATH = str(RESULTS_ROOT / "trace_eval_v1_validation.json")
+assert Path(RESULTS_PATH).is_relative_to(RESULTS_ROOT) and Path(VALIDATION_PATH).is_relative_to(RESULTS_ROOT)
 # Why: a capture run writes its results to a work/ path; these optional env vars (paths, not secrets) point the page at
 # it without editing code. Unset means the default paths above.
 RESULTS_ENV, VALIDATION_ENV = "VERA_TRACE_EVAL_RESULTS", "VERA_TRACE_EVAL_VALIDATION"
@@ -296,9 +302,20 @@ def _per_group(res: dict, key: str, label: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _env_path(env_name: str, default: str) -> str:
+    """Env path after containment check; unset or refused (logged by key and code) falls back to the default."""
+    raw = os.environ.get(env_name)
+    if not raw:
+        return default
+    try:
+        return str(safe_path(raw, [RESULTS_ROOT], key=env_name))
+    except PathRefused:
+        return default
+
+
 def _resolve_paths(results_path, validation_path):
-    return (results_path or os.environ.get(RESULTS_ENV) or RESULTS_PATH,
-            validation_path or os.environ.get(VALIDATION_ENV) or VALIDATION_PATH)
+    return (results_path or _env_path(RESULTS_ENV, RESULTS_PATH),
+            validation_path or _env_path(VALIDATION_ENV, VALIDATION_PATH))
 
 
 PRIVATE_DENIED_TEXT = "Detail is not available with that key."

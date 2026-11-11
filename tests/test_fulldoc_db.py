@@ -212,7 +212,7 @@ def _patch_connect(monkeypatch, rows, log=None):
     monkeypatch.setattr(fulldoc_db, "default_connect", lambda cfg, env: _factory(*srcs, log))
 
 
-def test_seam_db_source_and_bundle_source(world, monkeypatch):
+def test_seam_db_source_and_bundle_source(world, monkeypatch, allow_tmp_bundle):
     root, cfg, rows, _ = world
     _patch_connect(monkeypatch, rows)
     env_db = {"VERA_FULLDOC_DB_RUN_ID": RUN}

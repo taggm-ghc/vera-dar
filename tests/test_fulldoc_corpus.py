@@ -97,7 +97,7 @@ def test_traversal_text_file_unusable(tmp_path):
     assert list(_unusable_ids(c)) == ["syn_epi"] and len(c.acquired) == 2
 
 
-def test_env_unset_returns_none_and_cache(tmp_path, monkeypatch):
+def test_env_unset_returns_none_and_cache(tmp_path, monkeypatch, allow_tmp_bundle):
     fc.reset_for_tests()
     cfg = synth_cfg()
     assert fc.get_corpus(cfg, env={}) is None
@@ -174,7 +174,7 @@ def _cache_cfg(n=None):
     return cfg
 
 
-def test_cache_evicts_at_bound(tmp_path):
+def test_cache_evicts_at_bound(tmp_path, allow_tmp_bundle):
     fc.reset_for_tests()
     cfg = _cache_cfg(2)
     bundles = [write_bundle(tmp_path / f"b{i}") for i in range(3)]
@@ -192,7 +192,7 @@ def test_cache_evicts_at_bound(tmp_path):
     fc.reset_for_tests()
 
 
-def test_concurrent_get_corpus_loads_once(tmp_path, monkeypatch):
+def test_concurrent_get_corpus_loads_once(tmp_path, monkeypatch, allow_tmp_bundle):
     import threading
     import time
     fc.reset_for_tests()
@@ -215,7 +215,7 @@ def test_concurrent_get_corpus_loads_once(tmp_path, monkeypatch):
     fc.reset_for_tests()
 
 
-def test_cache_hit_not_blocked_by_slow_load(tmp_path, monkeypatch):
+def test_cache_hit_not_blocked_by_slow_load(tmp_path, monkeypatch, allow_tmp_bundle):
     import threading
     fc.reset_for_tests()
     cfg = _cache_cfg()

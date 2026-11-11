@@ -84,7 +84,7 @@ _CODE_MAP: dict[str, str] = {
     # already held: not a rejection and not new evidence (the stored passages are used through retrieval)
     "R-ACQ-KNOWN": "already_in_corpus",
     "R-ACQ-REUSE-UNUSABLE": "provenance_rejected",
-    "R-BUNDLE": "provenance_rejected", "R-PIN": "provenance_rejected",
+    "R-BUNDLE": "provenance_rejected", "R-BUNDLE-PATH": "provenance_rejected", "R-PIN": "provenance_rejected",
     "R-SUMS": "provenance_rejected", "R-DUP": "provenance_rejected",
     "R-SOURCE": "provenance_rejected", "R-DBROW": "provenance_rejected",
     "R-DBHASH": "provenance_rejected", "R-DBDOCPIN": "provenance_rejected",

@@ -24,6 +24,7 @@ from pathlib import Path
 
 from vera import domain_registry, fulltext_loader
 from vera.dar_corpus import DarCorpus
+from vera.safe_path import PathRefused, safe_path
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "fulldoc_answer.json"
@@ -33,6 +34,11 @@ STATUS_OK, STATUS_UNUSABLE = "ok", "corpus_unusable"
 # own reason codes (loader codes come from Refused.code)
 R_BUNDLE, R_PIN, R_SUMS, R_DUP, R_ERR = "R-BUNDLE", "R-PIN", "R-SUMS", "R-DUP", "R-ERROR"
 R_SOURCE = "R-SOURCE"  # both corpus sources configured (bundle dir AND db run id): refused, never silently preferred
+R_BUNDLE_PATH = "R-BUNDLE-PATH"  # ENV-PATHS-1110: the bundle directory env value is outside the one allowed root (or malformed)
+# ENV-PATHS-1110: the only directory VERA_FULLDOC_BUNDLE_DIR may name, anchored on __file__. The parts are the same as
+# scripts/vera_test_runner.RO_BUNDLE_REL (parity test in tests/test_safe_path.py). On Render this is /work/fd-1020/bundle, absent.
+BUNDLE_ROOT_REL = ("work", "fd-1020", "bundle")
+BUNDLE_ROOT = ROOT.parent.joinpath(*BUNDLE_ROOT_REL)  # ROOT is __file__-anchored (repo root)
 DB_RUN_ID_ENV_DEFAULT = "VERA_FULLDOC_DB_RUN_ID"  # env var NAME (cfg["db_run_id_env"] overrides)
 
 
@@ -497,7 +503,8 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
     en = fd["enabled"]
     if en is not True and str(en).strip().lower() not in ("true", "1", "yes", "on"):  # strict allowlist: fail closed
         return None
-    raw = (env.get(cfg["bundle_dir_env"]) or "").strip()
+    raw_env = env.get(cfg["bundle_dir_env"]) or ""
+    raw = raw_env.strip()  # only decides "unset"; the value given to safe_path below is NOT stripped
     run_raw = (env.get(_db_run_env(cfg)) or "").strip()
     if raw and run_raw:  # one source only: never pick silently
         return _bundle_unusable(cfg, None, R_SOURCE, "both the bundle and the database corpus source are configured")
@@ -512,9 +519,12 @@ def get_corpus(cfg: dict | None = None, env=os.environ) -> FullDocCorpus | None:
         return c
     if not raw:
         return None
-    base = Path(raw).resolve()
+    try:  # ENV-PATHS-1110: contain the env value before any read; refused values are logged by key and code only
+        base = safe_path(raw_env, [BUNDLE_ROOT], key=cfg["bundle_dir_env"])
+    except PathRefused:
+        return _bundle_unusable(cfg, None, R_BUNDLE_PATH, "bundle directory is outside the allowed root")  # not cached
     try:
-        sig = (str(base), _sha_bytes((base / cfg["manifest_name"]).read_bytes()),
+        sig =(str(base), _sha_bytes((base / cfg["manifest_name"]).read_bytes()),
                _sha_bytes((base / cfg["sums_name"]).read_bytes()))
     except OSError:
         return _label_bundle(load_bundle(base, cfg))  # unusable; not cached so a later fix is seen

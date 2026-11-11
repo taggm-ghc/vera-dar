@@ -117,3 +117,6 @@ scratchpad/
 # Owner 2026-11-08: agent scratch/worktrees and dunder caches never belong in repo/
 /scratch/
 /__*
+
+# ENV-PATHS-1110: cost-log lines hold queries; never published or shipped
+/logs/

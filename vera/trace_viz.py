@@ -15,6 +15,8 @@ from pathlib import Path
 
 from fastapi import Header, HTTPException, Request
 
+from vera.safe_path import PathRefused, safe_path
+
 ROOT = Path(__file__).resolve().parent.parent
 VIZ_KEY_ENV = "VERA_TRACE_VIZ_KEY"
 VIZ_KEY_MIN_LEN = 32  # generate with: python3 -c 'import secrets;print(secrets.token_urlsafe(32))'
@@ -250,13 +252,27 @@ def _same_code(meta: dict | None, publication, code_root) -> bool:
         return False
 
 
+RESULTS_ROOT = ROOT / "eval_results"  # ENV-PATHS-1110: the only directory VERA_TRACE_EVAL_RESULTS may point into
+
+
+def _env_results_path() -> Path:
+    """VERA_TRACE_EVAL_RESULTS after containment check; unset or refused (logged by key and code) falls back to the default."""
+    raw = os.environ.get("VERA_TRACE_EVAL_RESULTS")
+    if not raw:
+        return RESULTS_PATH
+    try:
+        return safe_path(raw, [RESULTS_ROOT], key="VERA_TRACE_EVAL_RESULTS")
+    except PathRefused:
+        return RESULTS_PATH
+
+
 def public_view(results_path=None, validation_path=None, public_path=None, commit: str | None = None,
                 historical_path=None, offline_path=None, publication_path=None, code_root=None) -> dict:
     """Always returns a dict with the structure and a `status`. Source order for `run`: the newest published run file, then a
     local results file, then the shipped historical file; if none exist the method and validation sections still render."""
     from vera.version_info import deployed_commit, short_commit
     pub_p, val_p = Path(public_path or PUBLIC_PATH), Path(validation_path or VALIDATION_PATH)
-    res_p = Path(results_path or os.environ.get("VERA_TRACE_EVAL_RESULTS") or RESULTS_PATH)
+    res_p = Path(results_path or _env_results_path())
     hist_p, off_p = Path(historical_path or HISTORICAL_PATH), Path(offline_path or OFFLINE_PATH)
     summary, src_date, source = None, None, None
     for kind, p in (("run", pub_p), ("historical_file", hist_p)):
@@ -285,7 +301,7 @@ def public_view(results_path=None, validation_path=None, public_path=None, commi
 
 def private_view(results_path=None) -> dict:
     """Per-trace detail. Only ever returned by the key-protected route."""
-    res = _load(results_path or os.environ.get("VERA_TRACE_EVAL_RESULTS") or RESULTS_PATH)
+    res = _load(results_path or _env_results_path())
     if not res or not res.get("traces"):
         return {"available": False, "traces": []}
     cn, vn, namer = _names()  # deny by default: raw variant/check ids never leave the API, only display names

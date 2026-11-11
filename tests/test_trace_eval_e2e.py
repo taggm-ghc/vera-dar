@@ -164,7 +164,10 @@ def test_env_var_points_page_at_results(tmp_path, monkeypatch):
     _, results, _ = _pipeline(tmp_path)
     from vera.trace_eval import ui
     monkeypatch.setenv(ui.RESULTS_ENV, str(results))
-    assert ui._resolve_paths(None, None)[0] == str(results)
+    assert ui._resolve_paths(None, None)[0] == ui.RESULTS_PATH  # ENV-PATHS-1110: outside eval_results is refused, default used
+    from vera import safe_path
+    monkeypatch.setattr(safe_path, "EXTRA_TEST_ROOTS", [tmp_path])  # test-only hook keeps the original coverage
+    assert ui._resolve_paths(None, None)[0] == str(results.resolve())
     monkeypatch.delenv(ui.RESULTS_ENV)
     assert ui._resolve_paths(None, None)[0] == ui.RESULTS_PATH
 

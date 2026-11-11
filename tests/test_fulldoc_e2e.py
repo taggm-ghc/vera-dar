@@ -50,6 +50,8 @@ class Harness:
         fulldoc_corpus.reset_for_tests()
         self.mp.setattr(fulldoc_corpus, "load_config", lambda *a, **k: cfg)
         self.mp.setenv("VERA_FULLDOC_BUNDLE_DIR", str(root))
+        from vera import safe_path
+        self.mp.setattr(safe_path, "EXTRA_TEST_ROOTS", [self.tmp])  # ENV-PATHS-1110 test-only hook
         return root
 
     def install(self, grounding=GROUNDING, web=True):
