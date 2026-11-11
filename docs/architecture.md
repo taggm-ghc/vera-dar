@@ -37,6 +37,17 @@ Retrieval and acquisition changed as follows (details and bounds in the [README]
 - *Retrieval.* Filler words are dropped whole-word only, sparing proper-name runs and quoted text. With hybrid retrieval on, BM25 candidates and an embedding list (Cloudflare Workers AI bge-m3, vectors from the chunk-taxonomy job) are fused by reciprocal rank fusion, and up to 48 passages of the top 3 partitions are re-ranked at ask time. Any embedding failure, timeout, lock wait or budget stop falls back to word-only search.
 - *Chunk taxonomy.* A mechanical background job (embeddings, seeded clustering, nearest-center assignment, c-TF-IDF names) bounded by a neuron budget and a memory guard; migration 024 creates its tables and 022 gates its write mode (nodes, anchors, links; without 022 it only computes); both applied 2026-11-09, see `db/README.md`.
 
+## Additions of 2026-11-10, batch 6 (offline-tested; live unverified; read from the code and config at d3fe0fe)
+
+- *Hybrid retrieval ships off.* The 2026-11-09 "Retrieval" bullet above describes what happens with `config/hybrid_retrieval.json` `enabled` and `rerank.enabled` true. At d3fe0fe both are false, so retrieval is word-only; the heading "flags on from this release" above is **superseded** for hybrid retrieval.
+- *Host roles.* `vera/host_role.py` and `config/host_roles.json` give every host one role (ORIGINAL, REPOSITORY_OF_RECORD, PORTAL, RESOLVER, EXCLUDED). Portals (preprint servers such as arXiv, indexes such as OpenAlex, INSPIRE and Crossref, Wikipedia) never supply evidence; their abstracts and snippets never ground an answer. Repositories of record (for example OSTI, NASA NTRS, Zenodo and HAL; Europe PMC, PMC and ERIC only for specific article paths, since their hosts default to PORTAL) can.
+- *Portal following.* `vera/portal_follow.py` (`config/portal_follow.json`, on) follows portal records to their original host through metadata lookups only (3 records, 6 lookups, 6 s per question); OpenAlex lookups are off. arXiv is a portal: its full-text route is off and closed in code, and arXiv ids are resolved through INSPIRE metadata to the published version and its references.
+- *List ingest.* `POST /ingest/list` (own key, `VERA_INGEST_API_KEY`) queues identifiers on the existing background acquisition queue at seed priority with no search; see [API](api.md).
+- *Search cost control.* DuckDuckGo is a fallback only (used when other routes return fewer than 3 relevant results; never for seed work); OpenAlex has a visitor/seed split of its daily search cap; the Wikipedia search API is denied under the robots-first rule.
+- *Settings registry (off).* `vera/settings.py` overlays allow-listed database tunables over the JSON files for modules enabled in `config/settings.json`; none is enabled, and its tables (migration 026) are a draft, not applied.
+- *Taxonomy.* Multi-membership links (`score_kind` `cosine_r<rank>`, `cosine_soft`) are written by the job; display counts use `cosine` only; routing (`config/taxo_router.json` `mode`) is off. Chunk-value rules (`config/chunk_value.json`) are off.
+- *#79 corpus admission (ships with the follow-up batch, followups-1110; not part of d3fe0fe).* #79 corpus admission stores metadata and refuses only PORTAL and EXCLUDED records (unknown hosts and doi.org journal DOIs pass); the evidence rule is unchanged.
+
 ## Four design objectives
 
 1. **Grounding:** link research claims to relevant observed evidence.
