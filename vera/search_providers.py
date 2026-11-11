@@ -361,14 +361,26 @@ def openalex_api_key(settings: Mapping | None = None, env: Mapping | None = None
 
 
 def _scrub_resp_url(resp, key: str) -> None:
-    """ACQ-1027 K3: a response's .url may carry the key; overwrite it with the scrubbed form when settable."""
+    """ACQ-1027 K3 / OPENALEX-FOLLOWUPS-1110 F3: a response's .url, its .request.url and every redirect hop's url and
+    request url may carry the key; overwrite each with the scrubbed form when settable."""
     from vera import acq_urls
-    u = getattr(resp, "url", None)
-    if isinstance(u, str):
-        try:
-            resp.url = acq_urls.scrub(u, [key])
-        except Exception:  # noqa: BLE001
-            pass
+
+    def one(obj):
+        u = getattr(obj, "url", None)
+        if isinstance(u, str):
+            try:
+                obj.url = acq_urls.scrub(u, [key])
+            except Exception:  # noqa: BLE001
+                pass
+
+    one(resp)
+    one(getattr(resp, "request", None))
+    try:
+        for h in list(getattr(resp, "history", None) or []):
+            one(h)
+            one(getattr(h, "request", None))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ----------------------------------------------------------------------------------------- OpenAlex metered client
@@ -758,7 +770,7 @@ class OpenAlexProvider:
             if ok:
                 self._used += 1
                 self._attempts.pop(key, None)
-            else:
+            elif st != 404:  # F3: a 404 is a normal "not found" answer, not a failed attempt (still uncharged)
                 ent = self._attempts.get(key) or [now, 0]
                 ent[1] += 1
                 self._attempts[key] = ent

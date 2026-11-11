@@ -34,6 +34,17 @@ _DOI = re.compile(r"^(?:doi:|https?://(?:dx\.)?doi\.org/)?(10\.\d{4,9}/\S+)$", r
 _PMCID = re.compile(r"^(?:pmcid:)?(PMC\d{4,9})$", re.I)
 _PMID = re.compile(r"^(?:pmid:)(\d{1,9})$", re.I)
 _ARXIV_DOI = re.compile(r"^10\.48550/arxiv\.", re.I)
+# OPENALEX-FOLLOWUPS-1110 F1: OpenAlexRefused code -> result_codes key. Every code has its own per-item code; none is the
+# terminal "no_route". terms_gate_config_invalid is a stop (operator fix); the rest are paused/pacing (retry later).
+_OA_ITEM_CODES = {
+    "terms_gate": "arxiv_lookup_gated",
+    "terms_gate_config_invalid": "arxiv_lookup_config_invalid",
+    "own_cap": "arxiv_lookup_own_cap",
+    "seed_share": "arxiv_lookup_seed_share",
+    "provider_quota": "arxiv_lookup_provider_quota",
+    "cooldown": "arxiv_lookup_cooldown",
+    "retry_limit": "arxiv_lookup_retry_limit",
+}
 
 _LOCK = threading.Lock()
 _ACCEPTED: deque = deque()  # monotonic times of items accepted by this route (hour/day caps)
@@ -266,11 +277,8 @@ def _run(items, topic, cfg, acq, rc, env, clock, rv, deps_factory, start_worker)
         except Exception as e:  # noqa: BLE001  transport/permission/rate failure on an identifier lookup
             from vera import search_providers as _sp
             oc = _sp.oa_refusal_code(e)  # OPENALEX-FIX-1110: the OpenAlex terms gate has its own codes
-            if kind == "arxiv" and oc == "terms_gate":
-                out(raw, kind, "arxiv_lookup_gated")
-                continue
-            if kind == "arxiv" and oc == "terms_gate_config_invalid":
-                out(raw, kind, "arxiv_lookup_config_invalid")
+            if kind == "arxiv" and oc in _OA_ITEM_CODES:  # F1: each OpenAlex refusal keeps its own per-item code
+                out(raw, kind, _OA_ITEM_CODES[oc])
                 continue
             logger.info("list-ingest lookup failed (%s)", type(e).__name__)
             out(raw, kind, "no_route")
