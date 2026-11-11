@@ -91,13 +91,17 @@ def _rows():
              "https://doi.org/10.5281/zenodo.1234567")
     vers = ("published", "publishedVersion", "vor", "VoR", "info:eu-repo/semantics/publishedVersion", "INFO:EU-REPO/SEMANTICS/publishedVersion",
             "accepted", "acceptedVersion", "camera-ready", "cameraready", "info:eu-repo/semantics/acceptedVersion", "submittedVersion",
-            "preprint", "draft", "unknown", "none", "", "v1.0", "PublishedVersion ", "publishedversio", "published version", 5, None)
+            "preprint", "draft", "unknown", "none", "", "v1.0", "PublishedVersion ", "publishedversio", "published version", 5, None,
+            # S1 (a7a4df8): non-strings and bare / whitespace-only eu-repo prefixes are undecidable; whitespace-only plain strings
+            1, 0, True, False, [], ["published"], {}, {"v": "published"}, 1.0, "info:eu-repo/semantics/", "INFO:EU-REPO/SEMANTICS/   ",
+            " info:eu-repo/semantics/ ", "   ", "\tpublished\n", "info:eu-repo/semantics/ publishedVersion ")
     for u in gated:
         for v in vers:
             add({"url": u, "version": v}, {}, None)
             add({"url": "https://example.org/x"}, {"version": v}, u)
             add({"url": u, "version": v, "type": "preprint"}, {}, None)
             add({"url": u, "version": v, "type": "dataset"}, {}, None)
+            add({"url": u, "version": v}, {"version": "publishedVersion"}, None)     # S1: item version wins unless None/'' (0/False do not fall through)
         for t in ("dataset", "report", "software", "journal-article", "posted-content", "Dataset"):
             add({"url": u, "type": t}, {}, None)
             add({"url": u, "resource_type": t}, {}, None)
@@ -138,6 +142,12 @@ def test_parity_verdict_and_rule_id_row_for_row():
     vrows = [(i, p, c) for i, p, c in rows if isinstance(i, dict) and "version" in i and str(i.get("url", "")).startswith("https://zenodo.org/")]
     assert any(fulltext_loader.portal_verdict(i, p, c) is None for i, p, c in vrows)            # published/VoR relaxes (not vacuous)
     assert any(fulltext_loader.portal_verdict(i, p, c) for i, p, c in vrows)                    # accepted etc. stay PORTAL
+    z = "https://zenodo.org/records/1234567"
+    for v in (True, 1, [], "info:eu-repo/semantics/", " INFO:EU-REPO/SEMANTICS/ "):           # S1: undecidable, so a dataset type cannot qualify
+        it = {"url": z, "version": v, "type": "dataset"}
+        assert fulltext_loader.portal_verdict(it) and cv.portal_verdict(it, None, None, CFG) == fulltext_loader.portal_verdict(it), v
+    assert fulltext_loader.portal_verdict({"url": z, "type": "dataset"}) is None                 # control: no version + dataset serves
+    assert cv.portal_verdict({"url": z, "version": "PublishedVersion "}, None, None, CFG) is None  # trailing space trimmed, serves
 
 
 def test_fail_closed_matches_on_invalid_policy():

@@ -579,11 +579,18 @@ _PR_EU_REPO_PREFIX = "info:eu-repo/semantics/"
 
 
 def _pr_norm_version(v) -> str:
-    """PVFIX-A-1110 port of fulltext_loader._norm_version: strip only the OpenAIRE/eu-repo prefix (case-insensitive); any other
-    string is left as is, so an unknown version ('v1.0') stays undecidable (fail closed)."""
-    v = v.strip() if isinstance(v, str) else ""
+    """PVFIX-A-1110 port of fulltext_loader._norm_version (incl. S1, a7a4df8): strip only the OpenAIRE/eu-repo prefix (case-insensitive);
+    any other string is left as is, so an unknown version ('v1.0') stays undecidable (fail closed). None / '' mean 'no version' ("");
+    a non-string, or a bare eu-repo prefix with nothing after it, is undecidable (never 'no version')."""
+    if v is None or v == "":
+        return ""
+    if not isinstance(v, str):
+        return "undecidable"
+    v = v.strip()
     if v.lower().startswith(_PR_EU_REPO_PREFIX):
-        v = v[len(_PR_EU_REPO_PREFIX):]
+        v = v[len(_PR_EU_REPO_PREFIX):].strip()
+        if not v:
+            return "undecidable"
     return v
 
 
@@ -609,7 +616,7 @@ def portal_verdict(item, prov=None, canonical_url=None, cfg=None):
                 canonical_url, acq.get("abs_url")]
         urls += urls_extra  # acquisition["url_chain"] is deliberately NOT checked (wire-A F1)
         # PVFIX-A-1110 port: the item's own version / type is meta for the URL role checks only (relaxes a version-gated row; rec unchanged)
-        vmeta = {"version": _pr_norm_version(item.get("version") or prov.get("version")),
+        vmeta = {"version": _pr_norm_version(item.get("version") if item.get("version") not in (None, "") else prov.get("version")),
                  "type": item.get("type") or prov.get("type") or "",
                  "resource_type": item.get("resource_type") or prov.get("resource_type") or "",
                  "source_type": item.get("source_type") or ""}
