@@ -279,7 +279,10 @@ def test_ac7_resolve_by_pmcid_refuses_a_mismatched_record():
 def test_ac8_overlay_copies_only_labels_and_the_identity_allowlist():
     c = A.cfg()
     ov = c["ingest_overlay"]
-    assert ov["non_doi_identifier_kinds"] == {"pmcid": "^PMC[0-9]{1,10}$"}  # wikipedia_revision dropped (owner)
+    # wikipedia_revision dropped (owner). ALLDOMAINS-WPG-IMPL-1111: + original_url (identity of a page read from a
+    # permitted original host); the pmcid pattern is unchanged and the allowlist still holds only these two kinds.
+    assert set(ov["non_doi_identifier_kinds"]) == {"pmcid", "original_url"}
+    assert ov["non_doi_identifier_kinds"]["pmcid"] == "^PMC[0-9]{1,10}$"
     hostile = copy.deepcopy(c)
     hostile["ingest_overlay"].update({"min_fulltext_chars": 1, "min_body_chars": 1, "min_body_to_abstract_ratio": 0,
                                       "doi_pattern": ".*", "required_item_fields": [], "url_pattern": ".*",

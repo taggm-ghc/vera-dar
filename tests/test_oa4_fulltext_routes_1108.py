@@ -157,7 +157,9 @@ _FETCH = {"_guarded_get", "_get", "_get_locked", "_b_get", "fetch", "fetch_candi
 
 
 def test_registry_order_and_names():
-    assert [r.name for r in FR.ROUTES] == ["arxiv", "europepmc"]
+    # ALLDOMAINS-WPG-IMPL-1111: original_html sits between arxiv and the default route (it claims only identifier-less
+    # URLs in config/permitted_originals.json rows, and nothing while the shipped mode is off)
+    assert [r.name for r in FR.ROUTES] == ["arxiv", "original_html", "europepmc"]
     assert FR.ROUTES[-1] is FR.EUROPEPMC and FR.by_name("arxiv") is FR.ARXIV and FR.by_name("plos") is None
     assert set(FR.ROUTABLE_ORDER) == set(FR.ROUTES)
 
