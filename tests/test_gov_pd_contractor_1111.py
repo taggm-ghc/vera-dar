@@ -174,45 +174,90 @@ def test_web_lane_returns_no_licence_and_records_code(mode):
 
 
 # ---- adversarial timing: contractor stage only (the shipped third-party pattern at config line ~164 is P-1111-07)
-def _contractor_time(text, cfg):
-    rx = g._compiled(cfg, "contractor_patterns")
-    best = None
-    for _ in range(3):  # CPU time, best of 3: a loaded host must not fail a linear-time check
-        t0 = time.process_time()
-        for r in rx:
-            r.search(text)
-        d = time.process_time() - t0
-        best = d if best is None else min(best, d)
-    return best
+# RELFIX-1112: load-independent check. An absolute 0.1 s bound failed under host load, so each pattern is timed on
+# the same adversarial shape at size n and GROWTH*n and the ratio is bounded. A linear scan grows about GROWTH-fold
+# whatever the host speed; quadratic backtracking grows about GROWTH**2-fold (exponential: far more). Both axes are
+# scaled: the number of lines, and the run inside one line (a blow-up within a line is invisible to line counts).
+GROWTH = 8
+RATIO_BOUND = 24  # 3x headroom over linear (8); a quadratic pattern gives about 64
+MIN_SMALL_CPU = 0.005  # repeat the small search until it costs at least 5 ms, so timer noise cannot dominate
+CPU_CEILING = 2.0  # backstop only: all patterns once on the full-size text; 20x the old bound, not the real check
 
 
+def _cpu(rx, text, reps):
+    t0 = time.process_time()
+    for _ in range(reps):
+        rx.search(text)
+    return time.process_time() - t0
+
+
+def _growth_ratio(rx, make, n):
+    """CPU-time ratio of rx.search on make(GROWTH*n) over make(n); interleaved best of 3 so drift hits both."""
+    small, big = make(n), make(GROWTH * n)
+    reps = 1
+    while _cpu(rx, small, reps) < MIN_SMALL_CPU and reps < 65536:
+        reps *= 2
+    ts, tb = [], []
+    for _ in range(3):
+        ts.append(_cpu(rx, small, reps))
+        tb.append(_cpu(rx, big, reps))
+    return min(tb) / max(min(ts), 1e-9)
+
+
+# name -> (prefix, line head, run, inner run count, line tail, lines). Text = prefix + (head + run*inner + tail)*lines;
+# every full-size text is >= 20k characters, as before.
 ADVERSARIAL = {
-    "200k-newlines": "\n" * 200_000,
-    "20k-newlines": "\n" * 20_000,
-    "by-then-200k-newlines": "by Jane\n" + "\n" * 200_000,
-    "by-then-20k-newlines": "by Jane\n" + "\n" * 20_000,
-    "managed-for-spaces": ("managed for " + " " * 2000) * 100,
-    "200k-spaces": " " * 200_000,
-    "contact-commas": ("Contact: " + "a," * 80 + "\n") * 1200,
+    "200k-newlines": ("", "", "\n", 1, "", 200_000),
+    "20k-newlines": ("", "", "\n", 1, "", 20_000),
+    "by-then-200k-newlines": ("by Jane\n", "", "\n", 1, "", 200_000),
+    "by-then-20k-newlines": ("by Jane\n", "", "\n", 1, "", 20_000),
+    "managed-for-spaces": ("", "managed for ", " ", 2000, "", 100),
+    "200k-spaces": ("", "", " ", 1, "", 200_000),
+    "contact-commas": ("", "Contact: ", "a,", 80, "\n", 1200),
     # verifier probes (VERIFY-GOVPD-1111): dense-punctuation bylines and padded "managed for"
-    "by-dense-punct": ("by " + ",|-–—" * 20 + "\n") * 3000,
-    "by-comma-120": ("by " + "a," * 120 + "\n") * 800,
-    "by-dash-words": ("by " + "x-" * 60 + " " + "y " * 90 + "\n") * 800,
-    "managed-padded": "managed     for     the     " * 7000,
-    "managed-padded-3": "managed   for   the   " * 9000,
-    "managed-padded-nbsp3": "managed   for   the   " * 9000,
-    "managed-padded-nbsp1": "managed for the " * 12000,
-    "managed-padded-5": ("managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5) * 7000,
-    "realistic-200kb": (_page(NEGATIVE[1]) + "\n") * 1500,
+    "by-dense-punct": ("", "by ", ",|-–—", 20, "\n", 3000),
+    "by-comma-120": ("", "by ", "a,", 120, "\n", 800),
+    "by-dash-words": ("", "by ", "x-", 60, " " + "y " * 90 + "\n", 800),
+    "managed-padded": ("", "managed     for     the     ", "", 0, "", 7000),
+    "managed-padded-3": ("", "managed   for   the   ", "", 0, "", 9000),
+    "managed-padded-nbsp3": ("", "managed   for   the   ", "", 0, "", 9000),
+    "managed-padded-nbsp1": ("", "managed for the ", "", 0, "", 12000),
+    "managed-padded-5": ("", "managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5, "", 0, "", 7000),
+    "realistic-200kb": ("", _page(NEGATIVE[1]) + "\n", "", 0, "", 1500),
 }
+
+
+def _text(prefix, head, run, inner, tail, lines):
+    return prefix + (head + run * inner + tail) * lines
 
 
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL))
 def test_contractor_patterns_are_fast(mode, name):
     cfg = mode("on")
-    text = ADVERSARIAL[name]
-    assert len(text) >= 20_000
-    assert _contractor_time(text, cfg) <= 0.1, name
+    prefix, head, run, inner, tail, lines = ADVERSARIAL[name]
+    full = _text(prefix, head, run, inner, tail, lines)
+    assert len(full) >= 20_000
+    rxs = g._compiled(cfg, "contractor_patterns")
+    t0 = time.process_time()
+    for rx in rxs:
+        rx.search(full)
+    assert time.process_time() - t0 <= CPU_CEILING, name
+    by_lines = lambda k: _text(prefix, head, run, inner, tail, k)  # noqa: E731
+    by_run = lambda k: _text(prefix, head, run, k, tail, 1)  # noqa: E731
+    for i, rx in enumerate(rxs):
+        r = _growth_ratio(rx, by_lines, max(1, lines // GROWTH))
+        assert r <= RATIO_BOUND, (name, "lines", i, round(r, 1))
+        if run:  # a run inside the line: grow it to about 8x the full-size line, one line only
+            r = _growth_ratio(rx, by_run, max(1, inner))
+            assert r <= RATIO_BOUND, (name, "run", i, round(r, 1))
+
+
+def test_growth_check_catches_quadratic_backtracking():
+    """Non-vacuity: the same check fails a known quadratic pattern (\\s+x on a run of spaces with no x), on both axes."""
+    quadratic, linear = re.compile(r"\s+x", re.I | re.M), re.compile(r"x", re.I | re.M)
+    one_line = lambda k: "by " + " " * k + "\n"  # noqa: E731
+    assert _growth_ratio(quadratic, one_line, 500) > RATIO_BOUND
+    assert _growth_ratio(linear, one_line, 500) <= RATIO_BOUND
 
 
 # ---- narrowing only: nothing denied at origin/main becomes granted
