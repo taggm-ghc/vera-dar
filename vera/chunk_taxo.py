@@ -145,7 +145,8 @@ _CF_INT = {"max_attempts": (1, 10), "max_batch": (1, 1000)}
 _JOB_NUM = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay_s": (0, 3600), "page_size": (1, 5000),
             "tick_row_cap": (1, 100000), "statement_timeout_ms": (100, 600000), "lock_timeout_ms": (100, 600000),
             "connect_timeout_s": (1, 120), "text_chars": (50, 20000), "embed_batch": (1, 512), "max_rows": (1, 10**7),
-            "max_seconds": (1, 86400), "rss_soft_mb": (1, 10**6), "rss_hard_mb": (1, 10**6)}
+            "max_seconds": (1, 86400), "rss_soft_mb": (1, 10**6), "rss_hard_mb": (1, 10**6),
+            "embed_batch_chars": (1000, 10**6), "quarantine_max": (1, 10000), "quarantine_max_consecutive": (1, 1000)}  # TAXO-ROBUST-1111
 
 
 def _rng(d, k, v, lo, hi, where, integer=False):
@@ -162,8 +163,8 @@ def _validate_cloudflare(c):
     for k, v in c.items():
         if k == "model":
             _chk(isinstance(v, str) and re.fullmatch(r"(@cf/baai/)?[a-z0-9][a-z0-9._-]{0,63}", v) is not None, "cloudflare.model invalid")
-        elif k == "send_allowed":
-            _chk(isinstance(v, bool), "cloudflare.send_allowed must be a bool")
+        elif k in ("send_allowed", "truncate_inputs"):
+            _chk(isinstance(v, bool), "cloudflare.%s must be a bool" % k)
         elif k in _CF_NUM:
             _rng(c, k, v, *_CF_NUM[k], "cloudflare")
         elif k in _CF_INT:

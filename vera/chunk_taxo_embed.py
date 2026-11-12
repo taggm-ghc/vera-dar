@@ -39,7 +39,12 @@ MODELS = {
 DEFAULTS = {"model": "bge-m3", "send_allowed": True, "daily_neuron_budget": 8000, "chars_per_token": 3.0, "max_attempts": 4,
             "backoff_base_s": 1.0, "max_wait_s": 60.0, "timeout_s": 30,
             "max_response_bytes": 8_000_000,
+            "truncate_inputs": True,  # TAXO-ROBUST-1111 E1: ask the endpoint to truncate an over-long input instead of rejecting it
             "reserve_neurons": 0}  # HYBRID-1109: the job stops at daily_neuron_budget - reserve_neurons (ask-time share)  # 8 MB: ~64 vectors x 1024 floats is ~1 MB of JSON; generous but bounded
+# TAXO-ROBUST-1111 E1b: a failed 400/413/422 call is charged at its pre-call estimate (provider billing of failed calls is not
+# documented; live check L2 decides whether to set this False).
+CHARGE_FAILED_4XX = True
+_CHARGED_FAIL_CODES = frozenset({"http_400", "http_413", "http_422", "bad_response"})
 _REGISTRY: dict[str, Callable[[dict], object]] = {}
 _BUDGET = {"day": None, "neurons": 0.0, "requests": 0}  # per UTC day, process-wide (a new adapter instance keeps the day's count)
 _BLOCK = threading.Lock()
@@ -112,7 +117,7 @@ class CloudflareEmbedder:
         self.name = "@cf/baai/" + self.model_short
         self.dim = self.mcfg.get("dim")
         self.batch_limit = int((ecfg or {}).get("max_batch") or 64)
-        self.stats_run = {"neurons": 0.0, "requests": 0, "deferred": 0}
+        self.stats_run = {"neurons": 0.0, "requests": 0, "deferred": 0, "attempts": 0, "last_http_status": 0}
         self._day_used = 0.0  # the UTC day's neurons as persisted in tax_job_runs (set by the job before each batch)
 
     def set_day_used(self, neurons: float) -> None:
@@ -158,17 +163,23 @@ class CloudflareEmbedder:
 
     # -- request
     def _post(self, texts: list[str]):
+        self.stats_run["attempts"], self.stats_run["last_http_status"] = 0, 0  # TAXO-REASON-1111: ints only, per request
+        timed_out = False
         if self.cfg["send_allowed"] is not True:
             raise EmbedError("send_not_allowed")
         url = self._url()
         token = (self.env.get(ENV_TOKEN) or "").strip()
         if not token:
             raise EmbedError("credentials_missing")
-        body = json.dumps({"text": texts}).encode("utf-8")
+        payload: dict = {"text": texts}
+        if self.cfg.get("truncate_inputs") is True:
+            payload["truncate_inputs"] = True
+        body = json.dumps(payload).encode("utf-8")
         for attempt in range(int(self.cfg["max_attempts"])):
             req = urllib.request.Request(url, data=body, method="POST",
                                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
             retry_after = None
+            self.stats_run["attempts"], self.stats_run["last_http_status"], timed_out = attempt + 1, 0, False
             try:
                 with self.opener(req, timeout=float(self.cfg["timeout_s"])) as resp:
                     cap = int(self.cfg["max_response_bytes"])
@@ -178,6 +189,7 @@ class CloudflareEmbedder:
                     return json.loads(raw.decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 code = int(exc.code)
+                self.stats_run["last_http_status"] = code
                 try:
                     errs = json.loads(exc.read(65536).decode("utf-8")).get("errors") or []
                 except Exception:  # noqa: BLE001
@@ -194,15 +206,16 @@ class CloudflareEmbedder:
                         retry_after = None
                 else:
                     raise EmbedError(f"http_{code}") from None
-            except (urllib.error.URLError, TimeoutError, OSError):
-                pass  # transient network failure: retried below
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                # transient network failure: retried below; a timeout is told apart from other network errors (no text kept)
+                timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
             except ValueError:
                 raise EmbedError("bad_response") from None
             if attempt + 1 >= int(self.cfg["max_attempts"]):
                 break
             wait = retry_after if retry_after is not None else float(self.cfg["backoff_base_s"]) * (2 ** attempt)
             self.sleep(min(max(0.0, wait), float(self.cfg["max_wait_s"])))
-        raise EmbedError("request_failed")
+        raise EmbedError("timeout" if timed_out else "request_failed")
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if self.cfg["send_allowed"] is not True:
@@ -220,10 +233,17 @@ class CloudflareEmbedder:
             est_tokens = sum(len(p) for p in chunk) / float(self.cfg["chars_per_token"])
             est = est_tokens / 1e6 * float(self.mcfg["neurons_per_m"])
             self._charge_check(est)
-            resp = self._post(chunk)
+            try:
+                resp = self._post(chunk)
+            except EmbedError as exc:
+                if CHARGE_FAILED_4XX and str(exc) in _CHARGED_FAIL_CODES:
+                    self._charge(est)  # worst case: the provider may bill a rejected call
+                raise
             res = resp.get("result") if isinstance(resp, dict) else None
             data = res.get("data") if isinstance(res, dict) else None
             if not isinstance(data, list) or len(data) != len(chunk) or resp.get("success") is False:
+                if CHARGE_FAILED_4XX:
+                    self._charge(est)  # a malformed 200 was still processed: count the worst case
                 raise EmbedError("bad_response")
             usage = res.get("usage") if isinstance(res, dict) else None
             tok = usage.get("total_tokens") or usage.get("prompt_tokens") if isinstance(usage, dict) else None
