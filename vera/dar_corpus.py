@@ -936,6 +936,17 @@ class DarCorpus:
         qdoms = self._question_domains(question)
         trace["question_domains"] = qdoms
         trace["branch_counts"][fb] = len(branches[0][1])
+        from vera import draft_verify as _dv  # DRAFTVERIFY-1111: terms-only second query, only while draft_query is "on"
+        dq = _dv.second_query()
+        if dq:
+            try:
+                d_terms = self._query_terms(dq)
+                d_items = self._bm25(d_terms, self._chunks, bk, self._scores(d_terms)) if d_terms else []
+            except Exception:  # noqa: BLE001  optional: the question's own branches stand
+                d_items = []
+            if d_items:
+                branches.append(("draft", d_items))
+                trace["branch_counts"]["draft"] = len(d_items)
         allc = self._all
         for did in qdoms:  # the domain pool restricted to scored chunks (an unscored chunk is never ranked anyway)
             pool = [allc[i] for i in scores

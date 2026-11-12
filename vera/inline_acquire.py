@@ -1233,6 +1233,23 @@ ROUND_CAP: contextvars.ContextVar = contextvars.ContextVar("multiq_round_cap", d
 ROUND_CUT: contextvars.ContextVar = contextvars.ContextVar("multiq_round_cut", default=None)
 
 
+def _gap_queries() -> list:
+    """DRAFTVERIFY-1111: the ordered gap queries for this request ([] unless config/draft_verify.json gap is "on")."""
+    try:
+        from vera import draft_verify
+        return list(draft_verify.gap_queries())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _gap_round_cap() -> int:
+    try:
+        from vera import draft_verify
+        return int(draft_verify.config()["max_gap_rounds"])
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, count, ms, skip, plans, reused,
                   fresh_budget, route, persist=False):
     """NONASK-1103 A6 D1 (A6-2, A6-5): rounds 2 and later. While fewer than the target (acq_rounds, 6) answer-eligible
@@ -1273,6 +1290,10 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         variants = query_variants6.variants(question)
     except Exception:  # noqa: BLE001
         variants = []
+    gap, gap_used = _gap_queries(), 0  # DRAFTVERIFY-1111: [] unless the gap stage is "on" (then nothing below changes)
+    if gap:
+        variants = gap + [v for v in variants if v not in gap]
+    gap_set = set(gap)
     stop_pre = None
     passes = 0
     while pending and passes <= len(pend_ids):  # each pass takes at least one candidate off `pending`; the cap is a guard
@@ -1348,7 +1369,11 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
     r6["deferred_evaluated"] = len(pend_ids) - len(pending)
     if stop_pre:
         stop = stop_pre
-    for q in ([] if stop_pre else variants):
+    for q in ([] if (stop_pre and not (stop_pre == "met" and gap)) else variants):
+        is_gap = q in gap_set
+        if is_gap and gap_used >= _gap_round_cap():  # DRAFTVERIFY-1111: bounded gap rounds (distinct stop code)
+            r6["gap_stop"] = "gap_round_cap"
+            continue
         cur = len(extra) + _rn(acq, reused) + int(st.get("n_lane", 0) or 0)  # usable = answer-eligible documents gained
         # (fresh or reused; RETRIEVAL-1109 A3: variant-round reporting-lane pages too)
         if last is not None:
@@ -1361,7 +1386,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         last = cur
         eligible = len(plans) + len(extra) + _rn(acq, reused) + _n_ao(st)
         remaining = fresh_budget - len(plans) - len(extra)
-        if eligible >= tgt:
+        if eligible >= tgt and not is_gap:  # DRAFTVERIFY-1111: a gap round may open after the target is met (OR-1111-GAPSEARCH)
             stop = "met"
             break
         if remaining <= 0:
@@ -1393,6 +1418,10 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
             break
         rounds += 1
         r6["rounds"] = rounds
+        if is_gap:
+            gap_used += 1
+            r6["gap_rounds"] = gap_used
+            rt.event("acquire", "gap_round", counts={"n": gap_used})
         _emit("search", "start", step=rounds)
         with search_providers.portal_scope() as pl:
             try:
