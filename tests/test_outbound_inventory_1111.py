@@ -144,6 +144,11 @@ SITES: dict = {
     # LLM / embedding APIs (OpenAI-SDK clients, httpx transports, judge calls)
     ("vera/ask_service.py", "openai.OpenAI"): ("LLM", 7, "SDK clients"),
     ("vera/claim_check.py", "openai.OpenAI"): ("LLM", 1, "SDK client"),
+    # OUTBOUND-CLS-1112: draftverify-1111 Groq chat completions; base_url from the groq checkers of
+    # config/ask-provider-chain.json grounding.claim_check. Not DOC: the reply is parsed into stance labels or a draft
+    # whose claims reach the network only as filtered search terms via the guarded acquisition rounds, never as a URL.
+    ("vera/claim_stance.py", "openai.OpenAI"): ("LLM", 1, "SDK client, Groq stance judge"),
+    ("vera/draft_hypothesis.py", "openai.OpenAI"): ("LLM", 1, "SDK client, Groq draft hypothesis"),
     ("vera/generator_client.py", "openai.OpenAI"): ("LLM", 4, "SDK clients"),
     ("vera/inference_chain.py", "openai.OpenAI"): ("LLM", 2, "SDK clients"),
     ("vera/rate_limit.py", "httpx.Client"): ("LLM", 1, "OpenAI-SDK http client"),
