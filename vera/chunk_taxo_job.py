@@ -32,7 +32,7 @@ import time
 from types import SimpleNamespace
 
 from vera import chunk_taxo_store as store
-from vera.chunk_taxo_embed import Deferred, load_embedder
+from vera.chunk_taxo_embed import Deferred, EmbedError, load_embedder
 
 log = logging.getLogger("vera.chunk_taxo")
 
@@ -110,6 +110,37 @@ def _numeric_only(x, depth=0):
         return {str(k)[:48]: _numeric_only(v, depth + 1) for k, v in list(x.items())[:64]
                 if isinstance(_numeric_only(v, depth + 1), (bool, int, float, dict))}
     return None
+
+
+_SAFE_CODE = re.compile(r"^[a-z0-9_]{1,40}$")
+_RT_CODES = frozenset({"embed_count_mismatch", "dim_mismatch", "bad_phase", "node_not_active"})
+
+
+def _cut_token(x) -> str:
+    """TAXO-REASON-1111 L5: a text-free token: charset [A-Za-z0-9_.], at most 40 characters."""
+    return re.sub(r"[^A-Za-z0-9_.]", "", x if isinstance(x, str) else "")[:40]
+
+
+def _reason_for(exc) -> str:
+    """TAXO-REASON-1111: closed-vocabulary, text-free failure reason. Never raises (L3).
+    EmbedError: 'embed:<code>' when the message is a vetted code, else 'embed:unknown'; a plain RuntimeError with a fixed
+    allow-listed code: that code; anything else: the class name only (L2: the message, args, repr and any DB-error attribute
+    such as orig, statement, params or pgerror are never read)."""
+    try:
+        if isinstance(exc, EmbedError):  # before the RuntimeError branch: EmbedError subclasses RuntimeError (L1)
+            msg = str(exc)
+            return "embed:" + msg if _SAFE_CODE.match(msg) else "embed:unknown"
+        if type(exc) is RuntimeError:
+            msg = str(exc)
+            if msg in _RT_CODES:
+                return msg
+        return _cut_token(type(exc).__name__) or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _int_or_none(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def _unit_mean(vecs):
@@ -205,6 +236,7 @@ class Job:
         self._pass_neurons = 0.0
         self._fin = None
         self._phase = "start"
+        self._fail_span, self._fail_batch = None, None  # TAXO-REASON-1111: the batch being embedded (ints only)
         self._mode = None
         self._inert = None
         self._reset_run()
@@ -245,6 +277,7 @@ class Job:
         try:
             self._t0 = self._wall()
             self.rows_embedded, self._stop, self._phase, self._inert = 0, None, "start", None
+            self._fail_span, self._fail_batch = None, None
             self._reset_run()
             t_end = self._clock() + self.max_seconds
             while self._phase not in TERMINAL and not self._inert and self._stop is None:
@@ -257,11 +290,13 @@ class Job:
                     self._stop, self._retry_in = "deferred", d.retry_in_s
                     break
                 except Exception as exc:  # noqa: BLE001
-                    self._close_run("failed")
+                    reason = _reason_for(exc)
+                    info = self._fail_info()  # before the buffers and the engine are dropped
+                    self._close_run("failed", reason=reason, extra=info)
                     self._release_buffers()
                     self._drop_engine()
-                    self._set(state="error")
-                    log.warning("chunk_taxo job failed: CT_JOB_ERROR (%s)", type(exc).__name__)
+                    self._set(state="error", reasons=[reason[:64]])
+                    self._log_failure(reason, info)
                     return {"state": "error", "complete": False, "rows_embedded": self.rows_embedded}
             if self._inert:
                 self._record_inert(self._inert)  # after the probe connection is closed (pool of one)
@@ -280,10 +315,51 @@ class Job:
             return {"state": st["state"], "complete": self._phase == "idle" and not self._stop and not self._inert,
                     "rows_embedded": self.rows_embedded, "stop": self._stop, "retry_in_s": self._retry_in}
         except Exception as exc:  # noqa: BLE001
-            log.warning("chunk_taxo job failed: CT_JOB_ERROR (%s)", type(exc).__name__)
+            reason = _reason_for(exc)
+            try:
+                self._set(state="error", reasons=[reason[:64]])
+            except Exception:  # noqa: BLE001
+                pass
+            self._log_failure(reason, None)
             return {"state": "error", "complete": False, "rows_embedded": self.rows_embedded}
 
-    def _close_run(self, state: str) -> None:
+    def _fail_info(self) -> dict:
+        """TAXO-REASON-1111: integers only (no span text, no hash of it): where and with what batch shape the pass failed.
+        Never raises."""
+        out: dict = {}
+        try:
+            out["fail_rows_embedded"] = int(self.rows_embedded)
+            sid = _int_or_none(self._fail_span)
+            if sid is not None:
+                out["fail_span_id"] = sid
+            fb = self._fail_batch
+            if isinstance(fb, dict):
+                for k, v in fb.items():
+                    if _int_or_none(v) is not None:
+                        out[str(k)] = v
+            st = getattr(self._emb, "stats_run", None)
+            if isinstance(st, dict):
+                for k in ("last_http_status", "attempts"):
+                    if _int_or_none(st.get(k)) is not None:
+                        out[k] = st[k]
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def _log_failure(self, reason: str, info) -> None:
+        """One log line, ints and closed tokens only (L4: no exc_info, no stack_info, no log.exception). Never raises."""
+        try:
+            info = info if isinstance(info, dict) else self._fail_info()
+            sid = info.get("fail_span_id")
+            log.warning("chunk_taxo job failed: CT_JOB_ERROR reason=%s phase=%s rows_embedded=%d span_id=%s batch_n=%d "
+                        "last_http_status=%d attempts=%d", re.sub(r"[^A-Za-z0-9_.:]", "", str(reason))[:64], _cut_token(self._phase),
+                        int(self.rows_embedded),
+                        ("%d" % sid) if _int_or_none(sid) is not None else "n/a", int(info.get("fail_batch_n", 0)),
+                        int(info.get("last_http_status", 0)), int(info.get("attempts", 0)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _close_run(self, state: str, reason=None, extra=None) -> None:
         """Best effort: mark an unfinished pass's running row (keeps its neurons_used). Never raises."""
         rid, self._run_id = self._run_id, None
         if rid is None:
@@ -291,7 +367,8 @@ class Job:
         try:
             with self._engine().begin() as conn:
                 store.run_sql(conn, "job_run_close", {"run_id": rid, "state": state, "neurons": _ceil_int(self._pass_neurons),
-                                                      "metrics": "{}", "reasons": [str(self._stop or state)[:64]]})
+                                                      "metrics": json.dumps(_numeric_only(extra) or {}),
+                                                      "reasons": [str(reason or self._stop or state)[:64]]})
         except Exception:  # noqa: BLE001
             pass
 
@@ -481,6 +558,11 @@ class Job:
                 if hasattr(self._emb, "set_day_used"):  # the day's neurons from the DB (survives a restart), not process memory
                     with self._engine().connect() as conn:
                         self._emb.set_day_used(store.neurons_today(conn))
+                self._fail_span = part[0][0]  # TAXO-REASON-1111: the first span of the batch about to be embedded
+                self._fail_batch = {"fail_batch_n": len(part), "fail_min_chars": min(len(r[2].strip()) for r in part),
+                                    "fail_max_chars": max(len(r[2]) for r in part),
+                                    "fail_total_chars": sum(len(r[2]) for r in part),
+                                    "fail_nonascii_chars": sum(1 for r in part for ch in r[2] if ord(ch) > 127)}
                 vecs = self._emb.embed([r[2] for r in part])
                 if len(vecs) != len(part):
                     raise RuntimeError("embed_count_mismatch")
@@ -495,6 +577,7 @@ class Job:
                     fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
                 del recs, vecs
                 self.rows_embedded += len(part)
+                self._fail_span, self._fail_batch = None, None
                 i += len(part)
                 self._read_rss()
             if rows:  # one float32 block per page; the whole set is joined once at build (never a list of float lists)

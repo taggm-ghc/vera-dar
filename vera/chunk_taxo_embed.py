@@ -112,7 +112,7 @@ class CloudflareEmbedder:
         self.name = "@cf/baai/" + self.model_short
         self.dim = self.mcfg.get("dim")
         self.batch_limit = int((ecfg or {}).get("max_batch") or 64)
-        self.stats_run = {"neurons": 0.0, "requests": 0, "deferred": 0}
+        self.stats_run = {"neurons": 0.0, "requests": 0, "deferred": 0, "attempts": 0, "last_http_status": 0}
         self._day_used = 0.0  # the UTC day's neurons as persisted in tax_job_runs (set by the job before each batch)
 
     def set_day_used(self, neurons: float) -> None:
@@ -158,6 +158,8 @@ class CloudflareEmbedder:
 
     # -- request
     def _post(self, texts: list[str]):
+        self.stats_run["attempts"], self.stats_run["last_http_status"] = 0, 0  # TAXO-REASON-1111: ints only, per request
+        timed_out = False
         if self.cfg["send_allowed"] is not True:
             raise EmbedError("send_not_allowed")
         url = self._url()
@@ -169,6 +171,7 @@ class CloudflareEmbedder:
             req = urllib.request.Request(url, data=body, method="POST",
                                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
             retry_after = None
+            self.stats_run["attempts"], self.stats_run["last_http_status"], timed_out = attempt + 1, 0, False
             try:
                 with self.opener(req, timeout=float(self.cfg["timeout_s"])) as resp:
                     cap = int(self.cfg["max_response_bytes"])
@@ -178,6 +181,7 @@ class CloudflareEmbedder:
                     return json.loads(raw.decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 code = int(exc.code)
+                self.stats_run["last_http_status"] = code
                 try:
                     errs = json.loads(exc.read(65536).decode("utf-8")).get("errors") or []
                 except Exception:  # noqa: BLE001
@@ -194,15 +198,16 @@ class CloudflareEmbedder:
                         retry_after = None
                 else:
                     raise EmbedError(f"http_{code}") from None
-            except (urllib.error.URLError, TimeoutError, OSError):
-                pass  # transient network failure: retried below
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                # transient network failure: retried below; a timeout is told apart from other network errors (no text kept)
+                timed_out = isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
             except ValueError:
                 raise EmbedError("bad_response") from None
             if attempt + 1 >= int(self.cfg["max_attempts"]):
                 break
             wait = retry_after if retry_after is not None else float(self.cfg["backoff_base_s"]) * (2 ** attempt)
             self.sleep(min(max(0.0, wait), float(self.cfg["max_wait_s"])))
-        raise EmbedError("request_failed")
+        raise EmbedError("timeout" if timed_out else "request_failed")
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if self.cfg["send_allowed"] is not True:
