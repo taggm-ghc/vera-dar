@@ -164,6 +164,10 @@ def _sock_closer(sock):
 def default_transport(host, ip, port, target, headers, timeout):
     """Real transport: connect to the pinned IP, SNI + certificate check against host. Never used in tests."""
     import requests
+    # DENIAL-COVERAGE-1111: same guard pair as selective_fetch.pinned_get, on the URL rebuilt from host, port, target
+    _h = f"[{host}]" if ":" in host else host
+    doc_url = f"https://{_h}{'' if int(port) == 443 else f':{port}'}{target}"
+    sf.document_request_guard(doc_url)
     s = requests.Session()
     s.trust_env = False
     ad = sf._PinnedTLSAdapter(host)
@@ -199,6 +203,7 @@ def default_transport(host, ip, port, target, headers, timeout):
         finally:
             s.close()
     resp.close = _close
+    sf.document_response_note(doc_url, resp.status_code)
     return resp
 
 
@@ -387,6 +392,8 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
                     resp = _call_transport(transport, (host, ip, port, target, hdrs, max(0.1, end - clock())),
                                            end - clock())
                     break
+                except sf.DocumentDenied:  # DENIAL-COVERAGE-1111: transport guard; nothing sent
+                    raise FetchRefused("access_denied") from None
                 except FetchRefused as exc:
                     if exc.reason == "timeout":
                         raise

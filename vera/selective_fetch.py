@@ -209,6 +209,54 @@ def api_gate(url: str, purpose: str | None = None):
         raise ApiRefused(e) from None
 
 
+class DocumentDenied(PinnedRefused):
+    """DENIAL-COVERAGE-1111: the document URL is in the access-denial memory (an earlier 401/403 on this very
+    endpoint, OD-1111-ACCESS-DENIED-NO-BYPASS). Nothing was sent. A PinnedRefused, so callers treat it as a failed hop."""
+
+
+_ROBOTS_ENDPOINT_PATHS = ("/robots.txt", "/.well-known/tdmrep.json")  # exact paths only (the "robots endpoint")
+
+
+def _is_document_request(url: str, purpose: str | None, api_decision) -> bool:
+    """False for the robots endpoints (exact path) and for a gated API hop whose effective purpose is metadata;
+    True otherwise. An API hop with purpose fulltext (or none: the guarded default) is a download endpoint."""
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        return True
+    if path in _ROBOTS_ENDPOINT_PATHS:
+        return False
+    if api_decision is not None and (purpose or api_permissions.current_purpose(url)) == "metadata":
+        return False
+    return True
+
+
+def document_request_guard(url: str, purpose: str | None = None, api_decision=None) -> None:
+    """DENIAL-COVERAGE-1111: raise DocumentDenied, before anything is sent, when a document request targets a URL
+    that earlier answered 401/403 (memory: acq_discovered.is_denied; keyed host + path). The single guard shared by
+    pinned_get and public_fetch.default_transport; existing caller checks stay as the first line."""
+    if not _is_document_request(url, purpose, api_decision):
+        return
+    from vera import acq_discovered as _ad
+    if _ad.is_denied(urls=(url,)):
+        raise DocumentDenied("blocked: access_denied (earlier 401/403 on this document; not requested again)")
+
+
+def document_response_note(url: str, status, purpose: str | None = None, api_decision=None) -> None:
+    """DENIAL-COVERAGE-1111: remember a 401/403 on a document request (never raises). Metadata-API and robots
+    endpoint refusals are not remembered. One sanitised cause line (host only)."""
+    try:
+        if status not in (401, 403) or not _is_document_request(url, purpose, api_decision):
+            return
+        from vera import acq_discovered as _ad
+        if _ad.is_denied(urls=(url,)):
+            return
+        _ad.deny(_ad.denial_ids(urls=(url,)))
+        _ad.cause_log(urlsplit(url).hostname or "", "web", "access_denied", f"STATUS_{int(status)}", False, status)
+    except Exception:  # noqa: BLE001  diagnostics and memory never break a fetch
+        pass
+
+
 def _take_pin(url: str):
     pin, _PIN.slot = _PIN.slot, None
     if pin is None or pin[0] != url or time.monotonic() - pin[5] > PIN_MAX_AGE_S:
@@ -256,6 +304,7 @@ def pinned_get(url: str, *, headers=None, timeout=None, allow_redirects=False, s
     if params:  # 1108b review (1): the URL actually sent carries params; gate that one too (same purpose)
         api_gate(requests.Request("GET", url, params=params).prepare().url,
                  api_purpose or api_permissions.current_purpose(url))
+    document_request_guard(url, api_purpose, d)  # DENIAL-COVERAGE-1111: a denied document is never requested again
     if d is not None:
         headers = api_permissions.headers_for(d, headers)
         portal = str(d.conditions["rate_portal"])
@@ -299,6 +348,7 @@ def pinned_get(url: str, *, headers=None, timeout=None, allow_redirects=False, s
             continue
         if not stream:
             s.close()
+        document_response_note(url, resp.status_code, api_purpose, d)
         return resp
     raise last
 
@@ -638,9 +688,13 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
             # API-URL-GATE-1108: an API URL (first URL or redirect target) needs its api_permissions entry for
             # "fulltext" BEFORE robots.txt or the page is requested, whatever transport was injected.
             try:
-                api_gate(current, "fulltext")
+                dec = api_gate(current, "fulltext")
             except ApiRefused as e:
                 return None, None, None, hops, None, f"blocked: {e.code}"
+            try:  # DENIAL-COVERAGE-1111: first line, before robots.txt or the page is requested
+                document_request_guard(current, "fulltext", dec)
+            except DocumentDenied:
+                return None, None, None, hops, None, "blocked: access_denied"
             ok, why = url_check(current)
             if not ok:
                 return None, None, None, hops, None, f"blocked: {why}"
@@ -668,6 +722,8 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
                 resp = http_get(current, headers=hdrs, timeout=timeout_s, allow_redirects=False, stream=True, **extra)
             except rate_limit.RateLimited:
                 return None, None, None, hops, None, "rate_limited"
+            except DocumentDenied:  # raised by the transport guard (a redirect target seen as denied meanwhile)
+                return None, None, None, hops, None, "blocked: access_denied"
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
                 hops += 1
                 if hops > MAX_REDIRECTS:
