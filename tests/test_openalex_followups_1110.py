@@ -93,10 +93,14 @@ def no_inspire(monkeypatch):
     monkeypatch.setattr(list_ingest, "_api_get", api_get)
 
 
-def route_via(monkeypatch, holder):
-    """list_ingest's gated GET (the R5 transport) goes to the current provider's fake transport; INSPIRE is off."""
+def route_via(monkeypatch, holder, inspire_answers=False):
+    """list_ingest's gated GET (the R5 transport) goes to the current provider's fake transport. INSPIRE is off, or
+    (inspire_answers=True, B7FIX-1112) answers with no hits, returned here and not counted in `sent`; under S6-1 an
+    OpenAlex "not found" is definitive only when INSPIRE answered."""
     def api_get(url, params, t):
         if "inspirehep" in url:
+            if inspire_answers:
+                return R(200, {"hits": {"hits": []}})
             raise OSError("inspire off in this test")
         return holder[0]._transport(url, params, {}, t)
     monkeypatch.setattr(list_ingest, "_api_get", api_get)
@@ -140,18 +144,22 @@ def test_f1_codes_distinct_and_none_is_generic_no_route():
     assert set(sp.OpenAlexRefused.__doc__.split("[oa-refusal")[0].replace("|", " ").split()) >= {"retry_limit"}
 
 
-def test_f1_other_failures_and_other_kinds_stay_no_route():
+def test_f1_other_failures_and_other_kinds_get_no_openalex_item_code():
+    """B7FIX-1112: after the list-ingest S6-1 merge a transient failure is the retryable lookup-unavailable (was the
+    terminal no-route); the F1 intent is unchanged: neither case gets an OpenAlex per-item code."""
     def boom(a):
         raise OSError("transport down")
     out = list_ingest.ingest(["arXiv:2601.00001"], resolvers=list_ingest.Resolvers(
         arxiv_original=boom, known=lambda *a: False), start_worker=False)
-    assert [x["code"] for x in out["results"]] == ["no-route"]
+    got = [x["code"] for x in out["results"]]
+    assert got == ["lookup-unavailable"] and got[0] not in EXPECT.values()
 
     def pm(p):
         raise sp.OpenAlexRefused("own_cap", "x")  # a non-arXiv item never gets an arXiv-lookup code
     out = list_ingest.ingest(["PMID:12345678"], resolvers=list_ingest.Resolvers(pmid=pm, known=lambda *a: False),
                              start_worker=False)
-    assert [x["code"] for x in out["results"]] == ["no-route"]
+    got = [x["code"] for x in out["results"]]
+    assert got == ["lookup-unavailable"] and got[0] not in EXPECT.values()
 
 
 def test_f1_real_refusals_end_to_end(clk, monkeypatch):
@@ -159,13 +167,14 @@ def test_f1_real_refusals_end_to_end(clk, monkeypatch):
     gate_on(monkeypatch)
     p, sent = prov(clk, lambda u, prm: R(500))
     holder = [p]
-    route_via(monkeypatch, holder)
+    route_via(monkeypatch, holder, inspire_answers=True)
     monkeypatch.setattr(sp, "shared_openalex_provider", lambda: holder[0])
     first = list_ingest.ingest(["arXiv:2601.00001"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
                                start_worker=False)
     second = list_ingest.ingest(["arXiv:2601.00001"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
                                 start_worker=False)
-    assert [x["code"] for x in first["results"]] == ["no-route-arxiv-original-not-found"]  # pre-existing: any non-200 answer returns None
+    # B7FIX-1112: a 5xx answer is transient under S6-1 (retryable lookup-unavailable), no longer a terminal not-found
+    assert [x["code"] for x in first["results"]] == ["lookup-unavailable"]
     assert [x["code"] for x in second["results"]] == ["arxiv-lookup-retry-limit"] and len(sent) == 1
     p2, sent2 = prov(clk, lambda u, prm: R(429, headers={"Retry-After": "120"}))
     holder[0] = p2
@@ -197,13 +206,22 @@ def test_f3_404_is_not_a_retry_attempt_but_500_is(clk, monkeypatch):
 def test_f3_404_then_list_ingest_reports_original_not_found_each_time(clk, monkeypatch):
     gate_on(monkeypatch)
     p, sent = prov(clk, lambda u, prm: R(404, {}))
-    route_via(monkeypatch, [p])
+    route_via(monkeypatch, [p], inspire_answers=True)
     monkeypatch.setattr(sp, "shared_openalex_provider", lambda: p)
     for _ in range(2):
         out = list_ingest.ingest(["arXiv:2601.00011"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
                                  start_worker=False)
         assert [x["code"] for x in out["results"]] == ["no-route-arxiv-original-not-found"]
     assert len(sent) == 2
+    # B7FIX-1112: with INSPIRE down the 404 is not definitive (S6-1): retryable each time, and still never retry-limit
+    p2, sent2 = prov(clk, lambda u, prm: R(404, {}))
+    route_via(monkeypatch, [p2])
+    monkeypatch.setattr(sp, "shared_openalex_provider", lambda: p2)
+    for _ in range(2):
+        out = list_ingest.ingest(["arXiv:2601.00012"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
+                                 start_worker=False)
+        assert [x["code"] for x in out["results"]] == ["lookup-unavailable"]
+    assert len(sent2) == 2
 
 
 @pytest.mark.parametrize("shape", ["request", "history", "both"])

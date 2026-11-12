@@ -31,7 +31,7 @@ def _llm(messages):
 
 
 def _src():
-    return {"n": 1, "title": "T", "url": "https://arxiv.org/abs/1", "snippet": "an abstract",
+    return {"n": 1, "title": "T", "url": "https://journal.example.org/a1", "snippet": "an abstract",
             "licence": licence_record(metadata=OPENALEX_METADATA_LICENCE), "stored_text_kind": "abstract_metadata"}
 
 
@@ -139,5 +139,20 @@ def test_stored_corpus_sources_are_never_readmitted():
             return "admitted"
     st = Rec()
     counts = ca.admit("q", [stored, _src()], _llm, CFG, st)
-    assert st.rows == ["https://arxiv.org/abs/1"] and counts == {"admitted": 1}
+    assert st.rows == ["https://journal.example.org/a1"] and counts == {"admitted": 1}
     assert ca.is_stored_document_source(stored) and not ca.is_stored_document_source(_src())
+
+
+def test_arxiv_source_is_refused_by_e6_before_gate_a():
+    """B7FIX-1112: this file's generic source used to be an arXiv URL; arXiv is PORTAL (E6, OD-1110-PORTALS-ALL), so
+    such a source never reaches Gate A, the store or the DAR hook (the old fixture shape keeps its outcome pinned)."""
+    class Rec(FakeStore):
+        def __init__(self):
+            self.rows = []
+
+        def admit(self, c):
+            self.rows.append(c["url"])
+            return "admitted"
+    st, dc = Rec(), DarCorpus(dar_cfg())
+    counts = ca.admit("q", [dict(_src(), url="https://arxiv.org/abs/1")], _llm, CFG, st, dar_corpus=dc)
+    assert counts == {} and st.rows == [] and dc.skipped == [] and dc.stats()["documents"] == 0

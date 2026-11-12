@@ -432,13 +432,38 @@ def _resp(sc, body=None):
 
 
 def _lookup_with(monkeypatch, inspire, openalex):
+    """B7FIX-1112: the OpenAlex leg goes through the metered client (OPENALEX-FIX-1110). Each lookup gets the gate "on"
+    (as after the owner's terms ruling; the shipped "legacy" refusal is pinned in
+    test_openalex_lookup_takes_one_rate_slot_and_returns_doi), a fresh metered provider, a fresh rate-limit registry
+    and no cooldown, so one case's 429/5xx/403 never refuses the next case of the same test."""
+    from vera import rate_limit
+    from vera.eval_config import load_eval_config
+
     def fake(url, params, t):
         v = inspire if "inspire" in url else openalex
         if isinstance(v, Exception):
             raise v
         return v
     monkeypatch.setattr(list_ingest, "_api_get", fake)
-    return list_ingest._default_arxiv_original("2101.00001", list_ingest.load_config())
+    monkeypatch.setattr(search_providers, "openalex_terms_gate", lambda: "on")
+    fresh = search_providers.OpenAlexProvider(load_eval_config().search["openalex"])
+    monkeypatch.setattr(search_providers, "shared_openalex_provider", lambda: fresh)
+    rate_limit.set_registry_for_tests(rate_limit.Registry(rate_limit.load_config(env={})))
+    search_providers._QUOTA.reset()
+    try:
+        return list_ingest._default_arxiv_original("2101.00001", list_ingest.load_config())
+    finally:
+        search_providers._QUOTA.reset()
+        rate_limit.set_registry_for_tests(None)
+
+
+def _no_oa_refusal(ei):
+    """A transient or denied outcome must come from the lookup itself, never from an OpenAlex gate/meter refusal."""
+    assert search_providers.oa_refusal_code(ei.value) is None, ei.value
+
+
+# OPENALEX-FIX-1110 WP-B: only a location OpenAlex marks publishedVersion counts (production shape carries `version`)
+_PUB = {"landing_page_url": "https://doi.org/10.1234/j.x", "version": "publishedVersion"}
 
 
 def test_default_arxiv_lookup_transient_vs_definitive(monkeypatch):
@@ -448,10 +473,10 @@ def test_default_arxiv_lookup_transient_vs_definitive(monkeypatch):
     assert _lookup_with(monkeypatch, ok_empty, oa_none) is None
     for inspire, oa in ((ok_empty, _resp(429)), (ok_empty, _resp(503)), (ok_empty, OSError("t")),
                         (OSError("t"), oa_none), (_resp(500), oa_none), (OSError("t"), _resp(404))):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception) as ei:
             _lookup_with(monkeypatch, inspire, oa)
-    assert _lookup_with(monkeypatch, OSError("t"), _resp(200, {"locations": [
-        {"landing_page_url": "https://doi.org/10.1234/j.x"}]})) == "10.1234/j.x"
+        _no_oa_refusal(ei)
+    assert _lookup_with(monkeypatch, OSError("t"), _resp(200, {"locations": [_PUB]})) == "10.1234/j.x"
 
 
 # LI-TRANSIENT-CODES-1110 round 7 (S7-1): a permission denial is terminal (lookup-denied), not retryable.
@@ -477,12 +502,13 @@ def test_http_401_403_from_lookup_services_is_denied(monkeypatch):
         with pytest.raises(RuntimeError) as ei:
             _lookup_with(monkeypatch, inspire, oa)
         assert not isinstance(ei.value, list_ingest.LookupDenied)
+        _no_oa_refusal(ei)
     assert list_ingest._is_denied(OSError("t")) is False
 
 
 def test_inspire_denial_falls_through_to_openalex_both_orders(monkeypatch):
     from vera import api_permissions
-    found = _resp(200, {"locations": [{"landing_page_url": "https://doi.org/10.1234/j.x"}]})
+    found = _resp(200, {"locations": [_PUB]})
     ins_found = _resp(200, {"hits": {"hits": [{"metadata": {"dois": [{"value": "10.5555/ins.1"}]}}]}})
     denied_exc = api_permissions.ApiDenied("R-API-DENIED", "x", "no entry")
     # INSPIRE denied (HTTP and exception form), OpenAlex answers: the item resolves
@@ -495,6 +521,7 @@ def test_inspire_denial_falls_through_to_openalex_both_orders(monkeypatch):
         with pytest.raises(RuntimeError) as ei:
             _lookup_with(monkeypatch, _resp(403), oa)
         assert not isinstance(ei.value, list_ingest.LookupDenied)
+        _no_oa_refusal(ei)
     # both denied, in either exception/HTTP form: lookup-denied
     for i, o in ((denied_exc, denied_exc), (_resp(403), denied_exc), (denied_exc, _resp(401))):
         with pytest.raises(list_ingest.LookupDenied):
