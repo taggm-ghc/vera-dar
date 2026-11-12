@@ -18,6 +18,13 @@ DEMOTE = frozenset({"reference-entry"})
 
 def _oc(monkeypatch, n=1, demote=frozenset()):
     monkeypatch.setattr(sq, "_qt_oc", lambda: (n, frozenset(demote)))
+    monkeypatch.setattr(sq, "open_compound_max_pairs", lambda: n)
+
+
+@pytest.fixture(autouse=True)
+def _pairs_on(monkeypatch):
+    """The shipped default is max_pairs = 0 (rule off, owner decision (b)); these tests turn it on explicitly."""
+    monkeypatch.setattr(sq, "open_compound_max_pairs", lambda: 1)
 
 
 def _all(q):
@@ -167,9 +174,12 @@ def test_invalid_max_pairs_turns_the_rule_off_logs_once_and_does_not_raise(bad, 
         sq._qt_oc.cache_clear()
 
 
-def test_shipped_config_values():
+def test_shipped_config_values(monkeypatch):
     sq._qt_oc.cache_clear()
-    assert sq._qt_oc()[0] == 1 and sq.open_compound_max_pairs() == 1
+    assert sq._qt_oc() == (0, frozenset())  # shipped: rule off, demotion list empty
+    assert sq.build_query_terms("What are super strings?", QT).pairs == (("super", "strings"),)  # autouse fixture: on
+    monkeypatch.undo()
+    assert sq.build_query_terms("What are super strings?", QT).pairs == ()  # real shipped config: today's behaviour
 
 
 # --- 18 known gaps unchanged: non-boolean providers keep today's text
