@@ -1,11 +1,692 @@
 {
-  "_doc": "ALLDOMAINS-WPG-IMPL-1111: vendored catalogue snapshot for the ORIGINAL_HTML route (config/permitted_originals.json). EMPTY until the refresh script (WP-C) has run: it holds no harvested entry, no denied URL and no boilerplate set yet. Runtime code reads it and never writes it (vera/original_html.py has no write path; a test scans the source). The route claims nothing while this file is missing or fails validation (fail closed). Recorded divergence from feedback_no_hardcoded_data: work/USFED-ROUTE-1111/PLAN.md pass 2 ruling (4 conditions); later DB home: table permitted_catalogue, owner-gated DDL, not on the critical path.",
-  "version": 1,
-  "harvested_at": "",
-  "script_version": "none (empty seed; no harvest has run)",
-  "robots_status": {},
-  "entries": [],
-  "denied": [],
-  "boilerplate": {},
-  "sha256": "4203d5e19177d50bf6aee443c51576ce04ed0a850c20922e408da97ee2f1c817"
+ "_doc": "Vendored catalogue snapshot for the ORIGINAL_HTML route (config/permitted_originals.json), written ONLY by scripts/refresh_permitted_catalogue.py (never at runtime, never by hand). entries: harvested page URL, host, fetched page title, slug terms. denied: URLs that answered 401/403, never requested again. boilerplate: per host, sha256 of normalised text lines on at least max(floor, half) of the host's harvested pages (plan step 6c; headings never included). robots_status: per host robots read result, Crawl-delay and harvest outcome. sha256 covers entries, denied and boilerplate. Recorded divergence from feedback_no_hardcoded_data: work/USFED-ROUTE-1111/PLAN.md pass 2 ruling; later DB home: table permitted_catalogue (owner-gated DDL).",
+ "version": 1,
+ "harvested_at": "2026-11-12T23:54:00+00:00",
+ "script_version": "refresh_permitted_catalogue/1 (WPC-HARVEST-IMPL, USFED-WPC-1112)",
+ "robots_status": {
+  "www.energy.gov": {
+   "robots": "parsed_200",
+   "crawl_delay_s": 5.0,
+   "checked_at": "2026-11-12T23:54:00+00:00",
+   "counts": {
+    "discovered": 73,
+    "fetched": 73,
+    "kept": 73,
+    "dropped": 0,
+    "robots_skipped": 0,
+    "denied": 0
+   },
+   "harvest": "complete",
+   "harvested_at": "2026-11-12T23:54:00+00:00"
+  }
+ },
+ "entries": [
+  {
+   "url": "https://www.energy.gov/science/doe-explainsantimatter",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Antimatter | Department of Energy",
+   "slug_terms": [
+    "antimatter"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsartificial-intelligence",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Artificial Intelligence | Department of Energy",
+   "slug_terms": [
+    "artificial",
+    "intelligence"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsatmospheric-radiation",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Atmospheric Radiation | Department of Energy",
+   "slug_terms": [
+    "atmospheric",
+    "radiation"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsatmospheric-rivers",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Atmospheric Rivers | Department of Energy",
+   "slug_terms": [
+    "atmospheric",
+    "rivers"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbatteries",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Batteries | Department of Energy",
+   "slug_terms": [
+    "batteries"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbeta-decay",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Beta Decay | Department of Energy",
+   "slug_terms": [
+    "beta",
+    "decay"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbioenergy-research",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Bioenergy Research | Department of Energy",
+   "slug_terms": [
+    "bioenergy",
+    "research"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbiofuels",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Biofuels | Department of Energy",
+   "slug_terms": [
+    "biofuels"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbiomolecular-imaging",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Biomolecular Imaging | Department of Energy",
+   "slug_terms": [
+    "biomolecular",
+    "imaging"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsbosons-and-fermions",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Bosons and Fermions | Department of Energy",
+   "slug_terms": [
+    "bosons",
+    "and",
+    "fermions"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsburning-plasma",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Burning Plasma | Department of Energy",
+   "slug_terms": [
+    "burning",
+    "plasma"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainscarbon-sequestration",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Carbon Sequestration | Department of Energy",
+   "slug_terms": [
+    "carbon",
+    "sequestration"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainscatalysts",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Catalysts | Department of Energy",
+   "slug_terms": [
+    "catalysts"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsclouds-and-aerosols",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Clouds and Aerosols | Department of Energy",
+   "slug_terms": [
+    "clouds",
+    "and",
+    "aerosols"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainscosmic-acceleration-and-dark-energy",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Cosmic Acceleration and Dark Energy | Department of Energy",
+   "slug_terms": [
+    "cosmic",
+    "acceleration",
+    "and",
+    "dark",
+    "energy"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainscosmology",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Cosmology | Department of Energy",
+   "slug_terms": [
+    "cosmology"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainscritical-materials",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Critical Materials | Department of Energy",
+   "slug_terms": [
+    "critical",
+    "materials"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsdark-matter",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Dark Matter | Department of Energy",
+   "slug_terms": [
+    "dark",
+    "matter"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsdeuterium-tritium-fusion-fuel",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Deuterium-Tritium Fusion Fuel | Department of Energy",
+   "slug_terms": [
+    "deuterium",
+    "tritium",
+    "fusion",
+    "fuel"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsdirect-air-capture",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Direct Air Capture | Department of Energy",
+   "slug_terms": [
+    "direct",
+    "air",
+    "capture"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsearth-system-and-climate-models",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Earth System and Climate Models | Department of Energy",
+   "slug_terms": [
+    "earth",
+    "system",
+    "and",
+    "climate",
+    "models"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainselectrons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Electrons | Department of Energy",
+   "slug_terms": [
+    "electrons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsexascale-computing",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Exascale Computing | Department of Energy",
+   "slug_terms": [
+    "exascale",
+    "computing"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsfusion-energy-science",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Fusion Energy Science | Department of Energy",
+   "slug_terms": [
+    "fusion",
+    "energy",
+    "science"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsfusion-nuclear-science-and-technology",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Fusion Nuclear Science and Technology | Department of Energy",
+   "slug_terms": [
+    "fusion",
+    "nuclear",
+    "science",
+    "and",
+    "technology"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsfusion-reactions",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Fusion Reactions | Department of Energy",
+   "slug_terms": [
+    "fusion",
+    "reactions"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsgenomics",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Genomics | Department of Energy",
+   "slug_terms": [
+    "genomics"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsgravity",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Gravity | Department of Energy",
+   "slug_terms": [
+    "gravity"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainshigh-energy-density-laboratory-plasmas",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...High Energy Density Laboratory Plasmas | Department of Energy",
+   "slug_terms": [
+    "high",
+    "energy",
+    "density",
+    "laboratory",
+    "plasmas"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsisotopes",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Isotopes | Department of Energy",
+   "slug_terms": [
+    "isotopes"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainslight-sources",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Light Sources | Department of Energy",
+   "slug_terms": [
+    "light",
+    "sources"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsmachine-learning",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Machine Learning | Department of Energy",
+   "slug_terms": [
+    "machine",
+    "learning"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsmicrobiology",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Microbiology | Department of Energy",
+   "slug_terms": [
+    "microbiology"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsmulti-sector-dynamics-modeling",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Multi-Sector Dynamics Modeling | Department of Energy",
+   "slug_terms": [
+    "multi",
+    "sector",
+    "dynamics",
+    "modeling"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsmuons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Muons | Department of Energy",
+   "slug_terms": [
+    "muons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsnanoscience",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Nanoscience | Department of Energy",
+   "slug_terms": [
+    "nanoscience"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsneutrinos",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Neutrinos | Department of Energy",
+   "slug_terms": [
+    "neutrinos"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsneutron-stars",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Neutron Stars | Department of Energy",
+   "slug_terms": [
+    "neutron",
+    "stars"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsneutrons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Neutrons | Department of Energy",
+   "slug_terms": [
+    "neutrons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsnuclear-data",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Nuclear Data | Department of Energy",
+   "slug_terms": [
+    "nuclear",
+    "data"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsnuclear-fission",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Nuclear Fission | Department of Energy",
+   "slug_terms": [
+    "nuclear",
+    "fission"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsnuclei",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Nuclei | Department of Energy",
+   "slug_terms": [
+    "nuclei"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsnucleosynthesis",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Nucleosynthesis | Department of Energy",
+   "slug_terms": [
+    "nucleosynthesis"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsparticle-accelerators",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Particle Accelerators | Department of Energy",
+   "slug_terms": [
+    "particle",
+    "accelerators"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsphotons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Photons | Department of Energy",
+   "slug_terms": [
+    "photons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsplasma",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Plasma | Department of Energy",
+   "slug_terms": [
+    "plasma"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsplasma-confinement",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Plasma Confinement | Department of Energy",
+   "slug_terms": [
+    "plasma",
+    "confinement"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsprotons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Protons | Department of Energy",
+   "slug_terms": [
+    "protons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsquantum-chromodynamics",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Quantum Chromodynamics | Department of Energy",
+   "slug_terms": [
+    "quantum",
+    "chromodynamics"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsquantum-computing",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Quantum Computing | Department of Energy",
+   "slug_terms": [
+    "quantum",
+    "computing"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsquantum-mechanics",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Quantum Mechanics | Department of Energy",
+   "slug_terms": [
+    "quantum",
+    "mechanics"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsquantum-networks",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Quantum Networks | Department of Energy",
+   "slug_terms": [
+    "quantum",
+    "networks"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsquarks-and-gluons",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Quarks and Gluons | Department of Energy",
+   "slug_terms": [
+    "quarks",
+    "and",
+    "gluons"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsradioactivity",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Radioactivity | Department of Energy",
+   "slug_terms": [
+    "radioactivity"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsrelativity",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Relativity | Department of Energy",
+   "slug_terms": [
+    "relativity"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssoil",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Soil | Department of Energy",
+   "slug_terms": [
+    "soil"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssolar-fuels",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Solar Fuels | Department of Energy",
+   "slug_terms": [
+    "solar",
+    "fuels"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsspacetime",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Spacetime | Department of Energy",
+   "slug_terms": [
+    "spacetime"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsstellarators",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Stellarators | Department of Energy",
+   "slug_terms": [
+    "stellarators"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssuperconductivity",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Superconductivity | Department of Energy",
+   "slug_terms": [
+    "superconductivity"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssuperheavy-elements",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Superheavy Elements | Department of Energy",
+   "slug_terms": [
+    "superheavy",
+    "elements"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssupernovae",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Supernovae | Department of Energy",
+   "slug_terms": [
+    "supernovae"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssymmetry-physics",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Symmetry in Physics | Department of Energy",
+   "slug_terms": [
+    "symmetry",
+    "physics"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainssystems-biology",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Systems Biology | Department of Energy",
+   "slug_terms": [
+    "systems",
+    "biology"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-carbon-cycle",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...the Carbon Cycle | Department of Energy",
+   "slug_terms": [
+    "the",
+    "carbon",
+    "cycle"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-electromagnetic-force",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...The Electromagnetic Force | Department of Energy",
+   "slug_terms": [
+    "the",
+    "electromagnetic",
+    "force"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-higgs-boson",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...the Higgs Boson | Department of Energy",
+   "slug_terms": [
+    "the",
+    "higgs",
+    "boson"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-plant-microbiome",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...the Plant Microbiome | Department of Energy",
+   "slug_terms": [
+    "the",
+    "plant",
+    "microbiome"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-standard-model-particle-physics",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...the Standard Model of Particle Physics | Department of Energy",
+   "slug_terms": [
+    "the",
+    "standard",
+    "model",
+    "particle",
+    "physics"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-strong-force",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...The Strong Force | Department of Energy",
+   "slug_terms": [
+    "the",
+    "strong",
+    "force"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsthe-weak-force",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...The Weak Force | Department of Energy",
+   "slug_terms": [
+    "the",
+    "weak",
+    "force"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainstokamaks",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Tokamaks | Department of Energy",
+   "slug_terms": [
+    "tokamaks"
+   ]
+  },
+  {
+   "url": "https://www.energy.gov/science/doe-explainsultrafast-science",
+   "host": "www.energy.gov",
+   "title": "DOE Explains...Ultrafast Science | Department of Energy",
+   "slug_terms": [
+    "ultrafast",
+    "science"
+   ]
+  }
+ ],
+ "denied": [],
+ "boilerplate": {
+  "www.energy.gov": [
+   "86a7142a8bf4894cebdf7566c0e0dc0a6c35914ce34af8676f01a6c9eec3bfd9"
+  ]
+ },
+ "sha256": "5aaa25932137afa436c17a51451fd7b404e0e521ade77fe59aae3527cdfb8214"
 }
