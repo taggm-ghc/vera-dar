@@ -645,6 +645,45 @@ def _canonical_ref(url) -> str | None:
     return canonical_ref(url)
 
 
+_OH_INLINE_MAX = 2  # USFED-ROUTE-1111 plan 5.3: at most 2 catalogue candidates inline
+_OH_PREFIX = re.compile(r"^\s*(?:please\s+)?(?:(?:what|who)\s+(?:is|are|was|were|does|do)|explain|define|describe|"
+                        r"tell\s+me\s+about|give\s+me\s+an?\s+(?:overview|introduction)\s+(?:of|to))\s+", re.I)
+
+
+def _original_html_hook(question: str, cands: list) -> list:
+    """WPC-HOOK (plan A3.2, narrowed): for a definitional question, match the permitted-originals catalogue.
+    off -> returns `cands` untouched (the same list object). shadow -> logs ONE counts-only event and returns `cands`
+    untouched (answer-neutral: nothing is added to the pool). on -> returns `cands` + at most 2 matches; they are then
+    ranked and read under the existing per-prompt fresh_budget. Never raises; an error is a count-only event.
+    TODO(A3.2): the matches beyond the inline cap are not queued in this change (queue handoff)."""
+    try:
+        from vera import original_html, query_shape
+        md = original_html.mode()
+        if md == "off" or not query_shape.is_definitional(question):
+            return cands
+        subject = _OH_PREFIX.sub("", " ".join(str(question or "").split())).strip(" ?.!")
+        subject = re.sub(r"\s+mean$", "", subject, flags=re.I).strip()
+        matches = original_html.match_subject(subject)
+        if md == "shadow":
+            per_row: dict = {}
+            for m in matches:
+                hit = original_html.match_row(m.get("url"))
+                rid = str(hit[0].get("id")) if hit else "unknown"
+                per_row[f"row_{rid}"] = per_row.get(f"row_{rid}", 0) + 1
+            aa._log("original_html_match_shadow", n_matches=len(matches),
+                    subject_tokens=len(original_html._terms(subject)), **per_row)
+            return cands
+        if md == "on" and matches:
+            return list(cands) + [dict(m) for m in matches[:_OH_INLINE_MAX]]
+        return cands
+    except Exception as e:  # noqa: BLE001  never affects the Ask
+        try:
+            aa._log("original_html_match_error", error=type(e).__name__)
+        except Exception:  # noqa: BLE001
+            pass
+        return cands
+
+
 def _cand_record(c: dict) -> dict:
     """FRESH-1023 C3: one candidate's public record from what the candidate dict actually carries (None if absent)."""
     from vera import search_providers
@@ -840,6 +879,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             seeds = [h.pop("_portal_seed") for h in disc[1] if isinstance(h, dict) and "_portal_seed" in h]
             ext = arxiv_portal.extend(question, list(disc[0]) + seeds, acq, clock=clock, deadline=deadline)
             cands = merge_sources([c for c in ext if not any(c is x for x in seeds)], cands)
+        cands = _original_html_hook(question, cands)  # WPC-HOOK: off/shadow return cands unchanged (same object)
         if prefer_recent:  # FRESH-1023 C3: stable, newest first, unknown year last (ties then break toward recent)
             cands = sorted(cands, key=lambda c: (1, 0) if not isinstance(c, dict) or _cand_year(c) is None
                            else (0, -_cand_year(c)))
