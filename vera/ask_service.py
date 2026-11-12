@@ -297,7 +297,13 @@ def answer_in_scope(question: str, model: str, pricing: PricingRecord, client: O
     from vera import answer_contract as contract
 
     used_in: dict = {}
+    from vera import draft_verify as _dv  # DRAFTVERIFY-1111: every stage ships off; off => nothing below runs
+    _dv_on = _dv.any_on()
+    if _dv_on:
+        _dv.prepare(question, budget)  # optional draft hypothesis (Groq only; skips to today's pipeline on any shortfall)
     fd = _fulldoc(question, model, pricing, decision, chained, grounding, used=used_in)  # D-055; None = not configured
+    if _dv_on and isinstance(fd, AskResult):
+        _dv.after_answer(question, fd.evidence, budget)  # shadow/on: stance + gap plan, codes and counts only
     if isinstance(fd, AskResult):  # grounded in admitted passages of inspected, verified full documents
         fcfg = _fresh_cfg(acq)  # FRESH-1023: a retrieved, grounded answer is not by itself a reason to stop researching
         if fcfg is None or fd.evidence is None:
