@@ -148,7 +148,7 @@ def test_t4_generic_exception_message_never_read(caplog):
 
 
 # ---------------------------------------------------------------------------------------------------------------- T5
-@pytest.mark.parametrize("msg", ["has space", "a/b", "x" * 41, "UPPER", "", "http://h/x", "ünï"])
+@pytest.mark.parametrize("msg", ["has space", "a/b", "x" * 41, "UPPER", "", "http://h/x", "ünï", "http_429\n", "timeout\n"])
 def test_t5_off_pattern_embed_error(msg, caplog):
     assert job._reason_for(emb.EmbedError(msg)) == "embed:unknown"
     res, j, db = fail_run(RaisingEmb(emb.EmbedError(msg)), caplog)

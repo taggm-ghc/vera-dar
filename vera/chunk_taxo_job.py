@@ -129,7 +129,7 @@ def _reason_for(exc) -> str:
     try:
         if isinstance(exc, EmbedError):  # before the RuntimeError branch: EmbedError subclasses RuntimeError (L1)
             msg = str(exc)
-            return "embed:" + msg if _SAFE_CODE.match(msg) else "embed:unknown"
+            return "embed:" + msg if _SAFE_CODE.fullmatch(msg) else "embed:unknown"
         if type(exc) is RuntimeError:
             msg = str(exc)
             if msg in _RT_CODES:
