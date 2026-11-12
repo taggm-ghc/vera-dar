@@ -190,6 +190,12 @@ ADVERSARIAL = {
     "managed-for-spaces": ("managed for " + " " * 2000) * 100,
     "200k-spaces": " " * 200_000,
     "contact-commas": ("Contact: " + "a," * 80 + "\n") * 1200,
+    # verifier probes (VERIFY-GOVPD-1111): dense-punctuation bylines and padded "managed for"
+    "by-dense-punct": ("by " + ",|-–—" * 20 + "\n") * 3000,
+    "by-comma-120": ("by " + "a," * 120 + "\n") * 800,
+    "by-dash-words": ("by " + "x-" * 60 + " " + "y " * 90 + "\n") * 800,
+    "managed-padded": "managed     for     the     " * 7000,
+    "managed-padded-5": ("managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5) * 7000,
     "realistic-200kb": (_page(NEGATIVE[1]) + "\n") * 1500,
 }
 
