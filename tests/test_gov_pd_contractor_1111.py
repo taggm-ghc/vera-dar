@@ -176,10 +176,14 @@ def test_web_lane_returns_no_licence_and_records_code(mode):
 # ---- adversarial timing: contractor stage only (the shipped third-party pattern at config line ~164 is P-1111-07)
 def _contractor_time(text, cfg):
     rx = g._compiled(cfg, "contractor_patterns")
-    t0 = time.perf_counter()
-    for r in rx:
-        r.search(text)
-    return time.perf_counter() - t0
+    best = None
+    for _ in range(3):  # CPU time, best of 3: a loaded host must not fail a linear-time check
+        t0 = time.process_time()
+        for r in rx:
+            r.search(text)
+        d = time.process_time() - t0
+        best = d if best is None else min(best, d)
+    return best
 
 
 ADVERSARIAL = {
@@ -195,6 +199,9 @@ ADVERSARIAL = {
     "by-comma-120": ("by " + "a," * 120 + "\n") * 800,
     "by-dash-words": ("by " + "x-" * 60 + " " + "y " * 90 + "\n") * 800,
     "managed-padded": "managed     for     the     " * 7000,
+    "managed-padded-3": "managed   for   the   " * 9000,
+    "managed-padded-nbsp3": "managed   for   the   " * 9000,
+    "managed-padded-nbsp1": "managed for the " * 12000,
     "managed-padded-5": ("managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5) * 7000,
     "realistic-200kb": (_page(NEGATIVE[1]) + "\n") * 1500,
 }
