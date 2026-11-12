@@ -188,7 +188,7 @@ def test_t10_d7_d8_shaped_callers_and_public_fetch_rebuilt_url(monkeypatch):
     assert n.count(H, "/wiki/X") == 1
     # D1 transport: URL rebuilt from host, port and target (query dropped from the key; non-443 port kept in the URL)
     n2 = net(monkeypatch, {(f"{H}:8443", "/q"): [Resp(403)]})
-    pf.default_transport.__globals__["register_abort"] = lambda *_a, **_k: None
+    monkeypatch.setattr(pf, "register_abort", lambda *_a, **_k: None)
     r = pf.default_transport(H, PUB_IP, 8443, "/q?z=1", {"Host": f"{H}:8443"}, 5)
     assert r.status_code == 403 and ad.is_denied(urls=("https://pub.example:8443/q?z=2",))
     with pytest.raises(sf.DocumentDenied):
