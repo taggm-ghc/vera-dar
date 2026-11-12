@@ -43,7 +43,7 @@ _HEX = re.compile(r"[0-9a-f]{64}")
 _TITLE_RE = re.compile(r"[^\x00-\x1f\x7f]{1,200}")
 _TERM_RE = re.compile(r"[a-z0-9]{1,40}")
 _BAD_PATH = re.compile(r"[?#;\\]|\.\.|//|%")
-_SLUG = re.compile(r"[A-Za-z0-9-][A-Za-z0-9_.~-]*")
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")  # lower-case slug, no leading hyphen, no '.', '~' or '_' (G-C condition)
 _STOP = frozenset({"a", "an", "the", "of", "is", "are", "what", "whats", "and", "in", "to"})
 logger = logging.getLogger("vera.original_html")
 

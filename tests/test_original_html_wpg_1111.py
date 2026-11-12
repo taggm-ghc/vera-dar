@@ -112,7 +112,7 @@ def row_base(r):
 
 def row_url(r):
     """A real in-row page URL: stem + slug in one segment, or prefix + one more segment."""
-    return f"https://{r['host']}{row_base(r)}" + ("-x" if r.get("path_stems") else "/x")
+    return f"https://{r['host']}{row_base(r)}" + ("x" if r.get("path_stems") else "/x")
 
 
 # ================================================================================ step 2: route claim (per row)
@@ -134,7 +134,7 @@ def test_claim_positive_and_negative_per_row(monkeypatch, r):
                 f"https://{h}{p}/..;/..;/x", f"https://{h}{tail};jsessionid=1",  # D5: path parameters
                 f"https://{h}{p}%2fx", f"https://{h}{p}\\x", f"https://{h}//science",
                 f"https://{h}{p}-evil/x", f"https://{h}{p}X/y",  # D1: a longer first segment with more path
-                "https://fnal.gov/science/doe-explains-x", "https://www.fnal.gov" + tail):
+                "https://fnal.gov/science/doe-explainsx", "https://www.fnal.gov" + tail):
         assert not original_html.claims_url(bad), bad
 
 
@@ -147,6 +147,18 @@ def test_d1_whole_segment_boundaries_stems_and_prefixes(monkeypatch):
     assert not c("https://www.energy.gov/science/doe-explains")                       # the index page is links only
     assert not c("https://www.energy.gov/science/doe-explains-evil/x")                # deeper than one segment
     assert not c("https://www.energy.gov/science/doe-explains/neutrinos")
+    # G-C condition: the slug charset is [a-z0-9][a-z0-9-]*
+    assert c("https://www.energy.gov/science/doe-explainsquarks-and-gluons")
+    assert c("https://www.energy.gov/science/doe-explainsthe-standard-model-particle-physics")
+    for bad in ("https://www.energy.gov/science/doe-explains-evil",     # leading hyphen
+                "https://www.energy.gov/science/doe-explainsX_Y",       # upper case and underscore
+                "https://www.energy.gov/science/doe-explainsneutrinoS",  # upper case
+                "https://www.energy.gov/science/doe-explainsa_b",       # underscore
+                "https://www.energy.gov/science/doe-explainsa.b",       # dot
+                "https://www.energy.gov/science/doe-explainsa~b"):      # tilde
+        assert not c(bad), bad
+    assert original_html.path_ok({"path_stems": ["/s/doe-explains"]}, "/s/doe-explainsquarks-and-gluons")
+    assert not original_html.path_ok({"path_stems": ["/s/doe-explains"]}, "/s/doe-explains")  # the bare stem is the index
     # NASA row (prefix): the prefix itself and anything under prefix + "/"; never a longer first segment
     assert c("https://science.nasa.gov/dark-matter") and c("https://science.nasa.gov/dark-matter/x")
     assert c("https://science.nasa.gov/dark-energy") and c("https://science.nasa.gov/universe/black-holes")
@@ -206,9 +218,9 @@ def test_unsupported_basis_or_malformed_row_is_ignored(monkeypatch):
     c["rows"].append({**copy.deepcopy(ROWS[0]), "id": "x", "host": "www.loc.gov", "licence_basis": "page_declared"})
     c["rows"].append({**copy.deepcopy(ROWS[0]), "id": "y", "host": "www.nps.gov", "review": {}})
     c["rows"].append({**copy.deepcopy(ROWS[0]), "id": "z", "host": "WWW.BLS.GOV"})
-    assert not original_html.claims_url("https://www.loc.gov/science/doe-explains-x")
-    assert not original_html.claims_url("https://www.nps.gov/science/doe-explains-x")
-    assert not original_html.claims_url("https://www.bls.gov/science/doe-explains-x")
+    assert not original_html.claims_url("https://www.loc.gov/science/doe-explainsx")
+    assert not original_html.claims_url("https://www.nps.gov/science/doe-explainsx")
+    assert not original_html.claims_url("https://www.bls.gov/science/doe-explainsx")
 
 
 def test_route_registry_order_and_default(monkeypatch):
@@ -379,7 +391,7 @@ def test_same_row_redirect_inside_the_prefix_is_followed(monkeypatch):
 def test_index_and_sitemap_urls_are_untrusted(monkeypatch):
     set_mode(monkeypatch, "shadow")
     row = ROWS[0]
-    html = (b'<a href="/science/doe-explainsquarks">q</a><a href="https://evil.example.org/science/doe-explains-x">e</a>'
+    html = (b'<a href="/science/doe-explainsquarks">q</a><a href="https://evil.example.org/science/doe-explainsx">e</a>'
             b'<a href="/science/doe-explains/../../user/login">t</a><a href="/science/doe-explainsx?q=1">q</a>'
             b'<a href="http://www.energy.gov/science/doe-explainsy">h</a><a href="/science/doe-explainsquarks/">dup</a>')
     assert original_html.parse_index_links(html, "https://www.energy.gov/science/doe-explains", row) == [
@@ -454,8 +466,8 @@ def test_licence_clean_page_and_image_credit_only_are_pd_marker_pages_are_held()
         "applies"] is False
     assert pd(full(page(extra_main="<p>Operated by Example Research Alliance LLC for the U.S. Department of Energy.</p>")))[
         "applies"] is False  # contractor pattern
-    assert pd(full(page()), url="https://www.fnal.gov/science/doe-explains-x")["applies"] is False  # excluded lab
-    assert pd(full(page()), url="https://www.mass.gov/science/doe-explains-x")["applies"] is False  # state .gov
+    assert pd(full(page()), url="https://www.fnal.gov/science/doe-explainsx")["applies"] is False  # excluded lab
+    assert pd(full(page()), url="https://www.mass.gov/science/doe-explainsx")["applies"] is False  # state .gov
 
 
 @pytest.mark.parametrize("marker", ["© 2024 Example Press", "Reprinted with permission from Example News",
@@ -674,6 +686,9 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
     forged["source"]["provenance"]["acquisition"]["resolver"] = "europepmc"
     c = load(forged)
     assert len(c.acquired) == 0 and c.unusable  # neither the 1500 floor nor the federal licence branch applies
+    # the floor decides FIRST and from the resolver: a reader that took route= from item.discovered_via would pass the
+    # floor and fail later on the licence-element hold instead (a different code)
+    assert [u.get("code") for u in c.unusable] == ["R-SHORT"], c.unusable
     # the licence branch is keyed on the resolver too: a LONG page (passes the ordinary floor on any route) whose
     # acquisition record names another resolver is held for its empty JATS licence-element list, whatever its item says
     long_plan, _ = run(Web({DOE: page([PARA * 3 for _ in range(20)])}))
