@@ -34,11 +34,25 @@ def _fresh(monkeypatch):
     original_html.reset_for_tests()
 
 
+def index_snapshot(urls, harvested_at=None):
+    """A snapshot of the real shape (passes _snapshot_valid) whose entries are `urls`, harvested one day ago by default."""
+    from datetime import datetime, timedelta, timezone
+    at = harvested_at if harvested_at is not None else (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+    snap = {"version": 1, "harvested_at": at, "robots_status": {}, "script_version": "test",
+            "entries": [{"url": u, "host": u.split("/")[2], "title": "Test page", "slug_terms": ["test"]} for u in urls],
+            "denied": [], "boilerplate": {}}
+    snap["sha256"] = original_html.snapshot_digest(snap)
+    return snap
+
+
 def set_mode(monkeypatch, m="shadow", **limits):
     c = copy.deepcopy(SHIPPED)
     c["mode"] = m
     c["limits"].update(limits)
     monkeypatch.setattr(original_html, "load_config", lambda path=None: c)
+    if m == "on":  # PREON-ENFORCE-1112: mode "on" claims only published-index URLs, so these tests install an in-index snapshot
+        snap = index_snapshot([DOE, NASA])
+        monkeypatch.setattr(original_html, "load_snapshot", lambda cfg=None: snap)
     return c
 
 

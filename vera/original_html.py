@@ -181,12 +181,15 @@ def path_ok(row: dict, path: str) -> bool:
     return False
 
 
-def path_checker(row: dict):
+def path_checker(row: dict, index=None):
     """The per-hop check handed to auto_acquire._guarded_get: every hop (redirect targets included) must normalise and
-    stay on the row's exact host AND inside a row prefix or stem, by whole segments (3c)."""
+    stay on the row's exact host AND inside a row prefix or stem, by whole segments (3c). PREON-ENFORCE-1112: when
+    `index` (a frozenset of canonical URLs, mode "on" only) is given, every hop must also be a member of it."""
     def check(url: str) -> bool:
         c = normalise_url(url)
         if c is None:
+            return False
+        if index is not None and c not in index:
             return False
         sp = urlsplit(c)
         return sp.hostname == row["host"] and path_ok(row, sp.path)
@@ -259,12 +262,67 @@ def snapshot_denied(canon: str, cfg: dict | None = None) -> bool:
     return any(d.get("url") == canon for d in (s or {}).get("denied") or ())
 
 
+# ------------------------------------------------------------------------------------------------ published index (mode "on")
+# PREON-ENFORCE-1112: the `_pre_on_condition` of config/permitted_originals.json, enforced. In mode "on" the route may claim,
+# fetch and store only a URL that is a member of the harvested snapshot's entries. A missing, invalid, mislocated, stale,
+# future-dated or empty index admits nothing (fail closed). Shadow and off never call this code (behaviour unchanged).
+# UNCALIBRATED PRIOR: the 30-day default age is a conservative first value, no harvest has run yet; calibrate from the
+# first real harvest cadence (limits.index_max_age_days overrides it, int 1..365, anything else refuses).
+INDEX_MAX_AGE_DAYS = 30
+
+
+def index_urls(cfg: dict | None = None):
+    """frozenset of canonical entry URLs of the validated, fresh snapshot, or None (refuse). Never raises."""
+    try:
+        c = cfg if cfg is not None else load_config()
+        rel = str((c.get("snapshot") or {}).get("path") or "")
+        if not rel:
+            return None
+        sp = Path(rel)
+        p = sp if sp.is_absolute() else _ROOT / rel
+        root = (_ROOT / "config").resolve()
+        if root != p.resolve() and root not in p.resolve().parents:
+            return None  # Q24: the snapshot must sit inside <root>/config
+        age = (c.get("limits") or {}).get("index_max_age_days", INDEX_MAX_AGE_DAYS)
+        if isinstance(age, bool) or not isinstance(age, int) or not 1 <= age <= 365:
+            return None
+        snap = load_snapshot(c)
+        if snap is None:
+            return None
+        from datetime import datetime, timedelta
+
+        from vera import freshness as _fz
+        at = datetime.fromisoformat(str(snap.get("harvested_at") or ""))
+        if at.tzinfo is None:
+            return None
+        now = _fz.utcnow()
+        if at > now or now - at > timedelta(days=age):
+            return None
+        out = set()
+        for e in snap.get("entries") or ():
+            u = e.get("url") if isinstance(e, dict) else None
+            if isinstance(u, str) and normalise_url(u) == u:
+                out.add(u)
+        return frozenset(out)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def in_index(url, cfg: dict | None = None, index=None) -> bool:
+    """True when the normalised url is an exact member of the index (computed from cfg unless `index` is given)."""
+    canon = normalise_url(url)
+    idx = index if index is not None else index_urls(cfg)
+    return canon is not None and idx is not None and canon in idx
+
+
 # ------------------------------------------------------------------------------------------------ claim and match
 def claims_url(url, cfg: dict | None = None) -> bool:
     """True when the route would take this URL now: mode shadow or on, the validated snapshot present, and a row matches.
-    Metadata only; makes no request."""
+    In mode "on" the URL must also be in the published index. Metadata only; makes no request."""
     c = cfg if cfg is not None else load_config()
     if mode(c) == "off" or load_snapshot(c) is None:
+        return False
+    if mode(c) == "on" and not in_index(url, c):
         return False
     return match_row(url, c) is not None
 
@@ -273,10 +331,12 @@ def claims_cand(cand, cfg: dict | None = None) -> bool:
     return isinstance(cand, dict) and any(claims_url(cand.get(k), cfg) for k in ("url", "discovered_url"))
 
 
-def cand_url(cand) -> str | None:
+def cand_url(cand, cfg: dict | None = None) -> str | None:
+    c = cfg if cfg is not None else load_config()
+    idx = index_urls(c) if mode(c) == "on" else None
     for k in ("url", "discovered_url"):
-        m = match_row(cand.get(k), None) if isinstance(cand, dict) else None
-        if m:
+        m = match_row(cand.get(k), c) if isinstance(cand, dict) else None
+        if m and (mode(c) != "on" or (idx is not None and m[1] in idx)):
             return m[1]
     return None
 
@@ -431,6 +491,9 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
         raise aa._Stop(acq_config.reason(cfg, "host"))  # defensive: claims() already said no
     row, canon = m
     host = row["host"]
+    idx = index_urls(oc) if md == "on" else None
+    if md == "on" and (idx is None or canon not in idx):
+        raise aa._Stop(acq_config.reason(cfg, "host"))  # PREON-ENFORCE-1112: not in the published index, no request
     lim = oc.get("limits") or {}
     denied_code = acq_discovered.refusal_code(cfg, "access_denied")
     # 3b-ii / 3b-iii: no request for a denied document, a denied host (breaker) or a URL on the snapshot's denied list
@@ -440,7 +503,7 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
     try:
         raw, final = aa._guarded_get(canon, _fetch_cfg(cfg, row, lim), deps, int(lim.get("max_html_bytes", 2000000)),
                                      float(lim.get("fetch_timeout_s", 20)), False, clock=clock, deadline=deadline,
-                                     chain=[], route_hop=False, path_check=path_checker(row))
+                                     chain=[], route_hop=False, path_check=path_checker(row, idx))
     except aa._Stop as e:
         if str(e.code).startswith(denied_code):
             trip_host(host)  # the first denial on a host stops every request to it for this process (fail closed wider)
@@ -450,7 +513,7 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
     dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
     t = clock()
     fm = match_row(final, oc)
-    if fm is None or fm[0]["id"] != row["id"]:
+    if fm is None or fm[0]["id"] != row["id"] or (idx is not None and fm[1] not in idx):
         raise aa._Stop(acq_config.reason(cfg, "host"))
     if len(raw) > int(lim.get("max_html_bytes", 2000000)):
         raise aa._Stop(acq_config.reason(cfg, "original_oversize"))
