@@ -60,6 +60,11 @@ STORED_AND_VARIANTS = [
 @pytest.mark.parametrize("stored,variant", STORED_AND_VARIANTS)
 def test_admit_known_for_variant_spellings_no_insert(stored, variant):
     st, sqls = _store({stored})
+    assert ca.canonical_url({"url": variant}) == ca.canonical_url({"url": stored})  # same key for every spelling
+    if "arxiv.org" in stored:  # B7FIX-1112: arXiv is PORTAL (E6, OD-1110-PORTALS-ALL): refused before any lookup or SQL
+        assert st.admit(_cand(variant)) == "skipped_host_role"
+        assert sqls == [] and st.key_lookup.stored == {stored} and st.key_lookup.asked == []
+        return
     assert st.admit(_cand(variant)) == "known"
     assert not any("canonical_sources" in s for s in sqls)  # the canonical_sources INSERT never ran
 

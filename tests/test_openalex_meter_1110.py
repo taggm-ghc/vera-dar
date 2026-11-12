@@ -132,11 +132,19 @@ def r4(p):
     return p.metadata_get({"filter": "doi:https://doi.org/10.48550/arxiv.2601.00001", "select": "id,doi"}, 5.0)
 
 
-def r5(p, monkeypatch):
+INSPIRE_EMPTY = R(200, {"hits": {"hits": []}})  # INSPIRE answered and knows no journal DOI (a definitive answer)
+
+
+def r5(p, monkeypatch, inspire_answers=False):
+    """inspire_answers=True (B7FIX-1112, A7 only): INSPIRE answers with no hits, outside `sent`, so the OpenAlex
+    publishedVersion rule alone decides. Default: INSPIRE is down, and under S6-1 (list-ingest followups) "nothing
+    found" is then not definitive (lookup-unavailable)."""
     monkeypatch.setattr(sp, "shared_openalex_provider", lambda: p)
 
     def api_get(url, params, t):
         if "inspirehep" in url:
+            if inspire_answers:
+                return INSPIRE_EMPTY
             raise OSError("inspire off in this test")
         return p._transport(url, params, {}, t)
     monkeypatch.setattr(list_ingest, "_api_get", api_get)
@@ -660,20 +668,39 @@ def loc(doi, version, host="https://doi.org/"):
 def test_a7_list_ingest_takes_only_published_version(clk, monkeypatch, locations, want):
     gate(monkeypatch, "on")
     p, sent = prov(clk, lambda u, prm: R(200, {"id": "https://openalex.org/W1", "locations": locations}))
-    assert r5(p, monkeypatch) == want
+    assert r5(p, monkeypatch, inspire_answers=True) == want
     assert len(sent) == 1 and sent[0]["select"] == "doi,locations"
     assert (arxiv_portal.published_version_dois(locations)[:1] or [None])[0] == want
+    if want is None:  # B7FIX-1112: same input with INSPIRE down is not definitive (S6-1), never a silent None
+        p2, sent2 = prov(clk, lambda u, prm: R(200, {"id": "https://openalex.org/W1", "locations": locations}))
+        with pytest.raises(RuntimeError) as ei:
+            r5(p2, monkeypatch)
+        assert sp.oa_refusal_code(ei.value) is None and len(sent2) == 1
+
+
+def _a7_ingest(p, monkeypatch, inspire_answers):
+    monkeypatch.setattr(sp, "shared_openalex_provider", lambda: p)
+
+    def api_get(url, params, t):
+        if "inspirehep" in url:
+            if inspire_answers:
+                return INSPIRE_EMPTY
+            raise OSError("inspire off")
+        return p._transport(url, params, {}, t)
+    monkeypatch.setattr(list_ingest, "_api_get", api_get)
+    out = list_ingest.ingest(["arXiv:2601.00001"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
+                             start_worker=False)
+    return [x["code"] for x in out["results"]]
 
 
 def test_a7_list_ingest_no_original_code_kept(clk, monkeypatch):
     gate(monkeypatch, "on")
     p, sent = prov(clk, lambda u, prm: R(200, {"locations": [loc("10.1103/x", None)]}))
-    monkeypatch.setattr(sp, "shared_openalex_provider", lambda: p)
-    monkeypatch.setattr(list_ingest, "_api_get", lambda url, params, t: (_ for _ in ()).throw(OSError("inspire off"))
-                        if "inspirehep" in url else p._transport(url, params, {}, t))
-    out = list_ingest.ingest(["arXiv:2601.00001"], resolvers=list_ingest.Resolvers(known=lambda *a: False),
-                             start_worker=False)
-    assert [x["code"] for x in out["results"]] == ["no-route-arxiv-original-not-found"]
+    assert _a7_ingest(p, monkeypatch, inspire_answers=True) == ["no-route-arxiv-original-not-found"]
+    # B7FIX-1112: INSPIRE down + no published original is retryable (S6-1), not the terminal not-found code
+    p2, sent2 = prov(clk, lambda u, prm: R(200, {"locations": [loc("10.1103/x", None)]}))
+    assert _a7_ingest(p2, monkeypatch, inspire_answers=False) == ["lookup-unavailable"]
+    assert len(sent) == 1 and len(sent2) == 1
 
 
 def test_a7_result_codes_distinct():
