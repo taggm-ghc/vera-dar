@@ -207,3 +207,97 @@ def test_wiki_ref_portal_get_article_maps_the_refusal_to_unreachable(monkeypatch
             w.get_article("https://en.wikipedia.org/wiki/X", cfg, **args)
         assert ei.value.args[0] == "unreachable" or str(ei.value) == "unreachable"
     assert n.count("en.wikipedia.org", "/wiki/X") == 1
+
+
+JATS = "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC9/fullTextXML"
+JATS_KEY = ("www.ebi.ac.uk", "/europepmc/webservices/rest/PMC9/fullTextXML")
+
+
+def test_defect1_fulltext_endpoint_is_never_exempt_whatever_purpose_is_declared(monkeypatch):
+    from vera import api_permissions
+    n = net(monkeypatch, {JATS_KEY: [Resp(200)]})
+    ad.deny(ad.denial_ids(urls=(JATS,)))
+    with api_permissions.holding("europepmc"):
+        for purpose in ("fulltext", "metadata", None):
+            with pytest.raises(sf.DocumentDenied):
+                sf.pinned_get(JATS, api_purpose=purpose)
+        with api_permissions.purpose_scope("metadata", JATS):
+            with pytest.raises(sf.DocumentDenied):
+                sf.pinned_get(JATS)
+    assert n.count(*JATS_KEY) == 0
+
+
+def test_defect1_a_metadata_endpoint_of_the_same_api_is_still_exempt(monkeypatch):
+    from vera import api_permissions
+    s = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+    n = net(monkeypatch, {("www.ebi.ac.uk", "/europepmc/webservices/rest/search"): [Resp(403)]})
+    with api_permissions.holding("europepmc"):
+        sf.pinned_get(s, api_purpose="metadata")
+        sf.pinned_get(s, api_purpose="metadata")
+    assert n.count("www.ebi.ac.uk", "/europepmc/webservices/rest/search") == 2 and not ad.is_denied(urls=(s,))
+
+
+@pytest.mark.parametrize("variant", [
+    f"https://{H}./doc/a", f"https://{H.upper()}/doc/a", f"https://{H}/doc/%61", f"https://{H}/doc/%61#f",
+    f"https://{H}//doc/a", f"https://{H}///doc/a", f"https://{H}/doc/./a", f"https://{H}/doc/x/../a",
+    f"https://{H}:443/doc/a", f"https://{H}/doc/a?q=1",
+])
+def test_defect2_denial_key_is_normalised_at_lookup(monkeypatch, variant):
+    n = net(monkeypatch, {(H, "/doc/a"): [Resp(403)]})
+    sf.pinned_get(f"https://{H}/doc/a")
+    with pytest.raises(sf.DocumentDenied):
+        sf.pinned_get(variant)
+    assert n.count(H, "/doc/a") == 1 and sum(1 for h, _p in n.calls if h == H) == 1
+
+
+@pytest.mark.parametrize("recorded", [f"https://{H}./doc/a", f"https://{H}/doc/%61", f"https://{H}//doc/a",
+                                      f"https://{H}/doc/./a"])
+def test_defect2_denial_key_is_normalised_at_record_time(monkeypatch, recorded):
+    ad.deny(ad.denial_ids(urls=(recorded,)))
+    assert ad.is_denied(urls=(f"https://{H}/doc/a",))
+    assert not ad.is_denied(urls=(f"https://{H}/doc/b",)) and not ad.is_denied(urls=(f"https://{H}/doc/%2Fa",))
+
+
+def test_defect2_reserved_escapes_stay_distinct():
+    assert ad._id_url(f"https://{H}/a%2Fb") != ad._id_url(f"https://{H}/a/b")
+    assert ad._id_url(f"https://{H}/a%2fb") == ad._id_url(f"https://{H}/a%2Fb")
+    assert ad._id_url(f"https://{H}") == ad._id_url(f"https://{H}/")
+
+
+def test_d8_reference_portal_fetch_page_does_not_rerequest_a_403(monkeypatch):
+    import json
+    from pathlib import Path
+
+    from vera import reference_portal as rp
+    cfg = json.loads((Path(__file__).resolve().parent.parent / "config" / "reference_portals.json").read_text())
+    url = "https://en.wikipedia.org/wiki/Denied_Page"
+    n = net(monkeypatch, {("en.wikipedia.org", "/wiki/Denied_Page"): [Resp(403)]})
+    deps = rp.Deps(http_get=sf.pinned_get, url_check=lambda u: (True, ""), robots_ok=lambda u, ua: True,
+                   no_ai_input=lambda u, ua: False, tdmrep_ok=lambda u, p=None: True, crawl_ok=lambda u, ua: True,
+                   limited=lambda portal, fn: fn)
+    for _ in range(2):
+        with pytest.raises(rp.Skip) as ei:
+            rp.fetch_page(url, {"rate_portal": "wikipedia"}, cfg, deps, lambda: 0.0, None)
+        assert str(ei.value) in ("unreachable", ei.value.args[0] if ei.value.args else "unreachable")
+    assert n.count("en.wikipedia.org", "/wiki/Denied_Page") == 1
+
+
+def test_t13_real_pinned_get_doi_org_once_denied_endpoint_never(monkeypatch):
+    import time
+
+    from tests import acq_support as A
+    from vera import auto_acquire
+    n = net(monkeypatch, {("doi.org", "/10.9999/y"): [Resp(302, {"Location": "https://pub.example/a/z",
+                                                                  "Content-Type": "text/html"})],
+                          ("doi.org", "/robots.txt"): [Resp(404)], ("doi.org", "/.well-known/tdmrep.json"): [Resp(404)],
+                          ("pub.example", "/robots.txt"): [Resp(404)]})
+    ad.deny(ad.denial_ids(urls=("https://pub.example/a/z",)))
+    A.seed_access("doi.org")
+    A.seed_access("pub.example")
+    deps = A.deps([], sf.pinned_get)
+    deps.url_check = sf.is_public_url
+    with pytest.raises(auto_acquire._Stop) as e:
+        ad._b_get("https://doi.org/10.9999/y", {"doi.org", "pub.example"}, {"text/html"}, 10000, 2, deps, A.cfg(),
+                  time.monotonic, None, [])
+    assert e.value.code == "R-ACQ-ACCESS_DENIED"
+    assert n.count("doi.org", "/10.9999/y") == 1 and n.count("pub.example", "/a/z") == 0

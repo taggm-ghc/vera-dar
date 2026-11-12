@@ -227,7 +227,11 @@ def _is_document_request(url: str, purpose: str | None, api_decision) -> bool:
     if path in _ROBOTS_ENDPOINT_PATHS:
         return False
     if api_decision is not None and (purpose or api_permissions.current_purpose(url)) == "metadata":
-        return False
+        # exempt by ENDPOINT, not by the caller-declared purpose: a fulltext path of an API entry that serves
+        # fulltext (Europe PMC .../fullTextXML) is a download endpoint whatever purpose is declared
+        scope = [str(s).lower() for s in (getattr(api_decision, "conditions", None) or {}).get("content_scope") or ()]
+        if not ("fulltext" in scope and "fulltext" in path.lower()):
+            return False
     return True
 
 

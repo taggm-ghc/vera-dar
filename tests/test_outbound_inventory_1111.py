@@ -92,6 +92,13 @@ def _scan_source(src: str) -> dict:
                 add(r)
         if isinstance(n, ast.Call):
             d = _dotted(n.func)
+            if d and (d == "__import__" or d.split(".")[-1] == "import_module"):  # importlib / __import__ bypass
+                arg = n.args[0] if n.args else None
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    if any(arg.value == w or arg.value.startswith(w + ".") for w in WATCHED):
+                        add("dynamic-import:" + arg.value)
+                else:
+                    add("dynamic-import:<non-literal>")  # cannot be proven not to load a watched module
             if sock_mod and isinstance(n.func, ast.Attribute) and n.func.attr in METHODS \
                     and not (d and "()" not in d and resolve(d)):  # x.open(...) on any object; direct names are chains
                 add("<obj>." + n.func.attr)
@@ -158,6 +165,8 @@ SITES: dict = {
     ("vera/trace_eval/ui.py", "requests.get"): ("OWN", 2, "own API"),
     ("vera/ui_wake.py", "requests.get"): ("OWN", 1, "own API"),
     ("vera/ui_wake.py", "requests.post"): ("OWN", 1, "own API"),
+    # adapter module named in config/portal registry; every module under vera/ is scanned itself
+    ("vera/portal_registry.py", "dynamic-import:<non-literal>"): ("NOSOCKET", 1, "adapter existence check only"),
     # operator tool, fixed owner-chosen URL
     ("scripts/refresh_openai_pricing.py", "urllib.request.urlopen"): ("OPS", 1, "fixed pricing page"),
 }
@@ -229,6 +238,10 @@ def _probe(tmp_path, body):
     "import subprocess\nsubprocess.run(['curl', 'https://x.example/a'])\n",
     "import http.client\nc = http.client.HTTPSConnection('x.example')\n",
     "import socket\ns = socket.create_connection(('x.example', 443))\n",
+    "import importlib\nr = importlib.import_module('requests')\nr.get('https://x.example/a')\n",
+    "r = __import__('requests')\nr.get('https://x.example/a')\n",
+    "from importlib import import_module\nm = import_module('urllib.request')\n",
+    "import importlib\nr = importlib.import_module(name)\n",
 ])
 def test_t11_negative_probe_is_detected_and_unclassified(tmp_path, body):
     sites = _probe(tmp_path, body)

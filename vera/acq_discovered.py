@@ -444,10 +444,33 @@ def _hop_of(url: str, acq=None) -> str:
     return "route" if host == "www.ebi.ac.uk" else "source"
 
 
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _norm_path(path: str) -> str:
+    """DENIAL-COVERAGE-1111 defect 2: one key per document. Percent-escapes of unreserved characters are decoded
+    (other escapes keep upper-case hex), dot-segments are resolved and leading slashes collapse to one."""
+    def _unesc(m):
+        ch = chr(int(m.group(1), 16))
+        return ch if ch in _UNRESERVED else "%" + m.group(1).upper()
+    p = re.sub(r"%([0-9A-Fa-f]{2})", _unesc, path or "/")
+    out = []
+    for s in p.lstrip("/").split("/"):
+        if s == ".":
+            continue
+        if s == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(s)
+    return "/" + "/".join(out)
+
+
 def _id_url(u) -> str:
     try:
         sp = urlsplit(str(u or ""))
-        return f"url:{(sp.hostname or '').lower()}{sp.path or '/'}" if sp.hostname else ""
+        host = (sp.hostname or "").lower().rstrip(".")
+        return f"url:{host}{_norm_path(sp.path)}" if host else ""
     except ValueError:
         return ""
 
