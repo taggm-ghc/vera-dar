@@ -750,9 +750,13 @@ def ent(slug, title, terms=()):
             "slug_terms": list(terms) or slug.split("-")}
 
 
-def test_shipped_snapshot_validates_and_is_empty():
+def test_shipped_snapshot_validates_and_rows_only():
+    # USFED-WPC-1112: the shipped snapshot is now the WP-C harvest (was the empty seed); every entry must sit on a row
     s = original_html.load_snapshot(SHIPPED)
-    assert s is not None and s["entries"] == [] and s["denied"] == []
+    assert s is not None and isinstance(s["denied"], list)
+    for e in s["entries"]:
+        m = original_html.match_row(e["url"], SHIPPED)
+        assert m is not None and m[1] == e["url"] and m[0]["host"] == e["host"]
 
 
 def test_runtime_has_no_write_path_to_the_snapshot():

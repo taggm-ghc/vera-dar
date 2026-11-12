@@ -102,9 +102,9 @@ def test_max_age_override_is_honoured(monkeypatch):
     assert original_html.claims_url(DOE) is True
 
 
-def test_shipped_empty_snapshot_in_on_mode_refuses(monkeypatch):
-    c = set_mode(monkeypatch, "shadow")
-    c["mode"] = "on"  # real load_snapshot, shipped empty seed
+def test_empty_snapshot_in_on_mode_refuses(monkeypatch):
+    # USFED-WPC-1112: the shipped snapshot is now harvested, so the empty-index case uses an explicit empty snapshot
+    use(monkeypatch, index_snapshot([]))
     assert original_html.claims_url(DOE) is False
     assert code(Web({DOE: page()})) == NOTOA and direct(Web({DOE: page()})) == HOST
 
