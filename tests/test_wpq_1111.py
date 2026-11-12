@@ -141,12 +141,23 @@ def test_entity_central_tiers_keep_todays_order_for_the_entity():
     assert t[0] == 0 and t[2] == 2
 
 
-def test_part_tiers_for_parts_without_a_pair_are_unchanged():
+def test_part_tiers_for_parts_without_a_pair_are_unchanged(monkeypatch):
     texts = ["Quarks and hadrons in the standard model", "Weather of the Alps and cooking"]
     q = "what are quarks? and what is cooking?"
     parts = [("what are quarks?", ()), ("what is cooking?", ())]
-    got = sq.part_tiers(q, texts, [0, 1], parts, cfg=QT)
-    assert got == sq.part_tiers(q, texts, [0, 1], parts, cfg=QT) and 2 not in got[:1]
+    assert sq.build_query_terms(q, QT).pairs == ()  # the question itself has no eligible anchor pair here
+    on = sq.part_tiers(q, texts, [0, 1], parts, cfg=QT)
+    _oc(monkeypatch, 0)  # base behaviour (rule off)
+    base = sq.part_tiers(q, texts, [0, 1], parts, cfg=QT)
+    assert on == base and 2 not in base[:1]
+    # a part WITH a pair differs from base only by the pair weight (non-vacuous: pairs on vs off do differ)
+    t2 = ["Superstring compactifications and their phenomenology", "Climate of the Alps in summer and winter"]
+    p2 = [("What are super strings?", ()), ("what is cooking?", ())]
+    _oc(monkeypatch, 1)
+    with_pair = sq.part_tiers("What are super strings? and what is cooking?", t2 + ["Strings"], [0, 1, 0], p2, cfg=QT)
+    _oc(monkeypatch, 0)
+    no_pair = sq.part_tiers("What are super strings? and what is cooking?", t2 + ["Strings"], [0, 1, 0], p2, cfg=QT)
+    assert with_pair != no_pair
 
 
 def test_variants_round_never_emits_the_pair_components_alone():  # 24, 16 (variants round)
@@ -234,7 +245,44 @@ def test_rank_candidates_sorts_reference_entries_after_research(monkeypatch):
     assert dois[:3] == [r["doi"] for r in JHEP], dois
 
 
-def test_empty_demotion_list_leaves_the_order_unchanged(monkeypatch):  # 27
+def test_non_boolean_provider_strings_are_identical_with_pairs_on_and_off(monkeypatch):  # fix 4 (18): recorded known gap
+    """DDG, INSPIRE and the Wikipedia title adapter do not use the pair unit. DDG words come from build_query_terms and
+    are unchanged on/off; INSPIRE and Wikipedia build from wiki_ref_portal.build_query (independent of pairs), so the
+    Wikipedia redirect gap (/wiki/Super_strings, not Superstring theory) is unchanged. Gap recorded, not fixed."""
+    from vera import portal_inspire, reference_portal as rp
+    from tests.test_reference_portal_1108 import shipped
+    ddg_cfg = json.loads((ROOT / "config" / "vera_eval_run.json").read_text())["search"]["duckduckgo_lite"]
+    qq = "What are super strings?"
+
+    def snap():
+        return (sp.build_ddg_queries(qq, QT, ddg_cfg), portal_inspire._query(qq, {"max_query_terms": 8}),
+                rp.wikipedia_title_urls(qq, shipped()))
+    _oc(monkeypatch, 1)
+    on = snap()
+    _oc(monkeypatch, 0)
+    assert snap() == on
+    assert "super strings" in on[1] and on[2][0].endswith("/wiki/Super_strings")
+
+
+def test_empty_demotion_list_gives_exactly_the_base_order(monkeypatch):  # fix 5 (27)
+    from vera import acq_discovered as ad
+    cfg = A.cfg()
+    cfg["inline"]["use_discovered"] = True
+    pool = OED + JHEP
+    _oc(monkeypatch, 0, frozenset())  # base: rule off, no demotion
+    base_rank = [r[1] for r in auto_acquire.rank_candidates(Q, pool, cfg, set(), auto_acquire._fd_cfg(), lambda c: None, drops={})]
+    base_disc = [c["doi"] for c in ad.discovered_candidates(pool, cfg, question=Q)[0]]
+    _oc(monkeypatch, 0, frozenset())  # explicit empty list, same code path
+    assert [r[1] for r in auto_acquire.rank_candidates(Q, pool, cfg, set(), auto_acquire._fd_cfg(), lambda c: None, drops={})] == base_rank
+    assert [c["doi"] for c in ad.discovered_candidates(pool, cfg, question=Q)[0]] == base_disc
+    # the sort key adds nothing when the list is empty: same order as the tier-only order (stable provider order)
+    tiers = sq.relevance_tiers(sq.key_concepts(Q, pairs=True), [f"{r['title']} {r['snippet']}" for r in pool])
+    assert base_disc == [r["doi"] for _t, r in sorted(zip(tiers, pool), key=lambda x: x[0]) if _t != 2]
+    _oc(monkeypatch, 0, DEMOTE)  # non-vacuous: a non-empty list does change the order
+    assert [c["doi"] for c in ad.discovered_candidates(pool, cfg, question=Q)[0]] != base_disc
+
+
+def test_nonempty_demotion_list_changes_rank_candidates_order(monkeypatch):
     _oc(monkeypatch, 1, frozenset())
     acq = A.cfg()
     a = [r[1] for r in auto_acquire.rank_candidates(Q, OED + JHEP, acq, set(), auto_acquire._fd_cfg(), lambda c: None, drops={})]
