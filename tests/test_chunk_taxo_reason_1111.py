@@ -106,7 +106,7 @@ def test_t1_embed_http_429_reason_phase_rows_span(caplog):
 
 
 # ---------------------------------------------------------------------------------------------------------------- T2
-@pytest.mark.parametrize("code", ["http_429", "bad_response", "dim_mismatch", "request_failed", "send_not_allowed",
+@pytest.mark.parametrize("code", ["http_429", "dim_mismatch", "request_failed", "send_not_allowed",
                                   "credentials_missing", "response_too_large", "timeout", "model_unknown"])
 def test_t2_each_embed_code(code, caplog):
     res, j, db = fail_run(RaisingEmb(emb.EmbedError(code)), caplog)
@@ -157,7 +157,7 @@ def test_t5_off_pattern_embed_error(msg, caplog):
 
 # ---------------------------------------------------------------------------------------------------------------- T6
 def test_t6_span_text_never_in_reasons_metrics_logs(caplog):
-    res, j, db = fail_run(RaisingEmb(emb.EmbedError("bad_response")), caplog)
+    res, j, db = fail_run(RaisingEmb(emb.EmbedError("http_429")), caplog)
     reasons, metrics = stored(db)
     assert SENTINEL_TEXT not in everything(db, j, caplog)
     assert all(isinstance(v, int) and not isinstance(v, bool) for v in metrics.values())
@@ -283,18 +283,18 @@ def test_t11_lookalikes(caplog):
 # --------------------------------------------------------------------------------------------------------------- T12
 def test_t12_batch_shape_metrics(caplog):
     long_txt = "é" * 3 + "ß" + "x" * 20 + "ZZNONASCIIMARK"
-    sp = [(1, 100, "   \t"), (2, 101, long_txt)]
+    sp = [(1, 100, " x\t"), (2, 101, long_txt)]  # ROBUST-1111: was blank "   \t", now filtered before batching
     db = RecDB(sp)
-    res, j, db = fail_run(RaisingEmb(emb.EmbedError("http_400")), caplog, db=db)
+    res, j, db = fail_run(RaisingEmb(emb.EmbedError("http_401")), caplog, db=db)
     reasons, m = stored(db)
-    assert reasons == ["embed:http_400"]
-    assert m["fail_batch_n"] == 2 and m["fail_min_chars"] == 0 and m["fail_max_chars"] == len(long_txt)
-    assert m["fail_total_chars"] == 4 + len(long_txt) and m["fail_nonascii_chars"] == 4 and m["fail_span_id"] == 1
+    assert reasons == ["embed:http_401"]
+    assert m["fail_batch_n"] == 2 and m["fail_min_chars"] == 1 and m["fail_max_chars"] == len(long_txt)
+    assert m["fail_total_chars"] == 3 + len(long_txt) and m["fail_nonascii_chars"] == 4 and m["fail_span_id"] == 1
     assert all(isinstance(v, int) and not isinstance(v, bool) for v in m.values()) and set(m) <= INT_KEYS
     blob = everything(db, j, caplog)
     assert "ZZNONASCIIMARK" not in blob and "é" not in blob and "ß" not in blob
     # reset after a committed batch: the second batch's shape is reported, not the first's
-    res, j, db = fail_run(RaisingEmb(emb.EmbedError("http_400"), ok_calls=1), caplog, embed_batch=3)
+    res, j, db = fail_run(RaisingEmb(emb.EmbedError("http_401"), ok_calls=1), caplog, embed_batch=3)
     _, m = stored(db)
     assert m["fail_span_id"] == 4 and m["fail_batch_n"] == 3
     # a later failure outside _do_scan stores no batch shape and no span id
@@ -339,12 +339,12 @@ def test_t13_transport_codes_real_embedder():
 
 
 def test_t13_run_row_metrics_carry_transport_ints(caplog):
-    e = cf(Opener(http_err(400)))
+    e = cf(Opener(http_err(401)))
     res, j, db = fail_run(e, caplog)
     reasons, m = stored(db)
-    assert reasons == ["embed:http_400"] and m["last_http_status"] == 400 and m["attempts"] == 1 and m["fail_span_id"] == 1
+    assert reasons == ["embed:http_401"] and m["last_http_status"] == 401 and m["attempts"] == 1 and m["fail_span_id"] == 1
     msg = fail_records(caplog)[-1].getMessage()
-    assert "last_http_status=400" in msg and "attempts=1" in msg
+    assert "last_http_status=401" in msg and "attempts=1" in msg
     e = cf(Opener(*[TimeoutError("t") for _ in range(4)]))
     res, j, db = fail_run(e, caplog)
     reasons, m = stored(db)

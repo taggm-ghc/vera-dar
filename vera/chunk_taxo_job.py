@@ -40,12 +40,17 @@ JOB_DEFAULTS = {
     "interval_s": 3600, "initial_delay_s": 600, "step_delay_s": 2, "page_size": 500, "tick_row_cap": 2000,
     "statement_timeout_ms": 30000, "lock_timeout_ms": 5000, "connect_timeout_s": 5, "text_chars": 8000,
     "embed_batch": 32, "max_rows": 100000, "max_seconds": 3000, "rss_soft_mb": 380, "rss_hard_mb": 420,
+    # TAXO-ROBUST-1111: safety bounds, not decision thresholds (calibrate from the first live run's fail_total_chars / bisect metrics)
+    "embed_batch_chars": 48000, "quarantine_max": 50, "quarantine_max_consecutive": 4,
 }
 _BOUNDS = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay_s": (0, 3600), "page_size": (1, 5000),
            "tick_row_cap": (1, 100000), "statement_timeout_ms": (100, 600000), "lock_timeout_ms": (100, 600000),
            "connect_timeout_s": (1, 120), "text_chars": (50, 20000),
            "embed_batch": (1, 512), "max_rows": (1, 10**7), "max_seconds": (1, 86400), "rss_soft_mb": (1, 10**6),
-           "rss_hard_mb": (1, 10**6)}
+           "rss_hard_mb": (1, 10**6), "embed_batch_chars": (1000, 10**6), "quarantine_max": (1, 10000),
+           "quarantine_max_consecutive": (1, 1000)}
+# TAXO-ROBUST-1111 E5: per-input failures that bisection may quarantine, with the int stored for each (0 = bad_response).
+_QUARANTINABLE = {"http_400": 400, "http_413": 413, "http_422": 422, "bad_response": 0}
 _ABBR = {"domain": "d", "topic": "t", "subtopic": "s"}
 _WORKING = ("scan", "build", "w_nodes", "w_links", "w_votes", "w_retire", "finish")
 TERMINAL = ("idle", "stopped")
@@ -113,7 +118,8 @@ def _numeric_only(x, depth=0):
 
 
 _SAFE_CODE = re.compile(r"^[a-z0-9_]{1,40}$")
-_RT_CODES = frozenset({"embed_count_mismatch", "dim_mismatch", "bad_phase", "node_not_active"})
+_RT_CODES = frozenset({"embed_count_mismatch", "dim_mismatch", "bad_phase", "node_not_active",
+                       "quarantine_cap_consecutive", "quarantine_cap_total"})
 
 
 def _cut_token(x) -> str:
@@ -218,6 +224,10 @@ class Job:
         self.cap = int(_num(self.jcfg, "tick_row_cap"))
         self.chars = int(_num(self.jcfg, "text_chars"))
         self.batch = int(_num(self.jcfg, "embed_batch"))
+        self.batch_chars = int(_num(self.jcfg, "embed_batch_chars"))
+        self.q_max = int(_num(self.jcfg, "quarantine_max"))
+        self.q_max_consec = int(_num(self.jcfg, "quarantine_max_consecutive"))
+        self._quarantine: dict = {}  # span_id -> (sha256 of text, code); in process only, kept across passes (E6)
         self.max_rows = int(_num(self.jcfg, "max_rows"))
         self.max_seconds = float(_num(self.jcfg, "max_seconds"))
         self.rss_soft = float(_num(self.jcfg, "rss_soft_mb"))
@@ -292,6 +302,7 @@ class Job:
                 except Exception as exc:  # noqa: BLE001
                     reason = _reason_for(exc)
                     info = self._fail_info()  # before the buffers and the engine are dropped
+                    info.update(self._robust_info())
                     self._close_run("failed", reason=reason, extra=info)
                     self._release_buffers()
                     self._drop_engine()
@@ -301,7 +312,7 @@ class Job:
             if self._inert:
                 self._record_inert(self._inert)  # after the probe connection is closed (pool of one)
             if self._run_id is not None:
-                self._close_run("deferred")
+                self._close_run("deferred", extra=self._robust_info())
             self._release_buffers()  # early stop or end of pass: no chunk or vector buffer survives it
             self._drop_engine()
             self._release_embedder()
@@ -345,6 +356,76 @@ class Job:
         except Exception:  # noqa: BLE001
             pass
         return out
+
+    def _robust_info(self) -> dict:
+        """TAXO-ROBUST-1111 E6: ints only (no text, sha or message). Empty when nothing was quarantined, skipped or bisected, so a
+        clean pass stores what it stored before. Never raises."""
+        try:
+            if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive):
+                return {}
+            q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
+            return {"quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
+                    "vectors_missing": int(self.vectors_missing), "q_consecutive": int(self._consecutive),
+                    "q_last_status": int(self._q_last), "bisect_requests": int(self.bisect_requests),
+                    "bisect_failed_chars": int(self.bisect_failed_chars), "q": q}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    @staticmethod
+    def _batch_shape(part) -> dict:
+        return {"fail_batch_n": len(part), "fail_min_chars": min(len(r[2].strip()) for r in part),
+                "fail_max_chars": max(len(r[2]) for r in part), "fail_total_chars": sum(len(r[2]) for r in part),
+                "fail_nonascii_chars": sum(1 for r in part for ch in r[2] if ord(ch) > 127)}
+
+    def _refresh_neurons(self) -> None:
+        st = getattr(self._emb, "stats_run", None)
+        if isinstance(st, dict):
+            self._pass_neurons = float(st.get("neurons", 0.0))
+
+    def _embed_isolating(self, part, shas) -> dict:
+        """E5: embed `part`; on a quarantinable per-input failure bisect, quarantining single spans. Returns span_id -> vector for
+        the spans that embedded. Caps raise a plain RuntimeError with a fixed code. _pass_neurons is refreshed even on a raise."""
+        out: dict = {}
+        try:
+            self._bisect(part, shas, out, top=True)
+        finally:
+            self._refresh_neurons()
+        return out
+
+    def _bisect(self, part, shas, out, top=False) -> None:
+        self._fail_span, self._fail_batch = part[0][0], self._batch_shape(part)
+        if not top:
+            self.bisect_requests += 1
+        try:
+            vecs = self._emb.embed([r[2] for r in part])
+        except EmbedError as exc:
+            code = str(exc)
+            if code not in _QUARANTINABLE:
+                raise
+            self.bisect_failed_chars += sum(len(r[2]) for r in part)
+            if len(part) > 1:
+                mid = len(part) // 2
+                self._bisect(part[:mid], shas, out)
+                self._bisect(part[mid:], shas, out)
+                return
+            sid = part[0][0]
+            self._consecutive += 1
+            self._q_last = _QUARANTINABLE[code]
+            if self._consecutive >= self.q_max_consec:
+                for s in self._streak:  # not shown to be per-input faults: release them
+                    self._quarantine.pop(s, None)
+                self._streak = []
+                raise RuntimeError("quarantine_cap_consecutive") from None
+            if len(self._quarantine) >= self.q_max:
+                raise RuntimeError("quarantine_cap_total") from None
+            self._quarantine[sid] = (shas[sid], code)
+            self._streak.append(sid)
+            return
+        if len(vecs) != len(part):
+            raise RuntimeError("embed_count_mismatch")
+        self._consecutive, self._streak = 0, []
+        for r, v in zip(part, vecs):
+            out[r[0]] = v
 
     def _log_failure(self, reason: str, info) -> None:
         """One log line, ints and closed tokens only (L4: no exc_info, no stack_info, no log.exception). Never raises."""
@@ -478,6 +559,9 @@ class Job:
         self._pass_neurons = 0.0
         self.metrics_run = {}
         self._retry_in = None
+        self.skipped_empty, self.vectors_missing = 0, 0  # TAXO-ROBUST-1111: per pass
+        self.bisect_requests, self.bisect_failed_chars = 0, 0
+        self._consecutive, self._streak, self._q_last = 0, [], 0
 
     def _step(self):
         ph = self._phase
@@ -542,7 +626,20 @@ class Job:
                 rows = store.fetch_spans(conn, self._cursor, lim, self.chars)
                 have = store.fetch_vectors(conn, [r[0] for r in rows])
             shas = {r[0]: hashlib.sha256(r[2].encode("utf-8")).hexdigest() for r in rows}
-            todo = [r for r in rows if not (r[0] in have and have[r[0]][0] == model_name and have[r[0]][1] == shas[r[0]])]
+            cur = {sid for sid, h in have.items() if h[0] == model_name and h[1] == shas.get(sid)}
+            todo = []
+            for r in rows:
+                if r[0] in cur:
+                    continue
+                if r[2].strip() == "":  # E3: an empty or whitespace span is never sent (free, deterministic on every pass)
+                    self.skipped_empty += 1
+                    continue
+                qd = self._quarantine.get(r[0])
+                if qd is not None:
+                    if qd[0] == shas[r[0]]:
+                        continue  # quarantined and unchanged
+                    del self._quarantine[r[0]]  # text changed: retry
+                todo.append(r)
             fresh = {}
             i = 0
             while i < len(todo):
@@ -554,36 +651,42 @@ class Job:
                 rss = self._read_rss()
                 if rss > self.rss_soft and self.batch > 1:
                     self.batch = max(1, self.batch // 2)
-                part = todo[i:i + min(self.batch, self.max_rows - self.rows_embedded)]
+                # E4: count ceiling (embed_batch, the embedder's batch_limit, rows left), then a character budget (one oversize row goes alone)
+                cnt = min(self.batch, self.max_rows - self.rows_embedded)
+                bl = getattr(self._emb, "batch_limit", None)
+                if isinstance(bl, int) and not isinstance(bl, bool) and bl > 0:
+                    cnt = min(cnt, bl)
+                part, tot = [], 0
+                for r in todo[i:i + cnt]:
+                    if part and tot + len(r[2]) > self.batch_chars:
+                        break
+                    part.append(r)
+                    tot += len(r[2])
                 if hasattr(self._emb, "set_day_used"):  # the day's neurons from the DB (survives a restart), not process memory
                     with self._engine().connect() as conn:
                         self._emb.set_day_used(store.neurons_today(conn))
-                self._fail_span = part[0][0]  # TAXO-REASON-1111: the first span of the batch about to be embedded
-                self._fail_batch = {"fail_batch_n": len(part), "fail_min_chars": min(len(r[2].strip()) for r in part),
-                                    "fail_max_chars": max(len(r[2]) for r in part),
-                                    "fail_total_chars": sum(len(r[2]) for r in part),
-                                    "fail_nonascii_chars": sum(1 for r in part for ch in r[2] if ord(ch) > 127)}
-                vecs = self._emb.embed([r[2] for r in part])
-                if len(vecs) != len(part):
-                    raise RuntimeError("embed_count_mismatch")
-                recs = [{"span_id": r[0], "model": model_name, "dim": len(v), "sha": shas[r[0]], "vec": [float(x) for x in v]}
-                        for r, v in zip(part, vecs)]
+                got = self._embed_isolating(part, shas)  # sets _fail_span/_fail_batch to the sub-batch that failed
+                recs = [{"span_id": r[0], "model": model_name, "dim": len(got[r[0]]), "sha": shas[r[0]],
+                         "vec": [float(x) for x in got[r[0]]]} for r in part if r[0] in got]
                 with self._engine().begin() as conn:
-                    store.run_sql(conn, "vectors_upsert", recs)
-                    self._pass_neurons = float((getattr(self._emb, "stats_run", None) or {}).get("neurons", 0.0))
+                    if recs:
+                        store.run_sql(conn, "vectors_upsert", recs)
+                    self._refresh_neurons()
                     if self._run_id is not None:
                         store.run_sql(conn, "job_run_neurons", {"run_id": self._run_id, "neurons": _ceil_int(self._pass_neurons)})
                 for rec in recs:
                     fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
-                del recs, vecs
-                self.rows_embedded += len(part)
+                self.rows_embedded += len(recs)
+                del recs, got
                 self._fail_span, self._fail_batch = None, None
                 i += len(part)
                 self._read_rss()
-            if rows:  # one float32 block per page; the whole set is joined once at build (never a list of float lists)
-                first = fresh[rows[0][0]] if rows[0][0] in fresh else have[rows[0][0]][2]
-                blk = np.zeros((len(rows), len(first)), dtype=np.float32)
-                for k, (sid, src, txt) in enumerate(rows):
+            kept = [r for r in rows if r[0] in fresh or r[0] in cur]  # E7: rows with a vector this pass
+            self.vectors_missing += len(rows) - len(kept)
+            if kept:  # one float32 block per page; the whole set is joined once at build (never a list of float lists)
+                first = fresh[kept[0][0]] if kept[0][0] in fresh else have[kept[0][0]][2]
+                blk = np.zeros((len(kept), len(first)), dtype=np.float32)
+                for k, (sid, src, txt) in enumerate(kept):
                     self._chunks.append({"span_id": sid, "source_id": src, "text": txt})
                     v = fresh[sid] if sid in fresh else have[sid][2]
                     self._dims.add(len(v))
@@ -897,6 +1000,7 @@ class Job:
         elapsed = max(1e-6, self._wall() - self._t0)
         self.metrics_run = {"rows_embedded": self.rows_embedded, "seconds": round(elapsed, 3),
                             "rows_per_s": round(self.rows_embedded / elapsed, 4), "peak_rss_mb": round(self.peak_rss, 1)}
+        self.metrics_run.update(_numeric_only(self._robust_info()) or {})
         metrics = dict(_numeric_only(pend.metrics) or {})
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}

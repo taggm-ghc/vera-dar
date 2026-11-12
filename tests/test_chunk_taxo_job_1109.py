@@ -610,7 +610,7 @@ def test_cf_success_request_shape_dim_detected_and_secrets_not_logged(caplog):
     out = e.embed(["a", "b"])
     r = op.reqs[0]
     assert r.full_url == "https://api.cloudflare.com/client/v4/accounts/acct123/ai/run/@cf/baai/bge-m3" and r.get_method() == "POST"
-    assert r.get_header("Authorization") == "Bearer TOKEN-SENTINEL_TEXT-VALUE" and json.loads(r.data) == {"text": ["a", "b"]}
+    assert r.get_header("Authorization") == "Bearer TOKEN-SENTINEL_TEXT-VALUE" and json.loads(r.data) == {"text": ["a", "b"], "truncate_inputs": True}
     assert len(out) == 2 and e.dim == 5
     assert abs(e.stats()["neurons_today"] - 2000 / 1e6 * 1075) < 1e-6  # usage field preferred
     assert "TOKEN-SENTINEL_TEXT" not in caplog.text and "acct123" not in caplog.text

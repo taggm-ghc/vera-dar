@@ -39,7 +39,12 @@ MODELS = {
 DEFAULTS = {"model": "bge-m3", "send_allowed": True, "daily_neuron_budget": 8000, "chars_per_token": 3.0, "max_attempts": 4,
             "backoff_base_s": 1.0, "max_wait_s": 60.0, "timeout_s": 30,
             "max_response_bytes": 8_000_000,
+            "truncate_inputs": True,  # TAXO-ROBUST-1111 E1: ask the endpoint to truncate an over-long input instead of rejecting it
             "reserve_neurons": 0}  # HYBRID-1109: the job stops at daily_neuron_budget - reserve_neurons (ask-time share)  # 8 MB: ~64 vectors x 1024 floats is ~1 MB of JSON; generous but bounded
+# TAXO-ROBUST-1111 E1b: a failed 400/413/422 call is charged at its pre-call estimate (provider billing of failed calls is not
+# documented; live check L2 decides whether to set this False).
+CHARGE_FAILED_4XX = True
+_CHARGED_FAIL_CODES = frozenset({"http_400", "http_413", "http_422"})
 _REGISTRY: dict[str, Callable[[dict], object]] = {}
 _BUDGET = {"day": None, "neurons": 0.0, "requests": 0}  # per UTC day, process-wide (a new adapter instance keeps the day's count)
 _BLOCK = threading.Lock()
@@ -166,7 +171,10 @@ class CloudflareEmbedder:
         token = (self.env.get(ENV_TOKEN) or "").strip()
         if not token:
             raise EmbedError("credentials_missing")
-        body = json.dumps({"text": texts}).encode("utf-8")
+        payload: dict = {"text": texts}
+        if self.cfg.get("truncate_inputs") is True:
+            payload["truncate_inputs"] = True
+        body = json.dumps(payload).encode("utf-8")
         for attempt in range(int(self.cfg["max_attempts"])):
             req = urllib.request.Request(url, data=body, method="POST",
                                          headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
@@ -225,7 +233,12 @@ class CloudflareEmbedder:
             est_tokens = sum(len(p) for p in chunk) / float(self.cfg["chars_per_token"])
             est = est_tokens / 1e6 * float(self.mcfg["neurons_per_m"])
             self._charge_check(est)
-            resp = self._post(chunk)
+            try:
+                resp = self._post(chunk)
+            except EmbedError as exc:
+                if CHARGE_FAILED_4XX and str(exc) in _CHARGED_FAIL_CODES:
+                    self._charge(est)  # worst case: the provider may bill a rejected call
+                raise
             res = resp.get("result") if isinstance(resp, dict) else None
             data = res.get("data") if isinstance(res, dict) else None
             if not isinstance(data, list) or len(data) != len(chunk) or resp.get("success") is False:
