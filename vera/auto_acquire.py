@@ -750,8 +750,10 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 # API-ALLOW-1107 r2 (3): the gated transport checks the entry's content scope for this purpose
                 purpose = {"api_purpose": "metadata" if want_json else "fulltext"} if getattr(
                     deps.http_get, "api_gated", False) else {}
-                resp = deps.http_get(current, headers=hdrs, timeout=timeout_s,
-                                     allow_redirects=False, stream=True, **purpose)
+                with rate_limit.wait_tally() as lw:  # EPMC-CLOCK-1112: the limiter's wait for this request's slot
+                    resp = deps.http_get(current, headers=hdrs, timeout=timeout_s,
+                                         allow_redirects=False, stream=True, **purpose)
+                end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
             except rate_limit.RateLimited as e:  # RATE-1022 B2: skipped, nothing sent; never recorded as unreachable
                 raise _Stop(acq_config.rate_limited_code(cfg, e.reason)) from None  # F1: per-reason code
             except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent; a refusal, not a retry-later skip
