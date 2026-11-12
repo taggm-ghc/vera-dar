@@ -25,6 +25,10 @@ def _oc(monkeypatch, n=1, demote=frozenset()):
 def _pairs_on(monkeypatch):
     """The shipped default is max_pairs = 0 (rule off, owner decision (b)); these tests turn it on explicitly."""
     monkeypatch.setattr(sq, "open_compound_max_pairs", lambda: 1)
+    # WPQ-CYCLE2-1111: these cycle-1 tests exercise the pair RULE; attestation (c2/c3) is covered by
+    # tests/test_open_compound_attest.py. Every candidate is treated as attested here, as in cycle 1. The 4.2 junk guard
+    # (generic scholarly terms, 6-24 letters) still applies and flips the cases noted in the assertions below.
+    monkeypatch.setattr(sq, "_attested", lambda a, b: True)
 
 
 def _all(q):
@@ -75,8 +79,10 @@ def test_pair_concept_matches_open_hyphenated_and_closed_titles():
 
 
 def test_component_only_record_is_weak_not_dropped_22():
-    kc = sq.key_concepts("climate change effects", QT, pairs=True)
-    t = sq.relevance_tiers(kc, ["Climate and weather of the Alps in summer", "Climate change effects on crop yields", "Quantum dots in photonic crystal devices"])
+    # WPQ-CYCLE2-1111: was "climate change effects"; "change" is a generic scholarly term, so the 4.2 junk guard no longer
+    # pairs it (guarded pair covered in test_open_compound_attest.py). Same shape with a pair the guard allows.
+    kc = sq.key_concepts("nano particles effects", QT, pairs=True)
+    t = sq.relevance_tiers(kc, ["Nano materials and weather of the Alps in summer", "Nano particles effects on crop yields", "Quantum dots in photonic crystal devices"])
     assert t == [1, 0, 2]
 
 
@@ -85,7 +91,7 @@ def test_without_pairs_flag_key_concepts_is_unchanged():
 
 
 # --- 4, 5, 6: lookalikes and no-pair questions
-@pytest.mark.parametrize("q,phrase", [("post office strings", "post office"), ("data base design", "data base"),
+@pytest.mark.parametrize("q,phrase", [("post office strings", "post office"), ("web site design", "web site"),  # was "data base design": "data" is generic, the 4.2 guard (G-10)
                                       ("super market prices", "super market"), ("life style changes", "life style"),
                                       ("super string quartet", "super string")])
 def test_lookalikes_keep_the_open_phrase_and_the_component_words(q, phrase):

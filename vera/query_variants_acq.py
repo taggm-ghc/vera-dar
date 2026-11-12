@@ -158,7 +158,8 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
     if anchor:
         add(_q(anchor))
     for c in sorted(kc, key=lambda c: (-w.get(c, 1), kc.index(c)))[:mt]:
-        add(search_query.pair_unit(c.split("-")) if tuple(c.split("-")) in qt.pairs else c)
+        add(search_query.pair_unit(next(p for p in qt.pairs if tuple(p) == tuple(c.split("-"))))
+            if tuple(c.split("-")) in qt.pairs else c)
     # (d) practitioner seed list: the entity-central terms (anchor run, else the first two base terms) + one seed
     head = anchor[:2] or base[:2]
     if is_news_route(question):  # F1-QUERY-1106: the news seed head is the event phrase ("midterm elections")
