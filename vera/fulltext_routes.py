@@ -81,11 +81,30 @@ def _europepmc_routable(c: dict, cfg: dict) -> bool:
     return bool(oa.get("epmc_ft") or _pmcid(c) or oa.get("is_oa") is True or oa.get("has_oa_location") is True)
 
 
+# ------------------------------------------------------------------------------------------------ permitted originals
+def _original_claims(cand: dict, cfg: dict) -> bool:
+    """ALLDOMAINS-WPG-IMPL-1111: a candidate with no DOI/PMCID whose normalised URL is in a config/permitted_originals.json
+    row (exact host + path prefix) while the route mode is shadow or on. Metadata only."""
+    from vera import original_html
+    from vera.auto_acquire import _doi, _pmcid
+    return not _doi(cand) and not _pmcid(cand) and original_html.claims_cand(cand)
+
+
+def _original_evaluate(*args):
+    from vera import original_html
+    return original_html.evaluate(*args)
+
+
+def _original_routable(c: dict, cfg: dict) -> bool:
+    return _original_claims(c, cfg)
+
+
 ARXIV = FulltextRoute("arxiv", None, _arxiv_prepare, _arxiv_claims, _arxiv_evaluate, _arxiv_routable)
+ORIGINAL_HTML = FulltextRoute("original_html", None, _same, _original_claims, _original_evaluate, _original_routable)
 EUROPEPMC = FulltextRoute("europepmc", "europepmc_rest", _same, _always, _europepmc_evaluate, _europepmc_routable)
 
-ROUTES: tuple = (ARXIV, EUROPEPMC)  # dispatch order; the last route is the default and claims everything
-ROUTABLE_ORDER: tuple = (EUROPEPMC, ARXIV)  # routable_fulltext's historical check order (short-circuit)
+ROUTES: tuple = (ARXIV, ORIGINAL_HTML, EUROPEPMC)  # dispatch order; the last route is the default and claims everything
+ROUTABLE_ORDER: tuple = (EUROPEPMC, ARXIV, ORIGINAL_HTML) # routable_fulltext's historical check order (short-circuit)
 
 
 def by_name(name: str) -> FulltextRoute | None:

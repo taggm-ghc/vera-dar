@@ -1,0 +1,11 @@
+{
+  "_doc": "ALLDOMAINS-WPG-IMPL-1111: vendored catalogue snapshot for the ORIGINAL_HTML route (config/permitted_originals.json). EMPTY until the refresh script (WP-C) has run: it holds no harvested entry, no denied URL and no boilerplate set yet. Runtime code reads it and never writes it (vera/original_html.py has no write path; a test scans the source). The route claims nothing while this file is missing or fails validation (fail closed). Recorded divergence from feedback_no_hardcoded_data: work/USFED-ROUTE-1111/PLAN.md pass 2 ruling (4 conditions); later DB home: table permitted_catalogue, owner-gated DDL, not on the critical path.",
+  "version": 1,
+  "harvested_at": "",
+  "script_version": "none (empty seed; no harvest has run)",
+  "robots_status": {},
+  "entries": [],
+  "denied": [],
+  "boilerplate": {},
+  "sha256": "4203d5e19177d50bf6aee443c51576ce04ed0a850c20922e408da97ee2f1c817"
+}

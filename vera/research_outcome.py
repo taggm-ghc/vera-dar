@@ -79,6 +79,10 @@ _CODE_MAP: dict[str, str] = {
     "R-LIC-MISMATCH": "licence_rejected",
     "R-ACQ-ARXIV_LICENCE_HOLD": "licence_rejected",  # ARX-A2 (INTEG-1023): arXiv default/unknown licence held
     "R-ACQ-ARXIV_HTML_POLICY": "licence_rejected",  # ARX-A2 (INTEG-1023): refused at the current gate (D-ARX-1 pending)
+    # ALLDOMAINS-WPG-IMPL-1111: the permitted-original HTML route (config/permitted_originals.json)
+    "R-ACQ-ORIGINAL_NOT_PD": "licence_rejected", "R-ACQ-ORIGINAL_NO_BODY": "extraction_failed",
+    "R-ACQ-ORIGINAL_OVERSIZE": "extraction_failed", "R-ACQ-ORIGINAL_THIN": "extraction_failed",
+    "R-ACQ-ORIGINAL_SHADOW": "no_route",  # shadow / store-off row: the page was checked, nothing was stored
     # provenance / identity / integrity
     "R-ACQ-IDENTITY_MISMATCH": "provenance_rejected",
     "R-ACQ-DUPLICATE": "duplicate",

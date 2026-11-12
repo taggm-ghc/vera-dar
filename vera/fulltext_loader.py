@@ -431,7 +431,11 @@ def check_text_record(item: dict, text: str, meta: dict, cfg: dict, *, arxiv_evi
     conversion record, body/length checks and the licence gate. Returns the licence record. Raises Refused.
     Shared by prepare() and vera.fulldoc_db (R3: the DB path re-applies the same filters, never ingest-time judgement)."""
     check_declared_kind(meta, cfg, "conversion record")
-    check_content(text, meta, cfg)
+    ccfg = cfg
+    if item.get("discovered_via") == "original_html":  # ALLDOMAINS-WPG-IMPL-1111: the route's own body-length floors
+        from vera import original_html
+        ccfg = original_html.relaxed_ingest_cfg(cfg)
+    check_content(text, meta, ccfg)
     check_injection(item, text, cfg)
     return check_licence(item, meta, cfg, arxiv_evidence=arxiv_evidence)
 

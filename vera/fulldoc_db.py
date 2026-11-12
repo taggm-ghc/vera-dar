@@ -834,7 +834,14 @@ class _AcqBuilder:
                     elements = (provs[did].get("meta") or {}).get("jats_licences")
                     if not isinstance(elements, list):
                         raise fulltext_loader.Refused(R_DBROW, "acquired row has no licence-element record")
-                    auto_acquire.licence_elements_decision(elements, lic, self.ingest_cfg)
+                    if (provs[did].get("item") or {}).get("discovered_via") == "original_html":
+                        # ALLDOMAINS-WPG-IMPL-1111: a US-federal page has no JATS licence element; the declared licence
+                        # must be exactly the owner-approved federal one and the element list empty (anything else holds)
+                        if elements or lic != "LicenseRef-us-government-work":
+                            raise fulltext_loader.Refused(self.ingest_cfg["reason_codes"]["licence_hold"],
+                                                          "original_html row with an unexpected licence record: held")
+                    else:
+                        auto_acquire.licence_elements_decision(elements, lic, self.ingest_cfg)
                 except fulltext_loader.Refused as e:
                     self.unusable.append(_unusable(did, e.code, e))
                     continue

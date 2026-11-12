@@ -1,0 +1,67 @@
+{
+  "_doc": "ALLDOMAINS-WPG-IMPL-1111 (plan work/ALLDOMAINS-1111 WP-G, which absorbs work/USFED-ROUTE-1111): the reviewed, release-pinned allow-list of permitted original HTML hosts for the generic ORIGINAL_HTML full-text route (vera/original_html.py, vera/fulltext_routes.py). A row grants access, so it lives in a reviewed policy file, never in the DB (OD-1110-LISTS-CONSENSUS). Read only by vera/original_html.py. The route claims a candidate only when its normalised URL has the row's exact host (https, port 443, no userinfo, no query, no fragment) and a path starting with one of the row's path_prefixes. LICENCE STATUS comes only from the row's licence_basis: wave 1 allows only 'us_federal_pd' (vera.gov_public_domain.decide on the FULL visible page text); 'page_declared' is NOT implemented and a row naming it is ignored (needs its own plan, licence review and C0 sample). Robots.txt (404/410 = no restriction; every other 4xx, 429, 5xx, timeout = fail closed), TDMRep, X-Robots-Tag, robots meta, Crawl-delay, the host_role 'store' check, the SSRF guard, a 401/403 access denial (never bypassed) and the rate portal run on every hop before and independent of this file. mode: off (ships; the route claims nothing) | shadow (runs the fetch, licence, extraction and admission steps, stores nothing, counts only) | on (stores, but only for rows with store: true).",
+  "_calibration_note": "Every number in limits and extract is an UNCALIBRATED prior from work/USFED-ROUTE-1111/PLAN.md section 5.1 (steps 6-7). Real data behind the extract values: the 10 pilot pages saved by USFED-C0-1111 (5 energy.gov DOE Explains, 5 science.nasa.gov), leave-one-out measurement scratch/USFED-ROUTE-1111/c0b-loo.txt: max leakage L 0.023, F300 0 (thresholds L <= 0.05, F300 = 0). Spread: one sample, two hosts. Why these values: smallest settings that met the thresholds on that sample. What would change them: the per-row holdout of at least 10 pages per host drawn at random (plan G-B pass 12), shadow readout of pruned-character share per page. Each new row needs its own C0 and a third-party/contractor text sample before it may leave mode off.",
+  "mode": "off",
+  "snapshot": {
+    "path": "config/permitted_catalogue.json",
+    "_note": "Vendored, reviewed catalogue snapshot (recorded divergence from feedback_no_hardcoded_data, work/USFED-ROUTE-1111 pass 2 ruling, conditions: runtime reads it and never writes it; it carries harvested_at, per-host robots status, script version and sha256; the later DB home is table permitted_catalogue (owner-gated DDL, not on the critical path); the divergence is entered in records/registers/ by the Clerk). Written only by the refresh script (WP-C), never at runtime."
+  },
+  "limits": {
+    "max_html_bytes": 2000000,
+    "max_sitemap_bytes": 5000000,
+    "min_text_chars": 1500,
+    "fetch_timeout_s": 20,
+    "max_candidates_per_host": 1,
+    "max_candidates_per_question": 3
+  },
+  "extract": {
+    "roots": ["main", "[role=main]", "article"],
+    "drop_tags": ["nav", "header", "footer", "aside", "form", "script", "style", "noscript", "svg", "button", "template", "iframe", "figure", "figcaption"],
+    "drop_roles": ["navigation", "banner", "contentinfo", "complementary", "search", "menu", "menubar", "dialog"],
+    "drop_token_re": "(?:^|[-_ ])(menu|nav|navbar|breadcrumbs?|footer|header|share|social|related|promo|skip|cookie|newsletter|sidebar|subnav|megamenu|usa-banner|card|cards|carousel)(?:$|[-_ ])",
+    "link_density_max": 0.5,
+    "link_density_block_max_chars": 3000,
+    "boilerplate_min_pages_floor": 2,
+    "max_depth": 200,
+    "max_nodes": 400000,
+    "host_overrides": {}
+  },
+  "provenance": {
+    "max_chars": 300,
+    "max_items": 12,
+    "author_meta_names": ["author", "article:author", "dc.creator", "citation_author", "byl"],
+    "published_meta_names": ["article:published_time", "dcterms.date", "dc.date", "citation_publication_date"],
+    "byline_re": "(?:^|[-_ ])(byline|author|credit)(?:$|[-_ ])",
+    "statement_re": "(?i)credit|courtesy|©|copyright|licen[cs]e|terms of use|public domain|reuse"
+  },
+  "rows": [
+    {
+      "id": "energy_gov_doe_explains",
+      "host": "www.energy.gov",
+      "path_prefixes": ["/science/doe-explains"],
+      "licence_basis": "us_federal_pd",
+      "agency": "U.S. Department of Energy",
+      "discovery": {"index_url": "https://www.energy.gov/science/doe-explains"},
+      "crawl_delay_s": 5,
+      "rate_portal": "original_html_energy_gov",
+      "text_only": true,
+      "enabled": true,
+      "store": true,
+      "review": {"task": "USFED-ROUTE-1111", "date": "2026-11-11", "basis": "robots one * group, /science/ allowed (RR R3); C0 10/10 pages (scratch/USFED-C0-1111); DOE reuse terms read A1.3 still OPEN; owner storage approval D-1 PENDING"}
+    },
+    {
+      "id": "nasa_science_explainers",
+      "host": "science.nasa.gov",
+      "path_prefixes": ["/dark-energy", "/dark-matter", "/universe/"],
+      "licence_basis": "us_federal_pd",
+      "agency": "National Aeronautics and Space Administration",
+      "discovery": {"sitemap_url": "https://science.nasa.gov/wp-sitemap.xml"},
+      "crawl_delay_s": 5,
+      "rate_portal": "original_html_nasa_science",
+      "text_only": true,
+      "enabled": true,
+      "store": false,
+      "review": {"task": "USFED-ROUTE-1111", "date": "2026-11-11", "basis": "C0 10/10 pages; store false until the A2.1d JPL/Caltech contractor-pattern fix (branch govpd-1111) is merged (P7: 2 of 5 NASA C0 pages carry JPL text); owner storage approval D-1 PENDING"}
+    }
+  ]
+}
