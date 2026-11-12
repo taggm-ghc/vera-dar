@@ -110,7 +110,8 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
     mt = int(max_terms) if max_terms else mt
     clean = scrub(question)
     qt = search_query.build_query_terms(clean, cfg)
-    qt = search_query.QueryTerms(qt.core, tuple(t for t in qt.extra if t not in _WH), qt.mode, tuple(tuple(t for t in r if t not in _WH) for r in qt.runs if any(t not in _WH for t in r)))
+    qt = search_query.QueryTerms(qt.core, tuple(t for t in qt.extra if t not in _WH), qt.mode, tuple(tuple(t for t in r if t not in _WH) for r in qt.runs if any(t not in _WH for t in r)),
+                                 pairs=tuple(p for p in qt.pairs if p[0] not in _WH and p[1] not in _WH))  # WPQ-1111
     if qt.empty or qt.mode == "fallback_raw":
         return []
     gen = search_query.filler_words(cfg) | _WH
@@ -148,13 +149,16 @@ def variants(question: str, tried=(), *, terms_cfg=None, groups=None, seeds=None
     # (c) entity-central terms
     for sq in _subquery_central(clean, cfg, mt):  # A6 D1: vera.subquery entity-central queries come first
         add(sq, entity=True)
-    kc, w = search_query.key_concepts(clean, cfg, groups=groups)
+    kc, w = search_query.key_concepts(clean, cfg, groups=groups, pairs=True)
     kc = [c for c in kc if "|" not in c and c not in gen]
+    # WPQ-1111: a pair's two words never make bare one-word variants; the pair is one OR unit
+    pw = {w for p in qt.pairs for w in p}
+    kc = [c for c in kc if c not in pw]
     anchor = list(qt.anchor)
     if anchor:
         add(_q(anchor))
     for c in sorted(kc, key=lambda c: (-w.get(c, 1), kc.index(c)))[:mt]:
-        add(c)
+        add(search_query.pair_unit(c.split("-")) if tuple(c.split("-")) in qt.pairs else c)
     # (d) practitioner seed list: the entity-central terms (anchor run, else the first two base terms) + one seed
     head = anchor[:2] or base[:2]
     if is_news_route(question):  # F1-QUERY-1106: the news seed head is the event phrase ("midterm elections")

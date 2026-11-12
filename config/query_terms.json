@@ -120,6 +120,9 @@
     ]
   ],
   "_gx1106_note": "GOLDEN-XFAIL-1106. lexical_resource_cues: curated list, not a threshold. A title with one of these cues is tier 1 at best (never 0) unless the question itself contains a cue; checked offline on the golden set (sky-colour dataset title), not measured on production traffic. compound_concepts gained midterm/mid-term (and plural) and fulldoc_admission.tokenize now applies merge_compounds so admission matches the query side.",
+  "_wpq1111_note": "WPQ-1111. open_compound.max_pairs: structural bound on how many adjacent content-word pairs of the question's anchor run are sent as (\"w1 w2\" OR w1w2) and matched open/hyphenated/closed; UNCALIBRATED planner prior of 1, measured only on offline fixtures and the owner's two questions (PDSA cycle 1: raise to 2, add corpus attestation, or set 0 to restore the previous behaviour exactly). No word list. relevance.demote_record_types: the ONE list of OpenAlex record types sorted after research records (ordering only, no role or eligibility change); empty until the type value is observed in a recorded OpenAlex work (PASS C5).",
+  "open_compound": {"max_pairs": 1},
+  "relevance": {"demote_record_types": []},
   "lexical_resource_cues": ["word association", "word-association", "association norms", "lexicon", "lexical database", "semantic norms", "word norms"],
   "spelling_pairs": {
     "colour": "color",

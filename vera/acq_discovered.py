@@ -189,11 +189,12 @@ def discovered_candidates(sources, acq, question: str | None = None) -> tuple[li
     if question:  # DDFIX-1023/REL D4: relevance order (and off-topic drop) BEFORE the discovered_max cut
         from vera import search_query
         kc = search_query.key_concepts(question, extra_generic=(((acq or {}).get("search") or {}).get(
-            "openalex_profile") or {}).get("generic_terms") or ())
+            "openalex_profile") or {}).get("generic_terms") or (), pairs=True)
         sources = [s for s in sources or () if isinstance(s, dict)]
         tiers = dict(zip(map(id, sources), search_query.relevance_tiers(
             kc, [f"{s.get('title') or ''} {s.get('snippet') or ''}" for s in sources])))
-        sources = sorted(sources, key=lambda s: tiers[id(s)])  # stable: provider order within a tier
+        # WPQ-1111 (P5-1): reference-type records (config relevance.demote_record_types) sort after research records
+        sources = sorted(sources, key=lambda s: (search_query.record_demoted(s), tiers[id(s)]))  # stable within a tier
         off = lambda s: tiers.get(id(s)) == 2  # noqa: E731
     for s in sources or ():
         if not isinstance(s, dict) or any(s.get(k) for k in _STORED_KEYS):

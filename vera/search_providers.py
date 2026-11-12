@@ -203,7 +203,10 @@ def build_arxiv_query_info(question: str, q: Mapping, terms_cfg: Mapping | None 
                     if rest:
                         parts.append("(" + " OR ".join(f"all:{t}" for t in rest) + ")")
                 else:
-                    parts.append("(" + " OR ".join(f"all:{t}" for t in extra) + ")")
+                    from vera.search_query import render_terms  # WPQ-1111: the pair as one arXiv OR group
+                    terms = render_terms(extra, qt.pairs, plain=lambda t: f"all:{t}",
+                                         pair=lambda p: f'(all:"{p[0]} {p[1]}" OR all:{p[0]}{p[1]})')
+                    parts.append(terms[0] if len(terms) == 1 and qt.pairs else "(" + " OR ".join(terms) + ")")
             body = "(" + " AND ".join(parts) + ")" if (qt.core or len(parts) > 1) else parts[0]
             return body + _date_clause(q), mode
         mode = "fallback_legacy"
@@ -426,7 +429,11 @@ def build_openalex_search(question: str, terms_cfg: Mapping | None, *, relaxed: 
             if relaxed and len(parts) > 1:  # R72-e: core phrases ORed (one retry after a zero-hit AND query)
                 parts = ["(" + " OR ".join(parts) + ")"]
             if qt.extra:
-                parts.append("(" + " OR ".join(qt.extra) + ")")
+                # WPQ-1111 (C1a, P2-3): an open/closed pair is one OR group ("super strings" OR superstrings), never split
+                from vera.search_query import render_terms
+                terms = render_terms(qt.extra, qt.pairs)
+                parts.append(terms[0] if len(terms) == 1 and qt.pairs and terms[0].startswith("(\"")
+                             else "(" + " OR ".join(terms) + ")")
             return " AND ".join(parts), qt.mode
         mode = "fallback_legacy"
     else:

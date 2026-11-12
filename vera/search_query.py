@@ -11,14 +11,17 @@ Fallback is never silent and never empty: when no core phrase and no extra term 
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlencode
 
+_log = logging.getLogger(__name__)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9\-]*")
+_PAIR_WORD = re.compile(r"[a-z]{3,}")  # WPQ-1111: a word that can join an open compound (plain letters, no hyphen or digit)
 # MIDTERMS-WP3-1106: a 4-digit year (1900-2099) is a query term (the only recency signal), not dropped as a non-word.
 _YEAR_TOKEN = re.compile(r"(?:19|20)\d{2}")
 _TOKEN_OR_BREAK = re.compile(r"[A-Za-z][A-Za-z0-9\-]*|(?<!\d)(?:19|20)\d{2}(?!\d)|[|?!.,;:()]")
@@ -46,6 +49,9 @@ class QueryTerms:
     runs: tuple = ()
     # NONASK-1103 S2: the named entity's own terms in a sub-query; the run holding one is the anchor (taken first)
     central: tuple = ()
+    # WPQ-1111 (C1): adjacent content-word pairs of the anchor run that may be spelled open or closed ("super strings" /
+    # "superstrings"); at most open_compound.max_pairs (config/query_terms.json); () = today's behaviour exactly.
+    pairs: tuple = ()
 
     @property
     def anchor(self) -> tuple:
@@ -88,7 +94,44 @@ def build_query_terms(question: str, cfg: Mapping) -> QueryTerms:
         mode = "extra_only"
     else:
         mode = "fallback_raw"
-    return QueryTerms(tuple(core), tuple(extra), mode, tuple(tuple(r) for r in runs))
+    qt = QueryTerms(tuple(core), tuple(extra), mode, tuple(tuple(r) for r in runs))
+    pairs = _open_pairs(qt, open_compound_max_pairs())
+    return replace(qt, pairs=pairs) if pairs else qt
+
+
+def pair_unit(pair) -> str:
+    """WPQ-1111: the provider-query form of an open/closed pair, expansion not replacement: ("super strings" OR superstrings)."""
+    return f'("{pair[0]} {pair[1]}" OR {pair[0]}{pair[1]})'
+
+
+def render_terms(terms, pairs, plain=str, pair=pair_unit) -> list:
+    """`terms` with each pair whose two words are both present rendered as ONE unit (at the first word's place) so the pair
+    is never split into bare components; every other term is rendered by `plain`. Unchanged (plain-rendered) without pairs."""
+    terms = list(terms)
+    skip, put = set(), {}
+    for a, b in pairs or ():
+        if a in terms and b in terms and a not in skip and b not in skip and a not in put:
+            put[a] = pair((a, b))
+            skip.add(b)
+    return [put[t] if t in put else plain(t) for t in terms if t not in skip]
+
+
+def _open_pairs(qt: QueryTerms, k: int) -> tuple:
+    """C1: up to `k` adjacent pairs of plain-letter content words in the anchor run, left to right, non-overlapping. A word
+    of a configured compound ("multi-agent", "midterm") never joins (those have their own entries). No word list."""
+    run = qt.anchor
+    if k <= 0 or len(run) < 2:
+        return ()
+    blocked = {w for g in _qt_lists()[1] for v in g for w in re.split(r"[\s\-]+", v)}
+    out, i = [], 0
+    while i + 1 < len(run) and len(out) < k:
+        a, b = run[i], run[i + 1]
+        if all(_PAIR_WORD.fullmatch(x) and x not in blocked for x in (a, b)):
+            out.append((a, b))
+            i += 2
+        else:
+            i += 1
+    return tuple(out)
 
 
 def _generic_cfg(cfg: Mapping) -> tuple:
@@ -105,7 +148,9 @@ def and_terms(qt: QueryTerms, k: int, exclude=()) -> list:
     before any concept gets a second term; filler words and `exclude` (e.g. the profile's generic_terms) never.
     Returned in question order. [] when no run term is left (the caller keeps its previous rule)."""
     ex = {str(x).lower() for x in exclude or ()}
-    runs = [[t for t in r if t not in ex] for r in qt.runs]
+    # WPQ-1111 (P3-1): an open/closed pair is ONE term here (rendered as pair_unit), never its two bare components
+    pairs = tuple(p for p in qt.pairs if p[0] not in ex and p[1] not in ex)
+    runs = [[t for t in _collapse_run(r, pairs) if t not in ex] for r in qt.runs]
     runs = [r for r in runs if r]
     if not runs:
         return []
@@ -119,7 +164,20 @@ def and_terms(qt: QueryTerms, k: int, exclude=()) -> list:
                 picked.append(runs[i][depth])
         depth += 1
     pos = {t: n for n, t in enumerate(qt.extra)}
+    pos.update({pair_unit(p): pos.get(p[0], 0) for p in pairs})
     return sorted(picked, key=lambda t: pos.get(t, 0))
+
+
+def _collapse_run(run, pairs) -> list:
+    out, i = [], 0
+    while i < len(run):
+        if i + 1 < len(run) and (run[i], run[i + 1]) in pairs:
+            out.append(pair_unit((run[i], run[i + 1])))
+            i += 2
+        else:
+            out.append(run[i])
+            i += 1
+    return out
 
 
 def drop_generic(text: str, cfg: Mapping | None = None) -> str:
@@ -202,6 +260,48 @@ def _qt_lists() -> tuple:
         return (), (), {}, (), (), (), ()
 
 
+_QT_PATH = Path(__file__).resolve().parent.parent / "config" / "query_terms.json"
+
+
+@lru_cache(maxsize=1)
+def _qt_oc() -> tuple:
+    """(open_compound.max_pairs, relevance.demote_record_types) from config/query_terms.json (WPQ-1111). max_pairs must be
+    an int >= 0; anything else (or an unreadable file) turns the open-compound rule OFF (today's behaviour), logged once.
+    A missing key is OFF too. The demotion list is lower-cased strings; invalid -> empty (no demotion), logged once."""
+    try:
+        d = json.loads(_QT_PATH.read_text("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        _log.warning("query_terms.json unreadable (%s): open_compound and demote_record_types are off", type(e).__name__)
+        return 0, frozenset()
+    n = (d.get("open_compound") or {}).get("max_pairs", 0) if isinstance(d.get("open_compound") or {}, dict) else "x"
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        _log.warning("query_terms.json open_compound.max_pairs invalid (%r): open-compound rule off", n)
+        n = 0
+    dem = (d.get("relevance") or {}).get("demote_record_types", []) if isinstance(d.get("relevance") or {}, dict) else "x"
+    if not isinstance(dem, list) or not all(isinstance(x, str) for x in dem):
+        _log.warning("query_terms.json relevance.demote_record_types invalid: no demotion")
+        dem = []
+    return n, frozenset(x.strip().lower() for x in dem if x.strip())
+
+
+def open_compound_max_pairs() -> int:
+    return _qt_oc()[0]
+
+
+def demote_record_types() -> frozenset:
+    """WPQ-1111 (P5-1, P6-1): the ONE list of record types (OpenAlex `type`) that sort after research records in the
+    reading list and the acquisition pool. Read by acq_discovered and auto_acquire through record_demoted."""
+    return _qt_oc()[1]
+
+
+def record_demoted(rec) -> bool:
+    """True when the record's type (`source_type`, else `type`) is in demote_record_types. Ordering only: roles, labels and
+    eligibility are unchanged (P5-1)."""
+    if not isinstance(rec, dict):
+        return False
+    return str(rec.get("source_type") or rec.get("type") or "").strip().lower() in demote_record_types()
+
+
 def strip_framing(text: str) -> str:
     """R2: `text` without the framing idioms (config framing_phrases); unchanged when nothing else would remain."""
     out = " ".join(str(text or "").split())
@@ -255,14 +355,17 @@ def _groups(groups):
 
 
 def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), groups=None,
-                 central=()) -> tuple[tuple, dict]:
+                 central=(), pairs: bool = False) -> tuple[tuple, dict]:
     """(key concepts, weights). Concepts: core phrases + distinctive extra terms (stop, meta, filler words and
     `extra_generic`, e.g. the acquisition profile's generic_terms, removed; idioms never reach them). Weight of a
     concept: 1, a hyphenated compound 2 (R1: never a component above its compound).
     ((), {}) without a terms config.
     NONASK-1103 S2: `central` (the named entities of a sub-query) makes each matching concept CENTRAL: its weight is
     (top weight + 1), so a record that lacks the entity is weak (tier 1) however many generic concepts it matches.
-    No new number: the weight is derived from the others."""
+    No new number: the weight is derived from the others.
+    WPQ-1111 (C1b, P2-1): with `pairs` (the pre-fetch ordering callers), each open/closed pair of build_query_terms becomes
+    one extra concept "w1-w2" (matched open, hyphenated or closed by _concept_regex) of weight 2, ahead of its two
+    components, which stay as weight-1 concepts: a pair match is tier 0, a component-only match tier 1 (kept, sorted after)."""
     cfg = cfg if cfg is not None else _default_terms_cfg()
     if not cfg:
         return (), {}
@@ -284,8 +387,15 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
     # R1: a hyphen component ("agent") never outweighs its compound ("multi-agent"): the compound is the top concept
     # (2), its components and every other concept weigh 1. relevance_tiers then asks a compound-only match to be
     # backed by a second, non-component concept. No numeric threshold changes; weights stay derived from the set.
+    pc = set()
+    if pairs:
+        for a, b in qt.pairs:
+            if a in out and b in out:
+                pc.add(f"{a}-{b}")
+                i = out.index(a)
+                out = out[:i] + (f"{a}-{b}",) + out[i:]
     comps = {c for c in out if is_compound(c)} if llm_sense(out) else set()  # incidental "multi-agent": weight 1 (QA F4)
-    w = {c: (2 if c in comps else 1) for c in out}
+    w = {c: (2 if c in comps or c in pc else 1) for c in out}
     cen = entity_concepts(out, central) | _news_central(question, out)
     if cen and w:
         top = max(w.values())
@@ -423,7 +533,7 @@ def part_tiers(question: str, texts, part_of, parts, *, cfg=None, extra_generic=
     one pool (today). Otherwise a text found for part k is judged against THAT part's concepts with the named entity
     central AND really present (entity_hit via `ctx_for(entity) -> ctx or None`); tiers stay relative to each group."""
     texts = list(texts)
-    kc_q = key_concepts(question, cfg, extra_generic=extra_generic)
+    kc_q = key_concepts(question, cfg, extra_generic=extra_generic, pairs=True)
     if len(parts or ()) < 2:
         return relevance_tiers(kc_q, texts)
     groups: dict = {}
@@ -434,7 +544,7 @@ def part_tiers(question: str, texts, part_of, parts, *, cfg=None, extra_generic=
         if k is None:
             kc, ents = kc_q, None
         else:
-            kc = key_concepts(parts[k][0], cfg, extra_generic=extra_generic, central=parts[k][1])
+            kc = key_concepts(parts[k][0], cfg, extra_generic=extra_generic, central=parts[k][1], pairs=True)
             ents = [c for c in (ctx_for(e) for e in parts[k][1]) if c] if ctx_for else None
         for i, t in zip(idx, relevance_tiers(kc, [texts[i] for i in idx], entities=ents or None)):
             out[i] = t
