@@ -105,28 +105,73 @@ def code(web, c=None, cfg=None, job=None):
 ROWS = [r for r in SHIPPED["rows"]]
 
 
+def row_base(r):
+    """The row's first stem or prefix, as a path."""
+    return (r.get("path_stems") or r["path_prefixes"])[0].rstrip("/")
+
+
 def row_url(r):
-    return f"https://{r['host']}{r['path_prefixes'][0]}-x"
+    """A real in-row page URL: stem + slug in one segment, or prefix + one more segment."""
+    return f"https://{r['host']}{row_base(r)}" + ("-x" if r.get("path_stems") else "/x")
 
 
 # ================================================================================ step 2: route claim (per row)
 @pytest.mark.parametrize("r", ROWS, ids=lambda r: r["id"])
 def test_claim_positive_and_negative_per_row(monkeypatch, r):
     set_mode(monkeypatch, "shadow")
-    h, p = r["host"], r["path_prefixes"][0]
-    assert original_html.claims_url(f"https://{h}{p}-x")
-    assert original_html.claims_url(f"https://{h}{p}-x/")  # trailing slash: one canonical form
+    h, p, ok = r["host"], row_base(r), row_url(r)
+    assert original_html.claims_url(ok)
+    assert original_html.claims_url(ok + "/")  # trailing slash: one canonical form
+    tail = ok[len(f"https://{h}"):]
     for bad in (f"https://{h}/other/path",                       # same host, other path
-                f"https://{h}.example.com{p}-x", f"https://x{h}{p}-x",  # lookalike hosts
-                f"http://{h}{p}-x",                              # http
-                f"https://{h}:8443{p}-x",                        # port
-                f"https://user@{h}{p}-x", f"https://user:pw@{h}{p}-x",  # userinfo
-                f"https://{h}{p}-x?q=1", f"https://{h}{p}-x#frag",       # query, fragment
+                f"https://{h}.example.com{tail}", f"https://x{h}{tail}",  # lookalike hosts
+                f"http://{h}{tail}",                             # http
+                f"https://{h}:8443{tail}",                       # port
+                f"https://user@{h}{tail}", f"https://user:pw@{h}{tail}",  # userinfo
+                f"https://{h}{tail}?q=1", f"https://{h}{tail}#frag",      # query, fragment
                 f"https://{h}{p}/../../user/login",              # dot-segments leave the prefix
                 f"https://{h}{p}/%2e%2e/%2e%2e/user/login",      # %2e%2e segments
+                f"https://{h}{p}/..;/..;/x", f"https://{h}{tail};jsessionid=1",  # D5: path parameters
                 f"https://{h}{p}%2fx", f"https://{h}{p}\\x", f"https://{h}//science",
-                "https://fnal.gov/science/doe-explains-x", "https://www.fnal.gov" + p + "-x"):
+                f"https://{h}{p}-evil/x", f"https://{h}{p}X/y",  # D1: a longer first segment with more path
+                "https://fnal.gov/science/doe-explains-x", "https://www.fnal.gov" + tail):
         assert not original_html.claims_url(bad), bad
+
+
+def test_d1_whole_segment_boundaries_stems_and_prefixes(monkeypatch):
+    set_mode(monkeypatch, "shadow")
+    c = original_html.claims_url
+    # DOE row (stem): the real page shape is stem + slug in ONE segment; the bare stem (the index) and deeper paths are not
+    assert c("https://www.energy.gov/science/doe-explainsneutrinos")
+    assert c("https://www.energy.gov/science/doe-explainsthe-higgs-boson")
+    assert not c("https://www.energy.gov/science/doe-explains")                       # the index page is links only
+    assert not c("https://www.energy.gov/science/doe-explains-evil/x")                # deeper than one segment
+    assert not c("https://www.energy.gov/science/doe-explains/neutrinos")
+    # NASA row (prefix): the prefix itself and anything under prefix + "/"; never a longer first segment
+    assert c("https://science.nasa.gov/dark-matter") and c("https://science.nasa.gov/dark-matter/x")
+    assert c("https://science.nasa.gov/dark-energy") and c("https://science.nasa.gov/universe/black-holes")
+    for bad in ("https://science.nasa.gov/dark-matterX", "https://science.nasa.gov/dark-matter-evil/x",
+                "https://science.nasa.gov/dark-energyX", "https://science.nasa.gov/universeX/y",
+                "https://science.nasa.gov/universe-x"):
+        assert not c(bad), bad
+    row = {"path_prefixes": ["/a/"], "path_stems": []}
+    assert original_html.path_ok(row, "/a") and original_html.path_ok(row, "/a/b") and not original_html.path_ok(row, "/ab")
+    # the per-hop checker (redirect targets) uses the same boundary
+    chk = original_html.path_checker(ROWS[1])
+    assert chk("https://science.nasa.gov/dark-matter/x") and not chk("https://science.nasa.gov/dark-matter-evil/x")
+
+
+def test_d5_rows_need_a_dns_name_host(monkeypatch):
+    c = set_mode(monkeypatch, "shadow")
+    for bad in ("127.0.0.1", "10.0.0.5", "8.8.8.8", "0x7f.1", "1.2.3.4.5", "localhost", "[::1]"):
+        c["rows"] = [{**copy.deepcopy(ROWS[1]), "id": "ip", "host": bad}]
+        assert original_html.rows(c) == [], bad
+    c["rows"] = [{**copy.deepcopy(ROWS[1]), "id": "ok", "host": "www.example.gov"}]
+    assert len(original_html.rows(c)) == 1
+    c["rows"] = [{**copy.deepcopy(ROWS[1]), "id": "semi", "path_prefixes": ["/a;b"]}]
+    assert original_html.rows(c) == []
+    c["rows"] = [{**copy.deepcopy(ROWS[1]), "id": "empty", "path_prefixes": [], "path_stems": []}]
+    assert original_html.rows(c) == []
 
 
 def test_normalisation_is_one_canonical_form():
@@ -271,6 +316,29 @@ def test_snapshot_denied_list_blocks_before_any_request(monkeypatch):
     assert code(web) == acq_discovered.refusal_code(A.cfg(), "access_denied") and web.urls == []
 
 
+NEUTRINOS = "https://www.energy.gov/science/doe-explainsneutrinos"
+
+
+def test_d2_denial_seeded_from_outside_makes_zero_requests_and_does_not_trip_the_breaker(monkeypatch):
+    # the shared WP-L memory (_DENIED), written by another lane/worker path, must stop the route before ANY request
+    # (robots included) through the URL-level check, with the host breaker NOT involved
+    set_mode(monkeypatch, "shadow")
+    acq_discovered.deny(acq_discovered.denial_ids(urls=(NEUTRINOS,)))
+    web = Web({NEUTRINOS: page()})
+    assert code(web, cand(NEUTRINOS)) == acq_discovered.refusal_code(A.cfg(), "access_denied")
+    assert web.urls == [] and not original_html.host_tripped(DOE_HOST)
+    # an un-denied sibling on the same host is still fetched (the breaker was not the reason)
+    assert code(Web({DOE: page()}), cand(DOE)) == acq_config.reason(A.cfg(), "original_shadow")
+
+
+def test_d2_redirect_to_a_denied_url_is_refused_before_it_is_requested(monkeypatch):
+    set_mode(monkeypatch, "shadow")
+    acq_discovered.deny(acq_discovered.denial_ids(urls=(NEUTRINOS,)))
+    web = Web({NEUTRINOS: page()}, over={DOE: A.Resp(301, b"", "text/html", {"Location": NEUTRINOS})})
+    assert code(web) == acq_discovered.refusal_code(A.cfg(), "access_denied")
+    assert NEUTRINOS not in web.urls and web.docs() == [DOE]
+
+
 def test_429_stays_a_pacing_code_not_a_denial(monkeypatch):
     set_mode(monkeypatch, "shadow")
     web = Web({}, over={DOE: A.Resp(429, b"", "text/html")})
@@ -338,9 +406,19 @@ def test_sitemap_size_cap_counts_decoded_bytes(monkeypatch):
     assert str(e.value) == "oversize"
 
 
-def test_sitemap_uses_defusedxml():
-    import inspect
-    assert "defusedxml" in inspect.getsource(original_html.parse_sitemap)
+def test_d3_sitemap_parse_calls_defusedxml_with_dtd_entities_external_forbidden(monkeypatch):
+    import defusedxml.ElementTree as DET
+    real, seen = DET.fromstring, []
+
+    def spy(*a, **k):
+        seen.append(k)
+        return real(*a, **k)
+    monkeypatch.setattr(DET, "fromstring", spy)
+    sm = (b'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+          b"<url><loc>https://www.energy.gov/science/doe-explainsneutrinos</loc></url></urlset>")
+    assert original_html.parse_sitemap(sm, ROWS[0])["urls"]
+    assert seen and seen[0].get("forbid_dtd") is True and seen[0].get("forbid_entities") is True \
+        and seen[0].get("forbid_external") is True  # swapping in stdlib ElementTree would make this list empty
 
 
 def test_oversize_html_is_refused_whole_and_nothing_is_stored(monkeypatch):
@@ -380,6 +458,18 @@ def test_markers_in_pruned_regions_still_hold_the_page(monkeypatch, marker):
     set_mode(monkeypatch, "on")
     for where in ({"footer": marker}, {"header_byline": f"<p>{marker}</p>"}, {"extra_main": f'<div class="share"><p>{marker}</p></div>'}):
         assert code(Web({DOE: page(**where)})) == acq_config.reason(A.cfg(), "original_not_pd"), where
+
+
+def test_d4_page_licence_check_is_consulted_not_only_the_pd_rule(monkeypatch):
+    # "contributed to this report" is a wire cue that page_licence.check holds (acc_third_party_page) while
+    # gov_public_domain.decide alone would grant public domain: ignoring pl.ok in the route would store the page
+    set_mode(monkeypatch, "on")
+    raw = page(extra_main="<p>Jane Roe contributed to this report.</p>")
+    full = html_main.visible_text(html_main.parse(raw))
+    assert pd(full)["applies"] is True  # the PD rule alone passes it
+    from vera import page_licence
+    assert page_licence.check(DOE, {"text": full, "licence_href": "", "url": DOE})["ok"] is False
+    assert code(Web({DOE: raw})) == acq_config.reason(A.cfg(), "original_not_pd")
 
 
 def test_declared_licence_link_holds_the_page(monkeypatch):
@@ -558,6 +648,32 @@ def test_stored_row_reads_back_through_the_acquired_reader(monkeypatch):
     c = fulldoc_db.load_acquired_rows(srcs, spans, auto_acquire._fd_cfg(), cfg,
                                       ingest_cfg=acq_config.ingest_cfg(fulltext_loader.load_config(), cfg))
     assert c.status == "ok" and len(c.acquired) == 1
+
+
+def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_the_items_claim(monkeypatch):
+    set_mode(monkeypatch, "on")
+    from vera import fulldoc_db
+    plan, _ = run(Web({DOE: page()}))
+    assert plan["source"]["provenance"]["item"]["discovered_via"] == "original_html"
+    assert len(plan["source"]["content"]) < 4000  # only the route's own floor lets this page in
+
+    def load(p):
+        srcs, spans = A.rows_from_plans([p])
+        cfg = A.cfg()
+        return fulldoc_db.load_acquired_rows(srcs, spans, auto_acquire._fd_cfg(), cfg,
+                                             ingest_cfg=acq_config.ingest_cfg(fulltext_loader.load_config(), cfg))
+    assert len(load(plan).acquired) == 1
+    forged = copy.deepcopy(plan)  # same item claim, but the acquisition record names another resolver
+    forged["source"]["provenance"]["acquisition"]["resolver"] = "europepmc"
+    c = load(forged)
+    assert len(c.acquired) == 0 and c.unusable  # neither the 1500 floor nor the federal licence branch applies
+    # a manifest item (prepare_from_parts without route=) can never claim the shorter floor
+    item = copy.deepcopy(plan["source"]["provenance"]["item"])
+    meta = {**plan["source"]["provenance"]["meta"], "has_body": True, "body_chars": 2000, "abstract_chars": 0}
+    icfg = acq_config.ingest_cfg(fulltext_loader.load_config(), A.cfg())
+    with pytest.raises(fulltext_loader.Refused):
+        fulltext_loader.check_text_record(item, "x" * 2500, meta, icfg)
+    fulltext_loader.check_content("x" * 2500, meta, original_html.relaxed_ingest_cfg(icfg, SHIPPED))
 
 
 def test_length_floor_is_relaxed_only_for_this_route():

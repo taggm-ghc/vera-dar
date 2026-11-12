@@ -248,11 +248,15 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
             # R3: the ingest filters, re-applied to the rebuilt text as the configured full-document kind
             # ARX-SECREV-1023 R1: only the acquired path, only rows the arXiv route wrote (arxiv_fulltext.stored_evidence)
             ev = None
+            route = None
             if "acquisition" in ek:
                 from vera import arxiv_fulltext
                 ev = arxiv_fulltext.stored_evidence(prov)
+                # ALLDOMAINS-WPG-IMPL-1111: only an acquired row whose acquisition record names the route (written by it)
+                route = ((prov.get("acquisition") or {}).get("resolver") if isinstance(prov.get("acquisition"), dict)
+                         else None)
             rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"),
-                                                     arxiv_evidence=ev)
+                                                     arxiv_evidence=ev, route=route)
             rec["document_id"] = did
             # R3NORM-FIX-1028 D2: a row stored under a legacy spelling of the same source is accepted (no rewrite)
             from vera.url_key import legacy_keys
@@ -834,7 +838,7 @@ class _AcqBuilder:
                     elements = (provs[did].get("meta") or {}).get("jats_licences")
                     if not isinstance(elements, list):
                         raise fulltext_loader.Refused(R_DBROW, "acquired row has no licence-element record")
-                    if (provs[did].get("item") or {}).get("discovered_via") == "original_html":
+                    if (provs[did].get("acquisition") or {}).get("resolver") == "original_html":
                         # ALLDOMAINS-WPG-IMPL-1111: a US-federal page has no JATS licence element; the declared licence
                         # must be exactly the owner-approved federal one and the element list empty (anything else holds)
                         if elements or lic != "LicenseRef-us-government-work":

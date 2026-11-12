@@ -38,7 +38,9 @@
     {
       "id": "energy_gov_doe_explains",
       "host": "www.energy.gov",
-      "path_prefixes": ["/science/doe-explains"],
+      "path_prefixes": [],
+      "path_stems": ["/science/doe-explains"],
+      "_path_note": "Whole-segment matching. DOE names explainer pages by appending the slug to the stem in ONE path segment (/science/doe-explainsneutrinos, read in USFED-C0-1111 and the plan), so this row uses path_stems: the stem plus a non-empty single-segment slug. The bare stem (the index page) and anything deeper (/science/doe-explains-evil/x) never match.",
       "licence_basis": "us_federal_pd",
       "agency": "U.S. Department of Energy",
       "discovery": {"index_url": "https://www.energy.gov/science/doe-explains"},

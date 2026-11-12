@@ -22,6 +22,7 @@ Modes: off (ships) -> shadow -> on. Never raises to a caller outside auto_acquir
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import re
@@ -41,6 +42,8 @@ _HOST_RE = re.compile(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?")
 _HEX = re.compile(r"[0-9a-f]{64}")
 _TITLE_RE = re.compile(r"[^\x00-\x1f\x7f]{1,200}")
 _TERM_RE = re.compile(r"[a-z0-9]{1,40}")
+_BAD_PATH = re.compile(r"[?#;\\]|\.\.|//|%")
+_SLUG = re.compile(r"[A-Za-z0-9-][A-Za-z0-9_.~-]*")
 _STOP = frozenset({"a", "an", "the", "of", "is", "are", "what", "whats", "and", "in", "to"})
 logger = logging.getLogger("vera.original_html")
 
@@ -82,9 +85,17 @@ def _row_valid(r) -> bool:
         h = r.get("host")
         if not isinstance(h, str) or h != h.lower() or not _HOST_RE.fullmatch(h) or "." not in h:
             return False
-        pp = r.get("path_prefixes")
-        if (not isinstance(pp, list) or not pp or not all(isinstance(x, str) and x.startswith("/") and "?" not in x
-                                                           and "#" not in x and ".." not in x for x in pp)):
+        try:  # D5: a DNS name only, never an IP literal (and no all-numeric last label)
+            ipaddress.ip_address(h)
+            return False
+        except ValueError:
+            pass
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", h.rsplit(".", 1)[1]):
+            return False
+        pp, st = r.get("path_prefixes", []), r.get("path_stems", [])
+        if not isinstance(pp, list) or not isinstance(st, list) or not (pp or st):
+            return False
+        if not all(isinstance(x, str) and x.startswith("/") and not _BAD_PATH.search(x) for x in pp + st):
             return False
         if r.get("licence_basis") not in SUPPORTED_BASES:
             return False
@@ -109,8 +120,8 @@ def normalise_url(u) -> str | None:
     Pure; never raises."""
     try:
         s = str(u or "")
-        if not s or len(s) > 2000 or any(ord(ch) < 33 or ord(ch) > 126 for ch in s) or "\\" in s:
-            return None
+        if not s or len(s) > 2000 or any(ord(ch) < 33 or ord(ch) > 126 for ch in s) or "\\" in s or ";" in s:
+            return None  # D5: no path parameters (`..;/` tricks)
         sp = urlsplit(s)
         if sp.scheme != "https" or sp.query or sp.fragment or sp.username is not None or sp.password is not None:
             return None
@@ -150,20 +161,35 @@ def match_row(url, cfg: dict | None = None):
         return None
     sp = urlsplit(canon)
     for r in rows(cfg):
-        if sp.hostname == r["host"] and any(sp.path.startswith(p) for p in r["path_prefixes"]):
+        if sp.hostname == r["host"] and path_ok(r, sp.path):
             return r, canon
     return None
 
 
+def path_ok(row: dict, path: str) -> bool:
+    """D1: whole path segments. A `path_prefixes` entry P matches `P` itself and anything under `P/` (so `/dark-matter`
+    does not match `/dark-matterX` or `/dark-matter-evil/x`). A `path_stems` entry S (for a host whose pages are named by
+    appending a slug to a stem in ONE segment, e.g. DOE `/science/doe-explains<slug>`) matches S followed by a non-empty
+    single-segment slug; the bare stem (an index page, links only) and any deeper path never match."""
+    for p in row.get("path_prefixes") or ():
+        b = p.rstrip("/")
+        if path == b or path.startswith(b + "/"):
+            return True
+    for s in row.get("path_stems") or ():
+        if path.startswith(s) and _SLUG.fullmatch(path[len(s):]):
+            return True
+    return False
+
+
 def path_checker(row: dict):
     """The per-hop check handed to auto_acquire._guarded_get: every hop (redirect targets included) must normalise and
-    stay on the row's exact host AND inside a row prefix (3c)."""
+    stay on the row's exact host AND inside a row prefix or stem, by whole segments (3c)."""
     def check(url: str) -> bool:
         c = normalise_url(url)
         if c is None:
             return False
         sp = urlsplit(c)
-        return sp.hostname == row["host"] and any(sp.path.startswith(p) for p in row["path_prefixes"])
+        return sp.hostname == row["host"] and path_ok(row, sp.path)
     return check
 
 
@@ -370,7 +396,8 @@ def trip_host(host: str) -> None:
 def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None) -> dict:
     """The fulltext_ingest config with the body-length floors replaced by this route's own `limits.min_text_chars`
     (federal explainer pages are far shorter than the 4000-character article floor). Every other filter is unchanged. A
-    copy; the input is never mutated. Used for rows whose item says discovered_via == "original_html"."""
+    copy; the input is never mutated. Used only when the caller passes route="original_html" (the route itself, or the
+    acquired-path reader from the row's acquisition resolver), never from an item's own claim."""
     lim = ((oc if oc is not None else load_config()).get("limits") or {})
     floor = int(lim.get("min_text_chars", 1500))
     out = dict(icfg)
@@ -471,7 +498,7 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
     item["attribution"] = aa.tasl_attribution(title, agency, canon, lic["id"], LICENCE_URL)
     # no JATS licence element exists on an HTML page: the licence is the PD rule's (decided above on the full text); the
     # acquired-path reader checks this row's licence record by its own original_html branch (fulldoc_db)
-    rec = fl.prepare_from_parts(item, text, meta, icfg, now=now_iso)  # every filter; the route-own length floors apply
+    rec = fl.prepare_from_parts(item, text, meta, icfg, now=now_iso, route=ROUTE)  # every filter; route-own floors
     if acq_config.injection_refused(f"{title}\n{text}", cfg):
         raise aa._Stop(acq_config.reason(cfg, "inject"))
     plan = aa.build_plan(rec, item, meta, cfg, job, score, {"open_access": True, "licence_family": "us-federal-pd",

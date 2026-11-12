@@ -426,13 +426,17 @@ def check_item_declared(item: dict, cfg: dict) -> None:
     check_declared_kind(item, cfg, "manifest item")
 
 
-def check_text_record(item: dict, text: str, meta: dict, cfg: dict, *, arxiv_evidence: dict | None = None) -> dict:
+def check_text_record(item: dict, text: str, meta: dict, cfg: dict, *, arxiv_evidence: dict | None = None,
+                      route: str | None = None) -> dict:
     """The text-level filters after the text and its conversion record are in hand (pure; no I/O): declared kind of the
     conversion record, body/length checks and the licence gate. Returns the licence record. Raises Refused.
     Shared by prepare() and vera.fulldoc_db (R3: the DB path re-applies the same filters, never ingest-time judgement)."""
     check_declared_kind(meta, cfg, "conversion record")
     ccfg = cfg
-    if item.get("discovered_via") == "original_html":  # ALLDOMAINS-WPG-IMPL-1111: the route's own body-length floors
+    # ALLDOMAINS-WPG-IMPL-1111: the route's own body-length floors. `route` is passed ONLY by the ORIGINAL_HTML route
+    # (write path) and by the acquired-path reader from the row's acquisition record; the item's self-declared
+    # discovered_via (a manifest can say anything) never relaxes a floor.
+    if route == "original_html":
         from vera import original_html
         ccfg = original_html.relaxed_ingest_cfg(cfg)
     check_content(text, meta, ccfg)
@@ -448,11 +452,11 @@ def prepare(item: dict, base_dir: Path, cfg: dict, now: str | None = None) -> di
 
 
 def prepare_from_parts(item: dict, text: str, meta: dict, cfg: dict, now: str | None = None, _checked: bool = False,
-                       *, arxiv_evidence: dict | None = None) -> dict:
+                       *, arxiv_evidence: dict | None = None, route: str | None = None) -> dict:
     """prepare() without file I/O: the same filters and the same record from an in-memory item, text and conversion record."""
     if not _checked:
         check_item_declared(item, cfg)
-    lic = check_text_record(item, text, meta, cfg, arxiv_evidence=arxiv_evidence)
+    lic = check_text_record(item, text, meta, cfg, arxiv_evidence=arxiv_evidence, route=route)
     check_portal(item)  # PORTAL-RULE-1110 CP4: manifest ingest; the item's own defects keep their specific codes
     now = now or datetime.now(timezone.utc).isoformat(timespec="seconds")
     src = {"doi": item.get("doi"), "url": item["landing_url"]}
