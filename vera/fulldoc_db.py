@@ -256,7 +256,7 @@ def _load_rows(sources, spans, cfg, ingest_cfg, extra_keys=None, build_index=Tru
                 route = ((prov.get("acquisition") or {}).get("resolver") if isinstance(prov.get("acquisition"), dict)
                          else None)
             rec = fulltext_loader.prepare_from_parts(item, text, meta, icfg, now=prov.get("retrieved_at"),
-                                                     arxiv_evidence=ev, route=route)
+                                                     arxiv_evidence=ev, **({"route": route} if route else {}))
             rec["document_id"] = did
             # R3NORM-FIX-1028 D2: a row stored under a legacy spelling of the same source is accepted (no rewrite)
             from vera.url_key import legacy_keys
