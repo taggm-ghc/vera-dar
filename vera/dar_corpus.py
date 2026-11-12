@@ -1048,6 +1048,32 @@ class DarCorpus:
         n = len(self.registry.corpora_for_domain(domain_id))
         return "established" if n >= int(self._icfg["established_support"]) else "provisional"
 
+    def docs_with_terms(self, terms) -> set:
+        """WPQ-CYCLE2-1111 (c2): source keys of the DOCUMENTS of this version holding at least one chunk with any of the
+        index keys `terms` (already in index form: stemmed when stemming is on). Read-only, in memory, no I/O. Applies the
+        same version and mask filter as `_scores`: postings are shared append-only across forks, so an entry at or beyond
+        this version's chunk count, or masked out of an evidence view, is not counted. Counts documents, not chunks."""
+        allc, mask, out = self._all, self._mask, set()
+        n_all = len(allc)
+        for t in terms:
+            for v in self._post.get(t) or ():
+                i = v >> _CNT_BITS
+                if i >= n_all or (mask is not None and not mask[i]):
+                    continue
+                out.add(allc[i].source_key)
+        return out
+
+    def closed_form_docs(self, a: str, b: str) -> set:
+        """WPQ-CYCLE2-1111 (c2): documents holding the closed form of the open compound "a b". The index stemmer does not
+        fold singular and plural ("superstring" -> "superstr", "superstrings" -> "superstring"), so the index keys K are
+        the closed form with and without the second word's suffix, each through the index's own stemmer. No word list."""
+        a, b = str(a).lower(), str(b).lower()
+        if self._stem_on():
+            keys = {light_stem(a + b), light_stem(a + light_stem(b)), light_stem(a + light_stem(b) + "s")}
+        else:
+            keys = {a + b, a + b + "s"} | ({a + b[:-1]} if b.endswith("s") else set())
+        return self.docs_with_terms(keys)
+
     def doc_keys(self) -> frozenset:
         """Membership keys (see doc_key_set) of every stored document, not only those retrieved for a question."""
         out: set = set()

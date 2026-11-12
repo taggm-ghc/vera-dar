@@ -103,6 +103,13 @@ class FullDocCorpus:
                 did = key_to_doc.get(c["source_key"])
                 self._chunk_counts[did] = self._chunk_counts.get(did, 0) + 1
 
+    def closed_form_docs(self, a: str, b: str) -> set:
+        """WPQ-CYCLE2-1111 (c2): source keys of the documents of this corpus holding the closed form of "a b" (in memory,
+        no I/O). Empty when the corpus is unusable or has no index."""
+        if self.status != STATUS_OK or self._dar is None:
+            return set()
+        return self._dar.closed_form_docs(a, b)
+
     def text(self, document_id: str) -> str:
         """The verified text of an acquired document (KeyError when not acquired)."""
         return self._texts[document_id]
@@ -464,6 +471,22 @@ _LOAD_LOCK = threading.Lock()  # serialises bundle loads so concurrent first cal
 def _apply_cache_bound(cfg: dict) -> None:
     n = cfg.get("cache_max_entries")
     _CACHE.max_entries = n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else CACHE_MAX_ENTRIES
+
+
+def peek_loaded_corpora() -> tuple:
+    """WPQ-CYCLE2-1111 (c2): the corpora ALREADY BUILT in this process (the base cache entries and the served acquired
+    corpus), usable ones only. A pure peek: it never calls get_corpus or get_acquired_corpus, so it never loads from the
+    database, never starts a probe thread and never waits. () while nothing is loaded or warming."""
+    out = []
+    try:
+        with _CACHE.lock:
+            out.extend(_CACHE.values())
+        with _ACQ_LOCK:
+            if _ACQ.get("corpus") is not None:
+                out.append(_ACQ["corpus"])
+    except Exception:  # noqa: BLE001
+        return ()
+    return tuple(c for c in out if getattr(c, "status", None) == STATUS_OK)
 
 
 def reset_for_tests() -> None:

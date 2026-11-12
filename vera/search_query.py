@@ -10,15 +10,20 @@ Fallback is never silent and never empty: when no core phrase and no extra term 
 """
 from __future__ import annotations
 
+import contextvars
 import json
+import logging
 import re
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlencode
 
+_log = logging.getLogger(__name__)
 _TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9\-]*")
+_PAIR_WORD = re.compile(r"[a-z]{3,}")  # WPQ-1111: a word that can join an open compound (plain letters, no hyphen or digit)
 # MIDTERMS-WP3-1106: a 4-digit year (1900-2099) is a query term (the only recency signal), not dropped as a non-word.
 _YEAR_TOKEN = re.compile(r"(?:19|20)\d{2}")
 _TOKEN_OR_BREAK = re.compile(r"[A-Za-z][A-Za-z0-9\-]*|(?<!\d)(?:19|20)\d{2}(?!\d)|[|?!.,;:()]")
@@ -46,6 +51,9 @@ class QueryTerms:
     runs: tuple = ()
     # NONASK-1103 S2: the named entity's own terms in a sub-query; the run holding one is the anchor (taken first)
     central: tuple = ()
+    # WPQ-1111 (C1): adjacent content-word pairs of the anchor run that may be spelled open or closed ("super strings" /
+    # "superstrings"); at most open_compound.max_pairs (config/query_terms.json); () = today's behaviour exactly.
+    pairs: tuple = ()
 
     @property
     def anchor(self) -> tuple:
@@ -88,7 +96,254 @@ def build_query_terms(question: str, cfg: Mapping) -> QueryTerms:
         mode = "extra_only"
     else:
         mode = "fallback_raw"
-    return QueryTerms(tuple(core), tuple(extra), mode, tuple(tuple(r) for r in runs))
+    qt = QueryTerms(tuple(core), tuple(extra), mode, tuple(tuple(r) for r in runs))
+    pairs = _open_pairs(qt, open_compound_max_pairs())
+    return replace(qt, pairs=pairs) if pairs else qt
+
+
+class _HyphenWord(str):
+    """WPQ-CYCLE2-1111 (G4): marks the first word of a pair that came from ONE hyphenated question token "a-b". It is a
+    plain str in every comparison and hash, so (a, b) in qt.pairs and tuple unpacking behave as before."""
+    __slots__ = ()
+
+
+def _is_hyphen_pair(pair) -> bool:
+    return isinstance(pair[0], _HyphenWord)
+
+
+def _pair_head(pair) -> str:
+    """The extra term at whose place the pair's unit stands: "a" for an open pair, "a-b" for a hyphenated token."""
+    return f"{pair[0]}-{pair[1]}" if _is_hyphen_pair(pair) else str(pair[0])
+
+
+def pair_unit(pair) -> str:
+    """WPQ-1111: the provider-query form of an open/closed pair, expansion not replacement: ("super strings" OR superstrings).
+    A pair from a hyphenated token also keeps the hyphen form: ("super-string" OR "super string" OR superstring)."""
+    if _is_hyphen_pair(pair):
+        return f'("{pair[0]}-{pair[1]}" OR "{pair[0]} {pair[1]}" OR {pair[0]}{pair[1]})'
+    return f'("{pair[0]} {pair[1]}" OR {pair[0]}{pair[1]})'
+
+
+def render_terms(terms, pairs, plain=str, pair=pair_unit) -> list:
+    """`terms` with each pair whose two words are both present rendered as ONE unit (at the first word's place) so the pair
+    is never split into bare components; every other term is rendered by `plain`. Unchanged (plain-rendered) without pairs."""
+    terms = list(terms)
+    skip, put = set(), {}
+    for p in pairs or ():
+        a, b = p
+        if _is_hyphen_pair(p):  # G4: the single hyphenated token stands for both words
+            h = _pair_head(p)
+            if h in terms and h not in skip and h not in put:
+                put[h] = pair(p)
+            continue
+        if a in terms and b in terms and a not in skip and b not in skip and a not in put:
+            put[a] = pair((a, b))
+            skip.add(b)
+    return [put[t] if t in put else plain(t) for t in terms if t not in skip]
+
+
+def _open_pairs(qt: QueryTerms, k: int) -> tuple:
+    """C1: up to `k` adjacent pairs of plain-letter content words in the anchor run, left to right, non-overlapping. A word
+    of a configured compound ("multi-agent", "midterm") never joins (those have their own entries). No word list."""
+    run = qt.anchor
+    if k <= 0 or not run:
+        return ()
+    blocked = {w for g in _qt_lists()[1] for v in g for w in re.split(r"[\s\-]+", v)}
+    generic = _guard_generic()
+    out, i, walks = [], 0, 0
+    # WPQ-CYCLE2-1111: at most k + 1 candidates reach the attestation test (one walk each), so the work is bounded
+    while i < len(run) and len(out) < k and walks < k + 1:
+        cand, step = None, 1
+        if "-" in run[i]:  # G4: ONE hyphenated token "a-b" (exactly one hyphen) is a candidate at its own position
+            parts = run[i].split("-")
+            if len(parts) == 2 and all(_PAIR_WORD.fullmatch(x) and x not in blocked for x in parts):
+                cand = (_HyphenWord(parts[0]), parts[1])
+        elif i + 1 < len(run):
+            a, b = run[i], run[i + 1]
+            if all(_PAIR_WORD.fullmatch(x) and x not in blocked for x in (a, b)):
+                cand, step = (a, b), 2
+        if cand is not None and _guard_ok(cand, generic):
+            walks += 1
+            if _attested(cand[0], cand[1]):
+                out.append(cand)
+                i += step
+                continue
+        i += 1
+    return tuple(out)
+
+
+# ---- WPQ-CYCLE2-1111: attestation of a closed form (c2: the corpus; c3: the request's own round-1 titles) and the junk guard
+_GENERIC_PATH = Path(__file__).resolve().parent.parent / "config" / "chunk_topic_terms.json"
+_OC_MODES = ("corpus", "request", "corpus_or_request")
+_WORD_RUN = re.compile(r"[^\W\d_]+")  # the corpus tokenizer's pattern (config/domain_routing.json): hyphens split
+
+
+@lru_cache(maxsize=1)
+def _guard_generic() -> frozenset:
+    """Stopwords and generic scholarly terms of config/chunk_topic_terms.json (the single source). Unreadable -> None-like
+    sentinel: the guard then fails closed (no closed form is emitted)."""
+    try:
+        d = json.loads(_GENERIC_PATH.read_text("utf-8"))
+        return frozenset(str(w).strip().lower() for k in ("stopwords", "generic_scholarly_terms") for w in d[k])
+    except Exception as e:  # noqa: BLE001
+        _log.warning("chunk_topic_terms.json unreadable (%s): no closed form is emitted", type(e).__name__)
+        return frozenset({"*"})
+
+
+def _guard_ok(cand, generic: frozenset) -> bool:
+    """4.2 items 2 and 3: neither word is a stopword or generic scholarly term; the closed form has 6-24 letters.
+    (Items 1 and 5, plain-letter words inside one anchor run, are the callers' candidate rules.)"""
+    if "*" in generic:
+        return False
+    a, b = str(cand[0]), str(cand[1])
+    return a not in generic and b not in generic and 6 <= len(a + b) <= 24
+
+
+@lru_cache(maxsize=1)
+def _oc_attest_cfg() -> tuple:
+    """(open_compound.mode, min_docs, request_min_records) from config/query_terms.json. mode in {corpus, request,
+    corpus_or_request}, default corpus; the two counts are ints >= 1, default 2 (UNCALIBRATED planner priors, see the
+    _wpq1111_note). Anything invalid takes the default, logged once. max_pairs 0 disables every mode before this is read."""
+    try:
+        oc = json.loads(_QT_PATH.read_text("utf-8")).get("open_compound")
+    except Exception:  # noqa: BLE001
+        oc = None
+    oc = oc if isinstance(oc, dict) else {}
+    mode = oc.get("mode", "corpus")
+    if mode not in _OC_MODES:
+        _log.warning("query_terms.json open_compound.mode invalid (%r): corpus", mode)
+        mode = "corpus"
+    out = [mode]
+    for key in ("min_docs", "request_min_records"):
+        n = oc.get(key, 2)
+        if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+            _log.warning("query_terms.json open_compound.%s invalid (%r): 2", key, n)
+            n = 2
+        out.append(n)
+    return tuple(out)
+
+
+def _loaded_corpora() -> tuple:
+    """c2: the corpora already built in this process (a no-I/O peek; never loads, never probes the database)."""
+    try:
+        from vera import fulldoc_corpus
+        return tuple(fulldoc_corpus.peek_loaded_corpora())
+    except Exception:  # noqa: BLE001
+        return ()
+
+
+def _corpus_attests(a, b, min_docs: int) -> bool:
+    """c2: the closed form of "a b" occurs in at least `min_docs` distinct DOCUMENTS of the union of the loaded corpora
+    (base + acquired, de-duplicated by source key), read from the in-memory BM25 postings. Not loaded: False."""
+    docs: set = set()
+    for c in _loaded_corpora():
+        try:
+            docs |= c.closed_form_docs(str(a), str(b))
+        except Exception:  # noqa: BLE001
+            continue
+        if len(docs) >= min_docs:
+            return True
+    return len(docs) >= min_docs
+
+
+def _title_matches(token: str, closed: str) -> bool:
+    """c3 plural rule on the closed form (no word list): token in {ab, abs, abes} or ab in {token+s, token+es}."""
+    return token in (closed, closed + "s", closed + "es") or closed in (token + "s", token + "es")
+
+
+class RequestAttest:
+    """c3: in-request attestation. Built ONCE from the request's round-1 result titles (compute), immutable afterwards and
+    held only by the request scope (request_attest_scope): never a module cache. Holds title token sets, never read back
+    outside attests(). A candidate is attested iff its closed form is a whole title token (plural rule) of at least
+    `request_min_records` distinct records (distinct record key AND distinct normalised title)."""
+
+    def __init__(self):
+        self._recs = None  # None = not computed yet (round 1 running): attests nothing
+        self._seen: dict = {}
+
+    @property
+    def computed(self) -> bool:
+        return self._recs is not None
+
+    def compute(self, items) -> bool:
+        """First call only; returns True when this call computed. Titles only (never snippets); items without a usable title
+        are skipped. Record key = DOI, else the normalised URL (vera.url_key); a record whose key or normalised title was
+        already counted is the same work."""
+        if self._recs is not None:
+            return False
+        recs, keys, titles = [], set(), set()
+        try:
+            from vera.url_key import normalize_doi, normalize_url
+        except Exception:  # noqa: BLE001
+            normalize_doi = normalize_url = lambda x: str(x or "").strip().lower()  # noqa: E731
+        for it in items or ():
+            if not isinstance(it, dict):
+                continue
+            words = _WORD_RUN.findall(str(it.get("title") or "").lower())
+            if not words:
+                continue
+            nt = " ".join(words)
+            doi = normalize_doi(it.get("doi"))
+            url = str(it.get("url") or "").strip()
+            key = ("doi:" + doi) if doi else (normalize_url(url) if url else None)
+            if nt in titles or (key is not None and key in keys):
+                continue
+            titles.add(nt)
+            if key is not None:
+                keys.add(key)
+            recs.append(frozenset(words))
+        self._recs = tuple(recs)
+        return True
+
+    def attests(self, a, b, min_records: int) -> bool:
+        if not self._recs:
+            return False
+        closed = str(a).lower() + str(b).lower()
+        hit = self._seen.get(closed)
+        if hit is None:
+            hit = self._seen[closed] = sum(1 for r in self._recs if any(_title_matches(t, closed) for t in r))
+            if hit >= min_records:
+                try:  # trace: a code and a count only, never a title or a term
+                    from vera import request_trace as rt
+                    rt.event("acquire", "pair_attested_request", counts={"records": hit})
+                except Exception:  # noqa: BLE001
+                    pass
+        return hit >= min_records
+
+
+_REQ_ATTEST: contextvars.ContextVar = contextvars.ContextVar("wpq_c3_request_attest", default=None)
+
+
+@contextmanager
+def request_attest_scope(att: "RequestAttest | None" = None):
+    """Opens the request's attestation holder (a new empty one, or the given one) for the code run inside, including threads
+    that copy the context. Always closed on exit; nothing outlives the request. Empty until compute() is called, so every
+    query built before that (round 1) is the control's."""
+    att = att if att is not None else RequestAttest()
+    tok = _REQ_ATTEST.set(att)
+    try:
+        yield att
+    finally:
+        _REQ_ATTEST.reset(tok)
+
+
+def current_request_attest() -> "RequestAttest | None":
+    return _REQ_ATTEST.get()
+
+
+def request_attest_active() -> bool:
+    """True when the configured mode uses request attestation and max_pairs allows pairs (callers skip the work otherwise)."""
+    return open_compound_max_pairs() > 0 and _oc_attest_cfg()[0] in ("request", "corpus_or_request")
+
+
+def _attested(a, b) -> bool:
+    mode, min_docs, req_min = _oc_attest_cfg()
+    if mode in ("corpus", "corpus_or_request") and _corpus_attests(a, b, min_docs):
+        return True
+    if mode in ("request", "corpus_or_request"):
+        att = _REQ_ATTEST.get()
+        return att is not None and att.attests(a, b, req_min)
+    return False
 
 
 def _generic_cfg(cfg: Mapping) -> tuple:
@@ -105,7 +360,9 @@ def and_terms(qt: QueryTerms, k: int, exclude=()) -> list:
     before any concept gets a second term; filler words and `exclude` (e.g. the profile's generic_terms) never.
     Returned in question order. [] when no run term is left (the caller keeps its previous rule)."""
     ex = {str(x).lower() for x in exclude or ()}
-    runs = [[t for t in r if t not in ex] for r in qt.runs]
+    # WPQ-1111 (P3-1): an open/closed pair is ONE term here (rendered as pair_unit), never its two bare components
+    pairs = tuple(p for p in qt.pairs if p[0] not in ex and p[1] not in ex)
+    runs = [[t for t in _collapse_run(r, pairs) if t not in ex] for r in qt.runs]
     runs = [r for r in runs if r]
     if not runs:
         return []
@@ -119,7 +376,24 @@ def and_terms(qt: QueryTerms, k: int, exclude=()) -> list:
                 picked.append(runs[i][depth])
         depth += 1
     pos = {t: n for n, t in enumerate(qt.extra)}
+    pos.update({pair_unit(p): pos.get(_pair_head(p), 0) for p in pairs})
     return sorted(picked, key=lambda t: pos.get(t, 0))
+
+
+def _collapse_run(run, pairs) -> list:
+    out, i = [], 0
+    hy = {_pair_head(p): p for p in pairs if _is_hyphen_pair(p)}
+    while i < len(run):
+        if run[i] in hy:  # G4: a hyphenated token is one run element
+            out.append(pair_unit(hy[run[i]]))
+            i += 1
+        elif i + 1 < len(run) and (run[i], run[i + 1]) in pairs:
+            out.append(pair_unit(next(p for p in pairs if tuple(p) == (run[i], run[i + 1]))))
+            i += 2
+        else:
+            out.append(run[i])
+            i += 1
+    return out
 
 
 def drop_generic(text: str, cfg: Mapping | None = None) -> str:
@@ -202,6 +476,48 @@ def _qt_lists() -> tuple:
         return (), (), {}, (), (), (), ()
 
 
+_QT_PATH = Path(__file__).resolve().parent.parent / "config" / "query_terms.json"
+
+
+@lru_cache(maxsize=1)
+def _qt_oc() -> tuple:
+    """(open_compound.max_pairs, relevance.demote_record_types) from config/query_terms.json (WPQ-1111). max_pairs must be
+    an int >= 0; anything else (or an unreadable file) turns the open-compound rule OFF (today's behaviour), logged once.
+    A missing key is OFF too. The demotion list is lower-cased strings; invalid -> empty (no demotion), logged once."""
+    try:
+        d = json.loads(_QT_PATH.read_text("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        _log.warning("query_terms.json unreadable (%s): open_compound and demote_record_types are off", type(e).__name__)
+        return 0, frozenset()
+    n = (d.get("open_compound") or {}).get("max_pairs", 0) if isinstance(d.get("open_compound") or {}, dict) else "x"
+    if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+        _log.warning("query_terms.json open_compound.max_pairs invalid (%r): open-compound rule off", n)
+        n = 0
+    dem = (d.get("relevance") or {}).get("demote_record_types", []) if isinstance(d.get("relevance") or {}, dict) else "x"
+    if not isinstance(dem, list) or not all(isinstance(x, str) for x in dem):
+        _log.warning("query_terms.json relevance.demote_record_types invalid: no demotion")
+        dem = []
+    return n, frozenset(x.strip().lower() for x in dem if x.strip())
+
+
+def open_compound_max_pairs() -> int:
+    return _qt_oc()[0]
+
+
+def demote_record_types() -> frozenset:
+    """WPQ-1111 (P5-1, P6-1): the ONE list of record types (OpenAlex `type`) that sort after research records in the
+    reading list and the acquisition pool. Read by acq_discovered and auto_acquire through record_demoted."""
+    return _qt_oc()[1]
+
+
+def record_demoted(rec) -> bool:
+    """True when the record's type (`source_type`, else `type`) is in demote_record_types. Ordering only: roles, labels and
+    eligibility are unchanged (P5-1)."""
+    if not isinstance(rec, dict):
+        return False
+    return str(rec.get("source_type") or rec.get("type") or "").strip().lower() in demote_record_types()
+
+
 def strip_framing(text: str) -> str:
     """R2: `text` without the framing idioms (config framing_phrases); unchanged when nothing else would remain."""
     out = " ".join(str(text or "").split())
@@ -255,14 +571,17 @@ def _groups(groups):
 
 
 def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), groups=None,
-                 central=()) -> tuple[tuple, dict]:
+                 central=(), pairs: bool = False) -> tuple[tuple, dict]:
     """(key concepts, weights). Concepts: core phrases + distinctive extra terms (stop, meta, filler words and
     `extra_generic`, e.g. the acquisition profile's generic_terms, removed; idioms never reach them). Weight of a
     concept: 1, a hyphenated compound 2 (R1: never a component above its compound).
     ((), {}) without a terms config.
     NONASK-1103 S2: `central` (the named entities of a sub-query) makes each matching concept CENTRAL: its weight is
     (top weight + 1), so a record that lacks the entity is weak (tier 1) however many generic concepts it matches.
-    No new number: the weight is derived from the others."""
+    No new number: the weight is derived from the others.
+    WPQ-1111 (C1b, P2-1): with `pairs` (the pre-fetch ordering callers), each open/closed pair of build_query_terms becomes
+    one extra concept "w1-w2" (matched open, hyphenated or closed by _concept_regex) of weight 2, ahead of its two
+    components, which stay as weight-1 concepts: a pair match is tier 0, a component-only match tier 1 (kept, sorted after)."""
     cfg = cfg if cfg is not None else _default_terms_cfg()
     if not cfg:
         return (), {}
@@ -284,8 +603,19 @@ def key_concepts(question: str, cfg: Mapping | None = None, extra_generic=(), gr
     # R1: a hyphen component ("agent") never outweighs its compound ("multi-agent"): the compound is the top concept
     # (2), its components and every other concept weigh 1. relevance_tiers then asks a compound-only match to be
     # backed by a second, non-component concept. No numeric threshold changes; weights stay derived from the set.
+    pc = set()
+    if pairs:
+        for p in qt.pairs:
+            a, b = p
+            if _is_hyphen_pair(p):  # G4: the hyphenated token is already the concept "a-b"; it takes the pair weight
+                if _pair_head(p) in out:
+                    pc.add(_pair_head(p))
+            elif a in out and b in out:
+                pc.add(f"{a}-{b}")
+                i = out.index(a)
+                out = out[:i] + (f"{a}-{b}",) + out[i:]
     comps = {c for c in out if is_compound(c)} if llm_sense(out) else set()  # incidental "multi-agent": weight 1 (QA F4)
-    w = {c: (2 if c in comps else 1) for c in out}
+    w = {c: (2 if c in comps or c in pc else 1) for c in out}
     cen = entity_concepts(out, central) | _news_central(question, out)
     if cen and w:
         top = max(w.values())
@@ -423,7 +753,7 @@ def part_tiers(question: str, texts, part_of, parts, *, cfg=None, extra_generic=
     one pool (today). Otherwise a text found for part k is judged against THAT part's concepts with the named entity
     central AND really present (entity_hit via `ctx_for(entity) -> ctx or None`); tiers stay relative to each group."""
     texts = list(texts)
-    kc_q = key_concepts(question, cfg, extra_generic=extra_generic)
+    kc_q = key_concepts(question, cfg, extra_generic=extra_generic, pairs=True)
     if len(parts or ()) < 2:
         return relevance_tiers(kc_q, texts)
     groups: dict = {}
@@ -434,7 +764,7 @@ def part_tiers(question: str, texts, part_of, parts, *, cfg=None, extra_generic=
         if k is None:
             kc, ents = kc_q, None
         else:
-            kc = key_concepts(parts[k][0], cfg, extra_generic=extra_generic, central=parts[k][1])
+            kc = key_concepts(parts[k][0], cfg, extra_generic=extra_generic, central=parts[k][1], pairs=True)
             ents = [c for c in (ctx_for(e) for e in parts[k][1]) if c] if ctx_for else None
         for i, t in zip(idx, relevance_tiers(kc, [texts[i] for i in idx], entities=ents or None)):
             out[i] = t

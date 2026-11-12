@@ -1125,7 +1125,7 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
     # the profile's generic_terms removed) judge each candidate's title + abstract BEFORE the cut below: a candidate
     # matching none of them is dropped as irrelevant; weak matches are ordered after relevant ones.
     kc = search_query.key_concepts(question, extra_generic=((cfg.get("search") or {}).get("openalex_profile")
-                                                                   or {}).get("generic_terms") or ())
+                                                                   or {}).get("generic_terms") or (), pairs=True)
     pool = [c for c in cands or () if isinstance(c, dict)]
     _txt = lambda c: f"{c.get('title') or ''} {c.get('snippet') or ''}"  # noqa: E731
     tier = {}
@@ -1183,7 +1183,9 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
             if drops is not None:
                 drops[id(c)] = acq_config.reason(cfg, "irrelevant")
             continue
-        ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos, tier.get(id(c), 0)))
+        # WPQ-1111 (P5-1): reference-type records sort after research records (first key part = (demoted, tier))
+        ranked.append((prerank_score(rq, c, fdcfg), doi, c, isbn, pos,
+                       (search_query.record_demoted(c), tier.get(id(c), 0))))
     # YIELD-1021: DDG-mapped first. DAR-TRACE-1022: ties keep the providers' own relevance order (merge position), not
     # the DOI string (Europe PMC lite carries no abstract, so most title scores tie and the DOI sort discarded its order).
     # P0DTA-PRIO D1: routable full text (an OA signal the code already gathers) before records with no OA evidence, so

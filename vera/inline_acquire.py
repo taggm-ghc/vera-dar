@@ -390,10 +390,16 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
         if not scope_router.intent_clean(str(question)):
             return Outcome("off", guard=True)
         disc = None
+        att = None  # WPQ-CYCLE2-1111 (c3): this request's attestation, computed once from the discovery (round-1) results
         if discovered is not None:
             from vera import acq_discovered
             if acq_discovered.use_discovered(acq):
-                disc = acq_discovered.discovered_candidates(discovered, acq, question)
+                from vera import search_query
+                if search_query.request_attest_active():
+                    att = search_query.RequestAttest()
+                    att.compute(discovered)
+                with search_query.request_attest_scope(att):
+                    disc = acq_discovered.discovered_candidates(discovered, acq, question)
         key = _cache_key(question, served, disc) if disc is not None else _cache_key(question, served)
         if persist:  # MIDTERMS-WP8-1106: a keep-searching request never replays, nor shares a slot with, a plain one
             key = key + ("persist",)
@@ -438,7 +444,8 @@ def acquire(question: str, acq: dict, *, env=os.environ, clock=time.monotonic, d
                    **({"disc": disc} if disc is not None else {}),  # P0-5: flag off = the unchanged call
                    **({"prefer_recent": True} if prefer_recent else {}),
                    **({"topic_key": topic_key} if topic_key else {}),
-                   **({"persist": True} if persist else {}))
+                   **({"persist": True} if persist else {}),
+                   **({"attest": att} if att is not None else {}))
     except Exception as e:  # noqa: BLE001
         logger.warning("autoacq inline failed (%s)", type(e).__name__)
     finally:
@@ -539,7 +546,7 @@ def _wait_for_holder(slot, acq) -> None:
 
 
 def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer_recent=False,
-         topic_key="", persist=False) -> Outcome:
+         topic_key="", persist=False, attest=None) -> Outcome:
     """RATE-1022 C1: every rate-limit acquire() in this inline run sees its deadline. rate_limit uses time.monotonic,
     so the scope is now + deadline_s on that clock (the injected `clock` may be a test clock)."""
     # STREAM-1031 / OD-1031-NODEADLINE: on the streamed path there is no inline deadline (per-wait max_wait_s still applies)
@@ -548,7 +555,10 @@ def _run(question, acq, env, clock, deps_factory, served=None, disc=None, prefer
     # request_scope: this run's own limiter accounting (waits, skips), reported on this Outcome only.
     streamed = stream_ctx.active()
     scope = None if streamed else time.monotonic() + float(_b(acq, "deadline_s", 45))
-    with rate_limit.deadline_scope(scope), rate_limit.stream_wait_scope(streamed), rate_limit.request_scope() as led:
+    from vera import search_query
+    # WPQ-CYCLE2-1111 (c3): the request's attestation holder; empty until _run_body computes it after round 1, closed here
+    with search_query.request_attest_scope(attest), rate_limit.deadline_scope(scope), \
+            rate_limit.stream_wait_scope(streamed), rate_limit.request_scope() as led:
         o = _run_body(question, acq, env, clock, deps_factory, served,
                       **({"disc": disc} if disc is not None else {}),
                       **({"prefer_recent": True} if prefer_recent else {}),
@@ -848,6 +858,13 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
             st["route"] = route_rec
         route = route_rec["route"] if route_rec else None
         protected = _protected_keys(cands, acq, deps) if aa._topic_fit_active(acq, route) else set()
+        try:  # WPQ-CYCLE2-1111 (c3): attestation from the round-1 titles, once (no-op when already computed or off)
+            from vera import search_query
+            _att = search_query.current_request_attest()
+            if _att is not None and search_query.request_attest_active():
+                _att.compute(cands)
+        except Exception:  # noqa: BLE001  never breaks the run: no attestation = the control
+            pass
         ranked = aa.rank_candidates(question, [c for c in cands if id(c) not in st.get("web_ids", ())] if st.get("web_ids")
                                     else cands, acq, skip, fdcfg, count, drops=drops, route=route,
                                     protected=protected, parts=[(t, e) for t, e in (sq_plan or ())])
