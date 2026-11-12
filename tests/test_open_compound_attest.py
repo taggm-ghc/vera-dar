@@ -289,11 +289,32 @@ def _scope(items):
     return att
 
 
+# The 47 questions of the cycle-1 pool (work/WPQ-PDSA-1111/pool-v2.json), questions only, in pool order.
+POOL_QS = [
+    "What are super strings?", "superstrings", "what are superstrings", "super-string theory?", "What is Vera dar magops?",
+    "from where did vera come?", "What is VERA-DAR?", "How accurate are epidemic forecasting models?",
+    "What are the latest findings on lunar lava tube habitat engineering?", "Is aloe vera good for burns?",
+    "Who was Vera Brittain?", "where did it come from?", "What is the capital of France?",
+    "Why did Albert Einstein win the Nobel Prize for his theory of relativity?",
+    "What are the latest developments in epidemic forecasting?", "Tell me about models", "What is vrea?",
+    "what is vare dar?", "What are hadrons?", "What are quarks?", "What are leptons?", "What are components of RAG?",
+    "What are implications of the US 2026 Midterm elections? Keep searching until you find an answer",
+    "what are nano particles?", "what is neuro science", "post office strings", "data base design", "super market prices",
+    "life style changes", "super string quartet", "super bowl sponsorship", "guitar super slinky strings",
+    "super strings dark energy", "climate change effects", "what did Einstein say about super strings",
+    "multi-agent orchestration", "midterm grades", "string theory", "M-theory", "what are quarks?", "What are photons?",
+    "What are pigments?", "What are chords?", "What are sonnets?", "What are baked goods?", "What are super strings?",
+    "What is a super string?"]
+
+
 def test_g15_round1_is_the_control_for_every_question(monkeypatch):
+    assert len(POOL_QS) == 47
     _cfg(monkeypatch, mode="request")
-    base = {q: _control(monkeypatch, q) for q in QS}
+    base = {q: _control(monkeypatch, q) for q in POOL_QS}
+    base_kc = {q: _kc_control(monkeypatch, q) for q in POOL_QS}
     with sq.request_attest_scope():  # round 1: the holder is open but empty
-        assert {q: _all(q) for q in QS} == base
+        assert {q: _all(q) for q in POOL_QS} == base
+        assert {q: sq.key_concepts(q, pairs=True) for q in POOL_QS} == base_kc
         assert sq.request_attest_active()
 
 
@@ -392,3 +413,105 @@ def test_c2_or_c3_mode_either_source_attests(monkeypatch):
         assert _all(q)["ask"] == SS
     _use(monkeypatch, _fd({"d1": _text("superstrings"), "d2": _text("superstrings")}))
     assert _all(q)["ask"] == SS
+
+
+# --- D1 (verifier): the inline_acquire wiring, end to end with the offline fakes of tests/acq_support ----------------
+def _wiring(monkeypatch, cands_for, discovered=None):
+    """Runs inline_acquire.acquire (mode request, max_pairs 1) with fake providers; returns (log, outcome). `cands_for(n)` =
+    the candidates the n-th search call returns. The log holds, per search call and per rank_candidates call, what the
+    request scope and the provider query builder saw at that moment."""
+    from vera import acq_config, auto_acquire, inline_acquire
+    _cfg(monkeypatch, mode="request")
+    monkeypatch.setattr(acq_config, "db_configured", lambda cfg, env: True)
+    auto_acquire.reset_for_tests()
+    inline_acquire.reset_for_tests()
+    q = "What are super strings?"
+    log = []
+
+    def search(question, n, t):
+        att = sq.current_request_attest()
+        log.append(("search", None if att is None else att.computed, None if att is None or not att.computed else len(att._recs),
+                    sp.build_openalex_search(q, QT)[0]))
+        return list(cands_for(sum(1 for e in log if e[0] == "search") - 1))
+    orig = auto_acquire.rank_candidates
+
+    def rank(question, *a, **k):
+        att = sq.current_request_attest()
+        log.append(("rank", None if att is None else att.computed, None if att is None or not att.computed else len(att._recs),
+                    sq.key_concepts(q, pairs=True)[0]))
+        return orig(question, *a, **k)
+    monkeypatch.setattr(auto_acquire, "rank_candidates", rank)
+    d = auto_acquire.Deps(search=search, http_get=A.Web({}, {}), lookup=A.Lookup(), store=A.Store(),
+                          corpus_keys=lambda: set(), url_check=lambda u: (True, ""), refresh=None)
+    cfg = A.cfg()
+    cfg.setdefault("inline", {})["use_discovered"] = True
+    kw = {} if discovered is None else {"discovered": discovered}
+    try:
+        o = inline_acquire.acquire(q, cfg, env=A.ENV_ON, deps_factory=lambda a, e: d, **kw)
+    finally:
+        auto_acquire.reset_for_tests()
+        inline_acquire.reset_for_tests()
+    return log, o
+
+
+def _c(i, title):
+    return A.cand(f"10.9999/ss.{i}", title=title)
+
+
+def test_d1_wiring_round1_is_control_attestation_computed_once_before_reranking(monkeypatch):
+    ctrl = sp.build_openalex_search("What are super strings?", QT)[0]
+    r1 = [_c(1, "Superstrings and pathogen transmission"), _c(2, "Superstring outbreak incidence models"),
+          _c(3, "Superstrings and pathogen transmission")]  # #3: same normalised title as #1, other DOI: counts once (R5-D1)
+    log, o = _wiring(monkeypatch, lambda n: r1)
+    searches = [e for e in log if e[0] == "search"]
+    ranks = [e for e in log if e[0] == "rank"]
+    assert searches and ranks and o.status
+    assert searches[0][1] is False and searches[0][3] == ctrl  # round 1: holder open, not computed, control query
+    assert ranks[0][1] is True and ranks[0][2] == 2  # computed before re-ranking, from 2 distinct records
+    assert "super-strings" in ranks[0][3]  # re-ranking sees the attested pair as one concept
+    assert all(e[2] == 2 for e in log if e[1])  # never recomputed: the record count is the same in every later call
+    for e in searches[1:]:  # later rounds, when the variant loop ran, get the pair
+        assert e[3] != ctrl and "superstrings" in e[3]
+    assert sq.current_request_attest() is None  # nothing outlives the request
+
+
+def test_d1_wiring_one_record_does_not_attest(monkeypatch):
+    ctrl = sp.build_openalex_search("What are super strings?", QT)[0]
+    log, _o = _wiring(monkeypatch, lambda n: [_c(1, "Superstrings and pathogen transmission"), _c(2, "Unrelated outbreak models")])
+    assert all(e[3] == ctrl for e in log if e[0] == "search")
+    assert all("super-strings" not in e[3] for e in log if e[0] == "rank")
+
+
+def test_d1_wiring_discovered_results_attest_once_and_are_not_recomputed(monkeypatch):
+    ctrl = sp.build_openalex_search("What are super strings?", QT)[0]
+    disc = [{"n": 1, "title": "Superstrings: a review", "url": "https://arxiv.org/abs/2401.00001", "provider": "arxiv"},
+            {"n": 2, "title": "Superstring theory primer", "url": "https://arxiv.org/abs/2401.00002", "provider": "arxiv"}]
+    other = [_c(7, "Unrelated dark energy"), _c(8, "Another unrelated one"), _c(9, "A third unrelated one")]
+    log, _o = _wiring(monkeypatch, lambda n: other, discovered=disc)
+    searches = [e for e in log if e[0] == "search"]
+    assert searches
+    assert searches[0][1] is True and searches[0][2] == 2 and searches[0][3] != ctrl  # computed from the discovery titles
+    assert all(e[2] == 2 for e in log)  # the inline candidates (3 more records) never change it
+    assert sq.current_request_attest() is None
+
+
+def test_d1_wiring_no_leak_to_fresh_threads_or_pools(monkeypatch):
+    import concurrent.futures as cf
+    import contextvars
+    _cfg(monkeypatch, mode="request")
+    q = "What are super strings?"
+    ctrl = sp.build_openalex_search(q, QT)[0]
+    seen = {}
+    pool = cf.ThreadPoolExecutor(2)
+    with sq.request_attest_scope(_scope(R1)):
+        inside = sp.build_openalex_search(q, QT)[0]
+        seen["pool_no_copy"] = pool.submit(lambda: sp.build_openalex_search(q, QT)[0]).result()
+        seen["pool_copy"] = pool.submit(contextvars.copy_context().run, lambda: sp.build_openalex_search(q, QT)[0]).result()
+        bg = {}
+        th = threading.Thread(target=lambda: bg.update(q=sp.build_openalex_search(q, QT)[0], h=sq.current_request_attest()))
+        th.start()
+        th.join()
+    pool.shutdown()
+    assert inside != ctrl and seen["pool_copy"] == inside  # request-context copies share the one immutable holder
+    assert seen["pool_no_copy"] == ctrl and bg["q"] == ctrl and bg["h"] is None  # hand-off job: a fresh context
+    assert sp.build_openalex_search(q, QT)[0] == ctrl
