@@ -52,6 +52,10 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-NODOI": "no_route", "R-ACQ-NOTOA": "no_route", "R-ACQ-PID-NOROUTE": "no_route",
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
+    # WPL-1111 (ROBOTS-LABEL-1111): same bucket as R-ACQ-ROBOTS; none is transient (no background retry)
+    "R-ACQ-ROBOTS_UNREADABLE": "no_route", "R-ACQ-ROUTE_ROBOTS": "no_route", "R-ACQ-ROUTE_NOAI": "no_route",
+    "R-ACQ-ROUTE_UNREADABLE": "no_route", "R-ACQ-NOROUTE_UNCHECKED": "no_route",
+    "R-ACQ-ACCESS_DENIED": "no_route", "R-ACQ-ROUTE_DENIED": "no_route",
     "R-ACQ-TDM": "no_route",  # CONTROL-GAPS-1107: TDM reservation (tdmrep.json, header or meta)
     "R-ACQ-PORTAL": "portal",  # PORTAL-RULE-1110: any portal host or record (host_role), never stored or read as a source
     "R-ACQ-ARXIV_PORTAL": "portal",  # ARXIV-PORTAL-1110: an arXiv record is a portal, never read as a source
@@ -104,12 +108,19 @@ _CODE_MAP: dict[str, str] = {
     "R-ACQ-CRAWL_DELAY": "crawl_delay",
 }
 KNOWN_CODES = tuple(sorted(_CODE_MAP))
+_SUFFIXED_BASES = ("R-ACQ-ROBOTS", "R-ACQ-ROBOTS_UNREADABLE", "R-ACQ-ROUTE_NOAI", "R-ACQ-ROUTE_UNREADABLE",
+                   "R-ACQ-NOROUTE_UNCHECKED", "R-ACQ-ACCESS_DENIED")
 
 
 def _base(code) -> str:
     """PERF-MISS-1105-FIX2 F1: R-ACQ-RATELIMITED-<REASON> keys the same table rows as R-ACQ-RATELIMITED."""
     c = str(code or "").strip().upper()
-    return "R-ACQ-RATELIMITED" if c.startswith("R-ACQ-RATELIMITED-") else c
+    if c.startswith("R-ACQ-RATELIMITED-"):
+        return "R-ACQ-RATELIMITED"
+    for b in _SUFFIXED_BASES:  # WPL-1111: R-ACQ-<BASE>-<CAUSE> keys the rows of its base (ACCESS_DENIED-ROUTE too)
+        if c.startswith(b + "-"):
+            return b
+    return c
 
 
 def reason_from_code(code: str) -> str:

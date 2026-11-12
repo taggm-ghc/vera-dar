@@ -80,7 +80,17 @@ def _fetch_made(c: dict) -> bool:
         return c.get("outcome") != "reuse_rejected"
     if st not in _FETCH_STATUSES:
         return False
-    return str(c.get("reason") or "").strip().upper() in _FETCH_YES
+    rc = str(c.get("reason") or "").strip().upper()
+    # WPL-1111: suffixed codes. ROBOTS_UNREADABLE counts when fresh (robots.txt was requested); CACHED_*, the route
+    # codes (ROUTE_*, NOROUTE_*, ACCESS_DENIED-ROUTE) went to VERA-DAR's full-text service, not the source: not counted.
+    if rc.startswith("R-ACQ-ROBOTS_UNREADABLE-"):
+        return not rc.startswith("R-ACQ-ROBOTS_UNREADABLE-CACHED")
+    if rc == "R-ACQ-ROBOTS_UNREADABLE" or rc == "R-ACQ-ACCESS_DENIED" or (
+            rc.startswith("R-ACQ-ACCESS_DENIED-") and not rc.endswith("-ROUTE")):
+        return True
+    if rc.startswith("R-ACQ-ROBOTS-"):  # ROBOTS-PAGE_NOAI: the page was fetched
+        return True
+    return rc in _FETCH_YES
 
 
 def cfg_of(acq: dict | None) -> dict | None:

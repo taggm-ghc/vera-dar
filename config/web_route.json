@@ -16,6 +16,8 @@
  "phrases": {
   "host_round_cap": "not read: only one page per site is read per answer",
   "fetch_failed": "not read: the page could not be read",
+  "robots_unreadable": "not read: the site's robots rules could not be read",
+  "access_denied": "not read: the site denied access to this page",
   "crawl_delay": "not read yet: the site asks readers to wait between visits",
   "empty": "not read: the page had no readable text",
   "deadline": "not read: there was not enough time left to read it for this answer",

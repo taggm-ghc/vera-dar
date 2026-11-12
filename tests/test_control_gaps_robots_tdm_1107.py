@@ -65,10 +65,12 @@ def test_europepmc_robots_module_binds_statement_and_own_family_not_hyperscaler_
     assert A.doc_urls(web.urls) != []
 
 
-@pytest.mark.parametrize("resp", [_txt("", 500), _txt("", 502), ConnectionError("down")])
-def test_robots_unreadable_fails_closed(resp):
+@pytest.mark.parametrize("resp,cause", [(_txt("", 500), "STATUS_5XX"), (_txt("", 502), "STATUS_5XX"),
+                                        (ConnectionError("down"), "NETWORK")])
+def test_robots_unreadable_fails_closed(resp, cause):
     web = _xml_web({ROBOTS: resp})
-    assert _code(web) == "R-ACQ-ROBOTS" and A.doc_urls(web.urls) == []
+    # WPL-1111 (ROBOTS-LABEL-1111): an unreadable robots.txt is R-ACQ-ROBOTS_UNREADABLE-<CAUSE>, not a rule (R-ACQ-ROBOTS)
+    assert _code(web) == f"R-ACQ-ROBOTS_UNREADABLE-{cause}" and A.doc_urls(web.urls) == []
     assert acq_discovered._ROBOTS["www.ebi.ac.uk"][1] is False  # a real failure is cached briefly (robots_fail_ttl_s)
 
 
@@ -89,7 +91,7 @@ def test_server_throttle_on_gate_reads_is_rate_limited_not_cached_not_robots_or_
 
 def test_throttle_status_not_in_portal_list_is_a_robots_refusal():
     web = _xml_web({ROBOTS: _txt("", 504)})  # 504 is not in the europepmc throttle_statuses
-    assert _code(web) == "R-ACQ-ROBOTS"
+    assert _code(web) == "R-ACQ-ROBOTS_UNREADABLE-STATUS_5XX"  # WPL-1111: a refusal, now labelled as an unreadable file
 
 
 def test_job_deadline_on_gate_read_is_not_cached_as_robots():
@@ -117,7 +119,8 @@ def test_resolve_oa_search_api_is_gated_too():
     web = A.Web({}, {}, {ROBOTS: _txt("User-agent: *\nDisallow: /europepmc/webservices/rest/search\n")})
     with pytest.raises(auto_acquire._Stop) as e:
         auto_acquire.resolve_oa("10.9999/x", A.cfg(), A.deps([], web), clock=A.clock_at())
-    assert e.value.code == "R-ACQ-ROBOTS" and A.doc_urls(web.urls) == []
+    # WPL-1111: resolve_oa is the full-text service hop (Europe PMC), so the rule belongs to the service, not the source
+    assert e.value.code == "R-ACQ-ROUTE_ROBOTS" and A.doc_urls(web.urls) == []
 
 
 # ------------------------------------------------------------------------------------------------ r2 (2): host check
@@ -255,7 +258,7 @@ def test_run_job_end_to_end_stores_nothing_when_robots_disallows():
     store = A.Store()
     out = auto_acquire.run_job(A.job(), A.cfg(), A.deps([A.cand("10.9999/acq.epi4")], web, store=store),
                                clock=A.clock_at(), env=A.ENV_ON)
-    assert store.plans == [] and out["codes"] == {"R-ACQ-ROBOTS": 1}, out
+    assert store.plans == [] and out["codes"] == {"R-ACQ-ROUTE_ROBOTS": 1}, out  # WPL-1111: the service hop
 
 
 # ------------------------------------------------------------------------------------------------ TDM reservation
@@ -326,9 +329,9 @@ REGISTRY: dict[str, tuple] = {
     "vera/selective_fetch.py:fetch_candidate": (GATE, "_download("),
     "vera/auto_acquire.py:default_deps": (TRANSPORT, "vera/auto_acquire.py:_guarded_get", "hop_access("),
     "vera/selective_fetch.py:pinned_get": (TRANSPORT, "vera/selective_fetch.py:_download", "robots_allowed"),
-    "vera/public_fetch.py:default_transport": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_allowed("),
-    "vera/public_fetch.py:default_transport._Conn": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_allowed("),
-    "vera/public_fetch.py:default_transport._Pool": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_allowed("),
+    "vera/public_fetch.py:default_transport": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_verdict("),
+    "vera/public_fetch.py:default_transport._Conn": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_verdict("),
+    "vera/public_fetch.py:default_transport._Pool": (TRANSPORT, "vera/public_fetch.py:fetch", "robots_verdict("),
     "vera/selective_fetch.py:_connect_phase_error": (NO_REQUEST,),
     "vera/selective_fetch.py:_parsers_agree": (NO_REQUEST,),
     "vera/search_providers.py:ddg_default_transport": (TRANSPORT, "vera/search_providers.py:DuckDuckGoLiteProvider.call",

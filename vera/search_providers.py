@@ -1047,6 +1047,9 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                 return None
             if not _landing_url_ok(cur) or _is_wikipedia(cur):
                 return None
+            from vera import acq_discovered as _ad_deny0
+            if _ad_deny0.is_denied(urls=(cur,)):  # WPL-1111 RC-2(d): a denied landing URL is skipped, no request
+                return None
             from vera import selective_fetch as _sf_api
             try:  # API-URL-GATE-1108: an API URL (first or redirect hop) needs its api_permissions entry, any transport
                 _sf_api.api_gate(cur, "fulltext")
@@ -1080,6 +1083,10 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
                         from urllib.parse import urljoin
                         cur = urljoin(cur, r.headers["Location"])
                         continue
+                    if r.status_code in (401, 403):  # WPL-1111 R2: a denial is remembered; never requested again
+                        from vera import acq_discovered as _ad_deny
+                        _ad_deny.deny(_ad_deny.denial_ids(urls=(url, cur)))
+                        return None
                     if r.status_code != 200:
                         return None
                     ctype = str((getattr(r, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
@@ -1451,7 +1458,7 @@ def _own_decision(e: Exception):
     from vera import rate_limit
     t = str(e)
     tl = t.lower()
-    if "r-acq-robots" in tl:
+    if re.search(r"r-acq-robots\b", tl):  # WPL-1111: not R-ACQ-ROBOTS_UNREADABLE (a read failure is not a rule)
         return "robots"
     if isinstance(e, rate_limit.RateLimited):
         reason = e.reason

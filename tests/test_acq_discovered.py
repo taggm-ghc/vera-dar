@@ -213,19 +213,30 @@ def test_t3_landing_route_terminal_reasons(kw, code):
 
 
 def test_t3_robots_disallow_or_unavailable_stops_before_the_target():
-    for robots in (A.Resp(body=b"User-agent: *\nDisallow: /\n", ctype="text/plain"), A.Resp(status=503, ctype="text/plain")):
+    # WPL-1111 (ROBOTS-LABEL-1111): a rule that says no stays R-ACQ-ROBOTS; an unreadable robots.txt (503) now has its
+    # own true code and cause (it is not a rule), and the stop still happens before the target
+    for robots, want in ((A.Resp(body=b"User-agent: *\nDisallow: /\n", ctype="text/plain"), "R-ACQ-ROBOTS"),
+                         (A.Resp(status=503, ctype="text/plain"), "R-ACQ-ROBOTS_UNREADABLE-STATUS_5XX")):
         acq_discovered.reset_for_tests()
         inline_acquire.reset_for_tests()
         auto_acquire.reset_for_tests()
         why, web = _step_b_reason(robots_pub=robots)
-        assert why == "R-ACQ-ROBOTS"
+        assert why == want
         assert f"https://{PUB}/article/1" not in [u for u, _h, _k in web.calls]
 
 
-def test_t3_robots_4xx_means_no_rules_but_429_fails_closed():
-    web, _ = step_b_web(robots_pub=A.Resp(status=403, ctype="text/plain"))
+def test_t3_robots_404_means_no_rules_other_4xx_stops_and_429_fails_closed():
+    web, _ = step_b_web(robots_pub=A.Resp(status=404, ctype="text/plain"))
     o, store = run(cfg_on(step_b=True), [oa_src()], web)
     assert disc(o)["outcome"] == "admitted" and len(store.plans) == 1
+    # R1 / OD-1111-ROBOTS-4XX (owner 2026-11-11): FLIPPED from "robots 403 = no rules (RFC 9309)". Only 404 and 410 are
+    # unrestricted; a 403 stops, with its own cause, and the target is never requested (recorded RFC deviation).
+    acq_discovered.reset_for_tests()
+    inline_acquire.reset_for_tests()
+    auto_acquire.reset_for_tests()
+    why, web403 = _step_b_reason(robots_pub=A.Resp(status=403, ctype="text/plain"))
+    assert why == "R-ACQ-ROBOTS_UNREADABLE-STATUS_403"
+    assert f"https://{PUB}/article/1" not in [u for u, _h, _k in web403.calls]
     acq_discovered.reset_for_tests()
     inline_acquire.reset_for_tests()
     auto_acquire.reset_for_tests()

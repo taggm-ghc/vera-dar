@@ -36,7 +36,8 @@ def _code(web, cfg=None):
     {"Content-Usage": "ai-use=n"}, {"Content-Usage": "train-ai=y, ai-use = n"}])
 def test_guarded_get_refuses_header_no_ai(hdr):
     web = _web({JATS: A.Resp(body=b"<article/>", ctype="application/xml", headers=hdr)})
-    assert _code(web) == "R-ACQ-ROBOTS"
+    # WPL-1111 (ROBOTS-LABEL-1111): the page's own no-AI signal is R-ACQ-ROBOTS-PAGE_NOAI (same text as R-ACQ-ROBOTS)
+    assert _code(web) == "R-ACQ-ROBOTS-PAGE_NOAI"
 
 
 @pytest.mark.parametrize("hdr", [{"X-Robots-Tag": "ai-grounding:allow"}, {"Content-Signal": "ai-train=no"},
@@ -53,7 +54,7 @@ def test_guarded_get_refuses_meta_no_ai_in_html(meta):
     cfg = A.cfg()
     cfg["fetch"]["content_types"] = list(cfg["fetch"]["content_types"]) + ["text/html"]
     page = f"<html><head>{meta}</head><body>x</body></html>".encode()
-    assert _code(_web({JATS: A.Resp(body=page, ctype="text/html")}), cfg) == "R-ACQ-ROBOTS"
+    assert _code(_web({JATS: A.Resp(body=page, ctype="text/html")}), cfg) == "R-ACQ-ROBOTS-PAGE_NOAI"  # WPL-1111
 
 
 def test_page_no_ai_unit_and_fail_closed(monkeypatch):
@@ -70,7 +71,7 @@ def test_b_get_refuses_header_no_ai_on_the_discovered_route():
     with pytest.raises(auto_acquire._Stop) as e:
         acq_discovered._b_get(JATS, {"www.ebi.ac.uk"}, {"application/xml"}, 100000, 2, A.deps([], web), A.cfg(),
                               A.clock_at(), None, None)
-    assert e.value.code == "R-ACQ-ROBOTS"
+    assert e.value.code == "R-ACQ-ROBOTS-PAGE_NOAI"  # WPL-1111 (ROBOTS-LABEL-1111): the page's signal, same text
 
 
 @pytest.mark.parametrize("txt", ["Content-Signal: ai-input=no\nUser-agent: *\nAllow: /\n",

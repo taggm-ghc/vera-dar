@@ -584,7 +584,7 @@ def _failure_why(notes) -> str | None:
         return "cooldown"
     if "rate_limited (daily_cap" in t or "daily query cap" in t:
         return "daily_cap"
-    if "r-acq-robots" in t:
+    if re.search(r"r-acq-robots\b", t):  # WPL-1111: not R-ACQ-ROBOTS_UNREADABLE (a read failure is not a rule)
         return "robots"
     if re.search(r"\b202\b", t) and "challenge" in t:
         return "http_202"

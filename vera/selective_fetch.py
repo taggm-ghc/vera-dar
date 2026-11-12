@@ -355,6 +355,7 @@ def robots_cache_clear() -> None:
         _ROBOTS.clear()
         _ROBOTS_SIGNAL.clear()
         _ROBOTS_TEXT.clear()
+        _CACHED_LOGGED.clear()
 
 
 def remember_robots_text(host: str, text: str | None) -> None:
@@ -428,6 +429,27 @@ def robots_text_crawl_delay(host: str, user_agent=None) -> float | None:
         return None
 
 
+_CACHED_LOGGED: dict = {}  # host -> monotonic time of the last cached=1 cause line
+
+
+def _cause_log_sf(host, cause, cached, status=None) -> None:
+    """WPL-1111 R3: the stdout cause line (vera.robots_cause), hop=portal. Never raises."""
+    try:
+        from vera import acq_discovered as _ad
+        _ad.cause_log(host, "portal", "robots_unreadable", ("CACHED_" if cached else "") + str(cause), cached, status)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _cause_cached(parts, host, hit, hold, now) -> None:
+    """One cached=1 line per host per TTL (the fail TTL, or ROBOTS_TTL_S for a held 4xx stop)."""
+    ttl = ROBOTS_TTL_S if hold else ROBOTS_FAIL_TTL_S
+    last = _CACHED_LOGGED.get(host)
+    if last is None or now - last >= ttl:
+        _CACHED_LOGGED[host] = now
+        _cause_log_sf(host, hit[2] if len(hit) > 2 and hit[2] else "UNKNOWN", True)
+
+
 def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock=time.monotonic,
                    user_agent=None) -> bool:
     """True only if robots.txt of the URL's host permits USER_AGENT to fetch url. Fails closed. Never raises."""
@@ -440,10 +462,15 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
     now = clock()
     with _ROBOTS_LOCK:
         hit = _ROBOTS.get((parts.scheme, host, ua))
-    if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False else ROBOTS_TTL_S):
+    # WPL-1111 RC-1: a stop on a robots.txt 4xx (R1) is held for ROBOTS_TTL_S as the old "allow" was (cause recorded in
+    # the same write as a third tuple element; a 2-tuple False, as older fixtures write, keeps the fail TTL)
+    hold = hit is not None and hit[1] is False and len(hit) > 2 and hit[2] in ("STATUS_401", "STATUS_403", "STATUS_4XX")
+    if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False and not hold else ROBOTS_TTL_S):
         rp = hit[1]
+        if rp is False:
+            _cause_cached(parts, host, hit, hold, now)
     else:
-        rp, signal = False, ""
+        rp, signal, cause, _status = False, "", "NETWORK", None
         try:
             cur = f"{parts.scheme}://{parts.netloc}/robots.txt"
             for _hop in range(MAX_REDIRECTS + 1):
@@ -467,18 +494,28 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     remember_robots_text(host, txt)  # ASK-PARALLEL-FIX-1105: non-integer Crawl-delay
                     from vera import source_permissions as _sp
                     signal = " ".join(_sp.robots_content_signal(txt).split()).lower()[:300]
-                elif 400 <= resp.status_code < 500 and resp.status_code != 429:
+                elif resp.status_code in (404, 410):
                     rp = True
+                elif 400 <= resp.status_code < 500 and resp.status_code != 429:
+                    # R1 (OD-1111-ROBOTS-4XX): only 404/410 mean "no restrictions"; any other 4xx stops (a recorded
+                    # deviation from RFC 9309 section 2.3.1.3), held for ROBOTS_TTL_S so no request is added
+                    cause = "STATUS_401" if resp.status_code == 401 else "STATUS_403" if resp.status_code == 403 \
+                        else "STATUS_4XX"
+                else:
+                    cause = "STATUS_5XX" if resp.status_code >= 500 else "STATUS_OTHER"
+                _status = resp.status_code
                 break
         except Exception:  # noqa: BLE001  any error: fail closed
             rp = False
         with _ROBOTS_LOCK:
-            _ROBOTS[(parts.scheme, host, ua)] = (now, rp)
+            _ROBOTS[(parts.scheme, host, ua)] = (now, rp, cause if rp is False else None)
             _ROBOTS_SIGNAL[(parts.scheme, host, ua)] = signal
             while len(_ROBOTS) > 64:
                 k = next(iter(_ROBOTS))
                 _ROBOTS.pop(k)
                 _ROBOTS_SIGNAL.pop(k, None)
+        if rp is False:
+            _cause_log_sf(host, cause, False, _status)
     if rp is True:
         return True
     if rp is False:

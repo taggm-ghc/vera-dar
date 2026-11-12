@@ -202,6 +202,9 @@ _SINGLETONS = (("vera.memory_store", "_SERVICE", "clear"), ("vera.corpus_admissi
                # between tests (a fail-closed verdict cached under one test's fake web would refuse the next test's).
                ("vera.acq_discovered", "_ROBOTS", "clear"), ("vera.acq_discovered", "_TDMREP", "clear"),
                ("vera.acq_discovered", "_CRAWL_LAST", "clear"),
+               # WPL-1111: the R2 access-denial memory and the once-per-TTL cause-line memory never leak between tests
+               ("vera.acq_discovered", "_DENIED", "clear"), ("vera.acq_discovered", "_CACHED_LOGGED", "clear"),
+               ("vera.selective_fetch", "_CACHED_LOGGED", "clear"),
                ("vera.memory_store", "_MISSING_LICENCE_COUNTED", None))  # once-per-process count: fresh per test
 
 

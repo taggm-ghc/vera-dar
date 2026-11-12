@@ -340,6 +340,10 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
         except sf.ApiRefused:
             raise FetchRefused("api_denied") from None
         cur, host, port, ips = check_url(cur, cfg, resolve, timeout=end - clock())
+        if not ok_robots:  # WPL-1111 R2: every hop (redirect targets included); a denied document is not requested again
+            from vera import acq_discovered as _ad0
+            if _ad0.is_denied(urls=(cur,)):
+                raise FetchRefused("access_denied")
         if cur in seen:
             raise FetchRefused("cycle")
         seen.add(cur)
@@ -354,8 +358,14 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
             refused = hop_gate(cur)
             if refused:
                 raise FetchRefused(str(refused))  # read-restricted hop: neither robots.txt nor the page is requested
-        if robots_check is not None and not robots_check(cur, host, port):
-            raise FetchRefused("robots")
+        if robots_check is not None:
+            v = robots_check(cur, host, port)
+            if v is True or v == "allow":
+                pass
+            elif v == "unreadable":  # WPL-1111: robots.txt could not be read (a stop, but not a rule that says no)
+                raise FetchRefused("robots_unreadable")
+            else:
+                raise FetchRefused("robots")  # False, None or anything unexpected: fail closed as before
         if crawl_check is not None and not sf.crawl_reserve(host, crawl_check(host, port), clock):
             raise FetchRefused("crawl_delay")  # never sent early; robots.txt itself is not delayed (crawl_check None)
         parts = urlsplit(cur)
@@ -409,7 +419,14 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
                 continue
             if resp.status_code != 200:
                 if ok_robots and 400 <= resp.status_code < 500 and resp.status_code != 429:
-                    return b"", cur, resp.status_code, ""
+                    return b"", cur, resp.status_code, ""  # robots.txt: the status goes to robots_verdict (R1)
+                if not ok_robots and resp.status_code in (401, 403):
+                    # WPL-1111 R2 (OD-1111-ACCESS-DENIED-NO-BYPASS): the page itself refused access; remembered, never
+                    # retried or bypassed (the requested and the refusing URL)
+                    from vera import acq_discovered as _ad
+                    _ad.deny(_ad.denial_ids(urls=(url, cur)))
+                    _ad.cause_log(host, "web", "access_denied", f"STATUS_{resp.status_code}", False, resp.status_code)
+                    raise FetchRefused("access_denied")
                 raise FetchRefused("status")
             ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype not in allowed_ctypes:
@@ -443,24 +460,41 @@ def crawl_delay_for(cache, host, port, cfg) -> float:
         return 0.0
 
 
-def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=None, hop_gate=None) -> bool:
-    """robots.txt over the same pinned path. 200 parsed; other 4xx (not 429) allow; 429, 5xx, error, redirect loop,
-    oversize or ANY exception fails closed. Parsed rules are cached per host (rules only) for one fetch() call, or for
-    one request when the caller passes its own cache (fetch(robots_cache=...)). A robots.txt redirect to a hop refused by
-    `hop_gate` is never requested and fails closed."""
+_UNREADABLE = "unreadable"  # per-request cache value: robots.txt answered 4xx (not 404/410): held for the request (RC-1)
+_READ_CAUSES = {"timeout": "TIMEOUT", "unreachable": "NETWORK", "redirects": "REDIRECTS", "cycle": "CYCLE",
+                "status": "STATUS_5XX", "format_unsupported": "CTYPE", "too_large": "SIZE", "encoding": "ENCODING"}
+
+
+def robots_verdict(url, host, port, cfg, resolve, transport, clock, end, cache=None, hop_gate=None) -> str:
+    """robots.txt over the same pinned path -> "allow" | "disallow" | "unreadable". 200 text/plain parsed; 404/410 allow
+    (no restrictions); any other 4xx except 429 is unreadable (R1, OD-1111-ROBOTS-4XX: a recorded deviation from RFC
+    9309 section 2.3.1.3; kept in the per-request cache so later hops of one fetch send no second robots.txt request);
+    429, 5xx, error, redirect loop, oversize, a non-text/plain answer (WPL-1111 Q-3: an HTML page is not a rules file)
+    or ANY exception is unreadable (fail closed). Parsed rules are cached per host (rules only) for one fetch() call,
+    or for one request when the caller passes its own cache (fetch(robots_cache=...)). A robots.txt redirect to a hop
+    refused by `hop_gate` is never requested and fails closed."""
     key = (host, port)
     try:
         if cache is not None and key in cache:
             rp = cache[key]
-            return True if rp is True else _ai_ok(rp, cfg["user_agent"], url)
+            if rp == _UNREADABLE:  # no request: the answer is reused
+                return "unreadable"
+            return "allow" if rp is True or _ai_ok(rp, cfg["user_agent"], url) else "disallow"
         ru = f"https://{host}{'' if port == 443 else f':{port}'}/robots.txt"
-        body, _f, status, _c = _get(ru, cfg, resolve, transport, clock, end, ("text/plain", "text/html", ""),
+        body, _f, status, _c = _get(ru, cfg, resolve, transport, clock, end, ("text/plain",),
                                     None, int(cfg.get("max_robots_bytes", 200000)),
                                     int(cfg.get("max_robots_bytes", 200000)), ok_robots=True, hop_gate=hop_gate)
-        if status != 200:
+        if status in (404, 410):
             if cache is not None:
                 cache[key] = True
-            return True
+            return "allow"
+        if status != 200:
+            if cache is not None:
+                cache[key] = _UNREADABLE
+            from vera import acq_discovered as _ad
+            _ad.cause_log(host, "web", "robots_unreadable", "STATUS_401" if status == 401 else "STATUS_403"
+                          if status == 403 else "STATUS_4XX", False, status)
+            return "unreadable"
         rp = robotparser.RobotFileParser()
         txt = body.decode("utf-8", "replace")
         rp.parse(txt.splitlines())
@@ -470,9 +504,26 @@ def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=N
             cache[key] = rp
             from vera import source_permissions as _sp  # WP6-P2b D2: robots.txt Content-Signal, signal text only
             cache[("content_signal",) + key] = signal_value(_sp.robots_content_signal(txt))
-        return _ai_ok(rp, cfg["user_agent"], url)
+        return "allow" if _ai_ok(rp, cfg["user_agent"], url) else "disallow"
+    except FetchRefused as e:
+        _log_unreadable(host, _READ_CAUSES.get(e.reason, "PARSE"))
+        return "unreadable"
     except Exception:  # noqa: BLE001
-        return False
+        _log_unreadable(host, "PARSE")
+        return "unreadable"
+
+
+def _log_unreadable(host, cause: str) -> None:
+    try:
+        from vera import acq_discovered as _ad
+        _ad.cause_log(host, "web", "robots_unreadable", cause, False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def robots_allowed(url, host, port, cfg, resolve, transport, clock, end, cache=None, hop_gate=None) -> bool:
+    """True only when robots_verdict is allow (fail closed). Kept for its existing callers."""
+    return robots_verdict(url, host, port, cfg, resolve, transport, clock, end, cache, hop_gate) == "allow"
 
 
 def _ai_ok(rp, ua, url) -> bool:
@@ -774,7 +825,7 @@ def fetch(url: str, cfg: dict | None = None, *, resolve=None, transport=None, cl
     try:
         body, final, _s, ctype = _get(
             url, cfg, resolve, tr, clock, end, tuple(cfg["content_types"]),
-            lambda u, h, p: robots_allowed(u, h, p, cfg, resolve, tr, clock, end, cache, hop_gate),
+            lambda u, h, p: robots_verdict(u, h, p, cfg, resolve, tr, clock, end, cache, hop_gate),
             int(cfg["max_compressed_bytes"]), int(cfg["max_decompressed_bytes"]), meta=meta,
             crawl_check=lambda h, p: crawl_delay_for(cache, h, p, cfg), hop_gate=hop_gate)
         decoded = body.decode("utf-8", "replace")
