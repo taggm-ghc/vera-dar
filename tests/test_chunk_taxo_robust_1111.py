@@ -355,3 +355,31 @@ def test_d3_malformed_200_charged_like_failed_4xx(monkeypatch):
     with pytest.raises(emb.EmbedError):
         e.embed(["abc"])
     assert e.stats_run["neurons"] == 0
+
+
+class RawResp:
+    def __init__(self, raw):
+        self.b = raw
+
+    def read(self, n=-1):
+        return self.b if n is None or n < 0 else self.b[:n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_d3b_non_json_200_charged_via_real_embedder(monkeypatch):
+    est = 3 / 3.0 / 1e6 * 1075
+    for raw in (b"<html>not json</html>", b"\xff\xfe"):
+        e = cf(lambda req, timeout=None, raw=raw: RawResp(raw))
+        with pytest.raises(emb.EmbedError, match="bad_response"):
+            e.embed(["abc"])
+        assert e.stats_run["neurons"] == pytest.approx(est)
+    monkeypatch.setattr(emb, "CHARGE_FAILED_4XX", False)
+    e = cf(lambda req, timeout=None: RawResp(b"<html>not json</html>"))
+    with pytest.raises(emb.EmbedError, match="bad_response"):
+        e.embed(["abc"])
+    assert e.stats_run["neurons"] == 0
