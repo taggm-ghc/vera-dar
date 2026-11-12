@@ -226,7 +226,15 @@ def test_t30f_pmcid_only_candidate_whose_jats_doi_is_denied_records_access_denie
         auto_acquire.evaluate_candidate(A.job(), 1.0, "", cand, None, cfg, A.deps([], web), icfg,
                                         auto_acquire._fd_cfg(), clock=A.clock_at())
     assert e.value.code == "R-ACQ-ACCESS_DENIED"
-    assert _n(web, "fullTextXML") <= 1  # the identity was only learned from the JATS itself; nothing further is fetched
+    assert _n(web, "fullTextXML") == 1  # the identity was only learned from the JATS itself: the accepted residual
+    # D-4: the stop remembers the PMCID and the XML URL, so the residual is bounded to that one request
+    assert acq_discovered.is_denied(pmcid=PMC) and acq_discovered.is_denied(urls=(JATS,))
+    for _ in range(2):
+        with pytest.raises(auto_acquire._Stop) as e2:
+            auto_acquire.evaluate_candidate(A.job(), 1.0, "", cand, None, cfg, A.deps([], web), icfg,
+                                            auto_acquire._fd_cfg(), clock=A.clock_at())
+        assert e2.value.code == "R-ACQ-ACCESS_DENIED"
+    assert _n(web, "fullTextXML") == 1  # later runs send ZERO XML requests
 
 
 def test_t30g_resolved_doi_that_differs_from_the_candidates_is_checked_too(monkeypatch):

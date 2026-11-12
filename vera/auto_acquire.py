@@ -1365,6 +1365,10 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
         if deps.lookup.known(item["doi"], None, (isbn or {}).get("isbn")):
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
         if acq_discovered.is_denied(doi=item["doi"]):  # WPL-1111 RC-2 / D-1: a denied DOI found only in the JATS
+            # D-4: remember the other identities of this denied document too (the PMCID and the XML URL), so the next
+            # request is refused before any fetch; the one fetch that revealed the DOI is the accepted residual
+            acq_discovered.deny(acq_discovered.denial_ids(pmcid=res.get("pmcid"),
+                                                          urls=(final,) + ((url,) if route == "europepmc" else ())))
             raise _Stop(acq_discovered.refusal_code(cfg, "access_denied"))
     if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
         raise _Stop(acq_config.reason(cfg, "inject"))
