@@ -325,7 +325,13 @@ def test_d2_denial_seeded_from_outside_makes_zero_requests_and_does_not_trip_the
     set_mode(monkeypatch, "shadow")
     acq_discovered.deny(acq_discovered.denial_ids(urls=(NEUTRINOS,)))
     web = Web({NEUTRINOS: page()})
-    assert code(web, cand(NEUTRINOS)) == acq_discovered.refusal_code(A.cfg(), "access_denied")
+    cfg = A.cfg()
+    icfg = acq_config.ingest_cfg(fulltext_loader.load_config(), cfg)
+    # the route body is called directly: evaluate_candidate has its own start-of-candidate check, which would mask it
+    with pytest.raises(auto_acquire._Stop) as e:
+        original_html.evaluate(A.job(question=Q), 1.0, None, cand(NEUTRINOS), None, cfg, deps(web), icfg,
+                               auto_acquire._fd_cfg(), clock=A.clock_at())
+    assert e.value.code == acq_discovered.refusal_code(cfg, "access_denied")
     assert web.urls == [] and not original_html.host_tripped(DOE_HOST)
     # an un-denied sibling on the same host is still fetched (the breaker was not the reason)
     assert code(Web({DOE: page()}), cand(DOE)) == acq_config.reason(A.cfg(), "original_shadow")
@@ -655,7 +661,8 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
     from vera import fulldoc_db
     plan, _ = run(Web({DOE: page()}))
     assert plan["source"]["provenance"]["item"]["discovered_via"] == "original_html"
-    assert len(plan["source"]["content"]) < 4000  # only the route's own floor lets this page in
+    size = lambda p: sum(len(s["text"]) for s in p["spans"])  # noqa: E731  (the text is held as spans)
+    assert size(plan) < 4000  # only the route's own floor lets this page in
 
     def load(p):
         srcs, spans = A.rows_from_plans([p])
@@ -667,6 +674,14 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
     forged["source"]["provenance"]["acquisition"]["resolver"] = "europepmc"
     c = load(forged)
     assert len(c.acquired) == 0 and c.unusable  # neither the 1500 floor nor the federal licence branch applies
+    # the licence branch is keyed on the resolver too: a LONG page (passes the ordinary floor on any route) whose
+    # acquisition record names another resolver is held for its empty JATS licence-element list, whatever its item says
+    long_plan, _ = run(Web({DOE: page([PARA * 3 for _ in range(20)])}))
+    assert size(long_plan) > 8000 and len(load(long_plan).acquired) == 1
+    forged2 = copy.deepcopy(long_plan)
+    forged2["source"]["provenance"]["acquisition"]["resolver"] = "europepmc"
+    c2 = load(forged2)
+    assert len(c2.acquired) == 0 and [u.get("code") for u in c2.unusable] == ["R-LIC-HOLD"], c2.unusable
     # a manifest item (prepare_from_parts without route=) can never claim the shorter floor
     item = copy.deepcopy(plan["source"]["provenance"]["item"])
     meta = {**plan["source"]["provenance"]["meta"], "has_body": True, "body_chars": 2000, "abstract_chars": 0}
