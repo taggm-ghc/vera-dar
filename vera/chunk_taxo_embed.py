@@ -44,7 +44,7 @@ DEFAULTS = {"model": "bge-m3", "send_allowed": True, "daily_neuron_budget": 8000
 # TAXO-ROBUST-1111 E1b: a failed 400/413/422 call is charged at its pre-call estimate (provider billing of failed calls is not
 # documented; live check L2 decides whether to set this False).
 CHARGE_FAILED_4XX = True
-_CHARGED_FAIL_CODES = frozenset({"http_400", "http_413", "http_422"})
+_CHARGED_FAIL_CODES = frozenset({"http_400", "http_413", "http_422", "bad_response"})
 _REGISTRY: dict[str, Callable[[dict], object]] = {}
 _BUDGET = {"day": None, "neurons": 0.0, "requests": 0}  # per UTC day, process-wide (a new adapter instance keeps the day's count)
 _BLOCK = threading.Lock()
@@ -242,6 +242,8 @@ class CloudflareEmbedder:
             res = resp.get("result") if isinstance(resp, dict) else None
             data = res.get("data") if isinstance(res, dict) else None
             if not isinstance(data, list) or len(data) != len(chunk) or resp.get("success") is False:
+                if CHARGE_FAILED_4XX:
+                    self._charge(est)  # a malformed 200 was still processed: count the worst case
                 raise EmbedError("bad_response")
             usage = res.get("usage") if isinstance(res, dict) else None
             tok = usage.get("total_tokens") or usage.get("prompt_tokens") if isinstance(usage, dict) else None

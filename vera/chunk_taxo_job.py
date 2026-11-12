@@ -382,15 +382,14 @@ class Job:
         if isinstance(st, dict):
             self._pass_neurons = float(st.get("neurons", 0.0))
 
-    def _embed_isolating(self, part, shas) -> dict:
-        """E5: embed `part`; on a quarantinable per-input failure bisect, quarantining single spans. Returns span_id -> vector for
-        the spans that embedded. Caps raise a plain RuntimeError with a fixed code. _pass_neurons is refreshed even on a raise."""
-        out: dict = {}
+    def _embed_isolating(self, part, shas, out) -> None:
+        """E5: embed `part`; on a quarantinable per-input failure bisect, quarantining single spans. Fills `out` (span_id -> vector)
+        with the spans that embedded, also when a cap or another error is raised partway (the caller stores them).
+        Caps raise a plain RuntimeError with a fixed code. _pass_neurons is refreshed even on a raise."""
         try:
             self._bisect(part, shas, out, top=True)
         finally:
             self._refresh_neurons()
-        return out
 
     def _bisect(self, part, shas, out, top=False) -> None:
         self._fail_span, self._fail_batch = part[0][0], self._batch_shape(part)
@@ -665,15 +664,27 @@ class Job:
                 if hasattr(self._emb, "set_day_used"):  # the day's neurons from the DB (survives a restart), not process memory
                     with self._engine().connect() as conn:
                         self._emb.set_day_used(store.neurons_today(conn))
-                got = self._embed_isolating(part, shas)  # sets _fail_span/_fail_batch to the sub-batch that failed
+                got, err = {}, None
+                try:
+                    self._embed_isolating(part, shas, got)  # sets _fail_span/_fail_batch to the sub-batch that failed
+                except Exception as exc:  # noqa: BLE001  (Deferred, caps, other errors): keep what already embedded, then re-raise
+                    err = exc
                 recs = [{"span_id": r[0], "model": model_name, "dim": len(got[r[0]]), "sha": shas[r[0]],
                          "vec": [float(x) for x in got[r[0]]]} for r in part if r[0] in got]
-                with self._engine().begin() as conn:
-                    if recs:
-                        store.run_sql(conn, "vectors_upsert", recs)
-                    self._refresh_neurons()
-                    if self._run_id is not None:
-                        store.run_sql(conn, "job_run_neurons", {"run_id": self._run_id, "neurons": _ceil_int(self._pass_neurons)})
+                try:
+                    with self._engine().begin() as conn:
+                        if recs:
+                            store.run_sql(conn, "vectors_upsert", recs)
+                        self._refresh_neurons()
+                        if self._run_id is not None:
+                            store.run_sql(conn, "job_run_neurons", {"run_id": self._run_id, "neurons": _ceil_int(self._pass_neurons)})
+                except Exception:  # noqa: BLE001
+                    if err is None:
+                        raise
+                    recs = []  # the original error is the reason; the partial result could not be stored
+                if err is not None:
+                    self.rows_embedded += len(recs)
+                    raise err
                 for rec in recs:
                     fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
                 self.rows_embedded += len(recs)

@@ -80,13 +80,14 @@ def test_t2_one_poison_span_quarantined_by_bisection():
 
 
 # ---------------------------------------------------------------------------------------------------------------- T3
-def test_t3_systemic_4xx_consecutive_cap_and_rollback(caplog):
-    e = PoisonEmb(always=True)
+@pytest.mark.parametrize("code,status", [("http_400", 400), ("http_413", 413), ("http_422", 422), ("bad_response", 0)])
+def test_t3_systemic_4xx_consecutive_cap_and_rollback(caplog, code, status):
+    e = PoisonEmb(always=True, code=code)
     res, j, db = fail_run(e, caplog, db=RecDB(spans(10)))
     reasons, m = stored(db)
     assert res["state"] == "error" and reasons == ["quarantine_cap_consecutive"] and reasons != ["failed"]
     assert sum(1 for r in e.requests if len(r) == 1) <= j.q_max_consec
-    assert m["q_last_status"] == 400 and m["q_consecutive"] == j.q_max_consec
+    assert m["q_last_status"] == status and m["q_consecutive"] == j.q_max_consec
     assert j._quarantine == {} and not db.vectors  # streak rolled back, nothing stored
     e.always = False  # the fault clears: a second pass embeds every span
     res = j.run()
@@ -316,3 +317,41 @@ def test_t16_failed_4xx_charged_and_persisted(monkeypatch, caplog):
     res, j, db = fail_run(e, caplog, db=RecDB(spans(10)))
     assert stored(db)[0] == ["quarantine_cap_consecutive"]
     assert e.stats_run["neurons"] > 0 and db.closes[-1]["neurons"] == job._ceil_int(e.stats_run["neurons"]) > 0
+
+
+# ------------------------------------------------------------------------------------------------------------ D1 (verifier)
+def test_d1_partial_vectors_stored_when_deferred_or_capped_midway(caplog):
+    def defer(s):
+        if len(s.requests) >= 3:
+            raise emb.Deferred("quota_reached", 5.0)
+    res, j, db = fail_run(PoisonEmb(then=defer), caplog, db=RecDB(poison_spans(8, at=(8,))))
+    assert res["state"] == "deferred" and sorted(db.vectors) == [1, 2, 3, 4] and j.rows_embedded == 4
+    sp = poison_spans(8, at=(5, 6, 7, 8))
+    res, j, db = fail_run(PoisonEmb(), caplog, db=RecDB(sp), quarantine_max_consecutive=2)
+    assert stored(db)[0] == ["quarantine_cap_consecutive"] and sorted(db.vectors) == [1, 2, 3, 4]
+    e2 = PoisonEmb()
+    j2 = _make(db, e=e2, quarantine_max_consecutive=10)  # a restart does not re-send the stored four
+    j2.run()
+    assert all(t not in sum(e2.requests, []) for t in [s[2] for s in sp[:4]])
+
+
+# ------------------------------------------------------------------------------------------------------------ D2 (verifier)
+def test_d2_reason_for_quarantinable_embed_codes():
+    assert job._reason_for(emb.EmbedError("http_400")) == "embed:http_400"
+    assert job._reason_for(emb.EmbedError("bad_response")) == "embed:bad_response"
+    assert job._reason_for(RuntimeError("quarantine_cap_total")) == "quarantine_cap_total"
+
+
+# ------------------------------------------------------------------------------------------------------------ D3 (verifier)
+def test_d3_malformed_200_charged_like_failed_4xx(monkeypatch):
+    est = 3 / 3.0 / 1e6 * 1075
+    bad = {"result": {"data": []}, "success": True}
+    e = cf(Opener(bad))
+    with pytest.raises(emb.EmbedError, match="bad_response"):
+        e.embed(["abc"])
+    assert e.stats_run["neurons"] == pytest.approx(est)
+    monkeypatch.setattr(emb, "CHARGE_FAILED_4XX", False)
+    e = cf(Opener(bad))
+    with pytest.raises(emb.EmbedError):
+        e.embed(["abc"])
+    assert e.stats_run["neurons"] == 0
