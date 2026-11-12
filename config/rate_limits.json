@@ -135,6 +135,34 @@
       ],
       "_note": "OA5-ALLOW-1108: rate lowered to 1.0/s (conservative; DOAJ states no Crawl-delay; documented ceiling 2 req/s), burst 1, concurrency 1."
     },
+    "original_html_energy_gov": {
+      "hosts": ["www.energy.gov"],
+      "rate_per_s": 0.2,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://www.energy.gov/robots.txt", "read": "2026-11-11", "inspection": "summarizing read (RR USFED R3): one * group, no Crawl-delay; the robots file is re-read at run time on every hop",
+         "claims": "no Crawl-delay declared"}
+      ],
+      "_note": "ALLDOMAINS-WPG-IMPL-1111 (ORIGINAL_HTML row energy_gov_doe_explains): 1 request per 5 s, burst 1, concurrency 1. UNCALIBRATED prior (USFED plan step 4); a live robots Crawl-delay overrides it upward. No data measured."
+    },
+    "original_html_nasa_science": {
+      "hosts": ["science.nasa.gov"],
+      "rate_per_s": 0.2,
+      "burst": 1,
+      "max_concurrency": 1,
+      "daily_cap": null,
+      "throttle_statuses": [429, 503],
+      "contact_param": null,
+      "sources": [
+        {"url": "https://science.nasa.gov/robots.txt", "read": "2026-11-11", "inspection": "summarizing read (RR USFED R3): * Allow /; Crawl-delay only for usasearch; Sitemap wp-sitemap.xml",
+         "claims": "no Crawl-delay for generic agents"}
+      ],
+      "_note": "ALLDOMAINS-WPG-IMPL-1111 (ORIGINAL_HTML row nasa_science_explainers; store false): 1 request per 5 s. UNCALIBRATED prior; live robots Crawl-delay overrides upward."
+    },
     "plos": {
       "hosts": ["api.plos.org"],
       "rate_per_s": 0.033333,

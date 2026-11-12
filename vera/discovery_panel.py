@@ -43,6 +43,13 @@ REASON_TEXT = {
     "R-ACQ-PORTAL": "Portal site: used to find original sources; its text is not used as evidence.",
     "R-ACQ-ARXIV_LICENCE_HOLD": "Preprint: its arXiv licence does not permit reuse of the full text, so it was not used.",
     "R-ACQ-ARXIV_HTML_POLICY": "Preprint: the full text was found, but arXiv full text is not yet used as evidence.",
+    # ALLDOMAINS-WPG-IMPL-1111: the permitted-original HTML route
+    "R-ACQ-ORIGINAL_NOT_PD": "Not stored: the page could not be confirmed as free of copyright (a US government work "
+                             "with no copyright notice, third-party or contractor credit, or licence of its own).",
+    "R-ACQ-ORIGINAL_NO_BODY": "Not stored: the page has no article text that could be read as a whole.",
+    "R-ACQ-ORIGINAL_OVERSIZE": "Not stored: the page is too large to keep whole.",
+    "R-ACQ-ORIGINAL_THIN": "Not stored: the page's main text is too short to keep as a document.",
+    "R-ACQ-ORIGINAL_SHADOW": "Not stored: VERA-DAR is still testing how to read this site and keeps no pages from it yet.",
     "R-ACQ-NOTOA": "Full text is not openly available.",
     "R-ACQ-NOLIC": "Full text not openly licensed.",
     "R-ACQ-LICENCE_ABSENT": "Full text not openly licensed.",

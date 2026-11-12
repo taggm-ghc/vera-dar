@@ -658,8 +658,11 @@ def _route_key(cfg: dict, refused: str, route_hop: bool) -> str:
 
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
                  clock=time.monotonic, deadline: float | None = None, chain: list | None = None,
-                 route_hop: bool = False):
-    """GET with the host allowlist checked on every hop, https only, the SSRF guard, manual redirects, content type, size
+                 route_hop: bool = False, path_check=None):
+    """path_check (ALLDOMAINS-WPG-IMPL-1111, ORIGINAL_HTML only): an optional callable(url) -> bool run on EVERY hop after
+    the host check (a same-host redirect outside the route's path prefix is refused as R-ACQ-HOST). None = unchanged.
+
+    GET with the host allowlist checked on every hop, https only, the SSRF guard, manual redirects, content type, size
     cap, and a wall-clock limit over the WHOLE fetch (requests' timeout is per read; plan V-D7). Every streamed
     response is closed, including on an early stop.
 
@@ -694,6 +697,8 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 raise _Stop(acq_config.reason(cfg, "host"))
             from vera import acq_discovered
             if not acq_discovered._host_ok(current, allowed):  # CONTROL-GAPS-1107 r2: every path (userinfo, port)
+                raise _Stop(acq_config.reason(cfg, "host"))
+            if path_check is not None and not path_check(current):  # WPG: exact path prefix on every hop
                 raise _Stop(acq_config.reason(cfg, "host"))
             if acq_discovered.is_denied(urls=(current,)):  # WPL-1111 R2: every hop, redirect targets included
                 raise _Stop(acq_discovered.refusal_code(cfg, "access_denied-ROUTE" if route_hop and not want_json
@@ -1140,13 +1145,15 @@ def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, c
             continue
         doi = _doi(c)
         pmcid = None if doi else _pmcid(c)
-        if not doi and not pmcid:
+        from vera import original_html  # WPG: a URL in a permitted_originals row is routable without a DOI/PMCID
+        ourl = original_html.cand_url(c) if (not doi and not pmcid and original_html.claims_cand(c)) else None
+        if not doi and not pmcid and not ourl:
             why_no = PID_NOROUTE if _handle_pid(c) else acq_config.reason(cfg, "no_doi")  # WP-D: a Handle has a name, no route
             count(why_no)
             if drops is not None:
                 drops[id(c)] = why_no
             continue
-        ident = ("doi:" + doi) if doi else ("pmc:" + pmcid)
+        ident = ("doi:" + doi) if doi else ("pmc:" + pmcid) if pmcid else ("url:" + ourl)
         from vera import arxiv_portal
         if arxiv_portal.is_seed(c, cfg):  # ARXIV-PORTAL-1110: an arXiv record is a portal entry, never read
             count(acq_config.reason(cfg, "arxiv_portal"))

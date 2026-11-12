@@ -276,7 +276,8 @@
     },
     "_versioning": "labels are bound to marker vera-dar-auto-acquire-v1; never edit in place (a change needs a new marker version; old rows keep their labels)",
     "embedded_licence_unknown_holds": true,
-    "non_doi_identifier_kinds": {"pmcid": "^PMC[0-9]{1,10}$"},
+    "non_doi_identifier_kinds": {"pmcid": "^PMC[0-9]{1,10}$", "original_url": "^https://[a-z0-9.-]+\\.[a-z]{2,}(/[A-Za-z0-9._~%/-]*)?$"},
+    "_original_url_note": "ALLDOMAINS-WPG-IMPL-1111: identity of a document read from a permitted original host (config/permitted_originals.json; ORIGINAL_HTML route): its canonical https URL (no query, no fragment). Waives only the doi requirement, exactly as the pmcid kind does; the licence, injection, relevance and span filters are unchanged.",
     "_non_doi_note": "PLAN-NONDOI-1022 (owner decision 2026-10-22: documents without a DOI are acceptable; Wikipedia is not a source): identity allowlist, not a label. It waives ONLY the doi requirement and doi_pattern for doi=null items whose identifier matches an anchored pattern here; every other filter (licence, embedded licence, injection at write and read, relevance, span minimums, reader re-check, claim check) is unchanged. A record that also carries a DOI (Europe PMC core record or the JATS article-id) is stored under the DOI identity instead. Only pmcid is listed: every acquired full text is fetched from Europe PMC by PMCID, so a PMID-only or arXiv-only record has no fetch path here. The marker stays v1: no existing row changes.",
     "_embedded_licence_note": "WED-P17-VER item 4: an embedded licence that is present but not a recognised CC/CC0 licence is held (unclear = hold); applies to acquired documents only"
   },
@@ -343,7 +344,12 @@
     "licence_absent": "R-ACQ-LICENCE_ABSENT",
     "licence_mismatch": "R-ACQ-LICENCE_MISMATCH",
     "arxiv_licence_hold": "R-ACQ-ARXIV_LICENCE_HOLD",
-    "arxiv_html_policy": "R-ACQ-ARXIV_HTML_POLICY"
+    "arxiv_html_policy": "R-ACQ-ARXIV_HTML_POLICY",
+    "original_not_pd": "R-ACQ-ORIGINAL_NOT_PD",
+    "original_no_body": "R-ACQ-ORIGINAL_NO_BODY",
+    "original_oversize": "R-ACQ-ORIGINAL_OVERSIZE",
+    "original_thin": "R-ACQ-ORIGINAL_THIN",
+    "original_shadow": "R-ACQ-ORIGINAL_SHADOW"
   },
   "crawl_delay": {
     "_note": "CONTROL-GAPS-1107 r2, H-5 (approved OD-1107-HITL; see _h5_note, which supersedes the shipped-false sentence below): when enforce_on_acquisition is exactly true, the robots.txt Crawl-delay (own UA, * and AI-agent groups; vera.robots_ai.crawl_delay) of each host is honoured on auto_acquire._guarded_get and acq_discovered._b_get: a request waits until Crawl-delay seconds after the previous request to that host; a wait past the job deadline stops with R-ACQ-CRAWL_DELAY (no request sent, not an attempt). Ships false = unchanged pacing (rate_limits.json portals only; the arXiv route keeps its own Crawl-delay spacing). Not a threshold: the delay is the host's own published value.",
