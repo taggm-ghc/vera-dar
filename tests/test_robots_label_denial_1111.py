@@ -13,6 +13,8 @@ from vera import public_fetch as pf
 from vera import selective_fetch as sf
 
 DOI = "10.9999/acq.epi4"
+from vera.acq_config import ingest_cfg as acq_config_ingest  # noqa: E402
+
 PMC = "PMC1234567"
 JATS = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{PMC}/fullTextXML"
 
@@ -209,3 +211,31 @@ def test_t33b_web_route_phrase_for_a_denied_page():
                     registry=[], deny_list=[])
     assert r.pages == [] and r.dev[0]["gate"]["read"] == "read_access_denied"
     assert r.listed[0]["phrase"] == "not read: the site denied access to this page"
+
+
+def test_t30f_pmcid_only_candidate_whose_jats_doi_is_denied_records_access_denied():
+    # D-1 (verifier): the DOI found only in the JATS article-id is re-checked after the `known` check (RC-2)
+    web = _web()
+    web.records[PMC] = A.epmc_record("", pmcid=PMC)  # the search by PMCID returns a record that carries no DOI
+    acq_discovered.deny(acq_discovered.denial_ids(doi=DOI))
+    cand = {"pmcid": PMC, "title": "t", "url": "https://europepmc.org/article/PMC/1234567"}
+    from vera import fulltext_loader
+    cfg = A.cfg()
+    icfg = acq_config_ingest(fulltext_loader.load_config(), cfg)
+    with pytest.raises(auto_acquire._Stop) as e:
+        auto_acquire.evaluate_candidate(A.job(), 1.0, "", cand, None, cfg, A.deps([], web), icfg,
+                                        auto_acquire._fd_cfg(), clock=A.clock_at())
+    assert e.value.code == "R-ACQ-ACCESS_DENIED"
+    assert _n(web, "fullTextXML") <= 1  # the identity was only learned from the JATS itself; nothing further is fetched
+
+
+def test_t30g_resolved_doi_that_differs_from_the_candidates_is_checked_too(monkeypatch):
+    # D-2 (verifier): both DOIs are checked, not only when the candidate has none
+    web = _web()
+    real = auto_acquire.resolve_oa
+
+    def other_doi(*a, **k):
+        return {**real(*a, **k), "doi": "10.9999/acq.resolved"}
+    monkeypatch.setattr(auto_acquire, "resolve_oa", other_doi)
+    acq_discovered.deny(acq_discovered.denial_ids(doi="10.9999/acq.resolved"))
+    assert _code(web) == "R-ACQ-ACCESS_DENIED" and _n(web, "fullTextXML") == 0

@@ -1331,7 +1331,8 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
             route = "landing"
             raw, final, landing, res = acq_discovered.landing_fetch(doi, cand, cfg, deps, icfg, clock=clock,
                                                                     deadline=deadline, chain=chain)
-    if acq_discovered.is_denied(doi=doi or res.get("doi"), pmcid=res.get("pmcid")):  # WPL-1111 RC-2: before the fetch
+    if acq_discovered.is_denied(doi=doi, pmcid=res.get("pmcid")) or acq_discovered.is_denied(doi=res.get("doi")):
+        # WPL-1111 RC-2 (+ D-2: both the candidate's DOI and the resolved one): before the fetch
         raise _Stop(acq_discovered.refusal_code(cfg, "access_denied"))
     if not doi and res.get("doi"):  # PLAN-NONDOI-1022 rule 6: promote to the DOI identity, re-check known
         doi = res["doi"]
@@ -1363,6 +1364,8 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     if not doi and item.get("doi"):  # PLAN-NONDOI-1022: promoted from the JATS article-id; re-check known
         if deps.lookup.known(item["doi"], None, (isbn or {}).get("isbn")):
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
+        if acq_discovered.is_denied(doi=item["doi"]):  # WPL-1111 RC-2 / D-1: a denied DOI found only in the JATS
+            raise _Stop(acq_discovered.refusal_code(cfg, "access_denied"))
     if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
         raise _Stop(acq_config.reason(cfg, "inject"))
     value = {"open_access": True, "licence_family": _family(res["licence"]) or "",

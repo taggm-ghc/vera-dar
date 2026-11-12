@@ -140,6 +140,9 @@ def test_t24_selective_fetch_robots_status_policy(status, allowed):
 
 
 def test_t24b_4xx_stop_held_for_robots_ttl_and_5xx_for_fail_ttl():
+    # The real TTL here is sf.ROBOTS_TTL_S (300 s), not 3600 s: the plan's "3599 s for selective_fetch" in test 18 was a slip
+    # (3600 s is acq_discovered's robots_ttl_s, asserted in the gate file); this test asserts the real constants.
+    assert sf.ROBOTS_TTL_S == 300.0
     now = [1000.0]
     calls: list = []
     assert _sf(403, clock=lambda: now[0], calls=calls) is False
@@ -170,3 +173,32 @@ def test_t24d_consumers_refuse_on_a_robots_403():
     for mod in (reference_portal, search_providers, wiki_ref_portal):
         assert "sf.robots_allowed(" in inspect.getsource(mod)
     assert _sf(403, url="https://duckduckgo.example/html") is False
+
+
+def test_t24e_robots_429_and_url_check_and_redirect_exhaustion_have_their_own_cause_lines(capsys):
+    # D-3 (verifier): log text only; the stop itself is unchanged
+    assert _sf(429) is False
+    sf.robots_cache_clear()
+    assert sf.robots_allowed("https://p.example/page", http_get=lambda *a, **k: _R(200), url_check=lambda u: (False, ""),
+                             pacer=_NoWait(), clock=lambda: 1000.0) is False
+    sf.robots_cache_clear()
+
+    def loop(cur, **kw):
+        r = _R(302)
+        r.headers["Location"] = "/robots2"
+        return r
+    assert sf.robots_allowed("https://p.example/page", http_get=loop, url_check=lambda u: (True, ""), pacer=_NoWait(),
+                             clock=lambda: 1000.0) is False
+    out = capsys.readouterr().out
+    assert "cause=RATELIMITED" in out and "cause=HOST" in out and "cause=REDIRECTS" in out
+
+
+def test_t24f_public_fetch_robots_429_is_ratelimited_in_the_cause_line(capsys):
+    net, e = _fetch({("a.example", "/robots.txt"): Resp(429, {}, b""), ("a.example", "/p"): html()})
+    assert e.reason == "robots_unreadable" and "cause=RATELIMITED" in capsys.readouterr().out
+
+
+def test_t23f_robots_without_a_content_type_is_unreadable():
+    # deviation 6b: beyond the plan's wording, a 200 robots.txt with NO Content-Type is refused (only removes requests)
+    net, e = _fetch({("a.example", "/robots.txt"): Resp(200, {}, b"User-agent: *\nAllow: /\n"), ("a.example", "/p"): html()})
+    assert isinstance(e, pf.FetchRefused) and e.reason == "robots_unreadable"

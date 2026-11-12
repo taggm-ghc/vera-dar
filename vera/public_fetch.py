@@ -420,6 +420,8 @@ def _get(url, cfg, resolve, transport, clock, end, allowed_ctypes, robots_check,
             if resp.status_code != 200:
                 if ok_robots and 400 <= resp.status_code < 500 and resp.status_code != 429:
                     return b"", cur, resp.status_code, ""  # robots.txt: the status goes to robots_verdict (R1)
+                if ok_robots and resp.status_code == 429:
+                    raise FetchRefused("throttled")  # robots.txt 429: only the cause line differs (RATELIMITED)
                 if not ok_robots and resp.status_code in (401, 403):
                     # WPL-1111 R2 (OD-1111-ACCESS-DENIED-NO-BYPASS): the page itself refused access; remembered, never
                     # retried or bypassed (the requested and the refusing URL)
@@ -462,7 +464,7 @@ def crawl_delay_for(cache, host, port, cfg) -> float:
 
 _UNREADABLE = "unreadable"  # per-request cache value: robots.txt answered 4xx (not 404/410): held for the request (RC-1)
 _READ_CAUSES = {"timeout": "TIMEOUT", "unreachable": "NETWORK", "redirects": "REDIRECTS", "cycle": "CYCLE",
-                "status": "STATUS_5XX", "format_unsupported": "CTYPE", "too_large": "SIZE", "encoding": "ENCODING"}
+                "status": "STATUS_5XX", "throttled": "RATELIMITED", "format_unsupported": "CTYPE", "too_large": "SIZE", "encoding": "ENCODING"}
 
 
 def robots_verdict(url, host, port, cfg, resolve, transport, clock, end, cache=None, hop_gate=None) -> str:

@@ -476,6 +476,7 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
             for _hop in range(MAX_REDIRECTS + 1):
                 ok, _why = url_check(cur)
                 if not ok:
+                    cause = "HOST"
                     break
                 (pacer or _DEFAULT_PACER).wait(cur)
                 resp = http_get(cur, headers={"User-Agent": ua}, timeout=timeout_s,
@@ -496,7 +497,9 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     signal = " ".join(_sp.robots_content_signal(txt).split()).lower()[:300]
                 elif resp.status_code in (404, 410):
                     rp = True
-                elif 400 <= resp.status_code < 500 and resp.status_code != 429:
+                elif resp.status_code == 429:
+                    cause = "RATELIMITED"  # stays a stop (fail TTL); only the cause line is truthful
+                elif 400 <= resp.status_code < 500:
                     # R1 (OD-1111-ROBOTS-4XX): only 404/410 mean "no restrictions"; any other 4xx stops (a recorded
                     # deviation from RFC 9309 section 2.3.1.3), held for ROBOTS_TTL_S so no request is added
                     cause = "STATUS_401" if resp.status_code == 401 else "STATUS_403" if resp.status_code == 403 \
@@ -505,6 +508,8 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     cause = "STATUS_5XX" if resp.status_code >= 500 else "STATUS_OTHER"
                 _status = resp.status_code
                 break
+            else:
+                cause = "REDIRECTS"  # the redirect cap was used up without an answer
         except Exception:  # noqa: BLE001  any error: fail closed
             rp = False
         with _ROBOTS_LOCK:
