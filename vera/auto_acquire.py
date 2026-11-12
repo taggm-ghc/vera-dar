@@ -244,8 +244,12 @@ def enqueue_candidates(question: str, cands: list, *, cfg: dict | None = None, e
             for k in [k for k, t in _S.pending.items() if now - t >= win]:
                 del _S.pending[k]
             fresh, seen = [], set()
+            from vera import acq_discovered as _acqd  # WPL-1111 R2: a denied document is never queued for retry
             for i in idx:
-                ks = {_pkey(k) for k in cand_keys(cands[i])}
+                if _acqd.is_denied(doi=_doi(cands[i]), pmcid=_pmcid(cands[i]), urls=(cands[i].get("url"),)):
+                    out["already"].append(i)
+                    continue
+                ks ={_pkey(k) for k in cand_keys(cands[i])}
                 if ks & (set(_S.pending) | seen):
                     out["already"].append(i)
                 else:
@@ -637,8 +641,24 @@ def _api_denied():
     return api_permissions.ApiDenied
 
 
+def _route_key(cfg: dict, refused: str, route_hop: bool) -> str:
+    """WPL-1111: the refusal key for a gate refusal. At the full-text service hop (Europe PMC, route_hop) the rules
+    belong to VERA-DAR's route, not the candidate's site: robots -> route_robots; robots_unreadable-X ->
+    route_unreadable-X, or noroute_unchecked-X when no landing route exists (live state). TDM is unchanged."""
+    if not route_hop:
+        return refused
+    if refused == "robots":
+        return "route_robots"
+    if refused.startswith("robots_unreadable"):
+        suf = refused[len("robots_unreadable"):]
+        from vera import acq_discovered as _ad
+        return ("route_unreadable" if _ad.landing_on(cfg) else "noroute_unchecked") + suf
+    return refused
+
+
 def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: float, want_json: bool,
-                 clock=time.monotonic, deadline: float | None = None, chain: list | None = None):
+                 clock=time.monotonic, deadline: float | None = None, chain: list | None = None,
+                 route_hop: bool = False):
     """GET with the host allowlist checked on every hop, https only, the SSRF guard, manual redirects, content type, size
     cap, and a wall-clock limit over the WHOLE fetch (requests' timeout is per read; plan V-D7). Every streamed
     response is closed, including on an early stop.
@@ -675,6 +695,9 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
             from vera import acq_discovered
             if not acq_discovered._host_ok(current, allowed):  # CONTROL-GAPS-1107 r2: every path (userinfo, port)
                 raise _Stop(acq_config.reason(cfg, "host"))
+            if acq_discovered.is_denied(urls=(current,)):  # WPL-1111 R2: every hop, redirect targets included
+                raise _Stop(acq_discovered.refusal_code(cfg, "access_denied-ROUTE" if route_hop and not want_json
+                                                        else "route_denied" if want_json else "access_denied"))
             if not want_json:  # PORTAL-RULE-1110 CP3: a full-text hop must be ORIGINAL / RoR / a resolver (metadata calls are identifiers only)
                 from vera import host_role
                 if not host_role.is_hop_allowed(current, "store"):
@@ -703,7 +726,7 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 t_gate = clock()
                 refused = _ad.hop_access(current, allowed, deps, cfg, clock, deadline)  # r2: JOB deadline (uncached)
                 if refused:
-                    raise _Stop(acq_config.reason(cfg, refused))
+                    raise _Stop(_ad.refusal_code(cfg, _route_key(cfg, refused, route_hop)))
                 g = max(0.0, clock() - t_gate)  # H5-CRAWL-1107: the gate's own (paced) reads are not this fetch's time
                 end = end + g if deadline is None else min(end + g, deadline)
             ok, _why = check(current)
@@ -711,7 +734,7 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 raise _Stop(acq_config.reason(cfg, "host"))
             refused = _ad.hop_access(current, allowed, deps, cfg, clock, deadline)  # cached now: no request; TTL-checked
             if refused:
-                raise _Stop(acq_config.reason(cfg, refused))
+                raise _Stop(_ad.refusal_code(cfg, _route_key(cfg, refused, route_hop)))
             if chain is not None:
                 chain.append(acq_discovered._clean(current, 2000))
             w = _ad.crawl_wait(current, cfg, clock, deadline)  # H-5 / H5-CRAWL-1107: per-host pacing slot, under the lock
@@ -750,6 +773,11 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
                 # H5-CRAWL-1107: a server 429 is a rate limit, not a failed attempt (owner rule: 429/cooldown tries
                 # never count); background-eligible, never R-ACQ-UNREACHABLE. Other statuses (503 too) are unchanged.
                 raise _Stop(acq_config.rate_limited_code(cfg, "throttled"))
+            if resp.status_code in (401, 403):
+                # WPL-1111 R2 (OD-1111-ACCESS-DENIED-NO-BYPASS): a refusal by the endpoint is an access denial, never
+                # retried or bypassed. The search endpoint (want_json) is ROUTE_DENIED; a document fetch is remembered.
+                raise _ad.access_denied_stop(cfg, resp.status_code, (url, current), route_hop=route_hop,
+                                             want_json=want_json)
             raise _Stop(acq_config.reason(cfg, "unreachable"))
         if chain is not None and str(resp.headers.get("Content-Encoding") or "identity").strip().lower() != "identity":
             raise _Stop(acq_config.reason(cfg, "encoding"))
@@ -762,8 +790,9 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
         from vera import acq_discovered as _ad
         if _ad.tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
             raise _Stop(acq_config.reason(cfg, "tdm"))
-        if _ad.page_no_ai(resp.headers):  # ROBOTS-FOLLOWUP-1108: header no-AI signals (reason: robots family)
-            raise _Stop(acq_config.reason(cfg, "robots"))
+        sig = _ad.page_no_ai_reason(resp.headers)  # ROBOTS-FOLLOWUP-1108: header no-AI signals
+        if sig:
+            raise _ad.page_signal_stop(cfg, sig, current, route_hop=route_hop)
         chunks, size = [], 0
         try:
             for chunk in resp.iter_content(65536):
@@ -779,8 +808,9 @@ def _guarded_get(url: str, cfg: dict, deps: Deps, max_bytes: int, timeout_s: flo
         body = b"".join(chunks)
         if _ad.tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
             raise _Stop(acq_config.reason(cfg, "tdm"))
-        if _ad.page_no_ai({}, body, ctype):  # ROBOTS-FOLLOWUP-1108: <meta> noai / ai-grounding in an HTML page
-            raise _Stop(acq_config.reason(cfg, "robots"))
+        sig = _ad.page_no_ai_reason({}, body, ctype)  # ROBOTS-FOLLOWUP-1108: <meta> noai / ai-grounding in an HTML page
+        if sig:
+            raise _ad.page_signal_stop(cfg, sig, current, route_hop=route_hop)
         return body, current
     finally:
         _close(resp)
@@ -808,7 +838,8 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
     url = rcfg["search_url"] + "?" + urlencode({"query": f'DOI:"{doi}"' if doi else f'PMCID:"{pmcid}"', "resultType": "core", "format": "json",
                                                 "pageSize": 1})
     raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
-                               clock=clock, deadline=deadline, **({"chain": chain} if chain is not None else {}))
+                               clock=clock, deadline=deadline, route_hop=True,
+                               **({"chain": chain} if chain is not None else {}))
     try:
         doc = strict_json.loads(raw.decode("utf-8"))  # STRICTJSON-1027 C4: duplicate / non-ASCII keys, NaN rejected
         res = ((doc.get("resultList") or {}).get("result") or [])
@@ -1249,9 +1280,17 @@ def evaluate_candidate(job: Job, score: float, doi: str, cand: dict, isbn, cfg: 
     from vera import host_role  # PORTAL-RULE-1110 CP3b: record-level role (preprint DOI prefix, Europe PMC PPR, preprint type), no request
     if host_role.role_for_record(portal_meta(cand, doi)).role in ("PORTAL", "EXCLUDED"):
         raise _Stop(acq_config.reason(cfg, "portal"))
+    from vera import acq_discovered as _acqd  # WPL-1111 R2 (OD-1111-ACCESS-DENIED-NO-BYPASS): no request for a denied document
+    if _acqd.is_denied(doi=doi, pmcid=_pmcid(cand), urls=(cand.get("url"),)):
+        raise _Stop(_acqd.refusal_code(cfg, "access_denied"))
     from vera import fulltext_routes  # OA-4: route registry (arXiv first, Europe PMC the default; unchanged order)
     route, cand, doi = fulltext_routes.select(cand, doi, cfg)
-    plan, isbn = route.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur, min_spans)
+    try:
+        plan, isbn = route.evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock, deadline, dur, min_spans)
+    except _Stop as e:
+        if getattr(e, "denied_ids", None) is not None:  # R2: remember every identity the denied document goes by
+            _acqd.deny(set(e.denied_ids) | _acqd.denial_ids(doi=doi, pmcid=_pmcid(cand), urls=(cand.get("url"),)))
+        raise
     if cand.get("portal_via"):  # ARXIV-PORTAL-1110: found through an arXiv record ("via arXiv <id>"), read on its own host
         try:
             plan["source"]["provenance"]["acquisition"]["portal_via"] = str(cand["portal_via"])
@@ -1272,6 +1311,7 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     """OA-4: the Europe PMC route body (moved unchanged from evaluate_candidate): resolve OA -> fetch JATS (or the P0-5
     DOI-landing step for a discovered candidate) -> convert + filters + licence -> injection scan -> plan -> gate."""
     dur = {} if dur is None else dur
+    from vera import acq_discovered  # WPL-1111: the R2 denial memory is read on every path (disc or not)
     t = clock()
     # P0-5: a discovered candidate (only present with inline.use_discovered) records its URL chain; Step B
     # (inline.landing_route) tries ONE DOI -> landing -> JATS location when Europe PMC has no open-access record.
@@ -1291,6 +1331,9 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
             route = "landing"
             raw, final, landing, res = acq_discovered.landing_fetch(doi, cand, cfg, deps, icfg, clock=clock,
                                                                     deadline=deadline, chain=chain)
+    if acq_discovered.is_denied(doi=doi, pmcid=res.get("pmcid")) or acq_discovered.is_denied(doi=res.get("doi")):
+        # WPL-1111 RC-2 (+ D-2: both the candidate's DOI and the resolved one): before the fetch
+        raise _Stop(acq_discovered.refusal_code(cfg, "access_denied"))
     if not doi and res.get("doi"):  # PLAN-NONDOI-1022 rule 6: promote to the DOI identity, re-check known
         doi = res["doi"]
         if deps.lookup.known(doi, None, (isbn or {}).get("isbn")):
@@ -1301,9 +1344,17 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
     if route == "europepmc":
         url = cfg["resolve"]["fulltext_url_template"].format(pmcid=res["pmcid"])
-        raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
-                                  float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
-                                  deadline=deadline, **({"chain": chain} if chain is not None else {}))
+        try:
+            raw, final = _guarded_get(url, cfg, deps, int(acq_config.bound(cfg, "max_fetch_bytes")),
+                                      float(acq_config.bound(cfg, "fetch_timeout_s")), False, clock=clock,
+                                      deadline=deadline, route_hop=True,
+                                      **({"chain": chain} if chain is not None else {}))
+        except _Stop as e:
+            if getattr(e, "denied_ids", None) is not None:  # WPL-1111 RC-2: add the resolved identities
+                ids = acq_discovered.denial_ids(doi=doi or res.get("doi"), pmcid=res.get("pmcid"))
+                acq_discovered.deny(ids)
+                e.denied_ids = set(e.denied_ids) | ids
+            raise
     dur["fetch"] = dur.get("fetch", 0) + int((clock() - t) * 1000)
     t = clock()
     from vera import freshness as _fz  # FRESH-AMEND-1023: corpus write time on the freshness clock hook
@@ -1313,6 +1364,12 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     if not doi and item.get("doi"):  # PLAN-NONDOI-1022: promoted from the JATS article-id; re-check known
         if deps.lookup.known(item["doi"], None, (isbn or {}).get("isbn")):
             raise _Stop(acq_config.reason(cfg, "in_corpus"))
+        if acq_discovered.is_denied(doi=item["doi"]):  # WPL-1111 RC-2 / D-1: a denied DOI found only in the JATS
+            # D-4: remember the other identities of this denied document too (the PMCID and the XML URL), so the next
+            # request is refused before any fetch; the one fetch that revealed the DOI is the accepted residual
+            acq_discovered.deny(acq_discovered.denial_ids(pmcid=res.get("pmcid"),
+                                                          urls=(final,) + ((url,) if route == "europepmc" else ())))
+            raise _Stop(acq_discovered.refusal_code(cfg, "access_denied"))
     if acq_config.injection_refused(f"{item.get('title') or ''}\n{text}", cfg):  # SEC L2: title too
         raise _Stop(acq_config.reason(cfg, "inject"))
     value = {"open_access": True, "licence_family": _family(res["licence"]) or "",

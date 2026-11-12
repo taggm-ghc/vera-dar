@@ -58,6 +58,19 @@ REASON_TEXT = {
     "R-ACQ-CRAWL_DELAY": "Not checked in time: the source asks crawlers to wait.",
     "R-ACQ-HOST": "Not read: VERA-DAR has no cleared route to this site.",  # WORDING-LABELS-1110 (c): a policy refusal, not an SSRF check
     "R-ACQ-ROBOTS": "Not read: the site's robots rules do not permit automated reading.",
+    # WPL-1111 (ROBOTS-LABEL-1111): each cause of an unread robots file or a refusal has its own true sentence
+    "R-ACQ-ROBOTS_UNREADABLE": "Not read: the site's robots rules could not be read, so VERA-DAR did not read the page.",
+    "R-ACQ-ROUTE_ROBOTS": "Not read: VERA-DAR's full-text service does not permit this automated lookup, and the "
+                          "source's own site was not contacted.",
+    "R-ACQ-ROUTE_NOAI": "Not read: VERA-DAR's full-text service marked its answer as not for AI use, and the source's "
+                        "own site was not contacted.",
+    "R-ACQ-ROUTE_UNREADABLE": "Not read: VERA-DAR's full-text service could not be checked just now, and the "
+                              "source's own site was not contacted.",
+    "R-ACQ-NOROUTE_UNCHECKED": "Not read: VERA-DAR has no cleared route to this source's own site, and its full-text "
+                               "service could not be checked just now.",
+    "R-ACQ-ACCESS_DENIED": "Not read: access to this document was refused.",
+    "R-ACQ-ROUTE_DENIED": "Not read: VERA-DAR's full-text service refused the lookup, and the source's own site was "
+                          "not contacted.",
     "R-ACQ-TDM": "Not used: the publisher reserves text and data mining rights.",  # CONTROL-GAPS-1107
     "R-API-DENIED": "Not read: this source's API is not cleared for use.",  # API-ALLOW-1107
     "R-API-COND": "Not read: this source's API is not cleared for use.",
@@ -95,13 +108,73 @@ OUTCOME_TEXT = {  # outcomes that carry no reason code
 }
 
 
+CAUSE_TEXT = {  # WPL-1111: the cause sentence added after the base text (no host, URL or code in any of them)
+    "TIMEOUT": "Cause: no answer in time.",
+    "NETWORK": "Cause: the connection failed.",
+    "STATUS_5XX": "Cause: a server error.",
+    "STATUS_OTHER": "Cause: an unexpected answer.",
+    "STATUS_401": "Cause: access to the robots file was refused.",
+    "STATUS_403": "Cause: access to the robots file was refused.",
+    "STATUS_4XX": "Cause: the request for the robots file was rejected.",
+    "CTYPE": "Cause: a web page was returned instead of a robots file.",
+    "REDIRECTS": "Cause: too many redirects.",
+    "SIZE": "Cause: the robots file was too large.",
+    "ENCODING": "Cause: an unsupported encoding.",
+    "CYCLE": "Cause: a redirect loop.",
+    "PARSE": "Cause: VERA-DAR could not interpret the rules.",
+    "EVAL": "Cause: VERA-DAR could not interpret the rules.",
+    "ROUTE": "Cause: VERA-DAR's full-text service refused it, and the source's own site was not contacted.",
+    "CACHED": "Cause: a failure seen recently, reused.",
+}
+_CAUSE_BASES = ("R-ACQ-ROBOTS_UNREADABLE", "R-ACQ-ROUTE_UNREADABLE", "R-ACQ-NOROUTE_UNCHECKED", "R-ACQ-ROUTE_NOAI",
+                "R-ACQ-ACCESS_DENIED", "R-ACQ-ROBOTS")
+_STATUS_LONG = {"STATUS_401", "STATUS_403", "STATUS_4XX"}
+
+
+def split_reason(code: str) -> tuple:
+    """(base, suffix) for a suffixed reason code (R-ACQ-<BASE>-<SUFFIX>); (code, "") otherwise."""
+    c = str(code or "").strip().upper()
+    for b in _CAUSE_BASES:
+        if c == b:
+            return b, ""
+        if c.startswith(b + "-"):
+            return b, c[len(b) + 1:]
+    return c, ""
+
+
+def reason_text(code: str) -> str:
+    """Base text plus the cause sentence for a suffixed code; an unknown suffix gives the base text alone."""
+    base, suf = split_reason(code)
+    text = REASON_TEXT.get(base, REASON_GENERIC)
+    if not suf or base == "R-ACQ-ROBOTS" and suf == "PAGE_NOAI":
+        return text
+    cached = suf.startswith("CACHED")
+    key = suf[len("CACHED_"):] if suf.startswith("CACHED_") else ("" if cached else suf)
+    sentence = CAUSE_TEXT.get(key) if key and base != "R-ACQ-ROUTE_NOAI" else None
+    if base == "R-ACQ-ACCESS_DENIED" and suf != "ROUTE":
+        sentence = None
+    if sentence is None and not cached:
+        return text
+    if cached:
+        age = "an answer seen within the last hour, reused" if key in _STATUS_LONG else \
+            "a failure seen within the last minute, reused"
+        if sentence is None:
+            return text + " Cause: a failure seen recently, reused."
+        return text + " " + sentence.rstrip(".") + f" ({age})."
+    return text + " " + sentence
+
+
 def _reason_line(entry) -> str | None:
     """Plain-language outcome for one discovered entry; None when the entry is unusable."""
     if not isinstance(entry, dict):
         return None
     r = entry.get("reason")
     if isinstance(r, str) and r:
-        return REASON_TEXT.get("R-ACQ-RATELIMITED" if r.upper().startswith("R-ACQ-RATELIMITED-") else r, REASON_GENERIC)
+        if r.upper().startswith("R-ACQ-RATELIMITED-"):
+            return REASON_TEXT.get("R-ACQ-RATELIMITED", REASON_GENERIC)
+        if split_reason(r)[0] in _CAUSE_BASES and split_reason(r)[1]:
+            return reason_text(r)
+        return REASON_TEXT.get(r, REASON_GENERIC)
     o = entry.get("outcome")
     return OUTCOME_TEXT.get(o) if isinstance(o, str) and o in OUTCOME_TEXT else (REASON_GENERIC if o else None)
 

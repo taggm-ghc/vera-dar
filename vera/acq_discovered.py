@@ -31,8 +31,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
+import sys
 import threading
 import time
 from urllib.parse import urljoin, urlsplit
@@ -378,11 +380,176 @@ _CRAWL_LAST: dict = {}  # H-5 / H5-CRAWL-1107: host -> monotonic time of its lat
 _sleep = time.sleep  # test seam (tests never sleep for real)
 
 
+_CAUSE_RE_HOST = re.compile(r"[a-z0-9.-]{1,253}")
+_CAUSE_RE_CTYPE = re.compile(r"[a-z0-9.+/-]{1,64}")
+_CACHED_LOGGED: dict = {}  # host -> monotonic time of the last cached=1 cause line (once per host per fail-TTL)
+_DENIED: dict = {}  # WPL-1111 R2: identity -> time; process memory only (Q-4: a restart clears it)
+_DENIED_LOCK = threading.Lock()
+_DENIED_MAX = 4096  # A-3: FIFO bound; after 4096 later denials the oldest may be evicted (one re-request possible)
+# R1 (OD-1111-ROBOTS-4XX): a robots.txt 4xx other than 404/410 is a stop, cached as long as the old "allow" was.
+_STATUS_CAUSES = ("STATUS_401", "STATUS_403", "STATUS_4XX")
+
+
+class _StdoutHandler(logging.StreamHandler):
+    """R3: writes to the CURRENT sys.stdout at emit time (so a capture that swaps sys.stdout sees the line)."""
+
+    def __init__(self):
+        super().__init__(sys.stdout)
+
+    @property
+    def stream(self):  # noqa: D401
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, _v):
+        pass
+
+
+cause_logger = logging.getLogger("vera.robots_cause")
+if not any(isinstance(h, _StdoutHandler) for h in cause_logger.handlers):
+    cause_logger.addHandler(_StdoutHandler())
+cause_logger.setLevel(logging.INFO)
+cause_logger.propagate = False  # main.py basicConfig writes to stderr: no second copy of the line
+
+
+def _san(v, rx, fallback: str) -> str:
+    s = str(v or "").strip().lower()
+    return s if rx.fullmatch(s) else fallback
+
+
+def cause_log(host, hop: str, code: str, cause: str, cached: bool = False, status=None, ctype=None, nbytes=None,
+              ms=0) -> None:
+    """R3 / GOV-WPL-1111 RC-4: one stdout line per robots failure or access denial. Every field is fixed-set or
+    sanitised; no URL path or query, no question text, no body, no header value beyond a signal name. Never raises."""
+    try:
+        def _i(v):
+            try:
+                return str(int(v))
+            except (TypeError, ValueError):
+                return "-"
+        fixed = re.compile(r"[A-Za-z0-9_:.-]{1,64}")
+        c1 = code if fixed.fullmatch(str(code)) else "-"
+        c2 = cause if fixed.fullmatch(str(cause)) else "-"
+        h = hop if hop in ("route", "source", "portal", "web") else "-"
+        ct = "-" if ctype is None else _san(str(ctype).split(";")[0], _CAUSE_RE_CTYPE, "other")
+        cause_logger.info("robots_cause host=%s hop=%s code=%s cause=%s cached=%d status=%s ctype=%s bytes=%s ms=%s",
+                          _san(host, _CAUSE_RE_HOST, "-"), h, c1, c2, 1 if cached else 0, _i(status) if status
+                          is not None else "-", ct, _i(nbytes) if nbytes is not None else "-", _i(ms))
+    except Exception:  # noqa: BLE001  diagnostics never block
+        pass
+
+
+def _hop_of(url: str, acq=None) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return "route" if host == "www.ebi.ac.uk" else "source"
+
+
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _norm_path(path: str) -> str:
+    """DENIAL-COVERAGE-1111 defect 2: one key per document. Percent-escapes of unreserved characters are decoded
+    (other escapes keep upper-case hex), dot-segments are resolved and leading slashes collapse to one."""
+    def _unesc(m):
+        ch = chr(int(m.group(1), 16))
+        return ch if ch in _UNRESERVED else "%" + m.group(1).upper()
+    p = re.sub(r"%([0-9A-Fa-f]{2})", _unesc, path or "/")
+    out = []
+    for s in p.lstrip("/").split("/"):
+        if s == ".":
+            continue
+        if s == "..":
+            if out:
+                out.pop()
+            continue
+        out.append(s)
+    return "/" + "/".join(out)
+
+
+def _id_url(u) -> str:
+    try:
+        sp = urlsplit(str(u or ""))
+        host = (sp.hostname or "").lower().rstrip(".")
+        return f"url:{host}{_norm_path(sp.path)}" if host else ""
+    except ValueError:
+        return ""
+
+
+def denial_ids(doi=None, pmcid=None, urls=()) -> set:
+    """R2 identities: normalised DOI, PMCID, and each URL as host + path (no query)."""
+    out = set()
+    d = str(doi or "").strip().lower()
+    if d:
+        out.add(f"doi:{d}")
+    m = str(pmcid or "").strip().upper()
+    if m:
+        out.add(f"pmc:{m}")
+    for u in urls or ():
+        k = _id_url(u)
+        if k:
+            out.add(k)
+    return out
+
+
+def deny(ids) -> None:
+    """Remember an access denial (R2): the same document is never requested again in this process."""
+    now = time.monotonic()
+    with _DENIED_LOCK:
+        for k in ids or ():
+            _DENIED.pop(k, None)
+            _DENIED[k] = now
+        while len(_DENIED) > _DENIED_MAX:
+            _DENIED.pop(next(iter(_DENIED)))
+
+
+def is_denied(doi=None, pmcid=None, urls=()) -> bool:
+    ids = denial_ids(doi, pmcid, urls)
+    with _DENIED_LOCK:
+        return any(k in _DENIED for k in ids)
+
+
+def refusal_code(acq, key: str) -> str:
+    """reason code for a refusal key, with an optional -SUFFIX ("robots_unreadable-TIMEOUT" -> R-ACQ-ROBOTS_UNREADABLE-
+    TIMEOUT; the same scheme as R-ACQ-RATELIMITED-<REASON>)."""
+    base, _, suf = str(key).partition("-")
+    return acq_config.reason(acq, base) + (f"-{suf}" if suf else "")
+
+
+def _caused(aa, acq, key: str, cause: str, status=None):
+    """A _Stop for reason `key` that records the robots-read cause (diagnostics only; the code is unchanged)."""
+    stop = aa._Stop(acq_config.reason(acq, key))
+    stop.cause = cause
+    stop.status = status
+    return stop
+
+
+def access_denied_stop(acq, status: int, urls, route_hop: bool = False, want_json: bool = False):
+    """R2: a 401/403 on a document endpoint. Writes the URL identities (the handler adds DOI / PMCID) and returns the
+    _Stop to raise. want_json (the Europe PMC search endpoint) is ROUTE_DENIED and is not remembered (A-1)."""
+    from vera import auto_acquire as aa
+    host = ""
+    for u in urls or ():
+        host = (urlsplit(str(u)).hostname or "").lower()
+    if want_json:
+        cause_log(host, "route", acq_config.reason(acq, "route_denied"), f"STATUS_{int(status)}", False, status)
+        return aa._Stop(acq_config.reason(acq, "route_denied"))
+    ids = denial_ids(urls=urls)
+    deny(ids)
+    code = refusal_code(acq, "access_denied-ROUTE" if route_hop else "access_denied")
+    cause_log(host, "route" if route_hop else "source", code, f"STATUS_{int(status)}", False, status)
+    stop = aa._Stop(code)
+    stop.denied_ids = ids
+    return stop
+
+
 def reset_for_tests() -> None:
     with _ROBOTS_LOCK:
         _ROBOTS.clear()
         _TDMREP.clear()
         _CRAWL_LAST.clear()
+        _CACHED_LOGGED.clear()
+    with _DENIED_LOCK:
+        _DENIED.clear()
 
 
 def _lcfg(acq) -> dict:
@@ -433,6 +600,8 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                                                  else "fetch_timeout"))  # P0DTA-DIAG: per-fetch clock != request deadline
         if not _host_ok(cur, hosts):
             raise aa._Stop(acq_config.reason(acq, "host"))
+        if robots and is_denied(urls=(cur,)):  # WPL-1111 R2: a denied document URL is never requested again (every hop)
+            raise aa._Stop(refusal_code(acq, "access_denied"))
         from vera import host_role  # PORTAL-RULE-1110 CP3: every landing / full-text hop is ORIGINAL / RoR / a resolver
         if robots and not host_role.is_hop_allowed(cur, "store"):  # robots.txt / tdmrep.json reads are not documents
             raise aa._Stop(acq_config.reason(acq, "portal"))
@@ -446,7 +615,7 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
             t_gate = clock()
             refused = hop_access(cur, hosts, deps, acq, clock, deadline)
             if refused:
-                raise aa._Stop(acq_config.reason(acq, refused))
+                raise aa._Stop(refusal_code(acq, refused))
             g = max(0.0, clock() - t_gate)  # H5-CRAWL-1107: the gate's own (paced) reads are not this fetch's time
             end = end + g if deadline is None else min(end + g, deadline)
         if chain is not None:
@@ -461,7 +630,7 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
         except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent
             raise aa._Stop(acq_config.reason(acq, "host")) from None
         except Exception:  # noqa: BLE001
-            raise aa._Stop(acq_config.reason(acq, "unreachable")) from None
+            raise _caused(aa, acq, "unreachable", "NETWORK") from None
         try:
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
                 nxt = urljoin(cur, resp.headers["Location"])
@@ -469,7 +638,7 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                     raise aa._Stop(acq_config.reason(acq, "cycle"))
                 hops += 1
                 if hops > max_redirects:
-                    raise aa._Stop(acq_config.reason(acq, "unreachable"))
+                    raise _caused(aa, acq, "unreachable", "REDIRECTS")
                 cur = nxt
                 continue
             if resp.status_code not in ok_status:
@@ -481,9 +650,14 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                     # CONTROL-GAPS-1107 r2: a server throttle (429 / the portal's throttle_statuses) on robots.txt or
                     # tdmrep.json is a rate limit, not a verdict: refused now, never cached, never an attempt.
                     raise aa._Stop(acq_config.reason(acq, "rate_limited"))
+                if robots and resp.status_code in (401, 403):
+                    # WPL-1111 R2 (OD-1111-ACCESS-DENIED-NO-BYPASS): an access denial on the document endpoint is not
+                    # unreachable and is never retried or bypassed (the requested and the refusing URL are remembered)
+                    raise access_denied_stop(acq, resp.status_code, (url, cur))
                 if robots is False and 400 <= resp.status_code < 500 and resp.status_code != 429:
-                    return b"", cur, resp.status_code  # robots.txt: 4xx = no rules (RFC 9309); 429/5xx fail closed
-                raise aa._Stop(acq_config.reason(acq, "unreachable"))
+                    return b"", cur, resp.status_code  # robots.txt 4xx: the status goes to _robots_verdict (R1)
+                raise _caused(aa, acq, "unreachable", "STATUS_5XX" if resp.status_code >= 500 else "STATUS_OTHER",
+                              resp.status_code)
             enc = str(resp.headers.get("Content-Encoding") or "identity").strip().lower()
             if enc != "identity":
                 raise aa._Stop(acq_config.reason(acq, "encoding"))
@@ -492,8 +666,9 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
                 raise aa._Stop(acq_config.reason(acq, "format_unsupported"))
             if robots and tdm_header_reserved(resp.headers):  # CONTROL-GAPS-1107: TDM-Reservation response header
                 raise aa._Stop(acq_config.reason(acq, "tdm"))
-            if robots and page_no_ai(resp.headers):  # ROBOTS-FOLLOWUP-1108: header no-AI signals (reason: robots family)
-                raise aa._Stop(acq_config.reason(acq, "robots"))
+            sig = page_no_ai_reason(resp.headers) if robots else None  # ROBOTS-FOLLOWUP-1108: header no-AI signals
+            if sig:
+                raise page_signal_stop(acq, sig, cur)
             buf, size = [], 0
             for chunk in resp.iter_content(65536):
                 size += len(chunk)
@@ -506,36 +681,66 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
             body = b"".join(buf)
             if robots and tdm_body_reserved(body, ctype):  # CONTROL-GAPS-1107: <meta name="tdm-reservation" content="1">
                 raise aa._Stop(acq_config.reason(acq, "tdm"))
-            if robots and page_no_ai({}, body, ctype):  # ROBOTS-FOLLOWUP-1108: <meta> noai / ai-grounding in the page
-                raise aa._Stop(acq_config.reason(acq, "robots"))
+            sig = page_no_ai_reason({}, body, ctype) if robots else None  # <meta> noai / ai-grounding in the page
+            if sig:
+                raise page_signal_stop(acq, sig, cur)
             return body, cur, resp.status_code
         finally:
             aa._close(resp)
 
 
-def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
-    """robots.txt for the URL's host through _b_get (same allowlist, caps, deadline), cached per host (allow/parsed:
-    robots_ttl_s; a failure: robots_fail_ttl_s). 200 -> parsed for our user agent; 4xx other than 429 -> allowed
-    (RFC 9309); 429, 5xx, error or timeout -> NOT allowed (fail closed)."""
+def _stop_cause(stop, acq) -> str:
+    """The robots-read cause key of a stop of the gate's own robots.txt request (WPL-1111)."""
+    c = getattr(stop, "cause", None)
+    if c:
+        return c
+    code = str(getattr(stop, "code", ""))
+    for key, cause in (("fetch_timeout", "TIMEOUT"), ("encoding", "ENCODING"), ("format_unsupported", "CTYPE"),
+                       ("too_large", "SIZE"), ("cycle", "CYCLE"), ("unreachable", "NETWORK")):
+        if code == acq_config.reason(acq, key):
+            return cause
+    return "PARSE"
+
+
+def _robots_verdict(url: str, hosts: set, deps, acq, clock, deadline) -> tuple:
+    """robots.txt for the URL's host through _b_get (same allowlist, caps, deadline), cached per host. Returns
+    ("allow" | "disallow" | "unreadable", cause): cause is None for allow, a verdict name for disallow, and the
+    read-failure key for unreadable (CACHED_<key> when served from the cache). 200 -> parsed for our user agent;
+    404/410 -> allowed; any other 4xx except 429 -> unreadable (R1, OD-1111-ROBOTS-4XX: a recorded deviation from
+    RFC 9309 section 2.3.1.3; held for robots_ttl_s, so no request is added by the stop); 429, 5xx, error or
+    timeout -> unreadable (fail closed). The cache value is (time, rp, cause); readers use [0] and [1] only, and a
+    2-tuple (older fixtures) has no cause (fail TTL, cause CACHED)."""
     from urllib import robotparser
 
     from vera import auto_acquire as aa
     from vera import selective_fetch as sf
     lc = _lcfg(acq)
     host = (urlsplit(url).hostname or "").lower()
+    hop = _hop_of(url)
     now = clock()
     with _ROBOTS_LOCK:
         hit = _ROBOTS.get(host)
-    if hit is not None and now - hit[0] < float(lc.get("robots_ttl_s" if hit[1] is not False else
-                                                         "robots_fail_ttl_s", 3600 if hit[1] is not False else 60)):
+    fresh, cause_w = False, None
+    if hit is not None:
+        cause_w = hit[2] if len(hit) > 2 else None
+        long_ttl = hit[1] is not False or cause_w in _STATUS_CAUSES  # RC-1: a 4xx stop is held as the old allow was
+    if hit is not None and now - hit[0] < float(lc.get("robots_ttl_s" if long_ttl else "robots_fail_ttl_s",
+                                                         3600 if long_ttl else 60)):
         rp = hit[1]
     else:
+        fresh = True
+        t0 = clock()
+        status_seen, ctype_seen, bytes_seen = None, None, None
         try:
             body, _f, status = _b_get(f"https://{host}/robots.txt", hosts, {"text/plain"},
                                       int(lc.get("robots_max_bytes", 524288)), 2, deps, acq, clock, deadline, None,
                                       robots=False)
-            if status != 200:
+            status_seen, bytes_seen = status, len(body)
+            if status in (404, 410):
                 rp = True
+            elif status != 200:
+                rp, cause_w = False, ("STATUS_401" if status == 401 else "STATUS_403" if status == 403
+                                      else "STATUS_4XX")
             else:
                 p = robotparser.RobotFileParser()
                 txt = body.decode("utf-8", "ignore")
@@ -548,25 +753,58 @@ def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
         except aa._Stop as e:
             if _passthrough(e, acq):
                 raise  # CONTROL-GAPS-1107: refused as host / rate-limited (nothing sent), never cached as robots
-            rp = False
+            rp, cause_w = False, _stop_cause(e, acq)
+            status_seen = getattr(e, "status", None)
         except Exception:  # noqa: BLE001  any other stop, parse or config error: fail closed
-            rp = False
+            rp, cause_w = False, "PARSE"
         with _ROBOTS_LOCK:
-            _ROBOTS[host] = (now, rp)
+            _ROBOTS[host] = (now, rp, cause_w if rp is False else None)
             while len(_ROBOTS) > 64:
                 _ROBOTS.pop(next(iter(_ROBOTS)))
+        if rp is False:
+            cause_log(host, hop, refusal_code(acq, "robots_unreadable-" + cause_w), cause_w, False, status_seen,
+                      ctype_seen, bytes_seen, int((clock() - t0) * 1000))
     if rp is True:
-        return True
+        return "allow", None
     if rp is False:
-        return False
+        if not fresh:
+            ttl = float(lc.get("robots_ttl_s", 3600)) if cause_w in _STATUS_CAUSES else float(
+                lc.get("robots_fail_ttl_s", 60))
+            with _ROBOTS_LOCK:
+                last = _CACHED_LOGGED.get(host)
+                first = last is None or now - last >= ttl
+                if first:
+                    _CACHED_LOGGED[host] = now
+            if first:
+                cause_log(host, hop, refusal_code(acq, "robots_unreadable-CACHED_" + (cause_w or "UNKNOWN")),
+                          "CACHED_" + (cause_w or "UNKNOWN"), True)
+        if fresh:
+            return "unreadable", cause_w
+        return "unreadable", ("CACHED_" + cause_w) if cause_w else "CACHED"
     try:
         from vera import robots_ai as _ra
         from vera import source_permissions as _sp
+        why = None
         if _sp.robots_no_ai(_sp.robots_entries(getattr(rp, "vera_use_signal", ""))):  # ai-input=no / ai-use=n anywhere
-            return False
-        return _ra.allowed(rp, sf.USER_AGENT, url) and _ra.block_reason(rp, url) is None
+            why = "verdict:content_signal"
+        elif not _ra.allowed(rp, sf.USER_AGENT, url):
+            why = "verdict:disallow"
+        elif _ra.block_reason(rp, url) is not None:
+            why = "verdict:ai_statement"
+        if why is None:
+            return "allow", None
+        if fresh:
+            cause_log(host, hop, acq_config.reason(acq, "robots"), why, False)
+        return "disallow", why
     except Exception:  # noqa: BLE001
-        return False
+        if fresh:
+            cause_log(host, hop, refusal_code(acq, "robots_unreadable-EVAL"), "EVAL", False)
+        return "unreadable", "EVAL"  # H3: an exception while evaluating is "could not be checked", not a rule
+
+
+def _robots_allowed(url: str, hosts: set, deps, acq, clock, deadline) -> bool:
+    """True only when the robots verdict is allow (fail closed). Wrapper kept for its external callers."""
+    return _robots_verdict(url, hosts, deps, acq, clock, deadline)[0] == "allow"
 
 
 def _passthrough(stop, acq) -> bool:
@@ -752,7 +990,15 @@ def tdm_body_reserved(body: bytes, ctype: str) -> bool:
 
 
 def page_no_ai(headers, body: bytes = b"", ctype: str = "") -> bool:
-    """ROBOTS-FOLLOWUP-1108: the page-level use-based no-AI signals the web route applies (source_permissions.evaluate),
+    """True when page_no_ai_reason finds a signal or an error (fail closed)."""
+    return bool(page_no_ai_reason(headers, body, ctype))
+
+
+def page_no_ai_reason(headers, body: bytes = b"", ctype: str = "") -> str | None:
+    """WPL-1111: the signal name (X_ROBOTS_TAG, META, CONTENT_SIGNAL, CONTENT_USAGE, AI_GROUNDING), "error" when the
+    check itself failed (fail closed; not a signal), else None. The rule is page_no_ai's (below).
+
+    ROBOTS-FOLLOWUP-1108: the page-level use-based no-AI signals the web route applies (source_permissions.evaluate),
     read on an acquisition response: X-Robots-Tag or <meta name=robots|googlebot|vera-dar|ai> noai / noimageai /
     noai-crawl / nocrawl, Content-Signal ai-input=no, Content-Usage ai-use=n, and Bing ai-grounding Disallow or
     DisallowExtended (header or <meta name=Bingbot>). Evidence use is barred, so the document is not acquired. Any
@@ -765,20 +1011,52 @@ def page_no_ai(headers, body: bytes = b"", ctype: str = "") -> bool:
             head = body[:200000].decode("utf-8", "replace")
         xrt = sp._tokens(h.get("x-robots-tag", ""))
         meta = sp._tokens(sp._meta_robots(head))
-        return bool({"noai", "noimageai", "noai-crawl", "nocrawl"} & (xrt | meta)
-                    or sp._content_signal_no_ai(h.get("content-signal", ""))
-                    or sp._content_signal_no_ai(sp.content_usage_signal(h.get("content-usage", "")))
-                    or sp.ai_grounding_disallow(h.get("x-robots-tag", ""))
-                    or sp.ai_grounding_disallow(sp._meta_robots(head)))
+        bad = {"noai", "noimageai", "noai-crawl", "nocrawl"}
+        if bad & xrt:
+            return "X_ROBOTS_TAG"
+        if bad & meta:
+            return "META"
+        if sp._content_signal_no_ai(h.get("content-signal", "")):
+            return "CONTENT_SIGNAL"
+        if sp._content_signal_no_ai(sp.content_usage_signal(h.get("content-usage", ""))):
+            return "CONTENT_USAGE"
+        if sp.ai_grounding_disallow(h.get("x-robots-tag", "")) or sp.ai_grounding_disallow(sp._meta_robots(head)):
+            return "AI_GROUNDING"
+        return None
     except Exception:  # noqa: BLE001
-        return True
+        return "error"
+
+
+def page_signal_stop(acq, sig: str, url: str, route_hop: bool = False):
+    """The _Stop for a page_no_ai_reason result at a source hop (or, route_hop, the full-text service hop), with the
+    stdout cause line. A signal is ROBOTS-PAGE_NOAI / ROUTE_NOAI-<SIGNAL>; a check error is ...UNREADABLE-EVAL."""
+    from vera import auto_acquire as aa
+    if sig == "error":
+        key = "route_unreadable-EVAL" if route_hop else "robots_unreadable-EVAL"
+        if route_hop and not landing_on(acq):
+            key = "noroute_unchecked-EVAL"
+    else:
+        key = f"route_noai-{sig}" if route_hop else "robots-PAGE_NOAI"
+    code = refusal_code(acq, key)
+    cause_log((urlsplit(url).hostname or ""), "route" if route_hop else "source", code, sig if sig != "error" else
+              "EVAL", False)
+    return aa._Stop(code)
+
+
+def page_signal_key(reason: str) -> str:
+    """Refusal key for a page_no_ai_reason result: "robots-PAGE_NOAI" for a signal (the page says no),
+    "robots_unreadable-EVAL" for an error (the check failed: not a rule)."""
+    return "robots_unreadable-EVAL" if reason == "error" else "robots-PAGE_NOAI"
 
 
 def hop_access(url: str, hosts: set, deps, acq, clock, deadline) -> str | None:
     """CONTROL-GAPS-1107: THE access gate for every acquisition hop (acq_discovered._b_get and auto_acquire._guarded_get,
     which serves Europe PMC and arXiv). Returns the refusal reason key ("robots" or "tdm") or None. robots.txt first
     (owner R-050 / OD-1106-ROBOTS-AI), then the TDM Reservation Protocol (/.well-known/tdmrep.json). Fail closed."""
-    if not _robots_allowed(url, hosts, deps, acq, clock, deadline):
+    v, cause = _robots_verdict(url, hosts, deps, acq, clock, deadline)  # WPL-1111: unreadable is not "disallow"
+    if v == "unreadable":
+        return "robots_unreadable-" + (cause or "UNKNOWN")
+    if v != "allow":
         return "robots"
     if not _tdmrep_allowed(url, hosts, deps, acq, clock, deadline):
         return "tdm"
@@ -815,6 +1093,8 @@ def landing_fetch(doi: str, cand: dict, acq: dict, deps, icfg: dict, clock=time.
     lc = _lcfg(acq)
     land, ft = landing_hosts(acq), fulltext_hosts(acq)
     chain = [] if chain is None else chain
+    if is_denied(doi=doi):  # WPL-1111 R2: an access denial for this DOI is never retried through the landing page
+        raise aa._Stop(refusal_code(acq, "access_denied"))
     html_b, final, _st = _b_get(f"https://doi.org/{doi}", land, {"text/html", "application/xhtml+xml"},
                                 int(lc.get("landing_max_bytes", 524288)), int(lc.get("landing_max_redirects", 2)),
                                 deps, acq, clock, deadline, chain)

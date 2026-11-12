@@ -137,7 +137,7 @@ def test_dns_rebind_second_resolution_is_checked_and_each_hop_resolves_once():
 def test_robots_fail_closed(rob):
     with pytest.raises(pf.FetchRefused) as e:
         run("https://a.example/p", GOOD, {("a.example", "/robots.txt"): rob, ("a.example", "/p"): html()})
-    assert e.value.reason == "robots"
+    assert e.value.reason == "robots_unreadable"  # WPL-1111 (ROBOTS-LABEL-1111): unreadable is not "robots" (a rule)
 
 
 def test_robots_404_allows():
@@ -239,7 +239,7 @@ def test_b1_read_errors_carry_no_page_bytes():
     # robots path: any exception fails closed
     with pytest.raises(pf.FetchRefused) as e:
         run("https://a.example/p", GOOD, {**OKPAGES, ("a.example", "/robots.txt"): Boom(ValueError(s))})
-    assert e.value.reason == "robots"
+    assert e.value.reason == "robots_unreadable"  # WPL-1111: any exception on the robots path is unreadable, still closed
     L.assert_no_leak(s, exc=[e.value])
     bad = gzip.compress(b"<p>x</p>")[:12] + s.encode()
     with pytest.raises(pf.FetchRefused) as e:
@@ -410,7 +410,7 @@ def test_s2_header_trickle_bounded():
     t0 = _t.monotonic()
     with pytest.raises(pf.FetchRefused) as e:
         pf.fetch("https://a.example/p", cfg, resolve=n.resolve, transport=slow)
-    assert e.value.reason in ("timeout", "robots") and _t.monotonic() - t0 < 5
+    assert e.value.reason in ("timeout", "robots", "robots_unreadable") and _t.monotonic() - t0 < 5
     ev.set()
     _t.sleep(0.2)
     assert closed  # a late response is closed, not leaked

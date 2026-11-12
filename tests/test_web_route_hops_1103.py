@@ -61,7 +61,7 @@ def test_hop_gate_in_public_fetch_also_guards_robots_redirect():
     gate = lambda u: "read_registry_forbid" if "amazon" in u else None  # noqa: E731
     with pytest.raises(pf.FetchRefused) as e:
         pf.fetch("https://a.example/p", CFG, resolve=net.resolve, transport=net.transport, hop_gate=gate)
-    assert e.value.reason == "robots" and "docs.aws.amazon.com" not in sent_hosts(net)
+    assert e.value.reason == "robots_unreadable" and "docs.aws.amazon.com" not in sent_hosts(net)  # WPL-1111: unreadable, still no request
 
 
 def test_redirect_to_host_already_read_this_round_is_not_sent():

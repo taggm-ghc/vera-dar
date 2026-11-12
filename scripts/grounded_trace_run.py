@@ -22,15 +22,42 @@ RESOLVE_TIMEOUT_S = 8
 MAX_RESOLVE_PER_ANSWER = 6
 
 
-def _resolves(url: str) -> bool:
+MAX_RESOLVE_REDIRECTS = 3
+
+
+def _resolves(url: str, *, http_get=None, robots_ok=None):
+    """True: the page exists. False: it does not (or is unreachable). None: not checked (robots.txt disallows or could
+    not be read on some hop; no document request was sent). DENIAL-COVERAGE-1111: pinned GET only, manual redirects
+    (at most MAX_RESOLVE_REDIRECTS), each hop through the access-denial guard and robots-first. 403 means the page
+    exists (bot-blocked publisher pages); a URL already denied is not requested again and also counts as existing."""
+    from urllib.parse import urljoin
+
+    from vera import selective_fetch as sf
+    get = http_get or sf.pinned_get
+    ua = "VERA-trace-check/1.0"
+    ok_robots = robots_ok or (lambda u: sf.robots_allowed(u, http_get=get, url_check=sf.is_public_url, user_agent=ua))
+    cur = url
     try:
-        r = requests.head(url, allow_redirects=True, timeout=RESOLVE_TIMEOUT_S,
-                          headers={"User-Agent": "VERA-trace-check/1.0"})
-        if r.status_code in (403, 405):  # some hosts refuse HEAD; a GET of the landing page decides
-            r = requests.get(url, allow_redirects=True, timeout=RESOLVE_TIMEOUT_S, stream=True,
-                             headers={"User-Agent": "VERA-trace-check/1.0"})
-        return r.status_code < 400 or r.status_code == 403  # 403: exists but bot-blocked (publisher pages)
-    except requests.RequestException:
+        for _hop in range(MAX_RESOLVE_REDIRECTS + 1):
+            try:
+                sf.document_request_guard(cur)
+            except sf.DocumentDenied:
+                return True
+            ok, _why = sf.is_public_url(cur)
+            if not ok:
+                return False
+            if not ok_robots(cur):
+                return None
+            r = get(cur, headers={"User-Agent": ua}, timeout=RESOLVE_TIMEOUT_S, allow_redirects=False, stream=True)
+            try:
+                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                    cur = urljoin(cur, r.headers["Location"])
+                    continue
+                return r.status_code < 400 or r.status_code == 403
+            finally:
+                r.close()
+        return False  # redirect cap used up
+    except (requests.RequestException, ValueError):
         return False
 
 
@@ -79,7 +106,7 @@ def main(argv=None) -> int:
             cited = sorted({int(n) for g in re.findall(r"\[(\d+(?:\s*,\s*\d+)*)\]", result.answer) for n in g.split(",")})
             bad_numbers = [n for n in cited if not 1 <= n <= len(srcs)]
             unresolved = [s["url"] for s in srcs if s["n"] in cited][:MAX_RESOLVE_PER_ANSWER]
-            unresolved = [u for u in unresolved if not _resolves(u)]
+            unresolved = [u for u in unresolved if _resolves(u) is False]  # None = not checked
             rec.update(model=model, answer=result.answer, n_sources=len(srcs), cited=cited,
                        bad_citation_numbers=bad_numbers, unresolved_cited_urls=unresolved,
                        claim_check=result.claim_check, sources=[{k: s.get(k) for k in ("n", "title", "url", "identifier",

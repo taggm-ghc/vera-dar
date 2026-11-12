@@ -359,6 +359,12 @@ def read_web(question, candidates, *, fetch=None, registry=None, deny_list=None,
                 elif reason == "robots":
                     dev["gate"]["read"] = "read_robots_disallow"
                     phrase = sp._phrase(sp.load_config(), "read", "read_robots_disallow")
+                elif reason == "robots_unreadable":  # WPL-1111: robots.txt could not be read (not a rule that says no)
+                    dev["gate"]["read"] = "read_robots_unreadable"
+                    phrase = ph.get("robots_unreadable", ph.get("fetch_failed", ""))
+                elif reason == "access_denied":  # WPL-1111 R2: the page refused access; never retried or bypassed
+                    dev["gate"]["read"] = "read_access_denied"
+                    phrase = ph.get("access_denied", ph.get("fetch_failed", ""))
                 elif reason == "crawl_delay":
                     dev["gate"]["read"] = "read_crawl_delay"  # listed now; readable in a later request, never early
                     phrase = ph.get("crawl_delay", ph.get("fetch_failed", ""))

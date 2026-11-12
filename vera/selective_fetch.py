@@ -209,6 +209,58 @@ def api_gate(url: str, purpose: str | None = None):
         raise ApiRefused(e) from None
 
 
+class DocumentDenied(PinnedRefused):
+    """DENIAL-COVERAGE-1111: the document URL is in the access-denial memory (an earlier 401/403 on this very
+    endpoint, OD-1111-ACCESS-DENIED-NO-BYPASS). Nothing was sent. A PinnedRefused, so callers treat it as a failed hop."""
+
+
+_ROBOTS_ENDPOINT_PATHS = ("/robots.txt", "/.well-known/tdmrep.json")  # exact paths only (the "robots endpoint")
+
+
+def _is_document_request(url: str, purpose: str | None, api_decision) -> bool:
+    """False for the robots endpoints (exact path) and for a gated API hop whose effective purpose is metadata;
+    True otherwise. An API hop with purpose fulltext (or none: the guarded default) is a download endpoint."""
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        return True
+    if path in _ROBOTS_ENDPOINT_PATHS:
+        return False
+    if api_decision is not None and (purpose or api_permissions.current_purpose(url)) == "metadata":
+        # exempt by ENDPOINT, not by the caller-declared purpose: a fulltext path of an API entry that serves
+        # fulltext (Europe PMC .../fullTextXML) is a download endpoint whatever purpose is declared
+        scope = [str(s).lower() for s in (getattr(api_decision, "conditions", None) or {}).get("content_scope") or ()]
+        if not ("fulltext" in scope and "fulltext" in path.lower()):
+            return False
+    return True
+
+
+def document_request_guard(url: str, purpose: str | None = None, api_decision=None) -> None:
+    """DENIAL-COVERAGE-1111: raise DocumentDenied, before anything is sent, when a document request targets a URL
+    that earlier answered 401/403 (memory: acq_discovered.is_denied; keyed host + path). The single guard shared by
+    pinned_get and public_fetch.default_transport; existing caller checks stay as the first line."""
+    if not _is_document_request(url, purpose, api_decision):
+        return
+    from vera import acq_discovered as _ad
+    if _ad.is_denied(urls=(url,)):
+        raise DocumentDenied("blocked: access_denied (earlier 401/403 on this document; not requested again)")
+
+
+def document_response_note(url: str, status, purpose: str | None = None, api_decision=None) -> None:
+    """DENIAL-COVERAGE-1111: remember a 401/403 on a document request (never raises). Metadata-API and robots
+    endpoint refusals are not remembered. One sanitised cause line (host only)."""
+    try:
+        if status not in (401, 403) or not _is_document_request(url, purpose, api_decision):
+            return
+        from vera import acq_discovered as _ad
+        if _ad.is_denied(urls=(url,)):
+            return
+        _ad.deny(_ad.denial_ids(urls=(url,)))
+        _ad.cause_log(urlsplit(url).hostname or "", "web", "access_denied", f"STATUS_{int(status)}", False, status)
+    except Exception:  # noqa: BLE001  diagnostics and memory never break a fetch
+        pass
+
+
 def _take_pin(url: str):
     pin, _PIN.slot = _PIN.slot, None
     if pin is None or pin[0] != url or time.monotonic() - pin[5] > PIN_MAX_AGE_S:
@@ -256,6 +308,7 @@ def pinned_get(url: str, *, headers=None, timeout=None, allow_redirects=False, s
     if params:  # 1108b review (1): the URL actually sent carries params; gate that one too (same purpose)
         api_gate(requests.Request("GET", url, params=params).prepare().url,
                  api_purpose or api_permissions.current_purpose(url))
+    document_request_guard(url, api_purpose, d)  # DENIAL-COVERAGE-1111: a denied document is never requested again
     if d is not None:
         headers = api_permissions.headers_for(d, headers)
         portal = str(d.conditions["rate_portal"])
@@ -299,6 +352,7 @@ def pinned_get(url: str, *, headers=None, timeout=None, allow_redirects=False, s
             continue
         if not stream:
             s.close()
+        document_response_note(url, resp.status_code, api_purpose, d)
         return resp
     raise last
 
@@ -355,6 +409,7 @@ def robots_cache_clear() -> None:
         _ROBOTS.clear()
         _ROBOTS_SIGNAL.clear()
         _ROBOTS_TEXT.clear()
+        _CACHED_LOGGED.clear()
 
 
 def remember_robots_text(host: str, text: str | None) -> None:
@@ -428,6 +483,27 @@ def robots_text_crawl_delay(host: str, user_agent=None) -> float | None:
         return None
 
 
+_CACHED_LOGGED: dict = {}  # host -> monotonic time of the last cached=1 cause line
+
+
+def _cause_log_sf(host, cause, cached, status=None) -> None:
+    """WPL-1111 R3: the stdout cause line (vera.robots_cause), hop=portal. Never raises."""
+    try:
+        from vera import acq_discovered as _ad
+        _ad.cause_log(host, "portal", "robots_unreadable", ("CACHED_" if cached else "") + str(cause), cached, status)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _cause_cached(parts, host, hit, hold, now) -> None:
+    """One cached=1 line per host per TTL (the fail TTL, or ROBOTS_TTL_S for a held 4xx stop)."""
+    ttl = ROBOTS_TTL_S if hold else ROBOTS_FAIL_TTL_S
+    last = _CACHED_LOGGED.get(host)
+    if last is None or now - last >= ttl:
+        _CACHED_LOGGED[host] = now
+        _cause_log_sf(host, hit[2] if len(hit) > 2 and hit[2] else "UNKNOWN", True)
+
+
 def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock=time.monotonic,
                    user_agent=None) -> bool:
     """True only if robots.txt of the URL's host permits USER_AGENT to fetch url. Fails closed. Never raises."""
@@ -440,15 +516,21 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
     now = clock()
     with _ROBOTS_LOCK:
         hit = _ROBOTS.get((parts.scheme, host, ua))
-    if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False else ROBOTS_TTL_S):
+    # WPL-1111 RC-1: a stop on a robots.txt 4xx (R1) is held for ROBOTS_TTL_S as the old "allow" was (cause recorded in
+    # the same write as a third tuple element; a 2-tuple False, as older fixtures write, keeps the fail TTL)
+    hold = hit is not None and hit[1] is False and len(hit) > 2 and hit[2] in ("STATUS_401", "STATUS_403", "STATUS_4XX")
+    if hit is not None and now - hit[0] < (ROBOTS_FAIL_TTL_S if hit[1] is False and not hold else ROBOTS_TTL_S):
         rp = hit[1]
+        if rp is False:
+            _cause_cached(parts, host, hit, hold, now)
     else:
-        rp, signal = False, ""
+        rp, signal, cause, _status = False, "", "NETWORK", None
         try:
             cur = f"{parts.scheme}://{parts.netloc}/robots.txt"
             for _hop in range(MAX_REDIRECTS + 1):
                 ok, _why = url_check(cur)
                 if not ok:
+                    cause = "HOST"
                     break
                 (pacer or _DEFAULT_PACER).wait(cur)
                 resp = http_get(cur, headers={"User-Agent": ua}, timeout=timeout_s,
@@ -467,18 +549,32 @@ def robots_allowed(url, *, http_get, url_check, pacer=None, timeout_s=8.0, clock
                     remember_robots_text(host, txt)  # ASK-PARALLEL-FIX-1105: non-integer Crawl-delay
                     from vera import source_permissions as _sp
                     signal = " ".join(_sp.robots_content_signal(txt).split()).lower()[:300]
-                elif 400 <= resp.status_code < 500 and resp.status_code != 429:
+                elif resp.status_code in (404, 410):
                     rp = True
+                elif resp.status_code == 429:
+                    cause = "RATELIMITED"  # stays a stop (fail TTL); only the cause line is truthful
+                elif 400 <= resp.status_code < 500:
+                    # R1 (OD-1111-ROBOTS-4XX): only 404/410 mean "no restrictions"; any other 4xx stops (a recorded
+                    # deviation from RFC 9309 section 2.3.1.3), held for ROBOTS_TTL_S so no request is added
+                    cause = "STATUS_401" if resp.status_code == 401 else "STATUS_403" if resp.status_code == 403 \
+                        else "STATUS_4XX"
+                else:
+                    cause = "STATUS_5XX" if resp.status_code >= 500 else "STATUS_OTHER"
+                _status = resp.status_code
                 break
+            else:
+                cause = "REDIRECTS"  # the redirect cap was used up without an answer
         except Exception:  # noqa: BLE001  any error: fail closed
             rp = False
         with _ROBOTS_LOCK:
-            _ROBOTS[(parts.scheme, host, ua)] = (now, rp)
+            _ROBOTS[(parts.scheme, host, ua)] = (now, rp, cause if rp is False else None)
             _ROBOTS_SIGNAL[(parts.scheme, host, ua)] = signal
             while len(_ROBOTS) > 64:
                 k = next(iter(_ROBOTS))
                 _ROBOTS.pop(k)
                 _ROBOTS_SIGNAL.pop(k, None)
+        if rp is False:
+            _cause_log_sf(host, cause, False, _status)
     if rp is True:
         return True
     if rp is False:
@@ -596,9 +692,13 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
             # API-URL-GATE-1108: an API URL (first URL or redirect target) needs its api_permissions entry for
             # "fulltext" BEFORE robots.txt or the page is requested, whatever transport was injected.
             try:
-                api_gate(current, "fulltext")
+                dec = api_gate(current, "fulltext")
             except ApiRefused as e:
                 return None, None, None, hops, None, f"blocked: {e.code}"
+            try:  # DENIAL-COVERAGE-1111: first line, before robots.txt or the page is requested
+                document_request_guard(current, "fulltext", dec)
+            except DocumentDenied:
+                return None, None, None, hops, None, "blocked: access_denied"
             ok, why = url_check(current)
             if not ok:
                 return None, None, None, hops, None, f"blocked: {why}"
@@ -626,6 +726,8 @@ def _download(url, *, timeout_s, http_get, url_check, pacer, robots_ok=None, cra
                 resp = http_get(current, headers=hdrs, timeout=timeout_s, allow_redirects=False, stream=True, **extra)
             except rate_limit.RateLimited:
                 return None, None, None, hops, None, "rate_limited"
+            except DocumentDenied:  # raised by the transport guard (a redirect target seen as denied meanwhile)
+                return None, None, None, hops, None, "blocked: access_denied"
             if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
                 hops += 1
                 if hops > MAX_REDIRECTS:
