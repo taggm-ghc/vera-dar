@@ -16,7 +16,7 @@ from tests.test_original_html_wpg_1111 import (CC, DOE, DOE_HOST, PARA, SHIPPED,
 from vera import acq_config, auto_acquire, fulltext_loader, html_main, jats_text, original_html
 
 FLOOR = int(SHIPPED["limits"]["min_text_chars"])
-NEW_TOKENS = ("field_banner_color", "caption", "attribution")
+NEW_TOKENS = ("field_banner_color", "caption", "attribution", "field--label-visually_hidden")
 BANNER_FIELD = ('<div class="block block-layout-builder block-field-blocknodepagefield-banner-color">'
                 '<div class="field field--list_default field--field_banner_color field field--name-field-banner-color">'
                 '<div class="title">Banner Color</div><div class="field__item">Light Text on a Dark Overlay (Default)'
@@ -137,6 +137,30 @@ def test_caption_credit_and_banner_field_pruned_credit_kept_in_provenance():
     assert "Image courtesy of Example National Laboratory" in prov["statements"]  # 6e reads the full page first
 
 
+VIDEO_FIELD = ('<div class="field field--video_embed_field_video field--field_media_video_embed_field field '
+               'field--name-field-media-video-embed-field field--type-video-embed-field field--label-visually_hidden">'
+               '<div class="title usa-sr-only">Video Url</div><div class="field__item"><div class="video-embed-field-provider-youtube">'
+               '<iframe width="854" height="480" title="Example talk"></iframe></div></div></div>')
+SR_ONLY_LINK = ("<p>" + PARA + ' Read the <a href="/more">report<span class="usa-sr-only"> about quarks</span></a> for more.</p>')
+
+
+def test_hidden_label_cms_field_pruned_h1_and_prose_kept():
+    raw = doe_page([PARA * 5, PARA * 4], [("Section heading", PARA * 2)], before_lead=VIDEO_FIELD)
+    conv, _ = convert_shipped(raw)
+    ls = lines(conv["text"])
+    assert "video url" not in ls  # red before field--label-visually_hidden joined the token regex
+    assert "doe explains...quarks and gluons" in ls or any("quarks and gluons" in ln for ln in ls)  # h1 kept
+    assert any("quarks are elementary particles" in ln for ln in ls) and "section heading" in ls
+    assert re.search(X["drop_token_re"], "field--label-visually_hidden", re.I)
+    assert not re.search(X["drop_token_re"], "field--label-above", re.I)  # a visible label is not pruned by this token
+
+
+def test_bare_usa_sr_only_is_not_a_token_so_inline_sr_text_survives():
+    raw = doe_page([PARA * 5, SR_ONLY_LINK], [("Section heading", PARA * 2)])
+    conv, _ = convert_shipped(raw)
+    assert any("about quarks" in ln for ln in lines(conv["text"]))
+
+
 def test_shipped_token_regex_carries_the_three_tokens_and_not_bare_banner():
     rx = re.compile(X["drop_token_re"], re.I)
     for t in ("field--field_banner_color", "caption", "caption-attribution", "caption-text", "hds-caption"):
@@ -174,13 +198,28 @@ def _without_new_tokens():
     return x
 
 
-@pytest.mark.skipif(not C0_OK, reason="saved USFED-C0-1111 pages not present (never copied into the repo)")
+def _try_convert(raw, x):
+    try:
+        return jats_text.html_to_text(html_main.extract_main(raw, x, None, set())["html"], CC)
+    except jats_text.ConversionError:
+        return None  # e.g. the series index page: no headed sections
+
+
+# The two tests below need saved third-party pages that are never copied into the public repo (scratch/ is outside
+# the checkout). The sanctioned runner masks /home with a tmpfs, so under the runner they are SKIPPED, not passed: a
+# skip is not coverage. Run the same checks outside the runner with scratch/USFED-FOLLOW-1112/realpages.py.
+RUNNER_SKIP = "needs saved USFED-C0-1111 pages under scratch/, invisible in the runner sandbox (/home is masked)"
+
+
+@pytest.mark.skipif(not C0_OK, reason=RUNNER_SKIP)
 def test_real_c0_pages_new_tokens_drop_no_heading_and_no_nasa_text():
     x0 = _without_new_tokens()
     for f in sorted(C0.glob("*.html")):
         raw = f.read_bytes()
-        a = jats_text.html_to_text(html_main.extract_main(raw, x0, None, set())["html"], CC)
-        b = jats_text.html_to_text(html_main.extract_main(raw, X, None, set())["html"], CC)
+        a, b = _try_convert(raw, x0), _try_convert(raw, X)
+        assert (a is None) == (b is None), f.name  # the tokens never turn a convertible page into a refusal or back
+        if a is None:
+            continue
         ha = [s.get("title") for s in a["sections"]]
         assert [s.get("title") for s in b["sections"]] == ha, f.name  # no heading newly pruned
         if "nasa" in f.name:
@@ -189,10 +228,14 @@ def test_real_c0_pages_new_tokens_drop_no_heading_and_no_nasa_text():
         assert all(len(ln) < 400 for ln in lost), (f.name, [ln[:40] for ln in lost])  # captions/credits, not prose blocks
 
 
-@pytest.mark.skipif(not (C0 / "www_energy_gov_science_doe_explainsquarks_and_gluons.html").is_file(),
-                    reason="saved USFED-C0-1111 quarks page not present")
-def test_real_quarks_page_is_not_refused_r_abstract(monkeypatch):
-    raw = (C0 / "www_energy_gov_science_doe_explainsquarks_and_gluons.html").read_bytes()
+LEADHEAVY_REAL = SCRATCH / "USFED-WPC-1112" / "harvest" / "pages" / "d2eef25e5941825fa0102b76.html"  # doe-explainsquantum-networks
+
+
+@pytest.mark.skipif(not LEADHEAVY_REAL.is_file(), reason=RUNNER_SKIP)
+def test_real_lead_heavy_page_is_not_refused_r_abstract(monkeypatch):
+    # saved harvest page whose body_chars is 1073 (< 1500) while len(text) is 4013: the readout's failing shape
+    # (the C0 quarks page was a wrong pick: its body_chars is 1730)
+    raw = LEADHEAVY_REAL.read_bytes()
     conv, _ = convert_shipped(raw)
     assert conv["body_chars"] < FLOOR <= len(conv["text"])  # the readout's failing shape
     set_mode(monkeypatch, "on")

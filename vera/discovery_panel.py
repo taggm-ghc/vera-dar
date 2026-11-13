@@ -46,7 +46,7 @@ REASON_TEXT = {
     # ALLDOMAINS-WPG-IMPL-1111: the permitted-original HTML route
     "R-ACQ-ORIGINAL_NOT_PD": "Not stored: the page could not be confirmed as free of copyright (a US government work "
                              "with no copyright notice, third-party or contractor credit, or licence of its own).",
-    "R-ACQ-ORIGINAL_NO_BODY": "Not stored: the page has no article text that could be read as a whole.",
+    "R-ACQ-ORIGINAL_NO_BODY": "Not stored: the page's text has no sections that could be read as a document.",
     "R-ACQ-ORIGINAL_OVERSIZE": "Not stored: the page is too large to keep whole.",
     "R-ACQ-ORIGINAL_THIN": "Not stored: the page's main text is too short to keep as a document.",
     "R-ACQ-ORIGINAL_SHADOW": "Not stored: VERA-DAR is still testing how to read this site and keeps no pages from it yet.",
