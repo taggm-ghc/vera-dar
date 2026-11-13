@@ -723,8 +723,13 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
 def test_length_floor_is_relaxed_only_for_this_route():
     base = fulltext_loader.load_config()
     r = original_html.relaxed_ingest_cfg(base, SHIPPED)
-    assert r["min_body_chars"] == 1500 and base["min_body_chars"] == 4000  # copy; input untouched
-    assert r["min_fulltext_chars"] == 1500 and r["min_body_to_abstract_ratio"] == base["min_body_to_abstract_ratio"]
+    # USFED-SHADOWFIX-1112 (plan §5.6 SF-A) flipped two assertions: the route's one floor is on len(text)
+    # (min_fulltext_chars), and the article abstract-only tests (min_body_chars on the converter's body_chars, which omits
+    # the lead before the first h2, and the body/abstract ratio) no longer apply to an HTML page; has_body is still
+    # required. Coverage kept: copy semantics and the ordinary item's full floor below.
+    assert r["min_body_chars"] == 1 and base["min_body_chars"] == 4000  # copy; input untouched
+    assert r["min_fulltext_chars"] == 1500 and r["min_body_to_abstract_ratio"] == 0
+    assert base["min_body_to_abstract_ratio"] == 2.0
     meta = {"has_body": True, "body_chars": 2000, "abstract_chars": 0}
     with pytest.raises(fulltext_loader.Refused):
         fulltext_loader.check_content("x" * 2000, meta, base)  # an ordinary item still needs the full floor

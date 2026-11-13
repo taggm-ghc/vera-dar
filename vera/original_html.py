@@ -454,15 +454,20 @@ def trip_host(host: str) -> None:
 
 # ------------------------------------------------------------------------------------------------ loader limits (step 7)
 def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None) -> dict:
-    """The fulltext_ingest config with the body-length floors replaced by this route's own `limits.min_text_chars`
-    (federal explainer pages are far shorter than the 4000-character article floor). Every other filter is unchanged. A
-    copy; the input is never mutated. Used only when the caller passes route="original_html" (the route itself, or the
-    acquired-path reader from the row's acquisition resolver), never from an item's own claim."""
+    """The fulltext_ingest config with this route's single length floor (plan step 7; §5.6 SF-A, USFED-SHADOWFIX-1112).
+    The floor `limits.min_text_chars` is measured on the converted text that is stored (len(text)), the same measure the
+    route checks first under R-ACQ-ORIGINAL_THIN, so `min_fulltext_chars` IS that floor. The article abstract-only tests
+    do not apply to an HTML page (it has no abstract): `min_body_chars` is 1, because the converter's `body_chars` omits
+    the lead text between the page title and the first <h2> (where an explainer's definition sits), and
+    `min_body_to_abstract_ratio` is 0, because an HTML heading named "Summary" is not an article abstract; `has_body`
+    is still required (the route raises NO_BODY first). Every other filter is unchanged. A copy; the input is never
+    mutated. Used only when the caller passes route="original_html" (the route itself, or the acquired-path reader from
+    the row's acquisition resolver), never from an item's own claim."""
     lim = ((oc if oc is not None else load_config()).get("limits") or {})
-    floor = int(lim.get("min_text_chars", 1500))
     out = dict(icfg)
-    out["min_body_chars"] = min(int(icfg["min_body_chars"]), floor)
-    out["min_fulltext_chars"] = min(int(icfg["min_fulltext_chars"]), floor)
+    out["min_fulltext_chars"] = int(lim.get("min_text_chars", 1500))
+    out["min_body_chars"] = 1
+    out["min_body_to_abstract_ratio"] = 0
     return out
 
 
@@ -539,8 +544,10 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
         conv = jats_text.convert(ex["html"], "html", icfg["converter"])
     except Exception:  # noqa: BLE001  (ConversionError: no headed sections / hostile file)
         raise aa._Stop(acq_config.reason(cfg, "original_no_body")) from None
+    if not conv.get("has_body"):  # only the title heading: converts without error, but there is no body section
+        raise aa._Stop(acq_config.reason(cfg, "original_no_body"))
     text = conv["text"]
-    if len(text) < int(lim.get("min_text_chars", 1500)):
+    if len(text) < int(lim.get("min_text_chars", 1500)):  # step 7: the one floor, on the stored text (SF-A)
         raise aa._Stop(acq_config.reason(cfg, "original_thin"))
     now_iso = _now_iso()
     meta = {k: v for k, v in conv.items() if k != "text"}
