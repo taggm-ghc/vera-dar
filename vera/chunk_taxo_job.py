@@ -1022,14 +1022,6 @@ class Job:
 
     # ---- D3 incremental assignment (WP-I). Ships `off`. `shadow` computes, in memory only, what `on` would assign and reports the
     # agreement with the rebuild; `on` assigns spans that have a vector and no strict link, against the centers of the last build.
-    @staticmethod
-    def _as_dict(m):
-        if isinstance(m, (str, bytes)):
-            try:
-                m = json.loads(m)
-            except ValueError:
-                return {}
-        return m if isinstance(m, dict) else {}
 
     def _inc_inputs(self):
         """-> (reason, data). reason is None when assignment can run; otherwise `no_build_params` (no finished build row carrying the
@@ -1039,19 +1031,15 @@ class Job:
             if row is None:
                 return "no_build_params", None
             m = self._as_dict(row[1])
-            recent = store.run_sql(conn, "job_run_recent").fetchall()
             end = m.get("scan_end_epoch")
             if isinstance(end, bool) or not isinstance(end, (int, float)) or not isinstance(m.get("max_span_id"), (int, float)):
                 return "no_build_params", None
             after = {int(r[0]) for r in store.run_sql(conn, "vectors_after", {"epoch": float(end)}).fetchall()}
-        for state, mm in recent:  # newest first, up to the build row itself
-            mm = self._as_dict(mm)
-            if str(state) == "running":
-                continue
-            if "scan_end_epoch" in mm:
-                break
-            if mm.get("write_incomplete") or self._as_dict(mm.get("run")).get("write_incomplete"):
+            if self._write_incomplete(conn):  # a pass aborted after that build (its closed row says so), or ...
                 return "write_incomplete", None
+            if all(isinstance(m.get("n_nodes_" + lv), (int, float)) for lv in store.LEVELS) and \
+                    self._active_node_counts(conn) != {lv: m["n_nodes_" + lv] for lv in store.LEVELS}:
+                return "write_incomplete", None  # ... active nodes beyond the build's own (a pass killed after W1)
         prior = self._load_prior()
         if prior is None:
             return "no_build_params", None

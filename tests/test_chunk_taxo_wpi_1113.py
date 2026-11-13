@@ -296,15 +296,18 @@ def test_t25_no_build_params_and_write_incomplete_block_assignment_an_incrementa
     add_spans(db, [14])
     j2 = mk(db, e=VEmb(), core=core, incremental="on")
     assert j2.run()["state"] != "error" and 14 in linked(db) and len(db.runs) == 1  # the incremental row did not hide the build row
-    # write_incomplete: an aborted pass after the build blocks assignment
-    db.runs.append({"version": "pending", "metrics": json.dumps({"write_incomplete": 1}), "started": 0, "finished": 0})
+    # write_incomplete: a closed row of an aborted pass after the build blocks assignment ...
+    db.rec.append(("failed", json.dumps({"write_incomplete": 1})))
     add_spans(db, [15])
     j3 = mk(db, e=VEmb(), core=core, incremental="on")
-    reason, data = (lambda jj: (jj._inc_inputs(), None))(j3)[0]
-    assert reason is None or reason == "write_incomplete" or True
     j3._chunks = []
     r, d = j3._inc_inputs()
     assert r == "write_incomplete" and d is None
+    db.rec.pop()
+    # ... and so do active nodes beyond the build's own (a pass killed after W1 leaves only a running row)
+    db.nodes[("topic", "ct-t-stray")] = dict(id=997, label="s", origin="induction", origin_ref="auto-chunk-taxo:zz", state="active")
+    r2, d2 = mk(db, e=VEmb(), core=core, incremental="on")._inc_inputs()
+    assert r2 == "write_incomplete" and d2 is None
 
 
 # ------------------------------------------------------------------------------------------------ T26 wake
@@ -335,7 +338,7 @@ def test_t26_wake_is_inert_without_a_running_job_and_the_ingest_hand_off_keeps_n
     job.wake()
     assert not job._WAKE.is_set()
     src = open(__import__("vera.auto_acquire", fromlist=["x"]).__file__, encoding="utf-8").read()
-    a, b = src.index("topic_tagging.notify_ingested(sid)"), src.index("chunk_taxo_job.wake()")
+    a, b = src.index("topic_tagging.notify_ingested(sid)"), src.index("chunk_taxo_wake.wake()")
     assert a < b and "except Exception" in src[a:b]  # both calls kept; the wake sits after, in its own never-raise block
     assert job._wake_min({}, 3600.0) == 3600.0 and job._wake_min({"wake_min_interval_s": 90}, 3600.0) == 90.0  # default = interval_s
 

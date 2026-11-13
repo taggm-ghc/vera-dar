@@ -1927,9 +1927,9 @@ class WoStore:
             topic_tagging.notify_ingested(sid)
         except Exception:  # noqa: BLE001
             pass
-        try:  # CHUNK-ASSOC-1113 D5: wake the chunk-taxonomy job (process-local, O(1), debounced there, never raises; no-op with the flag off)
-            from vera import chunk_taxo_job
-            chunk_taxo_job.wake()
+        try:  # CHUNK-ASSOC-1113 D5: nudge the background taxonomy loop (process-local, O(1), debounced there, never raises)
+            from vera import chunk_taxo_wake
+            chunk_taxo_wake.wake()
         except Exception:  # noqa: BLE001
             pass
         return {"status": "stored", "run_id": rid, "source_id": sid, "canonical_source_id": csid}
