@@ -15,7 +15,7 @@ CONTRACT_2C0A323_COUNT = 158
 CONTRACT_2C0A323_FROZEN_SHA256 = "84d028093cc8e770d732a2c7ad3095313e50a6295582709b2555a28fad511e73"  # old collector at 2c0a323
 N024 = 17  # tax_chunk_vectors, tax_job_runs pairs proven by the 024 draft (CHUNK-TAXO-INT-1109)
 N025 = 7  # chunk_use_assoc pairs proven by the 025 draft and used by vera/chunk_usage.py (CHUNK-USAGE-1110)
-N026 = 10  # set_deny_active 5, set_keys 1, set_settings 4: vera/settings.py reads migration 026 tables (not applied; draft lives on the owner-kit branch, SETTINGS-MIG026-1110)
+N026 = 10  # set_deny_active 5, set_keys 1, set_settings 4: vera/settings.py reads migration 026 tables (applied by the owner 2026-11-13; file stays in pending/; SETTINGS-MIG026-1110)
 N020 = 40  # tax_domains/topics/subtopics, tax_domain_topic, tax_topic_subtopic pairs proven by the 020 draft (TAXO-EXTENSIBLE-1108) + 12 pairs of tax_chunk_topic/tax_chunk_subtopic and entity state columns read by the router SQL (TAXO-ROUTE-1110)
 
 
