@@ -511,6 +511,32 @@ def test_r1_a_failed_commit_of_w4_is_an_error_never_complete():
     assert j.status()["state"] == "error" and j.status()["reasons"] == ["RuntimeError"]
 
 
+def test_r2_active_nodes_beyond_the_builds_own_block_the_no_op_rule_whatever_the_run_rows_say():
+    # a pass killed after W1 (a deploy restart) leaves its run row `running` and the new version's nodes active beside the old ones: no
+    # closed row records write_incomplete, yet the next pass must rebuild, not record `unchanged`
+    db = first_pass()
+    db.nodes[("topic", "ct-t-killed-after-w1")] = dict(id=999, label="stray", origin="induction", origin_ref=store.ORIGIN_REF_PREFIX + "other",
+                                                         state="active")
+    j = mk(db)
+    assert j.run()["state"] == "complete" and j.status()["state"] != "unchanged" and len(db.runs) == 2
+    # many later rows cannot push that evidence out: after the rebuild the stray node is retired (superseded) and the next pass is a no-op
+    assert db.nodes[("topic", "ct-t-killed-after-w1")]["state"] == "retired"
+    j2 = mk(db)
+    j2.run()
+    assert j2.status()["state"] == "unchanged"
+
+
+def test_r2_a_rebuild_that_reuses_nodes_keeps_their_original_origin_ref_and_the_next_pass_is_still_a_no_op():
+    db = first_pass()
+    second_pass(db, StubCore(), extra=2)  # StubCore reuses every node: active nodes carry two different origin_ref values now
+    refs = {v["origin_ref"] for v in db.nodes.values() if v["state"] == "active"}
+    assert len(refs) == 1  # (StubCore keeps the first build's nodes, all with the same ref) ...
+    db.nodes[("topic", "ct-t-other-ref")] = dict(id=998, label="x", origin="induction", origin_ref=store.ORIGIN_REF_PREFIX + "zz", state="retired")
+    j = mk(db)
+    j.run()
+    assert j.status()["state"] == "unchanged"  # ... and node COUNTS, not origin_ref values, decide
+
+
 def test_r2_an_aborted_write_after_the_build_blocks_the_no_op_rule():
     db = first_pass()
     db.spans = db.spans + [(11, 100, "alpha NEW 11")]

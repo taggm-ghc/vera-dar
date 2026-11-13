@@ -900,7 +900,9 @@ class Job:
                 ve = store.run_sql(conn, "vectors_epoch").first()
                 if ve is None or ve[0] is None or float(ve[0]) > float(end):
                     return False
-                return not self._write_incomplete(conn)  # a write aborted after that build (nodes of two versions active): rebuild
+                if self._active_node_counts(conn) != {lv: m.get("n_nodes_" + lv) for lv in store.LEVELS}:
+                    return False  # active nodes beyond the build's own (an interrupted write: two versions active, or a killed pass): rebuild
+                return not self._write_incomplete(conn)  # and a closed row of an aborted pass after that build: rebuild
         except Exception:  # noqa: BLE001
             return False
 
@@ -912,6 +914,15 @@ class Job:
             except ValueError:
                 return {}
         return m if isinstance(m, dict) else {}
+
+    def _active_node_counts(self, conn) -> dict:
+        """Active induction nodes of this job per level (the _load_prior filter). After a completed W4 this equals the build's own
+        count: reused nodes keep their original origin_ref, so counting versions by origin_ref would be wrong; counting nodes is not."""
+        out = {}
+        for lvl in store.LEVELS:
+            out[lvl] = sum(1 for n in store.fetch_nodes(conn, lvl) if n["origin"] == "induction"
+                           and (n["origin_ref"] or "").startswith(store.ORIGIN_REF_PREFIX) and n["state"] == "active")
+        return out
 
     def _write_incomplete(self, conn) -> bool:
         """True when a pass aborted between W1 and W4 after the latest build row (its run row carries `write_incomplete`). The newest run
@@ -984,7 +995,7 @@ class Job:
         return {"version": "prior", "nodes": [{"key": n["key"], "level": n["level"], "parent_key": n["parent_key"],
                                                "members": sorted(n["members"]), "label": n["label"]} for n in nodes.values()]}
 
-    # ---- writes. WP-W (CHUNK-ASSOC-1113 D1) reversed the one-transaction-per-pass design of OD-1109-DEMB-3 (c) (INFO-1): the pass no longer
+    # ---- writes. WP-W (CHUNK-ASSOC-1113 D1) reversed the one-transaction-per-pass design of orchestrator decision v3.8b (c) (INFO-1): the pass no longer
     # commits all-or-nothing; it commits per phase as described below. Embedding batches (a cache) still commit on their own earlier.
     # D1: activate first, then one transaction per page of spans or sources, then a closing transaction (W4). Every phase below commits on its own, so a restart or budget stop mid-write loses no
     # visible label: a span not yet swapped keeps its old links, a swapped span shows its new ones.
@@ -1335,6 +1346,8 @@ class Job:
             for cls, n in out.items():
                 self.metrics_run["outside_build_unlabelled_" + cls] = int(n)
             metrics.update({k: v for k, v in self._snap.items()})
+            for lv in store.LEVELS:  # the build's own node count per level: more active nodes later means an interrupted write (write_incomplete)
+                metrics["n_nodes_" + lv] = sum(1 for n in self._model_nodes(model) if n["level"] == lv)
             if self._scan_end is not None:
                 metrics["scan_end_epoch"] = round(float(self._scan_end), 3)
         if hasattr(self._emb, "stats"):
