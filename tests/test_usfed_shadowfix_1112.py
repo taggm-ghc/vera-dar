@@ -68,9 +68,14 @@ def test_text_below_floor_is_thin_never_abstract(monkeypatch):
 def test_h1_only_page_is_no_body_not_abstract(monkeypatch):
     raw = doe_page([PARA * 10])  # the title is the only heading: converts without error, has_body false
     conv, _ = convert_shipped(raw)
-    assert conv["has_body"] is False and len(conv["text"]) >= FLOOR
+    assert conv["has_body"] is False and len(conv["text"]) >= FLOOR  # the converter without the DOE opt-in
     set_mode(monkeypatch, "on")
-    assert code(Web({DOE: raw})) == acq_config.reason(A.cfg(), "original_no_body")  # red before: R-ABSTRACT
+    # USFED-MATCH-1113 EX-4 changed this: on the DOE row the lead text after the h1 is an untitled body section, so this
+    # page is no longer NO_BODY; it proceeds past the converter (and, as a one-page job, is refused FEWSPANS), never R-ABSTRACT.
+    assert code(Web({DOE: raw})) == acq_config.reason(A.cfg(), "few_spans")
+    # NO_BODY is still reached: a DOE page with an h1 and no text at all after it
+    empty = doe_page([])
+    assert code(Web({DOE: empty})) == acq_config.reason(A.cfg(), "original_no_body")
 
 
 def test_summary_heading_is_not_an_article_abstract_for_this_route(monkeypatch):

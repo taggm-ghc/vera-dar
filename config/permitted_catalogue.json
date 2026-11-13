@@ -2,7 +2,7 @@
  "_doc": "Vendored catalogue snapshot for the ORIGINAL_HTML route (config/permitted_originals.json), written ONLY by scripts/refresh_permitted_catalogue.py (never at runtime, never by hand). entries: harvested page URL, host, fetched page title, slug terms. denied: URLs that answered 401/403, never requested again. boilerplate: per host, sha256 of normalised text lines on at least max(floor, half) of the host's harvested pages (plan step 6c; headings never included). robots_status: per host robots read result, Crawl-delay and harvest outcome. sha256 covers entries, denied and boilerplate. Recorded divergence from feedback_no_hardcoded_data: work/USFED-ROUTE-1111/PLAN.md pass 2 ruling; later DB home: table permitted_catalogue (owner-gated DDL).",
  "version": 1,
  "harvested_at": "2026-11-12T23:54:00+00:00",
- "script_version": "refresh_permitted_catalogue/1 (WPC-HARVEST-IMPL, USFED-WPC-1112)",
+ "script_version": "refresh_permitted_catalogue/2 (WPC-HARVEST-IMPL, USFED-WPC-1112; subject_counts, USFED-MATCH-1113)",
  "robots_status": {
   "www.energy.gov": {
    "robots": "parsed_200",
@@ -27,7 +27,38 @@
    "title": "DOE Explains...Antimatter | Department of Energy",
    "slug_terms": [
     "antimatter"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 4,
+    "antimatter": 22,
+    "beta": 1,
+    "cosmic": 1,
+    "decay": 3,
+    "department": 1,
+    "doe": 3,
+    "electron": 2,
+    "element": 1,
+    "energy": 6,
+    "gluon": 1,
+    "high": 4,
+    "laboratory": 1,
+    "matter": 20,
+    "model": 2,
+    "neutrino": 6,
+    "neutron": 3,
+    "nuclear": 3,
+    "nuclei": 1,
+    "particle": 18,
+    "physic": 7,
+    "plasma": 1,
+    "proton": 2,
+    "quark": 1,
+    "radioactivity": 1,
+    "research": 5,
+    "science": 2,
+    "standard": 2,
+    "star": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsartificial-intelligence",
@@ -36,7 +67,28 @@
    "slug_terms": [
     "artificial",
     "intelligence"
-   ]
+   ],
+   "subject_counts": {
+    "artificial": 4,
+    "computing": 5,
+    "data": 5,
+    "department": 1,
+    "doe": 4,
+    "energy": 3,
+    "exascale": 1,
+    "fuel": 1,
+    "fusion": 3,
+    "high": 1,
+    "intelligence": 6,
+    "learning": 10,
+    "machine": 6,
+    "model": 2,
+    "network": 3,
+    "reaction": 1,
+    "research": 2,
+    "science": 3,
+    "system": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsatmospheric-radiation",
@@ -45,7 +97,31 @@
    "slug_terms": [
     "atmospheric",
     "radiation"
-   ]
+   ],
+   "subject_counts": {
+    "aerosol": 7,
+    "air": 1,
+    "atmospheric": 14,
+    "carbon": 1,
+    "climate": 2,
+    "cloud": 9,
+    "cycle": 1,
+    "data": 3,
+    "department": 1,
+    "doe": 4,
+    "earth": 6,
+    "electromagnetic": 1,
+    "element": 1,
+    "energy": 5,
+    "model": 2,
+    "particle": 4,
+    "physic": 1,
+    "radiation": 16,
+    "research": 1,
+    "science": 3,
+    "soil": 1,
+    "solar": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsatmospheric-rivers",
@@ -54,7 +130,27 @@
    "slug_terms": [
     "atmospheric",
     "rivers"
-   ]
+   ],
+   "subject_counts": {
+    "air": 1,
+    "atmospheric": 19,
+    "climate": 5,
+    "cloud": 1,
+    "critical": 1,
+    "department": 1,
+    "doe": 6,
+    "earth": 8,
+    "energy": 2,
+    "exascale": 1,
+    "model": 3,
+    "plant": 1,
+    "radiation": 1,
+    "research": 7,
+    "river": 19,
+    "science": 3,
+    "source": 2,
+    "system": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbatteries",
@@ -62,7 +158,22 @@
    "title": "DOE Explains...Batteries | Department of Energy",
    "slug_terms": [
     "batteries"
-   ]
+   ],
+   "subject_counts": {
+    "batterie": 10,
+    "burning": 1,
+    "critical": 1,
+    "doe": 3,
+    "electron": 4,
+    "energy": 21,
+    "material": 6,
+    "multi": 1,
+    "research": 4,
+    "science": 4,
+    "source": 2,
+    "system": 1,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbeta-decay",
@@ -71,7 +182,29 @@
    "slug_terms": [
     "beta",
     "decay"
-   ]
+   ],
+   "subject_counts": {
+    "antimatter": 2,
+    "beta": 23,
+    "carbon": 1,
+    "decay": 27,
+    "doe": 4,
+    "electron": 7,
+    "explain": 2,
+    "isotope": 1,
+    "laboratory": 1,
+    "model": 4,
+    "neutrino": 14,
+    "neutron": 7,
+    "nuclear": 1,
+    "nuclei": 1,
+    "particle": 7,
+    "physic": 2,
+    "proton": 7,
+    "research": 2,
+    "science": 1,
+    "standard": 4
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbioenergy-research",
@@ -80,7 +213,23 @@
    "slug_terms": [
     "bioenergy",
     "research"
-   ]
+   ],
+   "subject_counts": {
+    "bioenergy": 10,
+    "biofuel": 2,
+    "biology": 3,
+    "doe": 3,
+    "energy": 2,
+    "fuel": 7,
+    "genomic": 1,
+    "high": 1,
+    "material": 3,
+    "plant": 8,
+    "reaction": 1,
+    "research": 11,
+    "science": 2,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbiofuels",
@@ -88,7 +237,27 @@
    "title": "DOE Explains...Biofuels | Department of Energy",
    "slug_terms": [
     "biofuels"
-   ]
+   ],
+   "subject_counts": {
+    "bioenergy": 7,
+    "biofuel": 11,
+    "biology": 2,
+    "critical": 1,
+    "department": 1,
+    "doe": 2,
+    "energy": 4,
+    "explain": 1,
+    "fuel": 7,
+    "genomic": 1,
+    "laboratory": 2,
+    "material": 3,
+    "plant": 8,
+    "research": 5,
+    "science": 4,
+    "solar": 1,
+    "source": 5,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbiomolecular-imaging",
@@ -97,7 +266,22 @@
    "slug_terms": [
     "biomolecular",
     "imaging"
-   ]
+   ],
+   "subject_counts": {
+    "bioenergy": 1,
+    "biomolecular": 4,
+    "critical": 1,
+    "doe": 2,
+    "electron": 1,
+    "energy": 1,
+    "imaging": 6,
+    "light": 6,
+    "mechanic": 1,
+    "plant": 2,
+    "research": 1,
+    "science": 4,
+    "system": 10
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsbosons-and-fermions",
@@ -107,7 +291,41 @@
     "bosons",
     "and",
     "fermions"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 3,
+    "boson": 22,
+    "doe": 2,
+    "electromagnetic": 1,
+    "electron": 3,
+    "energy": 1,
+    "fermion": 15,
+    "force": 6,
+    "fusion": 1,
+    "gluon": 5,
+    "gravity": 1,
+    "higg": 1,
+    "isotope": 1,
+    "laboratory": 1,
+    "light": 1,
+    "mechanic": 1,
+    "neutrino": 3,
+    "neutron": 6,
+    "nuclear": 3,
+    "nuclei": 2,
+    "particle": 13,
+    "photon": 2,
+    "physic": 1,
+    "plasma": 1,
+    "proton": 4,
+    "quantum": 7,
+    "quark": 5,
+    "research": 2,
+    "science": 3,
+    "star": 2,
+    "strong": 2,
+    "weak": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsburning-plasma",
@@ -116,7 +334,32 @@
    "slug_terms": [
     "burning",
     "plasma"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 13,
+    "confinement": 1,
+    "critical": 1,
+    "cycle": 1,
+    "department": 1,
+    "doe": 4,
+    "electromagnetic": 2,
+    "electron": 1,
+    "energy": 6,
+    "fuel": 1,
+    "fusion": 13,
+    "high": 3,
+    "matter": 1,
+    "particle": 6,
+    "physic": 2,
+    "plant": 1,
+    "plasma": 27,
+    "radiation": 2,
+    "reaction": 1,
+    "research": 2,
+    "science": 5,
+    "technology": 1,
+    "tokamak": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainscarbon-sequestration",
@@ -125,7 +368,27 @@
    "slug_terms": [
     "carbon",
     "sequestration"
-   ]
+   ],
+   "subject_counts": {
+    "atmospheric": 2,
+    "biology": 1,
+    "capture": 4,
+    "carbon": 26,
+    "climate": 2,
+    "cycle": 1,
+    "department": 1,
+    "doe": 3,
+    "earth": 1,
+    "energy": 4,
+    "material": 1,
+    "microbiome": 1,
+    "plant": 9,
+    "research": 5,
+    "science": 5,
+    "sequestration": 9,
+    "soil": 8,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainscatalysts",
@@ -133,7 +396,21 @@
    "title": "DOE Explains...Catalysts | Department of Energy",
    "slug_terms": [
     "catalysts"
-   ]
+   ],
+   "subject_counts": {
+    "carbon": 1,
+    "catalyst": 16,
+    "department": 1,
+    "direct": 2,
+    "doe": 8,
+    "energy": 5,
+    "fuel": 5,
+    "material": 2,
+    "reaction": 8,
+    "research": 6,
+    "science": 3,
+    "solar": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsclouds-and-aerosols",
@@ -143,7 +420,37 @@
     "clouds",
     "and",
     "aerosols"
-   ]
+   ],
+   "subject_counts": {
+    "aerosol": 19,
+    "air": 5,
+    "artificial": 1,
+    "atmospheric": 2,
+    "burning": 2,
+    "carbon": 5,
+    "climate": 13,
+    "cloud": 31,
+    "critical": 1,
+    "data": 3,
+    "department": 1,
+    "doe": 5,
+    "earth": 10,
+    "element": 1,
+    "energy": 1,
+    "fuel": 1,
+    "light": 2,
+    "material": 3,
+    "model": 3,
+    "modeling": 1,
+    "particle": 12,
+    "plant": 4,
+    "radiation": 1,
+    "research": 5,
+    "science": 2,
+    "soil": 2,
+    "source": 2,
+    "system": 4
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainscosmic-acceleration-and-dark-energy",
@@ -155,7 +462,27 @@
     "and",
     "dark",
     "energy"
-   ]
+   ],
+   "subject_counts": {
+    "acceleration": 7,
+    "cosmic": 9,
+    "dark": 10,
+    "data": 1,
+    "department": 1,
+    "doe": 2,
+    "energy": 12,
+    "force": 1,
+    "gravity": 3,
+    "laboratory": 1,
+    "light": 2,
+    "matter": 2,
+    "particle": 1,
+    "physic": 2,
+    "relativity": 1,
+    "science": 2,
+    "star": 1,
+    "supernovae": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainscosmology",
@@ -163,7 +490,45 @@
    "title": "DOE Explains...Cosmology | Department of Energy",
    "slug_terms": [
     "cosmology"
-   ]
+   ],
+   "subject_counts": {
+    "acceleration": 1,
+    "cosmic": 2,
+    "cosmology": 12,
+    "dark": 15,
+    "density": 2,
+    "department": 1,
+    "direct": 1,
+    "doe": 5,
+    "earth": 3,
+    "energy": 10,
+    "explain": 1,
+    "force": 1,
+    "gravity": 4,
+    "high": 3,
+    "isotope": 1,
+    "learning": 1,
+    "light": 5,
+    "matter": 15,
+    "mechanic": 1,
+    "model": 5,
+    "neutron": 1,
+    "nuclear": 4,
+    "nuclei": 1,
+    "nucleosynthesi": 1,
+    "particle": 8,
+    "photon": 1,
+    "physic": 13,
+    "plasma": 1,
+    "quantum": 1,
+    "relativity": 2,
+    "research": 5,
+    "science": 5,
+    "spacetime": 1,
+    "standard": 1,
+    "star": 1,
+    "supernovae": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainscritical-materials",
@@ -172,7 +537,35 @@
    "slug_terms": [
     "critical",
     "materials"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "batterie": 1,
+    "biology": 1,
+    "critical": 23,
+    "decay": 1,
+    "department": 1,
+    "doe": 8,
+    "earth": 5,
+    "electron": 1,
+    "element": 7,
+    "energy": 7,
+    "high": 3,
+    "laboratory": 1,
+    "light": 3,
+    "material": 30,
+    "neutron": 1,
+    "physic": 2,
+    "plant": 1,
+    "reaction": 1,
+    "research": 5,
+    "science": 5,
+    "sector": 1,
+    "source": 4,
+    "star": 1,
+    "strong": 1,
+    "technology": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsdark-matter",
@@ -181,7 +574,39 @@
    "slug_terms": [
     "dark",
     "matter"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "artificial": 1,
+    "cosmic": 1,
+    "dark": 25,
+    "department": 1,
+    "doe": 4,
+    "earth": 1,
+    "electron": 1,
+    "energy": 2,
+    "explain": 2,
+    "force": 2,
+    "gravity": 4,
+    "high": 2,
+    "intelligence": 1,
+    "light": 1,
+    "material": 1,
+    "matter": 37,
+    "model": 1,
+    "particle": 10,
+    "photon": 1,
+    "physic": 1,
+    "proton": 1,
+    "quantum": 1,
+    "research": 2,
+    "science": 4,
+    "sector": 1,
+    "star": 1,
+    "strong": 1,
+    "superconductivity": 1,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsdeuterium-tritium-fusion-fuel",
@@ -192,7 +617,41 @@
     "tritium",
     "fusion",
     "fuel"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 1,
+    "computing": 2,
+    "confinement": 2,
+    "cosmic": 1,
+    "decay": 1,
+    "department": 1,
+    "deuterium": 14,
+    "doe": 5,
+    "earth": 2,
+    "element": 6,
+    "energy": 17,
+    "fission": 2,
+    "fuel": 9,
+    "fusion": 29,
+    "isotope": 10,
+    "material": 3,
+    "neutron": 8,
+    "nuclear": 8,
+    "nucleosynthesi": 1,
+    "physic": 1,
+    "plant": 9,
+    "plasma": 3,
+    "proton": 4,
+    "reaction": 5,
+    "research": 2,
+    "science": 9,
+    "source": 1,
+    "star": 2,
+    "stellarator": 1,
+    "system": 1,
+    "tokamak": 3,
+    "tritium": 17
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsdirect-air-capture",
@@ -202,7 +661,29 @@
     "direct",
     "air",
     "capture"
-   ]
+   ],
+   "subject_counts": {
+    "air": 15,
+    "atmospheric": 1,
+    "capture": 13,
+    "carbon": 7,
+    "climate": 1,
+    "critical": 1,
+    "cycle": 2,
+    "department": 1,
+    "direct": 11,
+    "doe": 6,
+    "earth": 1,
+    "energy": 5,
+    "fuel": 1,
+    "material": 2,
+    "multi": 1,
+    "research": 5,
+    "science": 7,
+    "sequestration": 1,
+    "system": 4,
+    "technology": 4
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsearth-system-and-climate-models",
@@ -214,7 +695,41 @@
     "and",
     "climate",
     "models"
-   ]
+   ],
+   "subject_counts": {
+    "aerosol": 1,
+    "air": 1,
+    "atmospheric": 2,
+    "biology": 1,
+    "carbon": 6,
+    "climate": 17,
+    "cloud": 1,
+    "computing": 1,
+    "critical": 1,
+    "data": 1,
+    "department": 1,
+    "doe": 6,
+    "dynamic": 1,
+    "earth": 27,
+    "energy": 4,
+    "exascale": 1,
+    "explain": 1,
+    "force": 1,
+    "high": 1,
+    "microbiology": 1,
+    "model": 30,
+    "modeling": 4,
+    "multi": 2,
+    "physic": 2,
+    "plant": 5,
+    "radiation": 1,
+    "research": 3,
+    "river": 1,
+    "science": 5,
+    "sector": 2,
+    "soil": 2,
+    "system": 22
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainselectrons",
@@ -222,7 +737,32 @@
    "title": "DOE Explains...Electrons | Department of Energy",
    "slug_terms": [
     "electrons"
-   ]
+   ],
+   "subject_counts": {
+    "cloud": 1,
+    "doe": 2,
+    "earth": 2,
+    "electron": 27,
+    "element": 6,
+    "energy": 4,
+    "force": 1,
+    "gluon": 1,
+    "light": 1,
+    "matter": 1,
+    "mechanic": 1,
+    "neutron": 4,
+    "nuclear": 2,
+    "nuclei": 10,
+    "particle": 8,
+    "photon": 3,
+    "physic": 1,
+    "plasma": 1,
+    "proton": 4,
+    "quantum": 2,
+    "quark": 1,
+    "research": 4,
+    "science": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsexascale-computing",
@@ -231,7 +771,34 @@
    "slug_terms": [
     "exascale",
     "computing"
-   ]
+   ],
+   "subject_counts": {
+    "climate": 2,
+    "computing": 10,
+    "data": 2,
+    "department": 2,
+    "doe": 8,
+    "earth": 1,
+    "energy": 3,
+    "exascale": 19,
+    "fusion": 1,
+    "high": 1,
+    "laboratory": 2,
+    "material": 2,
+    "model": 1,
+    "nanoscience": 1,
+    "nuclear": 2,
+    "particle": 1,
+    "physic": 1,
+    "plant": 1,
+    "quantum": 1,
+    "research": 4,
+    "science": 3,
+    "standard": 1,
+    "star": 1,
+    "system": 3,
+    "technology": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsfusion-energy-science",
@@ -241,7 +808,35 @@
     "fusion",
     "energy",
     "science"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 1,
+    "computing": 1,
+    "confinement": 3,
+    "department": 2,
+    "direct": 1,
+    "doe": 3,
+    "earth": 1,
+    "electron": 2,
+    "energy": 16,
+    "force": 1,
+    "fuel": 2,
+    "fusion": 18,
+    "high": 1,
+    "multi": 1,
+    "neutron": 1,
+    "nuclear": 1,
+    "nuclei": 2,
+    "physic": 1,
+    "plasma": 6,
+    "proton": 1,
+    "reaction": 1,
+    "research": 4,
+    "science": 9,
+    "source": 2,
+    "star": 1,
+    "tokamak": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsfusion-nuclear-science-and-technology",
@@ -253,7 +848,27 @@
     "science",
     "and",
     "technology"
-   ]
+   ],
+   "subject_counts": {
+    "cycle": 1,
+    "doe": 1,
+    "earth": 1,
+    "energy": 3,
+    "fuel": 4,
+    "fusion": 24,
+    "high": 3,
+    "material": 3,
+    "neutron": 1,
+    "nuclear": 8,
+    "particle": 1,
+    "plant": 2,
+    "research": 4,
+    "science": 11,
+    "source": 1,
+    "system": 3,
+    "technology": 6,
+    "tritium": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsfusion-reactions",
@@ -262,7 +877,38 @@
    "slug_terms": [
     "fusion",
     "reactions"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 1,
+    "computing": 2,
+    "department": 1,
+    "deuterium": 1,
+    "doe": 4,
+    "earth": 1,
+    "element": 2,
+    "energy": 12,
+    "explain": 1,
+    "fusion": 19,
+    "isotope": 1,
+    "laboratory": 1,
+    "light": 1,
+    "machine": 1,
+    "neutron": 2,
+    "nuclear": 5,
+    "nuclei": 2,
+    "nucleosynthesi": 1,
+    "physic": 1,
+    "plant": 1,
+    "plasma": 2,
+    "reaction": 6,
+    "research": 4,
+    "science": 5,
+    "source": 1,
+    "star": 1,
+    "stellarator": 1,
+    "tokamak": 1,
+    "tritium": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsgenomics",
@@ -270,7 +916,18 @@
    "title": "DOE Explains...Genomics | Department of Energy",
    "slug_terms": [
     "genomics"
-   ]
+   ],
+   "subject_counts": {
+    "biology": 1,
+    "data": 1,
+    "direct": 1,
+    "doe": 6,
+    "energy": 2,
+    "genomic": 10,
+    "radiation": 1,
+    "research": 1,
+    "science": 5
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsgravity",
@@ -278,7 +935,36 @@
    "title": "DOE Explains...Gravity | Department of Energy",
    "slug_terms": [
     "gravity"
-   ]
+   ],
+   "subject_counts": {
+    "antimatter": 1,
+    "cosmic": 2,
+    "dark": 5,
+    "department": 1,
+    "doe": 6,
+    "earth": 4,
+    "electromagnetic": 3,
+    "energy": 9,
+    "explain": 2,
+    "force": 17,
+    "gravity": 30,
+    "high": 1,
+    "light": 3,
+    "matter": 3,
+    "model": 2,
+    "multi": 1,
+    "nuclei": 2,
+    "particle": 5,
+    "physic": 3,
+    "quantum": 2,
+    "relativity": 1,
+    "research": 4,
+    "science": 4,
+    "standard": 1,
+    "star": 1,
+    "strong": 4,
+    "weak": 4
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainshigh-energy-density-laboratory-plasmas",
@@ -290,7 +976,30 @@
     "density",
     "laboratory",
     "plasmas"
-   ]
+   ],
+   "subject_counts": {
+    "density": 4,
+    "department": 1,
+    "doe": 4,
+    "earth": 3,
+    "energy": 10,
+    "fusion": 3,
+    "high": 6,
+    "isotope": 2,
+    "laboratory": 3,
+    "light": 2,
+    "material": 3,
+    "matter": 4,
+    "nuclear": 4,
+    "particle": 1,
+    "photon": 1,
+    "plasma": 15,
+    "radiation": 1,
+    "research": 5,
+    "science": 5,
+    "source": 1,
+    "star": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsisotopes",
@@ -298,7 +1007,23 @@
    "title": "DOE Explains...Isotopes | Department of Energy",
    "slug_terms": [
     "isotopes"
-   ]
+   ],
+   "subject_counts": {
+    "artificial": 1,
+    "carbon": 9,
+    "decay": 3,
+    "deuterium": 1,
+    "doe": 2,
+    "element": 7,
+    "isotope": 21,
+    "material": 2,
+    "neutron": 7,
+    "nuclear": 1,
+    "proton": 4,
+    "research": 3,
+    "science": 1,
+    "tritium": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainslight-sources",
@@ -307,7 +1032,35 @@
    "slug_terms": [
     "light",
     "sources"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 4,
+    "batterie": 1,
+    "department": 1,
+    "doe": 1,
+    "electromagnetic": 1,
+    "electron": 5,
+    "element": 1,
+    "energy": 7,
+    "high": 2,
+    "laboratory": 6,
+    "light": 34,
+    "machine": 3,
+    "material": 7,
+    "matter": 2,
+    "particle": 6,
+    "photon": 3,
+    "physic": 1,
+    "quantum": 1,
+    "radiation": 2,
+    "reaction": 1,
+    "research": 3,
+    "science": 6,
+    "solar": 1,
+    "source": 22,
+    "system": 1,
+    "ultrafast": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsmachine-learning",
@@ -316,7 +1069,30 @@
    "slug_terms": [
     "machine",
     "learning"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "artificial": 4,
+    "computing": 1,
+    "data": 22,
+    "department": 1,
+    "doe": 5,
+    "energy": 1,
+    "imaging": 1,
+    "intelligence": 4,
+    "laboratory": 1,
+    "learning": 27,
+    "light": 1,
+    "machine": 25,
+    "network": 1,
+    "particle": 1,
+    "physic": 2,
+    "research": 4,
+    "science": 5,
+    "source": 1,
+    "system": 19,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsmicrobiology",
@@ -324,7 +1100,30 @@
    "title": "DOE Explains...Microbiology | Department of Energy",
    "slug_terms": [
     "microbiology"
-   ]
+   ],
+   "subject_counts": {
+    "biofuel": 2,
+    "biology": 1,
+    "capture": 1,
+    "climate": 1,
+    "decay": 1,
+    "department": 1,
+    "doe": 6,
+    "earth": 3,
+    "energy": 7,
+    "laboratory": 1,
+    "material": 1,
+    "matter": 1,
+    "microbiology": 5,
+    "model": 1,
+    "nuclei": 3,
+    "plant": 3,
+    "reaction": 1,
+    "research": 9,
+    "science": 3,
+    "soil": 2,
+    "system": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsmulti-sector-dynamics-modeling",
@@ -335,7 +1134,26 @@
     "sector",
     "dynamics",
     "modeling"
-   ]
+   ],
+   "subject_counts": {
+    "climate": 2,
+    "data": 1,
+    "doe": 1,
+    "dynamic": 3,
+    "earth": 3,
+    "energy": 3,
+    "force": 1,
+    "model": 4,
+    "modeling": 3,
+    "multi": 3,
+    "nuclear": 1,
+    "plant": 3,
+    "river": 2,
+    "science": 2,
+    "sector": 3,
+    "source": 1,
+    "system": 12
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsmuons",
@@ -343,7 +1161,40 @@
    "title": "DOE Explains...Muons | Department of Energy",
    "slug_terms": [
     "muons"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "antimatter": 1,
+    "atmospheric": 1,
+    "cosmic": 1,
+    "dark": 3,
+    "decay": 1,
+    "doe": 7,
+    "earth": 5,
+    "electron": 2,
+    "energy": 2,
+    "explain": 2,
+    "force": 2,
+    "high": 1,
+    "laboratory": 2,
+    "light": 2,
+    "material": 1,
+    "matter": 3,
+    "model": 5,
+    "muon": 14,
+    "neutrino": 3,
+    "nuclear": 2,
+    "nuclei": 1,
+    "particle": 8,
+    "physic": 2,
+    "plant": 1,
+    "proton": 1,
+    "quark": 1,
+    "radiation": 1,
+    "research": 4,
+    "science": 2,
+    "standard": 5
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsnanoscience",
@@ -351,7 +1202,24 @@
    "title": "DOE Explains...Nanoscience | Department of Energy",
    "slug_terms": [
     "nanoscience"
-   ]
+   ],
+   "subject_counts": {
+    "biology": 1,
+    "computing": 1,
+    "department": 2,
+    "doe": 2,
+    "energy": 4,
+    "high": 1,
+    "material": 4,
+    "matter": 1,
+    "nanoscience": 5,
+    "neutron": 1,
+    "physic": 1,
+    "quantum": 1,
+    "research": 9,
+    "science": 8,
+    "technology": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsneutrinos",
@@ -359,7 +1227,27 @@
    "title": "DOE Explains...Neutrinos | Department of Energy",
    "slug_terms": [
     "neutrinos"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 2,
+    "antimatter": 1,
+    "department": 1,
+    "doe": 1,
+    "earth": 1,
+    "electron": 1,
+    "energy": 1,
+    "fission": 1,
+    "matter": 5,
+    "model": 1,
+    "muon": 1,
+    "neutrino": 27,
+    "nuclei": 1,
+    "particle": 8,
+    "physic": 1,
+    "radioactivity": 1,
+    "science": 3,
+    "standard": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsneutron-stars",
@@ -368,7 +1256,36 @@
    "slug_terms": [
     "neutron",
     "stars"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "burning": 1,
+    "density": 1,
+    "doe": 8,
+    "electron": 1,
+    "element": 2,
+    "energy": 1,
+    "gravity": 1,
+    "isotope": 1,
+    "laboratory": 1,
+    "material": 1,
+    "matter": 3,
+    "model": 1,
+    "neutron": 25,
+    "nuclear": 7,
+    "nuclei": 2,
+    "nucleosynthesi": 1,
+    "physic": 3,
+    "proton": 2,
+    "research": 5,
+    "science": 4,
+    "source": 2,
+    "spacetime": 1,
+    "star": 28,
+    "strong": 1,
+    "supernovae": 1,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsneutrons",
@@ -376,7 +1293,34 @@
    "title": "DOE Explains...Neutrons | Department of Energy",
    "slug_terms": [
     "neutrons"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "batterie": 1,
+    "capture": 1,
+    "cosmic": 1,
+    "department": 1,
+    "doe": 3,
+    "earth": 1,
+    "energy": 3,
+    "fission": 1,
+    "fusion": 1,
+    "high": 4,
+    "imaging": 1,
+    "isotope": 1,
+    "laboratory": 2,
+    "material": 7,
+    "matter": 1,
+    "neutron": 23,
+    "particle": 2,
+    "proton": 3,
+    "quantum": 1,
+    "radioactivity": 1,
+    "research": 4,
+    "science": 8,
+    "source": 1,
+    "superconductivity": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsnuclear-data",
@@ -385,7 +1329,28 @@
    "slug_terms": [
     "nuclear",
     "data"
-   ]
+   ],
+   "subject_counts": {
+    "data": 20,
+    "decay": 2,
+    "department": 1,
+    "doe": 3,
+    "energy": 3,
+    "fission": 5,
+    "force": 1,
+    "fusion": 2,
+    "laboratory": 1,
+    "matter": 1,
+    "model": 1,
+    "nuclear": 31,
+    "nuclei": 5,
+    "particle": 1,
+    "physic": 3,
+    "reaction": 3,
+    "research": 4,
+    "science": 8,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsnuclear-fission",
@@ -394,7 +1359,40 @@
    "slug_terms": [
     "nuclear",
     "fission"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "beta": 1,
+    "data": 3,
+    "decay": 3,
+    "department": 1,
+    "doe": 3,
+    "electron": 1,
+    "element": 3,
+    "energy": 4,
+    "fission": 15,
+    "fuel": 2,
+    "isotope": 1,
+    "laboratory": 2,
+    "light": 1,
+    "material": 4,
+    "matter": 1,
+    "modeling": 1,
+    "neutron": 3,
+    "nuclear": 9,
+    "nuclei": 3,
+    "particle": 9,
+    "photon": 1,
+    "physic": 1,
+    "plant": 1,
+    "proton": 1,
+    "radiation": 1,
+    "reaction": 1,
+    "research": 2,
+    "science": 4,
+    "system": 1,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsnuclei",
@@ -402,7 +1400,31 @@
    "title": "DOE Explains...Nuclei | Department of Energy",
    "slug_terms": [
     "nuclei"
-   ]
+   ],
+   "subject_counts": {
+    "beta": 1,
+    "capture": 1,
+    "cosmic": 1,
+    "decay": 4,
+    "density": 2,
+    "doe": 2,
+    "electron": 3,
+    "force": 2,
+    "gluon": 1,
+    "matter": 1,
+    "neutron": 4,
+    "nuclear": 2,
+    "nuclei": 13,
+    "particle": 1,
+    "photon": 1,
+    "physic": 1,
+    "proton": 4,
+    "quark": 1,
+    "research": 4,
+    "science": 2,
+    "star": 1,
+    "strong": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsnucleosynthesis",
@@ -410,7 +1432,37 @@
    "title": "DOE Explains...Nucleosynthesis | Department of Energy",
    "slug_terms": [
     "nucleosynthesis"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 2,
+    "capture": 1,
+    "carbon": 1,
+    "deuterium": 2,
+    "doe": 5,
+    "element": 13,
+    "fission": 1,
+    "fusion": 1,
+    "gluon": 2,
+    "isotope": 3,
+    "laboratory": 1,
+    "modeling": 1,
+    "neutron": 13,
+    "nuclear": 7,
+    "nuclei": 13,
+    "nucleosynthesi": 6,
+    "particle": 1,
+    "physic": 3,
+    "plasma": 1,
+    "proton": 4,
+    "quark": 2,
+    "reaction": 3,
+    "research": 2,
+    "science": 3,
+    "source": 1,
+    "star": 14,
+    "supernovae": 4,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsparticle-accelerators",
@@ -419,7 +1471,40 @@
    "slug_terms": [
     "particle",
     "accelerators"
-   ]
+   ],
+   "subject_counts": {
+    "acceleration": 1,
+    "accelerator": 23,
+    "air": 2,
+    "boson": 1,
+    "department": 1,
+    "doe": 1,
+    "electron": 2,
+    "energy": 3,
+    "explain": 1,
+    "force": 2,
+    "higg": 1,
+    "high": 1,
+    "isotope": 2,
+    "laboratory": 5,
+    "light": 2,
+    "machine": 1,
+    "matter": 1,
+    "model": 1,
+    "neutron": 2,
+    "nuclear": 2,
+    "nuclei": 4,
+    "particle": 37,
+    "physic": 6,
+    "proton": 4,
+    "quantum": 2,
+    "radiation": 1,
+    "reaction": 1,
+    "research": 2,
+    "science": 2,
+    "standard": 1,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsphotons",
@@ -427,7 +1512,34 @@
    "title": "DOE Explains...Photons | Department of Energy",
    "slug_terms": [
     "photons"
-   ]
+   ],
+   "subject_counts": {
+    "doe": 3,
+    "earth": 1,
+    "electromagnetic": 4,
+    "electron": 1,
+    "energy": 6,
+    "gluon": 1,
+    "high": 2,
+    "light": 16,
+    "matter": 3,
+    "mechanic": 2,
+    "model": 1,
+    "neutron": 1,
+    "nuclear": 2,
+    "nuclei": 3,
+    "particle": 11,
+    "photon": 17,
+    "physic": 2,
+    "proton": 1,
+    "quantum": 2,
+    "quark": 1,
+    "radiation": 4,
+    "relativity": 1,
+    "research": 5,
+    "science": 4,
+    "source": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsplasma",
@@ -435,7 +1547,32 @@
    "title": "DOE Explains...Plasma | Department of Energy",
    "slug_terms": [
     "plasma"
-   ]
+   ],
+   "subject_counts": {
+    "density": 2,
+    "department": 1,
+    "doe": 4,
+    "electromagnetic": 1,
+    "electron": 9,
+    "energy": 6,
+    "fusion": 5,
+    "gravity": 1,
+    "high": 7,
+    "laboratory": 2,
+    "matter": 5,
+    "nuclear": 1,
+    "nuclei": 1,
+    "particle": 2,
+    "photon": 1,
+    "physic": 1,
+    "plasma": 33,
+    "proton": 1,
+    "research": 3,
+    "science": 5,
+    "star": 2,
+    "stellarator": 1,
+    "tokamak": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsplasma-confinement",
@@ -444,7 +1581,32 @@
    "slug_terms": [
     "plasma",
     "confinement"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 1,
+    "confinement": 11,
+    "department": 1,
+    "doe": 3,
+    "earth": 1,
+    "energy": 6,
+    "force": 2,
+    "fuel": 1,
+    "fusion": 8,
+    "gravity": 1,
+    "high": 2,
+    "laboratory": 1,
+    "light": 2,
+    "machine": 1,
+    "matter": 1,
+    "nuclear": 2,
+    "plant": 1,
+    "plasma": 10,
+    "research": 4,
+    "science": 3,
+    "source": 2,
+    "star": 1,
+    "strong": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsprotons",
@@ -452,7 +1614,27 @@
    "title": "DOE Explains...Protons | Department of Energy",
    "slug_terms": [
     "protons"
-   ]
+   ],
+   "subject_counts": {
+    "carbon": 1,
+    "data": 1,
+    "decay": 2,
+    "doe": 2,
+    "element": 6,
+    "force": 2,
+    "gluon": 1,
+    "matter": 1,
+    "neutron": 13,
+    "nuclear": 2,
+    "nuclei": 3,
+    "particle": 12,
+    "physic": 1,
+    "proton": 19,
+    "quark": 9,
+    "research": 4,
+    "science": 2,
+    "strong": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsquantum-chromodynamics",
@@ -461,7 +1643,38 @@
    "slug_terms": [
     "quantum",
     "chromodynamics"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "chromodynamic": 3,
+    "department": 2,
+    "doe": 4,
+    "dynamic": 1,
+    "electromagnetic": 1,
+    "electron": 2,
+    "element": 1,
+    "energy": 2,
+    "explain": 2,
+    "fermion": 2,
+    "force": 4,
+    "gluon": 12,
+    "laboratory": 1,
+    "matter": 2,
+    "mechanic": 1,
+    "model": 1,
+    "neutrino": 1,
+    "neutron": 8,
+    "nuclei": 2,
+    "particle": 9,
+    "photon": 1,
+    "proton": 9,
+    "quantum": 10,
+    "quark": 27,
+    "research": 1,
+    "science": 3,
+    "standard": 1,
+    "strong": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsquantum-computing",
@@ -470,7 +1683,28 @@
    "slug_terms": [
     "quantum",
     "computing"
-   ]
+   ],
+   "subject_counts": {
+    "catalyst": 1,
+    "computing": 9,
+    "critical": 1,
+    "doe": 2,
+    "exascale": 1,
+    "gluon": 1,
+    "high": 1,
+    "material": 1,
+    "mechanic": 3,
+    "nuclear": 1,
+    "nuclei": 1,
+    "particle": 1,
+    "physic": 1,
+    "plasma": 1,
+    "quantum": 21,
+    "quark": 1,
+    "research": 4,
+    "science": 6,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsquantum-mechanics",
@@ -479,7 +1713,38 @@
    "slug_terms": [
     "quantum",
     "mechanics"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 5,
+    "air": 1,
+    "computing": 1,
+    "department": 1,
+    "doe": 1,
+    "electromagnetic": 2,
+    "electron": 8,
+    "energy": 5,
+    "explain": 2,
+    "imaging": 2,
+    "isotope": 1,
+    "laboratory": 3,
+    "light": 5,
+    "material": 2,
+    "matter": 1,
+    "mechanic": 15,
+    "network": 1,
+    "neutron": 1,
+    "nuclei": 1,
+    "particle": 19,
+    "photon": 1,
+    "physic": 3,
+    "proton": 2,
+    "quantum": 19,
+    "radiation": 2,
+    "research": 2,
+    "science": 9,
+    "system": 2,
+    "technology": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsquantum-networks",
@@ -488,7 +1753,20 @@
    "slug_terms": [
     "quantum",
     "networks"
-   ]
+   ],
+   "subject_counts": {
+    "doe": 4,
+    "energy": 1,
+    "light": 2,
+    "multi": 1,
+    "network": 14,
+    "photon": 9,
+    "physic": 2,
+    "quantum": 27,
+    "research": 2,
+    "science": 2,
+    "technology": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsquarks-and-gluons",
@@ -498,7 +1776,32 @@
     "quarks",
     "and",
     "gluons"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 4,
+    "chromodynamic": 1,
+    "density": 2,
+    "doe": 5,
+    "electron": 2,
+    "force": 9,
+    "gluon": 15,
+    "gravity": 1,
+    "high": 2,
+    "laboratory": 1,
+    "matter": 2,
+    "neutron": 4,
+    "nuclear": 5,
+    "nuclei": 1,
+    "particle": 5,
+    "plasma": 3,
+    "proton": 5,
+    "quantum": 1,
+    "quark": 19,
+    "research": 1,
+    "science": 1,
+    "strong": 4,
+    "weak": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsradioactivity",
@@ -506,7 +1809,36 @@
    "title": "DOE Explains...Radioactivity | Department of Energy",
    "slug_terms": [
     "radioactivity"
-   ]
+   ],
+   "subject_counts": {
+    "air": 1,
+    "critical": 1,
+    "dark": 1,
+    "decay": 5,
+    "doe": 4,
+    "earth": 3,
+    "electron": 2,
+    "element": 1,
+    "energy": 4,
+    "imaging": 1,
+    "isotope": 5,
+    "laboratory": 1,
+    "material": 2,
+    "matter": 4,
+    "neutrino": 3,
+    "neutron": 3,
+    "nuclear": 2,
+    "nuclei": 6,
+    "particle": 6,
+    "photon": 1,
+    "plant": 1,
+    "proton": 3,
+    "radiation": 1,
+    "radioactivity": 10,
+    "research": 2,
+    "science": 4,
+    "source": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsrelativity",
@@ -514,7 +1846,39 @@
    "title": "DOE Explains...Relativity | Department of Energy",
    "slug_terms": [
     "relativity"
-   ]
+   ],
+   "subject_counts": {
+    "acceleration": 1,
+    "accelerator": 2,
+    "cosmic": 2,
+    "dark": 1,
+    "data": 1,
+    "decay": 2,
+    "department": 1,
+    "doe": 5,
+    "earth": 12,
+    "energy": 9,
+    "explain": 2,
+    "force": 2,
+    "fusion": 3,
+    "gravity": 5,
+    "high": 1,
+    "light": 15,
+    "material": 1,
+    "matter": 3,
+    "muon": 8,
+    "nuclear": 3,
+    "nuclei": 3,
+    "particle": 8,
+    "physic": 4,
+    "relativity": 20,
+    "research": 2,
+    "science": 4,
+    "source": 1,
+    "spacetime": 1,
+    "star": 2,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssoil",
@@ -522,7 +1886,36 @@
    "title": "DOE Explains...Soil | Department of Energy",
    "slug_terms": [
     "soil"
-   ]
+   ],
+   "subject_counts": {
+    "air": 1,
+    "artificial": 1,
+    "bioenergy": 1,
+    "biofuel": 1,
+    "biology": 1,
+    "burning": 1,
+    "capture": 1,
+    "carbon": 12,
+    "climate": 4,
+    "cycle": 2,
+    "department": 1,
+    "doe": 5,
+    "earth": 5,
+    "energy": 1,
+    "force": 1,
+    "fuel": 1,
+    "genomic": 2,
+    "material": 4,
+    "matter": 2,
+    "particle": 1,
+    "plant": 13,
+    "reaction": 1,
+    "research": 5,
+    "science": 6,
+    "soil": 42,
+    "source": 1,
+    "system": 5
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssolar-fuels",
@@ -531,7 +1924,24 @@
    "slug_terms": [
     "solar",
     "fuels"
-   ]
+   ],
+   "subject_counts": {
+    "artificial": 2,
+    "carbon": 4,
+    "doe": 3,
+    "earth": 2,
+    "energy": 17,
+    "fuel": 24,
+    "light": 1,
+    "matter": 1,
+    "multi": 2,
+    "plant": 1,
+    "reaction": 1,
+    "research": 2,
+    "science": 3,
+    "solar": 17,
+    "system": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsspacetime",
@@ -539,7 +1949,32 @@
    "title": "DOE Explains...Spacetime | Department of Energy",
    "slug_terms": [
     "spacetime"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "cosmic": 1,
+    "cosmology": 1,
+    "critical": 1,
+    "dark": 5,
+    "data": 1,
+    "department": 1,
+    "doe": 7,
+    "dynamic": 1,
+    "energy": 6,
+    "gravity": 1,
+    "high": 2,
+    "light": 6,
+    "matter": 2,
+    "model": 1,
+    "modeling": 1,
+    "particle": 3,
+    "physic": 1,
+    "relativity": 4,
+    "research": 4,
+    "science": 4,
+    "spacetime": 22,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsstellarators",
@@ -547,7 +1982,28 @@
    "title": "DOE Explains...Stellarators | Department of Energy",
    "slug_terms": [
     "stellarators"
-   ]
+   ],
+   "subject_counts": {
+    "computing": 1,
+    "department": 1,
+    "doe": 2,
+    "energy": 4,
+    "fusion": 9,
+    "high": 2,
+    "laboratory": 2,
+    "machine": 1,
+    "matter": 1,
+    "particle": 1,
+    "physic": 1,
+    "plasma": 11,
+    "research": 2,
+    "science": 3,
+    "source": 1,
+    "stellarator": 19,
+    "strong": 1,
+    "technology": 1,
+    "tokamak": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssuperconductivity",
@@ -555,7 +2011,27 @@
    "title": "DOE Explains...Superconductivity | Department of Energy",
    "slug_terms": [
     "superconductivity"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "critical": 4,
+    "direct": 1,
+    "doe": 3,
+    "electron": 5,
+    "element": 1,
+    "energy": 3,
+    "explain": 2,
+    "high": 8,
+    "imaging": 1,
+    "machine": 2,
+    "material": 20,
+    "mechanic": 1,
+    "physic": 3,
+    "quantum": 3,
+    "research": 4,
+    "science": 3,
+    "superconductivity": 19
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssuperheavy-elements",
@@ -564,7 +2040,24 @@
    "slug_terms": [
     "superheavy",
     "elements"
-   ]
+   ],
+   "subject_counts": {
+    "decay": 3,
+    "department": 1,
+    "doe": 11,
+    "element": 39,
+    "energy": 1,
+    "high": 1,
+    "isotope": 3,
+    "laboratory": 5,
+    "material": 1,
+    "nuclear": 1,
+    "particle": 1,
+    "proton": 1,
+    "research": 3,
+    "science": 3,
+    "superheavy": 17
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssupernovae",
@@ -572,7 +2065,41 @@
    "title": "DOE Explains...Supernovae | Department of Energy",
    "slug_terms": [
     "supernovae"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "computing": 1,
+    "cosmic": 2,
+    "dark": 1,
+    "department": 1,
+    "doe": 2,
+    "element": 3,
+    "energy": 4,
+    "force": 2,
+    "fuel": 3,
+    "fusion": 3,
+    "gravity": 3,
+    "high": 1,
+    "laboratory": 2,
+    "learning": 1,
+    "machine": 1,
+    "matter": 3,
+    "neutrino": 1,
+    "neutron": 1,
+    "nuclear": 2,
+    "nuclei": 2,
+    "nucleosynthesi": 1,
+    "particle": 1,
+    "physic": 3,
+    "radiation": 1,
+    "reaction": 1,
+    "research": 2,
+    "science": 7,
+    "source": 2,
+    "star": 18,
+    "supernovae": 10,
+    "system": 1
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssymmetry-physics",
@@ -581,7 +2108,39 @@
    "slug_terms": [
     "symmetry",
     "physics"
-   ]
+   ],
+   "subject_counts": {
+    "antimatter": 1,
+    "beta": 2,
+    "biology": 1,
+    "computing": 1,
+    "data": 1,
+    "decay": 4,
+    "department": 1,
+    "doe": 2,
+    "energy": 5,
+    "force": 1,
+    "gravity": 1,
+    "high": 1,
+    "isotope": 1,
+    "laboratory": 1,
+    "material": 2,
+    "matter": 3,
+    "mechanic": 1,
+    "model": 2,
+    "neutrino": 3,
+    "neutron": 1,
+    "nuclear": 3,
+    "particle": 8,
+    "physic": 7,
+    "proton": 1,
+    "quantum": 2,
+    "relativity": 1,
+    "research": 1,
+    "science": 5,
+    "standard": 2,
+    "symmetry": 29
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainssystems-biology",
@@ -590,7 +2149,31 @@
    "slug_terms": [
     "systems",
     "biology"
-   ]
+   ],
+   "subject_counts": {
+    "bioenergy": 1,
+    "biofuel": 4,
+    "biology": 15,
+    "capture": 1,
+    "carbon": 9,
+    "critical": 1,
+    "data": 1,
+    "department": 2,
+    "doe": 1,
+    "energy": 4,
+    "fuel": 1,
+    "genomic": 2,
+    "material": 2,
+    "matter": 1,
+    "microbiome": 1,
+    "model": 1,
+    "network": 1,
+    "plant": 9,
+    "research": 4,
+    "science": 3,
+    "soil": 3,
+    "system": 22
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-carbon-cycle",
@@ -600,7 +2183,35 @@
     "the",
     "carbon",
     "cycle"
-   ]
+   ],
+   "subject_counts": {
+    "air": 1,
+    "biology": 1,
+    "capture": 1,
+    "carbon": 46,
+    "climate": 2,
+    "computing": 1,
+    "critical": 1,
+    "cycle": 12,
+    "decay": 1,
+    "department": 1,
+    "direct": 1,
+    "doe": 6,
+    "earth": 11,
+    "element": 1,
+    "energy": 1,
+    "fuel": 2,
+    "microbiome": 1,
+    "model": 1,
+    "multi": 1,
+    "plant": 8,
+    "research": 6,
+    "science": 4,
+    "sequestration": 1,
+    "soil": 2,
+    "source": 1,
+    "system": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-electromagnetic-force",
@@ -610,7 +2221,37 @@
     "the",
     "electromagnetic",
     "force"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "antimatter": 1,
+    "dark": 2,
+    "department": 1,
+    "doe": 5,
+    "electromagnetic": 7,
+    "electron": 4,
+    "element": 1,
+    "energy": 2,
+    "explain": 2,
+    "force": 19,
+    "light": 2,
+    "matter": 1,
+    "mechanic": 1,
+    "model": 6,
+    "neutrino": 1,
+    "nuclei": 2,
+    "particle": 9,
+    "photon": 1,
+    "physic": 2,
+    "proton": 4,
+    "quantum": 3,
+    "quark": 1,
+    "relativity": 1,
+    "research": 2,
+    "science": 3,
+    "standard": 6,
+    "strong": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-higgs-boson",
@@ -620,7 +2261,30 @@
     "the",
     "higgs",
     "boson"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "boson": 13,
+    "dark": 2,
+    "doe": 3,
+    "electromagnetic": 1,
+    "electron": 1,
+    "energy": 2,
+    "explain": 1,
+    "force": 2,
+    "higg": 18,
+    "high": 1,
+    "light": 1,
+    "matter": 2,
+    "model": 5,
+    "particle": 14,
+    "photon": 1,
+    "physic": 6,
+    "quark": 1,
+    "research": 1,
+    "science": 2,
+    "standard": 3
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-plant-microbiome",
@@ -630,7 +2294,31 @@
     "the",
     "plant",
     "microbiome"
-   ]
+   ],
+   "subject_counts": {
+    "air": 2,
+    "biofuel": 3,
+    "carbon": 6,
+    "climate": 3,
+    "cloud": 1,
+    "cycle": 1,
+    "department": 1,
+    "doe": 6,
+    "earth": 3,
+    "energy": 3,
+    "genomic": 2,
+    "material": 3,
+    "matter": 1,
+    "microbiome": 26,
+    "model": 1,
+    "particle": 1,
+    "plant": 44,
+    "research": 4,
+    "science": 8,
+    "soil": 7,
+    "star": 1,
+    "system": 6
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-standard-model-particle-physics",
@@ -642,7 +2330,39 @@
     "model",
     "particle",
     "physics"
-   ]
+   ],
+   "subject_counts": {
+    "antimatter": 1,
+    "boson": 6,
+    "dark": 4,
+    "doe": 5,
+    "electron": 4,
+    "element": 1,
+    "energy": 2,
+    "explain": 5,
+    "force": 8,
+    "gluon": 1,
+    "gravity": 1,
+    "higg": 3,
+    "matter": 7,
+    "model": 11,
+    "neutrino": 2,
+    "neutron": 2,
+    "nuclear": 1,
+    "nuclei": 1,
+    "particle": 10,
+    "photon": 1,
+    "physic": 3,
+    "proton": 2,
+    "quark": 5,
+    "reaction": 1,
+    "research": 2,
+    "science": 2,
+    "standard": 11,
+    "star": 1,
+    "strong": 2,
+    "weak": 2
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-strong-force",
@@ -652,7 +2372,32 @@
     "the",
     "strong",
     "force"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "antimatter": 1,
+    "boson": 1,
+    "dark": 2,
+    "doe": 5,
+    "electromagnetic": 3,
+    "energy": 3,
+    "explain": 1,
+    "force": 25,
+    "gluon": 2,
+    "matter": 1,
+    "model": 5,
+    "neutrino": 1,
+    "neutron": 2,
+    "nuclei": 2,
+    "particle": 15,
+    "physic": 2,
+    "proton": 3,
+    "quark": 7,
+    "research": 3,
+    "science": 3,
+    "standard": 5,
+    "strong": 12
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsthe-weak-force",
@@ -662,7 +2407,38 @@
     "the",
     "weak",
     "force"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "antimatter": 1,
+    "beta": 6,
+    "boson": 4,
+    "carbon": 2,
+    "dark": 2,
+    "decay": 8,
+    "department": 1,
+    "doe": 6,
+    "electron": 3,
+    "element": 4,
+    "energy": 2,
+    "force": 21,
+    "laboratory": 1,
+    "learning": 1,
+    "matter": 1,
+    "model": 6,
+    "neutrino": 2,
+    "neutron": 7,
+    "particle": 8,
+    "physic": 3,
+    "proton": 7,
+    "quark": 16,
+    "research": 2,
+    "science": 3,
+    "standard": 6,
+    "strong": 2,
+    "symmetry": 1,
+    "weak": 15
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainstokamaks",
@@ -670,7 +2446,25 @@
    "title": "DOE Explains...Tokamaks | Department of Energy",
    "slug_terms": [
     "tokamaks"
-   ]
+   ],
+   "subject_counts": {
+    "burning": 1,
+    "confinement": 1,
+    "doe": 2,
+    "earth": 1,
+    "energy": 4,
+    "fusion": 10,
+    "laboratory": 1,
+    "machine": 1,
+    "particle": 2,
+    "physic": 2,
+    "plant": 1,
+    "plasma": 10,
+    "reaction": 1,
+    "research": 3,
+    "science": 4,
+    "tokamak": 12
+   }
   },
   {
    "url": "https://www.energy.gov/science/doe-explainsultrafast-science",
@@ -679,7 +2473,27 @@
    "slug_terms": [
     "ultrafast",
     "science"
-   ]
+   ],
+   "subject_counts": {
+    "accelerator": 1,
+    "doe": 2,
+    "electromagnetic": 1,
+    "electron": 7,
+    "energy": 5,
+    "laboratory": 1,
+    "light": 3,
+    "material": 8,
+    "matter": 1,
+    "particle": 1,
+    "photon": 1,
+    "radiation": 1,
+    "reaction": 1,
+    "research": 3,
+    "science": 11,
+    "source": 1,
+    "system": 2,
+    "ultrafast": 11
+   }
   }
  ],
  "denied": [],
@@ -688,5 +2502,5 @@
    "86a7142a8bf4894cebdf7566c0e0dc0a6c35914ce34af8676f01a6c9eec3bfd9"
   ]
  },
- "sha256": "5aaa25932137afa436c17a51451fd7b404e0e521ade77fe59aae3527cdfb8214"
+ "sha256": "ab968f79a82b581b8aa74d915bf7bdfa8823160b67a40ac466be383d53b9f7e5"
 }

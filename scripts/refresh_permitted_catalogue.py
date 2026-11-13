@@ -36,6 +36,8 @@ import os
 import re
 import sys
 import time
+from collections import Counter
+from html import unescape
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -45,7 +47,7 @@ sys.path.insert(0, str(ROOT))
 
 from vera import html_main, original_html as oh, public_fetch as pf  # noqa: E402
 
-SCRIPT_VERSION = "refresh_permitted_catalogue/1 (WPC-HARVEST-IMPL, USFED-WPC-1112)"
+SCRIPT_VERSION = "refresh_permitted_catalogue/2 (WPC-HARVEST-IMPL, USFED-WPC-1112; subject_counts, USFED-MATCH-1113)"
 EVIDENCE_MAX_AGE = timedelta(minutes=60)
 # UNCALIBRATED PRIORS from PLAN.md section 4 (Harvest bounds); a config block "harvest" in permitted_originals.json overrides.
 DEFAULT_CAPS = {"max_child_sitemaps": 10, "max_urls_per_host": 300, "max_title_fetches_per_run": 400}
@@ -55,7 +57,7 @@ INDEX_TYPES = ("text/html", "application/xhtml+xml")
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 DOC = ("Vendored catalogue snapshot for the ORIGINAL_HTML route (config/permitted_originals.json), written ONLY by "
        "scripts/refresh_permitted_catalogue.py (never at runtime, never by hand). entries: harvested page URL, host, fetched "
-       "page title, slug terms. denied: URLs that answered 401/403, never requested again. boilerplate: per host, sha256 of "
+       "page title, slug terms, subject_counts (term -> count in the extracted body, title vocabulary only; plan 5.8 MT-A). denied: URLs that answered 401/403, never requested again. boilerplate: per host, sha256 of "
        "normalised text lines on at least max(floor, half) of the host's harvested pages (plan step 6c; headings never "
        "included). robots_status: per host robots read result, Crawl-delay and harvest outcome. sha256 covers entries, "
        "denied and boilerplate. Recorded divergence from feedback_no_hardcoded_data: work/USFED-ROUTE-1111/PLAN.md pass 2 "
@@ -136,6 +138,39 @@ def page_title(raw: bytes, xcfg: dict) -> str:
                 break
     t = re.sub(r"\s+", " ", _CTRL.sub(" ", t or "")).strip()
     return t[:200].strip()
+
+
+def page_file(url: str) -> str:
+    """The saved-page file name of a harvested URL: sha256(url)[:24] + ".html" (the harvest's own --save-pages rule)."""
+    return hashlib.sha256(url.encode()).hexdigest()[:24] + ".html"
+
+
+def _body_text(raw: bytes, xcfg: dict, host: str, bp) -> str:
+    """The extracted body (6a-6c with the shipped extract config and the host boilerplate), tags stripped, <title> and h1
+    excluded."""
+    body = html_main.extract_main(raw, xcfg, host, bp)["html"].decode("utf-8")
+    body = re.sub(r"<title>.*?</title>", " ", body, flags=re.S)
+    body = re.sub(r"<h1[^>]*>.*?</h1>", " ", body, flags=re.S)
+    return unescape(re.sub(r"<[^>]+>", " ", body))
+
+
+def derive_subject_counts(entries, raws: dict, xcfg: dict, boilerplate: dict) -> dict:
+    """THE one derivation of the snapshot field `subject_counts` (plan 5.8 MT-A). entries: snapshot entries (url, host,
+    title, slug_terms); raws: {url: raw page bytes}. Returns {url: {term: count}}: for each entry, the count (int >= 1)
+    of each term of the host's title/slug vocabulary (the union of _terms(title) and _terms(slug term) over that host's
+    entries, the same vocabulary match_subject compares against) in the entry's extracted body, via oh._terms. Pure; no
+    network."""
+    vocab: dict = {}
+    for e in entries:
+        v = vocab.setdefault(e["host"], set())
+        v.update(oh._terms(e["title"]))
+        v.update(t for x in e["slug_terms"] for t in oh._terms(x))
+    out = {}
+    for e in entries:
+        cnt = Counter(t for t in oh._terms(_body_text(raws[e["url"]], xcfg, e["host"], (boilerplate or {}).get(e["host"])))
+                      if t in vocab[e["host"]])
+        out[e["url"]] = {t: cnt[t] for t in sorted(cnt)}
+    return out
 
 
 class Harvester:
@@ -329,6 +364,7 @@ class Harvester:
         cnt = res["counts"] = {"discovered": 0, "fetched": 0, "kept": 0, "dropped": 0, "robots_skipped": 0,
                                "denied": 0}
         hashes_by_page: list = []
+        raws: dict = {}
         try:
             self.robots_first()
             found = [u for u in self.discover() if u not in self.denied_known]
@@ -353,6 +389,7 @@ class Harvester:
                 if self.save_dir is not None:
                     (self.save_dir / (hashlib.sha256(u.encode()).hexdigest()[:24] + ".html")).write_bytes(body)
                 res["entries"].append({"url": u, "host": self.host, "title": title, "slug_terms": slug_terms(self.row, u)})
+                raws[u] = body
                 hashes_by_page.append(hs)
             res["complete"] = True
         except Stop as s:
@@ -367,6 +404,12 @@ class Harvester:
             for h in hs:
                 tally[h] = tally.get(h, 0) + 1
         res["boilerplate"] = sorted(h for h, c in tally.items() if c >= need)
+        try:  # MT-A: the derived field, after the host's boilerplate is known (one function, shared with --rederive-from)
+            sc = derive_subject_counts(res["entries"], raws, self.xcfg, {self.host: res["boilerplate"]})
+            for e in res["entries"]:
+                e["subject_counts"] = sc[e["url"]]
+        except html_main.HtmlRefused:
+            res["entries"], res["complete"], res["stopped"] = [], False, {"kind": "extract_refused", "code": ""}
         res["denied"] = list(self.denied_new)
         res["robots"] = {"read": self.robots_read(), "crawl_delay_s": self.crawl_delay()}
         res["requests"] = self.requests
@@ -535,18 +578,58 @@ def harvest_phase(cfg, row, evidence, *, write, save_pages, resolve=None, transp
     return 0 if st is None else 2
 
 
+def rederive_phase(cfg, pages_dir: str, *, write: bool) -> int:
+    """OFFLINE (no socket): recompute ONLY `subject_counts` (and the digest, plus script_version) of the existing snapshot
+    from saved raw pages named by the harvest's own file rule. Everything else is carried over unchanged. A missing page
+    refuses the whole run and nothing is written."""
+    d = under_scratch(pages_dir)
+    sp = snapshot_path(cfg)
+    old = load_old(sp)
+    raws = {}
+    for e in old["entries"]:
+        f = d / page_file(e["url"])
+        if not f.is_file():
+            raise SystemExit(f"FAIL: saved page missing for an entry ({page_file(e['url'])}); nothing written")
+        raws[e["url"]] = f.read_bytes()
+    try:
+        sc = derive_subject_counts(old["entries"], raws, cfg.get("extract") or {}, old.get("boilerplate") or {})
+    except html_main.HtmlRefused:
+        raise SystemExit("FAIL: a saved page or the extract config was refused by html_main; nothing written") from None
+    body = dict(old)
+    body["entries"] = [{**e, "subject_counts": sc[e["url"]]} for e in old["entries"]]
+    body["script_version"] = SCRIPT_VERSION
+    body["sha256"] = oh.snapshot_digest(body)
+    print(f"rederive: entries={len(body['entries'])} terms={sum(len(e['subject_counts']) for e in body['entries'])} "
+          f"sha256={body['sha256'][:12]}")
+    if write:
+        if not oh._snapshot_valid(body, cfg):
+            raise SystemExit("FAIL: the re-derived snapshot does not validate (oh._snapshot_valid); nothing written")
+        write_snapshot(sp, body)
+        print(f"wrote {sp.relative_to(oh._ROOT)}")
+    else:
+        print("dry run: nothing written (use --write)")
+    return 0
+
+
 def main(argv=None, **inject) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--row", required=True)
+    ap.add_argument("--row")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--robots-only", action="store_true")
     g.add_argument("--harvest", action="store_true")
+    g.add_argument("--rederive-from", metavar="DIR")
     ap.add_argument("--robots-out")
     ap.add_argument("--robots-evidence")
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--save-pages")
     a = ap.parse_args(argv)
     cfg = oh.load_config()
+    if a.rederive_from:
+        if a.row or a.robots_out or a.robots_evidence or a.save_pages:
+            raise SystemExit("FAIL: --rederive-from takes only --write (no row, robots or save options)")
+        return rederive_phase(cfg, a.rederive_from, write=a.write)
+    if not a.row:
+        raise SystemExit("FAIL: --row is required")
     row = find_row(cfg, a.row)
     if a.robots_only:
         if not a.robots_out or a.harvest or a.write or a.save_pages:

@@ -25,6 +25,7 @@ VOID = frozenset({"br", "img", "hr", "meta", "link", "input", "source", "wbr", "
                   "param", "track"})
 HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _WS = re.compile(r"\s+")
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _NEVER_VISIBLE = frozenset({"script", "style", "noscript", "template", "head", "svg"})
 _BLOCK = frozenset({"p", "li", "div", "td", "th", "dd", "dt", "blockquote", "pre", "section", "article", "ul", "ol",
                     "table", "tr", "dl", "figure", "figcaption", "main", "aside", "nav", "header", "footer", "form"})
@@ -223,6 +224,21 @@ class _X:
         self.dchars = int(xcfg.get("link_density_block_max_chars", 3000))
         self.roots = [str(r) for r in xcfg.get("roots") or ("main", "[role=main]", "article")]
         self.dtags = {"div", "section", "ul", "ol", "li", "p", "table", "dl"}
+        # MT-B EX-2 / EX-3 (USFED-MATCH-1113, plan 5.8): both keys fail closed (a bad value refuses the page).
+        self.sec = None
+        sr = xcfg.get("drop_section_heading_re")
+        if sr is not None:
+            try:
+                if not isinstance(sr, str) or not sr:
+                    raise ValueError("type")
+                self.sec = re.compile(sr, re.I)
+            except (re.error, ValueError):
+                raise HtmlRefused("bad drop_section_heading_re") from None
+        em = xcfg.get("drop_email_blocks")
+        if em is not None and not isinstance(em, bool):
+            raise HtmlRefused("bad drop_email_blocks")
+        self.email = em is True
+        self.drop_level = None  # heading level of the section being dropped (state of ONE extract call)
 
     def why(self, n: Node):
         if n.tag in self.drop_tags:
@@ -272,12 +288,32 @@ def pick_root(doc: Node, xcfg: dict, host: str | None = None):
 
 def _ser(n, out: list, x: _X, stats: dict, bp: set | None) -> None:
     if isinstance(n, str):
-        out.append(escape(n, quote=False))
+        if x.drop_level is None:
+            out.append(escape(n, quote=False))
+        return
+    if n.tag in HEADINGS:
+        lvl = int(n.tag[1])
+        if x.drop_level is not None and lvl <= x.drop_level:
+            x.drop_level = None  # the next heading of the same or higher level ends the dropped section
+        if x.drop_level is not None:  # a sub-heading inside a dropped section: no orphan heading text
+            stats["section"] = stats.get("section", 0) + 1
+            return
+        if n.tag != "h1" and x.sec is not None and x.sec.fullmatch(_WS.sub(" ", _text(n)).strip()):
+            x.drop_level = lvl
+            stats["section"] = stats.get("section", 0) + 1
+            return
+    elif x.drop_level is not None and not _has_heading(n):
+        stats["section_block"] = stats.get("section_block", 0) + 1
         return
     why = x.why(n)
     if why:
         stats[why] = stats.get(why, 0) + 1
         return
+    if x.email and n.tag in _LEAF_BLOCK and _is_leaf_block(n) and not _has_heading(n):
+        t = _text(n)
+        if t and _EMAIL.search(t):  # EX-3: a contact line is not explanatory body; no length cap
+            stats["contact_line"] = stats.get("contact_line", 0) + 1
+            return
     if bp and n.tag in _LEAF_BLOCK and _is_leaf_block(n) and not _has_heading(n):
         t = _text(n)
         if t and line_hash(t) in bp:

@@ -203,6 +203,19 @@ def snapshot_digest(body: dict) -> str:
     return hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def _counts_valid(sc) -> bool:
+    """MT-A: an entry's `subject_counts` is a dict of term (as _terms() makes it) -> int >= 1 (not bool). Missing or
+    malformed on any entry voids the whole snapshot (fail closed)."""
+    if not isinstance(sc, dict):
+        return False
+    for k, v in sc.items():
+        if not isinstance(k, str) or not _TERM_RE.fullmatch(k) or _terms(k) != [k]:
+            return False
+        if type(v) is not int or v < 1:
+            return False
+    return True
+
+
 def _snapshot_valid(s, cfg: dict) -> bool:
     """Structure, sha256 and every entry re-checked (https, a row's host and prefix, one canonical form, no query).
     Off-pattern values are refused without being echoed."""
@@ -218,7 +231,8 @@ def _snapshot_valid(s, cfg: dict) -> bool:
             if (m is None or m[1] != e["url"] or e.get("host") != urlsplit(e["url"]).hostname
                     or not _TITLE_RE.fullmatch(str(e.get("title") or "")) or str(e["title"]) != str(e["title"]).strip()
                     or not isinstance(e.get("slug_terms"), list)
-                    or not all(isinstance(t, str) and _TERM_RE.fullmatch(t) for t in e["slug_terms"])):
+                    or not all(isinstance(t, str) and _TERM_RE.fullmatch(t) for t in e["slug_terms"])
+                    or not _counts_valid(e.get("subject_counts"))):
                 return False
         for d in s["denied"]:
             if normalise_url(d.get("url")) != d.get("url") or not isinstance(d.get("code"), str) \
@@ -472,7 +486,32 @@ def match_subject(subject: str, cfg: dict | None = None) -> list:
         if n.get(e["host"], 0) >= caps.get(e["host"], per_host) or len(out) >= total:
             continue
         n[e["host"]] = n.get(e["host"], 0) + 1
-        out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True})
+        out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True,
+                    "match_stage": 1})
+    # USFED-MATCH-1113 MT-A stage 2 (plan 5.8): DOE row only, only after a stage-1 match on that host, only while the host
+    # has a free slot under its cap (2) and the total cap. Other entries of the row holding EVERY subject term in their
+    # body counts, ranked by (-sum of the subject terms' counts, URL). Presence and order only: no threshold.
+    if tp is not None:
+        host = tp["host"]
+        have_urls = {m["url"] for m in out}
+        if n.get(host, 0) >= 1:
+            cand2 = []
+            for e in s["entries"]:
+                if e["host"] != host or e["url"] in have_urls or not claims_url(e["url"], c) \
+                        or snapshot_denied(e["url"], c):
+                    continue
+                mr = match_row(e["url"], c)
+                sc = e.get("subject_counts")  # a validated snapshot always has it; defensive for a stubbed one
+                if mr is None or mr[0]["id"] != tp["id"] or not isinstance(sc, dict) or not want <= set(sc):
+                    continue
+                cand2.append((-sum(sc[t] for t in want), e["url"], e))
+            cand2.sort(key=lambda x: (x[0], x[1]))
+            for _x, u, e in cand2:
+                if n.get(host, 0) >= TWO_PAGES_CAP or len(out) >= total:
+                    break
+                n[host] = n.get(host, 0) + 1
+                out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True,
+                            "match_stage": 2})
     return out
 
 
@@ -550,7 +589,18 @@ def trip_host(host: str) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ loader limits (step 7)
-def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None) -> dict:
+def converter_cfg(ccfg: dict, row: dict | None = None) -> dict:
+    """USFED-MATCH-1113 EX-4: a copy of the converter config with `html_lead_section` true ONLY for the DOE row
+    (TWO_PAGES_ROW) and only when that row's key is the bool true; for every other row, caller and value the flag is
+    absent (off). The input is never mutated."""
+    out = dict(ccfg)
+    out.pop("html_lead_section", None)
+    if isinstance(row, dict) and row.get("id") == TWO_PAGES_ROW and row.get("html_lead_section") is True:
+        out["html_lead_section"] = True
+    return out
+
+
+def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None, row: dict | None = None) -> dict:
     """The fulltext_ingest config with this route's single length floor (plan step 7; §5.6 SF-A, USFED-SHADOWFIX-1112).
     The floor `limits.min_text_chars` is measured on the converted text that is stored (len(text)), the same measure the
     route checks first under R-ACQ-ORIGINAL_THIN, so `min_fulltext_chars` IS that floor. The article abstract-only tests
@@ -565,6 +615,8 @@ def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None) -> dict:
     out["min_fulltext_chars"] = int(lim.get("min_text_chars", 1500))
     out["min_body_chars"] = 1
     out["min_body_to_abstract_ratio"] = 0
+    if isinstance(out.get("converter"), dict):  # EX-4: the converter flag follows the row (DOE only), never the config
+        out["converter"] = converter_cfg(out["converter"], row)
     return out
 
 
@@ -636,9 +688,12 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
             or not pl.get("ok")):
         raise aa._Stop(acq_config.reason(cfg, "original_not_pd"))
     # 6a-6d: generic main-content step, then the converter; a page with no headed sections is NO_BODY
-    ex = html_main.extract_main(raw, oc.get("extract") or {}, host, boilerplate_for(host, oc), doc=doc)
     try:
-        conv = jats_text.convert(ex["html"], "html", icfg["converter"])
+        ex = html_main.extract_main(raw, oc.get("extract") or {}, host, boilerplate_for(host, oc), doc=doc)
+    except html_main.HtmlRefused:  # a bad extract config key fails closed
+        raise aa._Stop(acq_config.reason(cfg, "convert")) from None
+    try:
+        conv = jats_text.convert(ex["html"], "html", converter_cfg(icfg["converter"], row))
     except Exception:  # noqa: BLE001  (ConversionError: no headed sections / hostile file)
         raise aa._Stop(acq_config.reason(cfg, "original_no_body")) from None
     if not conv.get("has_body"):  # only the title heading: converts without error, but there is no body section

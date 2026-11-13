@@ -40,7 +40,8 @@ def index_snapshot(urls, harvested_at=None):
     from datetime import datetime, timedelta, timezone
     at = harvested_at if harvested_at is not None else (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
     snap = {"version": 1, "harvested_at": at, "robots_status": {}, "script_version": "test",
-            "entries": [{"url": u, "host": u.split("/")[2], "title": "Test page", "slug_terms": ["test"]} for u in urls],
+            "entries": [{"url": u, "host": u.split("/")[2], "title": "Test page", "slug_terms": ["test"], "subject_counts": {}}
+                        for u in urls],
             "denied": [], "boilerplate": {}}
     snap["sha256"] = original_html.snapshot_digest(snap)
     return snap
@@ -753,7 +754,7 @@ def snap(entries=(), denied=(), boiler=None):
 
 def ent(slug, title, terms=()):
     return {"url": f"https://www.energy.gov/science/doe-explains{slug}", "host": DOE_HOST, "title": title,
-            "slug_terms": list(terms) or slug.split("-")}
+            "slug_terms": list(terms) or slug.split("-"), "subject_counts": {}}
 
 
 def test_shipped_snapshot_validates_and_rows_only():
