@@ -95,6 +95,31 @@ POSITIVE = [
     'The lab is run by U.S. Example Research Inc. under contract with NIST.',
     'The site is operated by Army Example Contractors LLC under contract.',
     'The mine was operated by Doe Example Company under contract.',
+    # CONTRACTOR3-1113: prefix probes, names that start with a body or qualifier word must still hit
+    'The site is operated by United States Space Alliance under contract.',
+    'The lab is run by Federal Example Labs under contract.',
+    'The site is operated by NASA Example Labs under contract.',
+    'The lab is managed by NIST Example Staff Services LLC under contract.',
+    'The range is operated by Air Force Example Research Partners under contract.',
+    'The depot is run by Army Corps Example Builders Inc. under contract.',
+    'The plant is managed by FAA Example Systems LLC under a contract.',
+    'The lab is operated by the Department of Energy Example Partners under contract.',
+    'The lab is operated by NASA (Example Labs Inc. under contract).',
+    'The site is run by DOE (Example Remediation LLC) under a prime contract.',
+    'The archive is managed by USGS (contractor: Example Data Corp) under contract.',
+    'The site is run by USGS (Example Alliance) under contract.',
+    'The site is run by DOE (Example Corporation) under contract.',
+    'The site is run by NASA (Example Holdings) under contract.',
+    'The site is run by the Department of Energy (Example Alliance) under contract.',
+    'The site is run by the Army Corps of Engineers (Example Builders) under contract.',
+    'The site is run by DOE (a joint venture of Example and Sample) under contract.',
+    # CONTRACTOR3-1113 follow-up: names built only from agency words plus a company suffix
+    'The depot is operated by Army Engineers, LLC under contract.',
+    'The depot is operated by City Staff, Inc. under contract.',
+    'The depot is operated by Department of Records, Inc. under contract.',
+    'The depot is operated by Navy Staff, Ltd. under contract.',
+    'The depot is operated by Agency Officers, Corp. under contract.',
+    'The depot is operated by Government Engineers, LLP under contract.',
 ]
 
 # ---- negatives: must stay granted (planner 7 with the image-credit text split, reviewer-trial 7)
@@ -154,6 +179,19 @@ NEGATIVE = [
     'The observatory site is run by NSF under contract to the University of Example.',
     'The archive is managed by the Department of Energy under a contract vehicle.',
     'The visitor center is run by the Park Service under a concession contract.',
+    # CONTRACTOR3-1113: government operators with a known sub-unit qualifier, multi-word bodies, extra agencies
+    "The lab is operated by the Department of Energy's Office of Science under a contract signed in 2020.",
+    "The radar is operated by NOAA's National Weather Service under a maintenance contract.",
+    'The site is managed by the Department of Homeland Security under a contract for guards.',
+    'The dam is operated by the U.S. Army Corps of Engineers under a contract with the county.',
+    'The facility is operated by NASA Goddard under a contract for janitorial services.',
+    'The ship is operated by NOAA Corps officers under contract rules.',
+    'The program is administered by the Department of Veterans Affairs under a contract.',
+    'The tower is operated by the FAA under a contract with the airport.',
+    'The reactor is operated by the Tennessee Valley Authority under contract.',
+    'The center is administered by the National Institutes of Health under a contract.',
+    'The range is operated by the Air Force Research Laboratory under a contract.',
+    'The lab is managed by NIST staff under a contract for equipment.',
 ]
 
 # ---- documented residuals, pinned so a change is noticed (plan "Known residuals" d-f; advisories A1, A2).
@@ -306,6 +344,11 @@ ADVERSARIAL = {
     "undercontract-abbrev": ("", "operated by ", "inc. ", 4000, "", 10),
     "undercontract-gov-prefix": ("", "run by the u.s. ", "", 0, "", 20000),
     "undercontract-initials": ("", "managed by ", "u.s. ", 4000, "", 10),
+    "undercontract-gov-qualifiers": ("", "run by nasa ", "staff ", 4000, "", 10),
+    "undercontract-gov-dept-words": ("", "run by the department of homeland ", "", 0, "", 8000),
+    "undercontract-gov-army-corps": ("", "run by the u.s. army corps of ", "", 0, "", 8000),
+    "undercontract-gov-paren": ("", "run by nasa (", "x ", 4000, "", 10),
+    "undercontract-gov-possessive": ("", "run by noaa's ", "", 0, "", 20000),
     "undercontract-gov-the": ("", "operated by ", "the ", 3000, "", 10),
     "undercontract-gov-spaces": ("", "operated by the", " ", 30000, "", 1),
     "nbsp-run-onbehalf": ("", "managed on behalf of ", "\u00a0", 3000, "", 10),
