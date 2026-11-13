@@ -15,7 +15,7 @@ from vera import web_route as wr
 
 SCI = "https://science.nasa.gov/mission/perseverance"
 WWW = "https://www.nasa.gov/missions/artemis"
-NEW_COUNT = 7
+NEW_COUNT = 12  # 7 (GOVPD-CONTRACTOR-1111) + 5 (CONTRACTOR2-1113)
 SHIPPED_COUNT = 9  # contractor_patterns at origin/main 2181844
 
 
@@ -61,6 +61,40 @@ POSITIVE = [
     "JPL, a division of Caltech in Pasadena, manages the mission.",
     "SOFIA was operated for NASA by the Universities Space Research Association.",
     "Argonne National Laboratory is a U.S. Department of Energy laboratory managed by UChicago Argonne, LLC.",
+    # CONTRACTOR2-1113: slash-joined affiliations, writer lines, Pasadena dateline, contractor mail domain,
+    # "operated by ... under contract", "managed on behalf of ... by". All names are fictional.
+    "Media contact: Jane Doe, JPL/Caltech",
+    "Contact: Jane Doe, NASA/JPL",
+    "By Jane Doe, Caltech/JPL",
+    "Writer: Jane Doe, Jet Propulsion Laboratory",
+    "Media contact: Jane Doe, Space Telescope Science Institute, Baltimore, Md.",
+    "PASADENA, Calif. -- NASA's Jet Propulsion Laboratory today announced a new instrument.",
+    "News Media Contact\nPat Example\n818-555-0142\npat.example@jpl.example.com",
+    "Questions: pat.example@caltech.example.org",
+    "The observatory is operated by Example Research Alliance under contract with the Department of Energy.",
+    "The array is run by Example Labs under a prime contract to the agency.",
+    "The mission is managed on behalf of NASA by JPL.",
+    "The telescope is managed for NASA by the Southwest Research Institute.",
+    "The instrument is managed for the agency by jpl.",
+    'The laboratory is operated by Example Alliance under contract with DOE.',
+    'The facility is managed by Example Corp. under a prime contract to NASA.',
+    'The center is run by Example Systems LLC under contract to NOAA.',
+    'The archive is administered by Example Research Foundation under a federal contract.',
+    'The site is operated by Example Nuclear Partners under a management contract with the department.',
+    'The observatory is managed by the Example Universities Consortium under an operating contract.',
+    'The plant is operated by Example Holdings, Inc. under contract with the Department of Energy.',
+    'The ground station is run by Example Technical Services under contract.',
+    'The reactor is operated by Example Battelle Partners under a government contract.',
+    'The laboratory is managed by Example Triad LLC under contract for the NNSA.',
+    'The ship is operated by Example Marine Inc. under contract to the Navy.',
+    'The station is operated by the Example Science Corporation under contract with USGS.',
+    'The plant was operated by United States Example Corporation under contract with DOE.',
+    'The depot is operated by Federal Example Services LLC under contract.',
+    'The campus is managed by City Example Partners under a management contract.',
+    'The facility is operated by Government Example Solutions under contract to the agency.',
+    'The lab is run by U.S. Example Research Inc. under contract with NIST.',
+    'The site is operated by Army Example Contractors LLC under contract.',
+    'The mine was operated by Doe Example Company under contract.',
 ]
 
 # ---- negatives: must stay granted (planner 7 with the image-credit text split, reviewer-trial 7)
@@ -81,6 +115,45 @@ NEGATIVE = [
     "Use JPL-Horizons ephemeris data.",
     "By Jane Doe\nNASA Headquarters\nText about Caltech alumni.",
     "NASA relies on FFRDCs such as JPL for some work.",
+    # CONTRACTOR2-1113 false-positive guards (genuine federal text that the new patterns must leave alone)
+    "The site is operated by the National Park Service under the Organic Act.",
+    "The facility is managed by NASA staff. Contract awards are posted separately.",
+    "Contact: NASA Headquarters, Washington\nCredit: NASA/JPL-Caltech",
+    "PASADENA is a city in California. NASA's JPL operates nearby.",
+    "Media contacts are listed on the agency page.",
+    "Email questions to press@agency.test.",
+    "The telescope is managed for NASA by its Goddard center.",
+    "Writer: Jane Doe, NASA Headquarters\nCredit: NASA/JPL-Caltech/MSSS",
+    "By Jane Doe, NASA/JPL-Caltech",
+    "The rover is run by a NASA team under the Mars program.",
+    'Ships are operated by the U.S. Navy under contract to the shipyard.',
+    'It is managed by the United States Navy under contract to the port.',
+    'The depot is run by the Air Force under an agreement with the shipyard under contract.',
+    "Visit caltech.edu or jpl.nasa.gov for more.",
+    "By Quill Varnet, NASA. Credit: Caltech/IPAC",
+    "Contact: Orla Fenwick. Credit: NASA/JPL-Caltech",
+    "By Quill Varnet | NASA/JPL-Caltech/SwRI",
+    "Writer: Jane Doe, NASA/ESA/CSA/STScI",
+    'By Quill Varnet, NASA. Credit: NASA/JPL',
+    'By Quill Varnet, NASA Goddard. Image: Caltech/JPL',
+    'Contact: Orla Fenwick. Credit: JPL/Caltech',
+    'Writer: Orla Fenwick, NASA Ames. Image credit: NASA/JPL',
+    'Writer: Orla Fenwick, NASA Goddard. Credit: NASA, ESA, and STScI',
+    'By Quill Varnet, NASA. Image: NASA, ESA, J. Example (STScI)',
+    'By Quill Varnet, NASA. Credit: NASA, Johns Hopkins APL, SwRI',
+    'Media contact: Orla Fenwick, NASA Headquarters. Photo: NASA/JPL',
+    'Writer: Orla Fenwick, NASA. Credit: NASA/Caltech',
+    "By Quill Varnet, NASA — Credit: NASA/JPL",
+    'Contact: Orla Fenwick | Credit: NASA/JPL',
+    'Contact: Orla Fenwick. Credit: NASA/JPL.',
+    'By Quill Varnet, NASA. Credit: NASA/JPL, NASA/Goddard',
+    'The ship is operated by NOAA under a contract with the shipyard for maintenance.',
+    'Launch services were run by the Air Force under a contract signed in 2019.',
+    'The program is administered by NASA under contract NNX-EXAMPLE.',
+    'The aquarium is operated by the city under contract with NOAA.',
+    'The observatory site is run by NSF under contract to the University of Example.',
+    'The archive is managed by the Department of Energy under a contract vehicle.',
+    'The visitor center is run by the Park Service under a concession contract.',
 ]
 
 # ---- documented residuals, pinned so a change is noticed (plan "Known residuals" d-f; advisories A1, A2).
@@ -94,15 +167,8 @@ FALL_BACK_BUT_FEDERAL = [
 ]
 # STILL_GRANTED_MISSES: contractor-shaped text these patterns do not catch (advisories A1, A2; recall unmeasured).
 STILL_GRANTED_MISSES = [
-    "Media contact: Jane Doe, JPL/Caltech",
-    "Contact: Jane Doe, NASA/JPL",
-    "By Jane Doe, Caltech/JPL",
-    "PASADENA, Calif. -- NASA's Jet Propulsion Laboratory today announced",
-    "News Media Contact\nPat Example\n818-555-0142\npat.example@jpl.example.com",
-    "Writer: Jane Doe, Jet Propulsion Laboratory",
     "Johns Hopkins APL, Laurel, Md.",
     "APL manages the mission for NASA's Science Mission Directorate.",
-    "Media contact: Jane Doe, Space Telescope Science Institute, Baltimore, Md.",
     "By Jane Doe\nSouthwest Research Institute\nText.",
 ]
 
@@ -115,7 +181,7 @@ def test_fixture_count_at_least_48():
     assert len(POSITIVE) + len(NEGATIVE) + len(FALL_BACK_BUT_FEDERAL) + len(STILL_GRANTED_MISSES) >= 48
 
 
-def test_config_adds_exactly_seven_bounded_patterns():
+def test_config_adds_exactly_twelve_bounded_patterns():
     pats = json.loads(g.CONFIG_PATH.read_text(encoding="utf-8"))["page_override"]["contractor_patterns"]
     assert len(pats) == SHIPPED_COUNT + NEW_COUNT
     for i, p in enumerate(pats[SHIPPED_COUNT:]):
@@ -227,6 +293,32 @@ ADVERSARIAL = {
     "managed-padded-nbsp3": ("", "managed   for   the   ", "", 0, "", 9000),
     "managed-padded-nbsp1": ("", "managed for the ", "", 0, "", 12000),
     "managed-padded-5": ("", "managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5, "", 0, "", 7000),
+    # CONTRACTOR2-1113: the five added patterns (head-line, Pasadena dateline, mail domain, under-contract, on-behalf)
+    "writer-spaces": ("", "writer", " ", 30000, "", 1),
+    "contact-colon-spaces": ("", "contact:", " ", 30000, "", 1),
+    "contact-long-line": ("", "Contact: ", "x ", 100, "\n", 1500),
+    "contact-caltech-slashes": ("", "Contact: ", "caltech/", 40, "\n", 800),
+    "by-sep-spaces": ("", "by a,", " ", 30000, "", 1),
+    "by-spaces": ("", "by", " ", 30000, "", 1),
+    "nbsp-run-undercontract": ("", "managed by x ", "\u00a0", 3000, "", 10),
+    "contact-cred-lines": ("", "Contact: ", "cred image ", 40, "\n", 1500),
+    "contact-cred-long": ("", "Contact: ", "credit", 10000, "", 1),
+    "undercontract-abbrev": ("", "operated by ", "inc. ", 4000, "", 10),
+    "undercontract-gov-prefix": ("", "run by the u.s. ", "", 0, "", 20000),
+    "undercontract-initials": ("", "managed by ", "u.s. ", 4000, "", 10),
+    "undercontract-gov-the": ("", "operated by ", "the ", 3000, "", 10),
+    "undercontract-gov-spaces": ("", "operated by the", " ", 30000, "", 1),
+    "nbsp-run-onbehalf": ("", "managed on behalf of ", "\u00a0", 3000, "", 10),
+    "pasadena-spaces": ("", "pasadena, calif", " ", 30000, "", 1),
+    "pasadena-lines": ("", "pasadena, calif. -- ", "x ", 30, "\n", 2000),
+    "mail-at-signs": ("", "", "@", 1, "", 200_000),
+    "mail-dotted": ("", "@", "a.", 20000, "", 1),
+    "mail-jpl-repeat": ("", "@jpl.a ", "", 0, "", 20000),
+    "undercontract-managed-by": ("", "managed by ", "a ", 3000, "", 10),
+    "undercontract-repeat": ("", "run by " + "a" * 30 + " ", "", 0, "", 8000),
+    "undercontract-spaces": ("", "operated by x ", " ", 20000, "", 1),
+    "onbehalf-spaces": ("", "managed on behalf of ", " ", 2000, "", 100),
+    "onbehalf-tokens": ("", "managed for ", "a ", 3000, "", 10),
     "realistic-200kb": ("", _page(NEGATIVE[1]) + "\n", "", 0, "", 1500),
 }
 
