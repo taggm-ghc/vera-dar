@@ -488,6 +488,7 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
     reservation. Cached per host. One GET through the host's rate portal (SECREV L2), no redirect, byte cap and one
     overall deadline on the body (SECREV L1), response always closed."""
     from vera import public_fetch, rate_limit, wiki_ref_portal as w
+    from vera.acq_discovered import _throttle_statuses
     host = _host(url)
     now = clock()
     with _TDM_LOCK:
@@ -506,6 +507,13 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
                 end += lw[0]  # our pacing is not fetch time, never cached as "unreadable" (bounded by max_wait)
                 try:
                     st = int(getattr(resp, "status_code", 0) or 0)
+                    if st in _throttle_statuses(t):
+                        # REFPORTAL-429-1112: a server throttle (429 / the portal's throttle_statuses) is a rate
+                        # limit, not a verdict about the file: never cached. The limiter wrapper already recorded the
+                        # response, so Retry-After sets the portal cooldown there (no new mechanism).
+                        ra = rate_limit.parse_retry_after((getattr(resp, "headers", None) or {}).get("Retry-After"),
+                                                          time.time())
+                        raise rate_limit.RateLimited(rate_portal or host, "throttled", ra or 0.0)
                     if st in (404, 410):
                         rules = []
                     elif st == 200:
@@ -585,7 +593,7 @@ def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable
         except Exception as e:  # noqa: BLE001
             raise Skip("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)
-        if status == 429:
+        if status in acq_discovered._throttle_statuses(url):  # REFPORTAL-429-1112: 429 + the portal's throttle codes
             raise Skip("rate_limited")
         if status != 200:
             raise Skip("unreachable")  # redirects included: never followed
