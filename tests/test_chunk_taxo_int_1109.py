@@ -150,6 +150,10 @@ class TxDB(FakeDB):
                 return Res([])
             r = fin[-1]
             return Res([(r["version"], _Ts(), r["metrics"], r["display_ok"], r["reasons"])])
+        if name == "job_run_build_latest":  # WP-I: the finished build row that carries scan_end_epoch (the unchanged rule reads it)
+            fin = [r for r in self.run_rows if r["state"] == "finished" and r["finished"] and r["version"] != "pending"
+                   and isinstance(r.get("metrics"), dict) and "scan_end_epoch" in r["metrics"]]
+            return Res([(fin[-1]["version"], fin[-1]["metrics"])] if fin else [])
         return super().h_any(name, batch)
 
 

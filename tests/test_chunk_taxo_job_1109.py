@@ -116,8 +116,20 @@ class FakeDB:
         if name == "job_run_latest":
             fin = [r for r in self.runs if not getattr(self, "no_latest", True)]  # opt in: db.no_latest = False
             return Res([(fin[-1]["version"], None, fin[-1]["metrics"], True, [])] if fin else [])
-        if name == "job_run_recent":  # WP-W no-op rule: newest run rows first (state, metrics)
+        if name == "job_run_build_latest":  # WP-I: the latest build row (carries scan_end_epoch); opt in with db.no_latest = False
+            fin = [r for r in self.runs if not getattr(self, "no_latest", True) and "scan_end_epoch" in json.loads(r["metrics"])]
+            return Res([(fin[-1]["version"], fin[-1]["metrics"])] if fin else [])
+        if name == "job_run_recent":
             return Res([("finished", r["metrics"]) for r in reversed(self.runs)][:8])
+        if name == "vectors_after":
+            return Res([(i,) for i in sorted(getattr(self, "vec_after_ids", ()))])
+        if name.startswith("link_retire_pair_routing_"):
+            kind = name[len("link_retire_pair_routing_"):]
+            for q in batch:
+                for k, v in self.links.items():
+                    if k[0] == kind and k[1] == q["a"] and k[2] == q["b"] and v["state"] == "active" and v["score_kind"] not in (None, "cosine", "cosine_lvl"):
+                        v["state"] = "retired"
+            return Res([])
         if name.startswith("link_select_strict_"):
             kind = name[len("link_select_strict_"):]
             rows = sorted((k[1], k[2], k[3]) for k, v in self.links.items() if k[0] == kind and v["state"] == "active"

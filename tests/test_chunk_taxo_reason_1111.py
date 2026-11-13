@@ -21,7 +21,11 @@ MARKER_SQL = "INSERT INTO secret_table VALUES (:v) -- SQLMARKER"
 MARKER_VAL = "BOUNDVALUEMARKER"
 MARKER_MSG = "secret-text https://host.example/x"
 INT_KEYS = {"fail_rows_embedded", "fail_span_id", "fail_batch_n", "fail_min_chars", "fail_max_chars", "fail_total_chars",
-            "fail_nonascii_chars", "last_http_status", "attempts"}
+            "fail_nonascii_chars", "last_http_status", "attempts",
+            # WP-I D6 run-row contract: written on every close (flips INT_KEYS and T7 below on purpose)
+            "scan_complete", "skipped_portal", "skipped_portal_error", "skipped_no_source", "skipped_empty", "no_vector_yet",
+            "no_vector_yet_min_span_id", "stale_vector", "write_incomplete", "no_rebuild_snapshot_incomplete",
+            "excluded_with_vector_portal", "excluded_with_vector_portal_error", "excluded_with_vector_no_source", "excluded_with_vector_empty"}
 
 
 class RecDB(FakeDB):
@@ -171,7 +175,9 @@ def test_t7_old_outcomes_unchanged(caplog):
     j = _make(db, e=RaisingEmb(emb.Deferred("quota_reached", 100.0)))
     res = j.run()
     assert res["state"] == "deferred" and j.status()["reasons"] == ["deferred_until_utc_midnight"]
-    assert stored(db)[0] == ["deferred"] and json.loads(db.closes[-1]["metrics"]) == {}
+    # WP-I flip: a deferred close now carries the scan contract numbers (scan_complete, skipped_*, excluded_with_vector_*) and nothing else
+    m7 = json.loads(db.closes[-1]["metrics"])  # (the scan went on reuse-only to its end, so the unvectored spans are counted)
+    assert stored(db)[0] == ["deferred"] and m7["scan_complete"] == 1 and m7["no_vector_yet"] == 10 and m7["no_vector_yet_min_span_id"] == 1
     assert not fail_records(caplog)
     db = RecDB(spans())
     j = _make(db, max_rows=2, embed_batch=2)

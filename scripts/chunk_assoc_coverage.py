@@ -119,6 +119,9 @@ def _job_counts(row: dict | None, what: str) -> dict | None:
 
 
 def evaluate(raw: dict, limits: dict, limit_pending: list[str], max_abstain_share: float) -> dict:
+    for key in ("classes", "ages_desc", "build", "scan"):  # WP-I (WP-C V-a): a malformed section is an ERROR, never a crash or a FAIL
+        if raw.get(key) is not None and not isinstance(raw.get(key), dict):
+            raise CoverageError(f"{key}: not an object")
     spans = _int(raw["spans"], "spans")
     with_vec = _int(raw.get("with_vector", 0), "with_vector")
     cl = {k: 0 for k in CLASSES}
@@ -248,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         limits, pend = load_limits(_inside(a.limits, base) if a.limits else None)
         res = evaluate(parse_raw(_inside(a.raw, base).read_text(encoding="utf-8")), limits, pend, cfg["max_abstain_share"])
-    except (CoverageError, OSError, json.JSONDecodeError, KeyError, TypeError) as e:
+    except (CoverageError, OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError, ValueError) as e:
         print(f"VERDICT: ERROR ({type(e).__name__}: {e})")
         return EXIT["ERROR"]
     print(render(res))
