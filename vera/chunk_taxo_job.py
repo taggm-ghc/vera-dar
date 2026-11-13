@@ -1584,6 +1584,8 @@ class Job:
         for kind in store.CHUNK_LINKS:
             for i in range(0, len(ids), self.page):
                 store.run_sql(conn, f"link_retire_spans_{kind}", {"ids": ids[i:i + self.page]})
+        for i in range(0, len(ids), self.page):
+            domain_writer.retire_spans(conn, getattr(self, "_dom", None), ids[i:i + self.page])  # REL17-1113 D-1: no-op if disabled or no table
         self._outside = {c: len(linked & set(v)) for c, v in self._excl.items()}
 
     def _finish_rows(self):

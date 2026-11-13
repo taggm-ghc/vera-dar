@@ -166,6 +166,9 @@ def _build() -> dict[str, str]:
         else:
             s[f"link_retire_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
                                         f"AND classifier_version <> :version AND {a} = ANY(:ids)")
+            if kind == "chunk_domain":  # REL17-1113 (verifier D-1): W4 cleanup of positively excluded spans also retires their domain rows
+                s["link_retire_spans_chunk_domain"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
+                                                       f"AND state = 'active' AND {a} = ANY(:ids)")
     return s
 
 

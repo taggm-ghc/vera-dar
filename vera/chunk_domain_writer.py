@@ -165,6 +165,17 @@ def write_page(conn, st: State, spans, assoc, ids, version, scores=None) -> None
     store.run_sql(conn, "link_insert_chunk_domain", rows)
 
 
+def retire_spans(conn, st: State, ids) -> None:
+    """W4 companion (REL17-1113, verifier D-1): retire this classifier's active domain rows of positively excluded spans, any version.
+    Disabled: nothing. Table absent (probe false): nothing."""
+    if st is None or not st.enabled or not ids or not probe(conn, st):
+        return
+    res = store.run_sql(conn, "link_retire_spans_chunk_domain", {"ids": list(ids)})
+    n = getattr(res, "rowcount", None)
+    if isinstance(n, int) and n > 0:
+        st.retired += n
+
+
 def metrics(st: State) -> dict:
     """Numbers for the run row (merged into metrics_run by the job)."""
     if st is None:
