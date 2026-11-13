@@ -326,6 +326,15 @@ def test_shadow_counts_a_disagreement_and_logs_only_the_public_doi(caplog):
     assert "outbreak" not in " ".join(msgs)  # no question or title text
 
 
+def test_shadow_counts_a_pub_type_refusal_as_a_per_doi_hit():
+    """Verifier finding: resolve_oa admits the row (OA + PMCID) and then refuses it as pub_type; that is a per-DOI hit,
+    so a batch miss for the same DOI is a disagreement (in on mode it would have been a wrong NOROUTE)."""
+    rec = A.epmc_record(HIT, pmcid=HIT_PMC, pub_types=("preprint",))  # refused after the admission test
+    web = BatchWeb({HIT: rec}, {}, batch_rows=[])  # the batch says: no row at all -> miss
+    run(cfg_batch("shadow"), sources([HIT] + MISS), web)
+    assert auto_acquire.shadow_counts()["disagree"] == 1
+
+
 @pytest.fixture(autouse=True)
 def _reset_shadow():
     auto_acquire.reset_for_tests()

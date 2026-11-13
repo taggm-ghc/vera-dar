@@ -1493,6 +1493,8 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
         except _Stop as e:
             if e.code == acq_config.reason(cfg, "no_route"):
                 _shadow_note(cand, doi, "miss")
+            elif e.code == acq_config.reason(cfg, "pub_type"):  # refused AFTER the OA / PMCID admission test: a hit
+                _shadow_note(cand, doi, "hit")
             raise
         _shadow_note(cand, doi, "hit")
         return r
