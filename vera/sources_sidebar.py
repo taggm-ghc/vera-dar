@@ -310,27 +310,28 @@ def taxonomy_lines(tx) -> list[str]:
         t = tx["totals"]
         docs, dch, lab_c = _n(t["documents"]), _n(t["documents_with_chunks"]), _n(t["chunks_labelled"])
         lines = [
-            "**Stored topic / sub-topic / domain records** (automatic and approximate; made by a program that groups passages by meaning and names groups from frequent terms, not read or checked by a person. "
-            "The subject list is incomplete, so some material is outside it). Two views of a document are shown. "
-            "**Main label (vote)**: the one subject area stored for the whole document. **Contains passages on (union)**: "
-            "every subject area at least one of the document's stored passages was labelled with, so a document can appear "
-            "under several subjects and the figures do not add up to the document count."]
+            "**Stored topic and sub-topic records, grouped by domain** (automatic and approximate; made by a program that groups chunks by meaning and names groups from frequent terms, not read or checked by a person. "
+            "The set of topics is incomplete, so some material has no topic). Two views of a document are shown. "
+            "**Document-level vote**: the one topic stored for the whole document. **Chunk-level union**: "
+            "every topic at least one of the document's stored chunks has a record for, so a document can appear "
+            "under several topics and the figures do not add up to the document count."]
         for d in tx["domains"]:
-            head = (f"**{plain(d['label'])}**: main label for {_n(d['vote_docs'])} documents; contains passages on it in "
-                    f"{_n(d['union_docs'])} documents ({_n(d['chunks']):,} labelled passages)")
+            head = (f"**{plain(d['label'])}**: document-level vote for {_n(d['vote_docs'])} documents; chunks in it in "
+                    f"{_n(d['union_docs'])} documents ({_n(d['chunks']):,} chunks with a record)")
             rows = [head]
             for tp in d.get("topics") or []:
-                rows.append(f"- {plain(tp['label'])}: main label for {_n(tp['vote_docs'])} documents; passages in "
-                            f"{_n(tp['union_docs'])} documents ({_n(tp['chunks']):,} passages)")
+                rows.append(f"- {plain(tp['label'])}: document-level vote for {_n(tp['vote_docs'])} documents; chunks in "
+                            f"{_n(tp['union_docs'])} documents ({_n(tp['chunks']):,} chunks)")
                 for sb_ in tp.get("subtopics") or []:
                     if _n(sb_["chunks"]):
-                        rows.append(f"    - {plain(sb_['label'])}: passages in {_n(sb_['union_docs'])} documents ({_n(sb_['chunks']):,} passages)")
+                        rows.append(f"    - {plain(sb_['label'])}: chunks in {_n(sb_['union_docs'])} documents ({_n(sb_['chunks']):,} chunks)")
             lines.append("\n".join(rows))
         lines.append(
-            f"**Not labelled or outside the subject list** (not told apart: unlabelled passages are not recorded by reason): "
-            f"{_n(t['chunks_not_labelled']):,} of {_n(t['chunks']):,} stored chunks have no topic / sub-topic / domain record. "
-            f"{_n(t['documents_vote_not_labelled'])} of {docs} documents have no main label; "
-            f"{_n(t['documents_union_not_labelled'])} of the {dch} documents with stored passages have no labelled passage.")
+            f"**Chunks with no topic or sub-topic record** (any stored record, wherever it sits in the topic hierarchy; "
+            f"chunks the program did not process and chunks it could not place are not told apart): "
+            f"{_n(t['chunks_not_labelled']):,} of {_n(t['chunks']):,} stored chunks. "
+            f"{_n(t['documents_vote_not_labelled'])} of {docs} documents have no document-level vote; "
+            f"{_n(t['documents_union_not_labelled'])} of the {dch} documents with stored chunks have no chunk with a record.")
         return lines if lab_c or any(d.get("vote_docs") for d in tx["domains"]) else []
     except (KeyError, TypeError, ValueError):
         return []
@@ -353,13 +354,13 @@ def _unl_pct(u: int, n: int) -> str:
     return "under 1%" if p < 1 else "over 99%" if p >= 100 else f"{p}%"
 
 
-_UNL_TAIL = ("Documents not yet processed by the labelling program and those outside its subject list are not told apart. "
-             "Topic / sub-topic / domain records are assigned automatically and are approximate; "
+_UNL_TAIL = ("Documents not yet processed by the labelling program and those it could not place in a topic are not told apart. "
+             "Topic and sub-topic records are assigned automatically and are approximate; "
              "a document stored in several versions is counted once.")
 
 
 def unlabelled_line(data) -> str | None:
-    """CORPUS-UNCAT-1113 / CORPUS-WORDING-1113: code-built caption stating how many chunks and documents have topic / sub-topic / domain records, from the
+    """CORPUS-UNCAT-1113 / CORPUS-WORDING-1113: code-built caption stating how many chunks and documents have a topic or sub-topic record in the active topic hierarchy (no chunk-domain table is read), from the
     API's `unlabelled` block. No model text, no source names. None for a missing or malformed payload."""
     try:
         v = {k: data[k] for k in ("documents", "documents_unlabelled", "documents_without_passages", "passages", "passages_unlabelled")}
@@ -370,12 +371,16 @@ def unlabelled_line(data) -> str | None:
             return None
     except (KeyError, TypeError):
         return None
-    xc = f" ({x:,} of the documents have no stored chunks, which the labelling program cannot label)" if x > 0 else ""
-    dn = f"{n - u:,} of {n:,} ({_unl_pct(n - u, n)}){xc}"
+    if x > 0:
+        xc = (f" Of the {u:,} documents without one, {x:,} have no stored chunks, which the labelling program cannot label."
+              if x <= u else f" {x:,} documents have no stored chunks, which the labelling program cannot label.")
+    else:
+        xc = ""
+    dn = f"{n - u:,} of {n:,} ({_unl_pct(n - u, n)})."
     if nc > 0:
-        return (f"**Chunks with topic / sub-topic / domain records:** {nc - uc:,} of {nc:,} ({_unl_pct(nc - uc, nc)}); "
-                f"documents with topic / sub-topic / domain records: {dn}. " + _UNL_TAIL)
-    return f"**Documents with topic / sub-topic / domain records:** {dn}. " + _UNL_TAIL
+        return (f"**Chunks with a topic or sub-topic record in the active topic hierarchy:** {nc - uc:,} of {nc:,} ({_unl_pct(nc - uc, nc)}). "
+                f"Documents with such a record: {dn}{xc} " + _UNL_TAIL)
+    return f"**Documents with a topic or sub-topic record in the active topic hierarchy:** {dn}{xc} " + _UNL_TAIL
 
 
 def render_corpus(st, data: dict | None) -> None:

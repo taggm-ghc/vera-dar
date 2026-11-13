@@ -13,7 +13,7 @@ from tests.test_corpus_taxonomy_wp6_1109 import CN, _engine, _ins, eng  # noqa: 
 from vera import corpus_description as cd, corpus_taxonomy as ct, help_pages, sources_sidebar as sb
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT_PREFIX = "**Chunks with topic / sub-topic / domain records:** "
+TEXT_PREFIX = "**Chunks with a topic or sub-topic record in the active topic hierarchy:** "
 
 
 # --- (a) per-document labelled / unlabelled rule on the real tables ---------------------------------------------------
@@ -121,7 +121,7 @@ def test_sources_but_no_passages_omit_the_passage_clause():
     r = ct.read_unlabelled(e, CN)
     assert (r["documents"], r["documents_unlabelled"], r["documents_without_passages"], r["passages"]) == (2, 2, 2, 0)
     line = sb.unlabelled_line(r)
-    assert "Chunks with" not in line and "0 of 2 (0%)" in line and line.startswith("**Documents with topic / sub-topic / domain records:**")
+    assert "Chunks with" not in line and "0 of 2 (0%)" in line and line.startswith("**Documents with a topic or sub-topic record in the active topic hierarchy:**")
 
 
 # --- (d) describer ---------------------------------------------------------------------------------------------------
@@ -231,23 +231,23 @@ def test_malformed_payloads_give_no_line():
 
 
 # --- (j) the exact display text, both branches -----------------------------------------------------------------------
-TAIL = ("Documents not yet processed by the labelling program and those outside its subject list are not told apart. "
-        "Topic / sub-topic / domain records are assigned automatically and are approximate; "
+TAIL = ("Documents not yet processed by the labelling program and those it could not place in a topic are not told apart. "
+        "Topic and sub-topic records are assigned automatically and are approximate; "
         "a document stored in several versions is counted once.")
-DOCS = "documents with topic / sub-topic / domain records: "
+DOCS = "Documents with such a record: "
+XC = " Of the 3 documents without one, 2 have no stored chunks, which the labelling program cannot label."
 
 
 def test_display_text_with_and_without_the_no_passages_clause():
     assert sb.unlabelled_line(_p(3, 10, 2, 40, 100)) == (
-        TEXT_PREFIX + "60 of 100 (60%); " + DOCS + "7 of 10 (70%) (2 of the documents have no stored chunks, which the labelling "
-        "program cannot label). " + TAIL)
+        TEXT_PREFIX + "60 of 100 (60%). " + DOCS + "7 of 10 (70%)." + XC + " " + TAIL)
     assert sb.unlabelled_line(_p(3, 10, 0, 40, 100)) == (
-        TEXT_PREFIX + "60 of 100 (60%); " + DOCS + "7 of 10 (70%). " + TAIL)
+        TEXT_PREFIX + "60 of 100 (60%). " + DOCS + "7 of 10 (70%). " + TAIL)
     assert sb.unlabelled_line(_p(3, 10, 2, 0, 0)) == (
-        "**Documents with topic / sub-topic / domain records:** 7 of 10 (70%) (2 of the documents have no stored chunks, "
-        "which the labelling program cannot label). " + TAIL)
+        "**Documents with a topic or sub-topic record in the active topic hierarchy:** 7 of 10 (70%)." + XC + " " + TAIL)
     assert sb.unlabelled_line(_p(3, 10)) == (
-        "**Documents with topic / sub-topic / domain records:** 7 of 10 (70%). " + TAIL)
+        "**Documents with a topic or sub-topic record in the active topic hierarchy:** 7 of 10 (70%). " + TAIL)
+    assert "domain record" not in sb.unlabelled_line(_p(3, 10, 2, 40, 100)).lower()
     assert "subject label" not in sb.unlabelled_line(_p(3, 10, 2, 40, 100)).lower()
 
 
@@ -294,10 +294,10 @@ def test_line_appears_exactly_once_after_the_count_and_before_the_stored_taxonom
             assert "sources" in caps[0] and caps[0].startswith("**VERA-DAR's corpus:**")
             assert i >= 1 and all(not c.startswith(TEXT_PREFIX) for c in caps[:i])
             if with_stored:
-                j = next(k for k, c in enumerate(caps) if "Stored topic / sub-topic / domain records" in c)
+                j = next(k for k, c in enumerate(caps) if "Stored topic and sub-topic records" in c)
                 assert i < j, (subjects, with_stored)
             else:
-                assert not any("Stored topic / sub-topic / domain records" in c for c in caps)
+                assert not any("Stored topic and sub-topic records" in c for c in caps)
 
 
 def test_line_is_absent_when_the_key_is_absent_or_malformed(monkeypatch):
@@ -318,7 +318,7 @@ def test_line_is_not_on_about_the_notes_or_the_sidebar(monkeypatch):
     at = AppTest.from_file(str(ROOT / "pages/about.py"), default_timeout=30).run()
     assert not at.exception
     shown = " ".join(e.value for kind in ("markdown", "caption") for e in getattr(at.main, kind))
-    assert "topic / sub-topic / domain records" not in shown
+    assert "topic or sub-topic record" not in shown
 
 
 def test_wp6_fixture_exact_hand_counts(eng):

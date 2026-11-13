@@ -122,17 +122,17 @@ def test_other_classifier_only_gives_none(eng):
 def test_abstentions_are_shown_as_one_combined_figure(eng):
     lines = sb.taxonomy_lines(ct.read_stored(eng))
     text_ = _NORM(" ".join(lines))
-    assert "6 of 12 stored chunks have no topic / sub-topic / domain record" in text_
-    assert "1 of 5 documents have no main label" in text_ and "1 of the 5 documents with stored passages have no labelled passage" in text_
-    assert "Not labelled or outside the subject list" in text_ and "not told apart" in text_
+    assert "Chunks with no topic or sub-topic record" in text_ and "6 of 12 stored chunks" in text_ and "domain record" not in text_
+    assert "1 of 5 documents have no document-level vote" in text_ and "1 of the 5 documents with stored chunks have no chunk with a record" in text_
+    assert "wherever it sits in the topic hierarchy" in text_ and "not told apart" in text_
 
 
 def test_both_views_are_labelled_and_nothing_names_a_source(eng):
     lines = sb.taxonomy_lines(ct.read_stored(eng))
     text_ = _NORM(" ".join(lines))
-    assert "Main label (vote)" in text_ and "Contains passages on (union)" in text_ and "automatic and approximate" in text_
-    assert "Flu: main label for 2 documents; passages in 2 documents (4 passages)" in text_
-    assert "Models: passages in 1 documents (3 passages)" in text_
+    assert "Document-level vote" in text_ and "Chunk-level union" in text_ and "automatic and approximate" in text_
+    assert "Flu: document-level vote for 2 documents; chunks in 2 documents (4 chunks)" in text_
+    assert "Models: chunks in 1 documents (3 chunks)" in text_
     assert "do not add up" in text_
     blob = json.dumps(ct.read_stored(eng))
     for banned in ("http", "title", "url", "source_id", "span_id", "canonical"):
@@ -173,8 +173,8 @@ def test_page_flag_off_is_identical_and_flag_on_appends(monkeypatch, eng):
     off = _page(monkeypatch, FALLBACK)
     assert _page(monkeypatch, {**FALLBACK, "stored_taxonomy": None}) == off
     on = _page(monkeypatch, {**FALLBACK, "stored_taxonomy": ct.read_stored(eng)})
-    assert on.startswith(off.split(" Current coverage")[0][:200]) and "Stored topic / sub-topic / domain records" in on and "Stored topic / sub-topic / domain records" not in off
-    assert "Main label (vote)" in on and "Flu: main label for 2 documents" in on
+    assert on.startswith(off.split(" Current coverage")[0][:200]) and "Stored topic and sub-topic records" in on and "Stored topic and sub-topic records" not in off
+    assert "Document-level vote" in on and "Flu: document-level vote for 2 documents" in on
 
 
 def test_shipped_flag_is_off_and_api_key_absent_when_off():
