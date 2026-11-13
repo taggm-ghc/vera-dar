@@ -108,6 +108,36 @@ class FakeDB:
             return Res([])
         if name == "neurons_today":
             return Res([(sum(r["neurons"] for r in self.run_rows),)])
+        # WP-W (CHUNK-ASSOC-1113): handlers for the statements added by D1; defaults leave every existing test's behaviour unchanged
+        if name in ("advisory_lock", "advisory_check", "advisory_unlock"):
+            return Res([(getattr(self, "lock_ok", True),)])
+        if name == "db_now":
+            return Res([(getattr(self, "epoch", 1000.0),)])
+        if name == "vectors_epoch":
+            return Res([(getattr(self, "vec_epoch", 0.0),)])
+        if name == "job_run_latest":
+            fin = [r for r in self.runs if not getattr(self, "no_latest", True)]  # opt in: db.no_latest = False
+            return Res([(fin[-1]["version"], None, fin[-1]["metrics"], True, [])] if fin else [])
+        if name == "job_run_recent":  # WP-W no-op rule: newest run rows first (state, metrics)
+            return Res([("finished", r["metrics"]) for r in reversed(self.runs)][:8])
+        if name.startswith("link_select_strict_"):
+            kind = name[len("link_select_strict_"):]
+            rows = sorted((k[1], k[2], k[3]) for k, v in self.links.items() if k[0] == kind and v["state"] == "active"
+                          and v["score_kind"] in (None, "cosine"))
+            return Res([r for r in rows if (r[0], r[2]) > (p["after"], p["after_lid"])][: p["lim"]])
+        if name.startswith("link_retire_pair_other_"):
+            kind = name[len("link_retire_pair_other_"):]
+            for q in batch:
+                for k, v in self.links.items():
+                    if k[0] == kind and k[1] == q["a"] and k[2] == q["b"] and v["state"] == "active" and v["version"] != q["version"]:
+                        v["state"] = "retired"
+            return Res([])
+        if name.startswith("link_retire_spans_"):
+            kind = name[len("link_retire_spans_"):]
+            for k, v in self.links.items():
+                if k[0] == kind and v["state"] == "active" and k[1] in p["ids"]:
+                    v["state"] = "retired"
+            return Res([])
         lvl = name.split("_")[-1]
         if name.startswith("nodes_"):
             return Res([(s, v["id"], v["label"], v["origin"], v["origin_ref"], v["state"]) for (l, s), v in self.nodes.items()

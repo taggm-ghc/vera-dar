@@ -311,7 +311,9 @@ def test_rerun_is_idempotent_and_does_not_reembed(first_run):
     assert db.nodes == db0.nodes and db.active("chunk_subtopic") == db0.active("chunk_subtopic")
     assert db.active("chunk_topic") == db0.active("chunk_topic")
     assert db.active("source_topic") == db0.active("source_topic") and db.active("domain_topic") == db0.active("domain_topic")
-    assert len(db.runs) == 2 and db.runs[1]["version"] == db.runs[0]["version"]
+    # WP-W (CHUNK-ASSOC-1113 T33), assertion flipped on purpose: an unchanged corpus no longer inserts a second build row for the same
+    # version; the pass closes its running row as finished with reason `unchanged` and issues no W1-W4 statement.
+    assert len(db.runs) == 1 and db.run_rows[-1]["reasons"] == ["unchanged"] and db.run_rows[-1]["state"] == "finished"
     assert not [nm for nm in db.names() if nm.startswith("node_insert")] or all(
         not rows for nm, rows in db.log if nm.startswith("node_insert"))
     assert [x["state"] for x in db.run_rows].count("running") == 0
@@ -338,19 +340,21 @@ def test_mid_write_failure_leaves_previous_version_active():
     db.fail_on = "link_insert_source_topic"
     emb_op = CfOpener()
     r = make(db, emb_op).run()
-    assert r["state"] == "error" and db.rollbacks >= 1
-    assert db.nodes == before[0]
-    assert all(not (v["origin_ref"] or "").endswith(("auto-chunk-taxo:" + "x")) for v in db.nodes.values())
-    assert (db.active("chunk_subtopic"), db.active("chunk_topic"), db.active("source_topic"), db.active("domain_topic")) == before[1:5]
-    assert len(db.runs) == before[5] == 1 and db.runs[0]["version"] == v1
-    # no link or run row of the new version is visible; the failed pass's running row is closed as failed, not left running
-    assert all(v["version"] == v1 for k, v in db.links.items() if v["state"] == "active")
+    # WP-W (CHUNK-ASSOC-1113 D1) reverses the one-transaction-per-pass design that this test pinned (assertions flipped on purpose):
+    # W1 and the W2 chunk pages are committed on their own, so the failure at the W3 vote page leaves the new nodes and the swapped
+    # spans in place and the pass is `write_incomplete`; what must still hold is that no label is lost (every previously linked span
+    # keeps an active strict link) and that no build row of the new version exists (W4 never ran).
+    assert r["state"] == "error"
+    prev_linked = {a for a, _b in before[1]} | {a for a, _b in before[2]}
+    now_linked = {a for a, _b in db.active("chunk_subtopic")} | {a for a, _b in db.active("chunk_topic")}
+    assert prev_linked <= now_linked
+    assert len(db.runs) == before[5] == 1 and db.runs[0]["version"] == v1  # no W4 build row for the new version
     assert [x["state"] for x in db.run_rows] == ["finished", "finished", "failed"]
     assert db.run_rows[2]["finished"] and db.run_rows[2]["display_ok"] is False
-    # embedding batches are a cache and stay committed (vectors for the new chunks exist); the old taxonomy is still readable
-    assert len(db.vectors) == 360
+    assert db.run_rows[2]["metrics"].get("write_incomplete") == 1
+    assert len(db.vectors) == 360  # embedding batches are a cache and stay committed
     cstatus.reset_for_tests()
-    assert cstatus.status(engine_factory=factory_for(db), env=dict(ENV))["version"] == v1
+    assert cstatus.status(engine_factory=factory_for(db), env=dict(ENV))["version"] == v1  # the status reader still reads the last W4 build
     cstatus.reset_for_tests()
 
 

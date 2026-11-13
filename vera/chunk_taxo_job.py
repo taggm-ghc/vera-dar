@@ -54,6 +54,13 @@ _BOUNDS = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay_
            "quarantine_max_consecutive": (1, 1000)}
 # TAXO-ROBUST-1111 E5: per-input failures that bisection may quarantine, with the int stored for each (0 = bad_response).
 _QUARANTINABLE = {"http_400": 400, "http_413": 413, "http_422": 422, "bad_response": 0}
+LOCK_KEY = {"k1": 0x56455241, "k2": 0x43545801}  # WP-W W0: namespaced two-int advisory key (VERA, CT 1); a safety key, not a threshold
+
+
+class _WriterLost(Exception):
+    """The held single-writer lock is no longer held on this session (dropped connection): no further write in this pass."""
+
+
 _BUDGET_CODES = ("budget_reached", "quota_reached")  # WP-F: the Deferred codes that may start a finish-now first build
 _ABBR = {"domain": "d", "topic": "t", "subtopic": "s"}
 _WORKING = ("scan", "build", "w_nodes", "w_links", "w_votes", "w_retire", "finish")
@@ -277,6 +284,8 @@ class Job:
         self._lock = threading.Lock()
         self._eng = None
         self._wconn = None
+        self._held, self._hcm = None, None  # WP-W W0: the pass's single held connection (pool of one) and its context manager
+        self._w_started = self._w_done = False  # WP-W: W1 begun, W4 committed (write_incomplete when started and not done)
         self._run_id = None
         self._pass_neurons = 0.0
         self._fin = None
@@ -333,6 +342,10 @@ class Job:
                     self._step()
                 except Deferred as d:  # quota or neuron budget: resume after 00:00 UTC, not a failure
                     self._stop, self._retry_in = "deferred", d.retry_in_s
+                    break
+                except _WriterLost:  # WP-W W0: the session lock is gone: abandon the pass before any further write
+                    self._stop = "writer_lost"
+                    self._abandon_held()
                     break
                 except Exception as exc:  # noqa: BLE001
                     reason = _reason_for(exc)
@@ -395,16 +408,19 @@ class Job:
             pass
         return out
 
-    def _robust_info(self) -> dict:
+    def _robust_info(self, final: bool = False) -> dict:
         """TAXO-ROBUST-1111 E6: ints only (no text, sha or message). Empty when nothing was quarantined, skipped or bisected, so a
         clean pass stores what it stored before. Never raises."""
         try:
             if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive
-                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source or self._reuse_only):
+                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source or self._reuse_only
+                    or (self._w_started and not self._w_done and not final)):
                 return {}
             q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
             fn = ({"no_vector_yet": int(self.no_vector_yet), "no_vector_yet_min_span_id": int(self._nvy_min or 0)}
                   if self._reuse_only else {})
+            if self._w_started and not self._w_done and not final:  # W1 committed, W4 not: the next build rebuilds from the mixed state
+                fn["write_incomplete"] = 1
             return {**fn, "quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
                     "skipped_portal": int(self.skipped_portal), "skipped_portal_error": int(self.skipped_portal_error),
                     "skipped_no_source": int(self.skipped_no_source),
@@ -488,7 +504,7 @@ class Job:
         if rid is None:
             return
         try:
-            with self._engine().begin() as conn:
+            with self._cx(True) as conn:
                 store.run_sql(conn, "job_run_close", {"run_id": rid, "state": state, "neurons": _ceil_int(self._pass_neurons),
                                                       "metrics": json.dumps(_numeric_only(extra) or {}),
                                                       "reasons": [str(reason or self._stop or state)[:64]]})
@@ -524,7 +540,7 @@ class Job:
                 return
             _INERT_ROW_DONE = True
         try:
-            with self._engine().begin() as conn:
+            with self._cx(True) as conn:
                 store.run_sql(conn, "job_run_inert", {"reasons": [str(code)[:64]]})
         except Exception as exc:  # noqa: BLE001
             log.warning("chunk_taxo inert run row not written: CT_INERT_ROW_ERROR (%s)", type(exc).__name__)
@@ -532,6 +548,7 @@ class Job:
             self._drop_engine()
 
     def _drop_engine(self) -> None:
+        self._release_held()  # W0: unlock and return the connection before the engine goes
         eng, self._eng = self._eng, None
         if eng is not None:
             try:
@@ -600,7 +617,7 @@ class Job:
         """WP-F: True when an active induction node of this job exists (the _load_prior filter). Read-only; an error counts as a build
         (fail closed: no first-build exception) and is not raised."""
         try:
-            with self._engine().connect() as conn:
+            with self._cx() as conn:
                 for lvl in store.LEVELS:
                     for n in store.fetch_nodes(conn, lvl):
                         if n["origin"] == "induction" and (n["origin_ref"] or "").startswith(store.ORIGIN_REF_PREFIX) and n["state"] == "active":
@@ -628,6 +645,9 @@ class Job:
         self.skipped_empty, self.vectors_missing = 0, 0  # TAXO-ROBUST-1111: per pass
         self.skipped_portal, self.skipped_portal_error, self.skipped_no_source = 0, 0, 0  # ARXIV-DEFENSE-1113: per pass
         self._verdicts = {}
+        self._excl = {"portal": [], "portal_error": [], "no_source": [], "empty": []}  # WP-W: span ids the scan positively excluded
+        self._scan_end, self._snap, self._prior_linked = None, {}, set()
+        self._w_started = self._w_done = False
         self.bisect_requests, self.bisect_failed_chars = 0, 0
         self._consecutive, self._streak, self._q_last = 0, [], 0
 
@@ -654,7 +674,7 @@ class Job:
             except Exception:  # noqa: BLE001
                 self._go_inert("engine_missing")
                 return
-        with self._engine().connect() as conn:
+        with self._cx() as conn:
             ok, why = store.probe_account(conn)
             if not ok:
                 self._go_inert(why)
@@ -667,7 +687,10 @@ class Job:
             self._go_inert("schema_024_missing")
             return
         self._mode = "write" if has022 else ("curator" if self.allow_curator else "compute")
-        with self._engine().begin() as conn:
+        if not self._acquire():  # W0: another job process holds the writer lock: end the pass before any embedding or run row
+            self._stop = "writer_busy"
+            return
+        with self._cx(True) as conn:
             self._run_id = store.run_start(conn)
         self._phase = "scan"
         self._set(state="scanning")
@@ -690,7 +713,7 @@ class Job:
             if self._guard():  # per page, so the reuse path (all vectors stored) is guarded too
                 return
             lim = min(self.page, self.cap - read)
-            with self._engine().connect() as conn:
+            with self._cx() as conn:
                 page = store.fetch_spans(conn, self._cursor, lim, self.chars)
                 # ARXIV-DEFENSE-1113: portal spans are never embedded or labelled; the page (not rows) drives the cursor and end test.
                 # A failed lookup raises into the job's error path before anything is sent.
@@ -704,10 +727,13 @@ class Job:
                         rows.append(r)
                     elif v == _NO_SOURCE:
                         self.skipped_no_source += 1
+                        self._excl["no_source"].append(r[0])
                     elif v == "error":
                         self.skipped_portal_error += 1
+                        self._excl["portal_error"].append(r[0])
                     else:
                         self.skipped_portal += 1
+                        self._excl["portal"].append(r[0])
                 have = store.fetch_vectors(conn, [r[0] for r in rows])
             shas = {r[0]: hashlib.sha256(r[2].encode("utf-8")).hexdigest() for r in rows}
             cur = {sid for sid, h in have.items() if h[0] == model_name and h[1] == shas.get(sid)}
@@ -717,6 +743,7 @@ class Job:
                     continue
                 if r[2].strip() == "":  # E3: an empty or whitespace span is never sent (free, deterministic on every pass)
                     self.skipped_empty += 1
+                    self._excl["empty"].append(r[0])
                     continue
                 qd = self._quarantine.get(r[0])
                 if qd is not None:
@@ -750,7 +777,7 @@ class Job:
                     part.append(r)
                     tot += len(r[2])
                 if hasattr(self._emb, "set_day_used"):  # the day's neurons from the DB (survives a restart), not process memory
-                    with self._engine().connect() as conn:
+                    with self._cx() as conn:
                         self._emb.set_day_used(store.neurons_today(conn))
                 got, err = {}, None
                 try:
@@ -760,7 +787,7 @@ class Job:
                 recs = [{"span_id": r[0], "model": model_name, "dim": len(got[r[0]]), "sha": shas[r[0]],
                          "vec": [float(x) for x in got[r[0]]]} for r in part if r[0] in got]
                 try:
-                    with self._engine().begin() as conn:
+                    with self._cx(True) as conn:
                         if recs:
                             store.run_sql(conn, "vectors_upsert", recs)
                         self._refresh_neurons()
@@ -807,6 +834,9 @@ class Job:
                 self._scan_done = True
                 break
         if self._scan_done:
+            with self._cx() as conn:  # the database clock, so it compares with tax_chunk_vectors.updated_at (WP-W, D3 inputs)
+                row = store.run_sql(conn, "db_now").first()
+            self._scan_end = float(row[0]) if row is not None and row[0] is not None else None
             if self.skipped_portal or self.skipped_portal_error or self.skipped_no_source:
                 log.info("chunk_taxo scan: skipped portal=%d portal_error=%d no_source=%d", self.skipped_portal,
                          self.skipped_portal_error, self.skipped_no_source)
@@ -832,11 +862,17 @@ class Job:
             return 0.0
         if self._headroom_short():  # the build adds about 8*n*d bytes more: do not start it without room (rss_hard_mb)
             return 0.0
-        vecs = self._matrix()
-        prior = self._load_prior() if self._mode in ("write", "curator") else None
         params = self.cfg.get("params") if isinstance(self.cfg.get("params"), dict) else self.cfg
         chunks = [(c["span_id"], c["source_id"], c["text"]) for c in self._chunks]  # C1 contract: (span_id, source_id, text)
+        self._snap = {"max_span_id": max(int(c[0]) for c in chunks), "n_spans": len(chunks), "n_vectors": len(chunks)}
+        vf = getattr(core, "version_for", None)  # the version hashes params, seeds and span ids: known before the build
+        if self._mode == "write" and vf is not None and self._unchanged(str(vf([c[0] for c in chunks], params))):
+            return self._finish_unchanged(str(vf([c[0] for c in chunks], params)))
+        vecs = self._matrix()
+        prior = self._load_prior() if self._mode in ("write", "curator") else None
         model = core.build(chunks, vecs, params, prior=prior)
+        if self._mode == "write" and vf is None and self._unchanged(str(_g(model, "version"))):
+            return self._finish_unchanged(str(_g(model, "version")))
         metrics = core.quality(model, vecs)
         self._dom_scores = domain_writer.domain_scores(model, vecs) if self._dom.enabled else {}  # WP-D-1113
         ok, reasons = core.display_gate(metrics, self.cfg.get("display_gate"))
@@ -852,11 +888,84 @@ class Job:
         self._set(state="writing")
         return 0.0
 
+    # ---- no-op rule (WP-W, D1): an unchanged corpus writes nothing and records `unchanged`
+    def _unchanged(self, version: str) -> bool:
+        """True when the latest finished build row (the last build that reached W4: its run row is inserted in W4's own transaction)
+        has this version AND no vector was written after that build's scan end (a re-embedded span under the same id forces a rebuild).
+        Any missing input is False: build and write as before."""
+        try:
+            with self._cx() as conn:
+                row = store.run_sql(conn, "job_run_latest").first()
+                if row is None or str(row[0]) != version:
+                    return False
+                m = row[2]
+                if isinstance(m, (str, bytes)):
+                    m = json.loads(m)
+                end = m.get("scan_end_epoch") if isinstance(m, dict) else None
+                if isinstance(end, bool) or not isinstance(end, (int, float)):
+                    return False
+                ve = store.run_sql(conn, "vectors_epoch").first()
+                if ve is None or ve[0] is None or float(ve[0]) > float(end):
+                    return False
+                if self._active_node_counts(conn) != {lv: m.get("n_nodes_" + lv) for lv in store.LEVELS}:
+                    return False  # active nodes beyond the build's own (an interrupted write: two versions active, or a killed pass): rebuild
+                return not self._write_incomplete(conn)  # and a closed row of an aborted pass after that build: rebuild
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _as_dict(m):
+        if isinstance(m, (str, bytes)):
+            try:
+                m = json.loads(m)
+            except ValueError:
+                return {}
+        return m if isinstance(m, dict) else {}
+
+    def _active_node_counts(self, conn) -> dict:
+        """Active induction nodes of this job per level (the _load_prior filter). After a completed W4 this equals the build's own
+        count: reused nodes keep their original origin_ref, so counting versions by origin_ref would be wrong; counting nodes is not."""
+        out = {}
+        for lvl in store.LEVELS:
+            out[lvl] = sum(1 for n in store.fetch_nodes(conn, lvl) if n["origin"] == "induction"
+                           and (n["origin_ref"] or "").startswith(store.ORIGIN_REF_PREFIX) and n["state"] == "active")
+        return out
+
+    def _write_incomplete(self, conn) -> bool:
+        """True when a pass aborted between W1 and W4 after the latest build row (its run row carries `write_incomplete`). The newest run
+        rows are read newest first up to the build row; the running row of this pass is skipped."""
+        for state, mm in store.run_sql(conn, "job_run_recent").fetchall():
+            mm = self._as_dict(mm)
+            if str(state) == "running":
+                continue
+            if "scan_end_epoch" in mm:
+                return False
+            if mm.get("write_incomplete") or self._as_dict(mm.get("run")).get("write_incomplete"):
+                return True
+        return False
+
+    def _finish_unchanged(self, version: str):
+        """Close the pass's running row as finished with `unchanged` and issue no W1-W4 statement. Never inserts a build row."""
+        self._pending_done = "unchanged"
+        info = {"unchanged": 1, "version_known": 1}
+        info.update(self._robust_info())
+        rid, self._run_id = self._run_id, None
+        if rid is not None:
+            with self._cx(True) as conn:
+                store.run_sql(conn, "job_run_close", {"run_id": rid, "state": "finished", "neurons": _ceil_int(self._pass_neurons),
+                                                      "metrics": json.dumps({"run": _numeric_only(info) or {}}), "reasons": ["unchanged"]})
+        self.fails = 0
+        self._release_buffers()
+        self._phase = "idle"
+        self._set(state="unchanged", version=version, last_run=self._wall())
+        log.info("chunk_taxo run unchanged version=%s", version[:32])
+        return 0.0
+
     # ---- prior snapshot (identity across runs) from the stored links; no vectors are stored
     def _load_prior(self):
         idx = {c["span_id"]: i for i, c in enumerate(self._chunks)}
         nodes, id2slug, level_of = {}, {}, {}
-        with self._engine().connect() as conn:
+        with self._cx() as conn:
             for lvl in store.LEVELS:
                 for n in store.fetch_nodes(conn, lvl):
                     if n["origin"] == "induction" and (n["origin_ref"] or "").startswith(store.ORIGIN_REF_PREFIX) and n["state"] == "active":
@@ -869,17 +978,23 @@ class Job:
                     c, p = id2slug.get((clv, b)), id2slug.get((plv, a))
                     if c and p:
                         nodes[c]["parent_key"] = p
-            for kind, lvl in (("chunk_subtopic", "subtopic"), ("chunk_topic", "topic")):
-                after = 0
+            # WP-W (pass 7 N6, pass 9 M3): each span contributes to exactly one node, the one of its newest active STRICT link: the deepest
+            # level first (the two tables' link_id sequences are not comparable), then the highest link_id within that table.
+            best = {}
+            for kind, lvl, rank in (("chunk_topic", "topic", 0), ("chunk_subtopic", "subtopic", 1)):
+                after, after_lid = 0, 0
                 while True:
-                    rows = store.fetch_chunk_links(conn, kind, after, self.page)
-                    for span, eid in rows:
+                    rows = store.fetch_strict_links(conn, kind, after, after_lid, self.page)
+                    for span, eid, lid in rows:
                         s = id2slug.get((lvl, eid))
-                        if s and span in idx:
-                            nodes[s]["members"].add(span)
+                        if s and span in idx and ((rank, lid) > best.get(span, ((-1, -1), None))[0]):
+                            best[span] = ((rank, lid), s)
                     if len(rows) < self.page:
                         break
-                    after = rows[-1][0]
+                    after, after_lid = rows[-1][0], rows[-1][2]
+            for span, (_k, s) in best.items():
+                nodes[s]["members"].add(span)
+            self._prior_linked = set(best)
         for lvl in ("subtopic", "topic"):  # members propagate upward
             for n in nodes.values():
                 if n["level"] == lvl and n["parent_key"] in nodes:
@@ -887,26 +1002,103 @@ class Job:
         return {"version": "prior", "nodes": [{"key": n["key"], "level": n["level"], "parent_key": n["parent_key"],
                                                "members": sorted(n["members"]), "label": n["label"]} for n in nodes.values()]}
 
-    # ---- writes (OD-1109-DEMB-3 c): one transaction per pass. Retire, nodes, activation, chunk links, votes and the run rows
-    # commit together or not at all; a crash mid-write leaves the previous version intact and active. Embedding batches
-    # (a cache) commit on their own earlier in the pass.
+    # ---- writes. WP-W (CHUNK-ASSOC-1113 D1) reversed the one-transaction-per-pass design of orchestrator decision v3.8b (c) (INFO-1): the pass no longer
+    # commits all-or-nothing; it commits per phase as described below. Embedding batches (a cache) still commit on their own earlier.
+    # D1: activate first, then one transaction per page of spans or sources, then a closing transaction (W4). Every phase below commits on its own, so a restart or budget stop mid-write loses no
+    # visible label: a span not yet swapped keeps its old links, a swapped span shows its new ones.
     def _tx(self):
-        if self._wconn is not None:
+        if self._wconn is not None:  # W4: the retire and the run-row insert share one transaction
             return contextlib.nullcontext(self._wconn)
-        return self._engine().begin()
+        return self._wtx()
+
+    @contextlib.contextmanager
+    def _wtx(self):
+        """A write transaction: the held-lock check (W0), then the 022 guard context for every guarded statement of the transaction."""
+        with self._cx(True) as conn:
+            if self._held is not None and not self._lock_held(conn):
+                raise _WriterLost()
+            if self._mode == "write" and self._pending is not None:
+                store.set_ctx(conn, hashlib.sha256((store.ORIGIN_REF_PREFIX + str(_g(self._pending.model, "version"))).encode("utf-8")).hexdigest())
+            yield conn
+
+    # ---- W0 single writer: the pass holds the pool's one connection and a session advisory lock on it
+    @staticmethod
+    def _end(conn, ok: bool) -> None:
+        fn = getattr(conn, "commit", None) if ok else getattr(conn, "rollback", None)  # test doubles may offer no transaction API
+        if fn is None:
+            return
+        if ok:
+            fn()  # a failed commit must reach the pass's error path: never report `complete` for a write that did not commit
+            return
+        try:
+            fn()
+        except Exception:  # noqa: BLE001  (a rollback on a dead connection: the original error is the one that matters)
+            pass
+
+    @contextlib.contextmanager
+    def _cx(self, write: bool = False):
+        """Every database use of a pass. While the pass holds its connection this yields it and ends the transaction explicitly
+        (commit, or rollback on error: a held connection autobegins, an open read would hold locks for the pass); otherwise a
+        fresh engine connection, as before W0."""
+        if self._held is None:
+            with (self._engine().begin() if write else self._engine().connect()) as conn:
+                yield conn
+            return
+        conn = self._held
+        try:
+            yield conn
+        except BaseException:
+            self._end(conn, False)
+            raise
+        self._end(conn, True)
+
+    def _lock_held(self, conn) -> bool:
+        row = store.run_sql(conn, "advisory_check", LOCK_KEY).first()
+        return bool(row[0]) if row is not None else False
+
+    def _acquire(self) -> bool:
+        """Take the single connection and the session lock; False (and nothing held) when another session holds the lock."""
+        cm = self._engine().connect()
+        conn = cm.__enter__()
+        try:
+            row = store.run_sql(conn, "advisory_lock", LOCK_KEY).first()
+            self._end(conn, True)
+            ok = bool(row[0]) if row is not None else False
+        except BaseException:
+            self._end(conn, False)
+            cm.__exit__(None, None, None)
+            raise
+        if not ok:
+            cm.__exit__(None, None, None)
+            return False
+        self._hcm, self._held = cm, conn
+        return True
+
+    def _release_held(self) -> None:
+        cm, conn, self._hcm, self._held = self._hcm, self._held, None, None
+        if cm is None:
+            return
+        try:
+            store.run_sql(conn, "advisory_unlock", LOCK_KEY)
+            self._end(conn, True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            cm.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _abandon_held(self) -> None:
+        """The lock is gone: close the connection without trusting it (no unlock call)."""
+        cm, self._hcm, self._held = self._hcm, None, None
+        try:
+            if cm is not None:
+                cm.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _do_write(self):
-        with self._engine().begin() as conn:
-            self._wconn = conn
-            try:
-                self._phase = "w_nodes"
-                while self._phase != "finish":
-                    self._step()
-                self._step()
-            finally:
-                self._wconn = None
-        metrics, version = self._fin
-        self._finish_status(metrics, version)
+        self._phase = "w_nodes"
         return 0.0
 
     def _model_nodes(self, model):
@@ -915,13 +1107,11 @@ class Job:
 
     def _do_nodes(self):
         model, version = self._pending.model, str(_g(self._pending.model, "version"))
-        batch = hashlib.sha256((store.ORIGIN_REF_PREFIX + version).encode("utf-8")).hexdigest()
         origin, state0, oref = ("induction", "proposed", store.ORIGIN_REF_PREFIX + version) if self._mode == "write" else \
             ("curator", "active", store.ORIGIN_REF_PREFIX + version)
         nodes = self._model_nodes(model)
-        with self._tx() as conn:
-            if self._mode == "write":
-                store.set_ctx(conn, batch)
+        self._w_started = True  # W1: from here an aborted pass is `write_incomplete` until W4 commits
+        with self._tx() as conn:  # _wtx sets the 022 guard context (vera.tax_actor / vera.tax_batch) for this transaction
             existing, taken = {}, set()
             for lvl in store.LEVELS:
                 for n in store.fetch_nodes(conn, lvl):
@@ -969,9 +1159,8 @@ class Job:
                 for s, (_i, st) in ids[lvl].items():
                     if st != "active":
                         raise RuntimeError("node_not_active")
-            # hierarchy: retire the superseded version's rows, then insert (the partial unique index ignores retired rows)
-            for kind in store.HIERARCHY:
-                store.run_sql(conn, f"link_retire_{kind}", {"version": version})
+            # hierarchy (W1): old pairs the new version does not assert stay active until W4 (old sub-topic links still derive their
+            # topic and domain); a pair both versions assert is retired and re-inserted here, so W4 never removes it
             by_key = {n["key"]: n for n in nodes}
             for kind, plv, clv in (("domain_topic", "domain", "topic"), ("topic_subtopic", "topic", "subtopic")):
                 rows = []
@@ -980,8 +1169,10 @@ class Job:
                     if p is not None and p["level"] == plv:
                         rows.append({"a": ids[plv][slug_of[p["key"]]][0], "b": ids[clv][slug_of[n["key"]]][0], "version": version,
                                      "score": None, "score_kind": None})
+                store.run_sql(conn, f"link_retire_pair_other_{kind}", rows)
                 store.run_sql(conn, f"link_insert_{kind}", rows)
-            retire = [str(k) for k in (_g(model, "retired_keys") or [])]
+            # a node the new version itself uses is never retired (a re-run after a crash between W1 and W4 meets its own empty nodes)
+            retire = [str(k) for k in (_g(model, "retired_keys") or []) if str(k) not in set(slug_of.values())]
         self._ids = {lvl: {n["key"]: ids[lvl][slug_of[n["key"]]][0] for n in nodes if n["level"] == lvl} for lvl in store.LEVELS}
         self._retire_keys = retire
         self._plan = [int(c["span_id"]) for c in self._chunks]
@@ -1093,20 +1284,55 @@ class Job:
         return self.step_delay
 
     def _do_retire(self):
+        """W4 (one transaction): retire superseded nodes, their anchors and the old hierarchy pairs the new version did not assert, retire
+        this classifier's links of positively excluded spans, and insert the build row (the run row closes in the same transaction)."""
         keys = set(getattr(self, "_retire_keys", []) or [])
-        if keys:
-            with self._tx() as conn:
-                if self._mode == "write":
-                    store.set_ctx(conn, hashlib.sha256((store.ORIGIN_REF_PREFIX + str(_g(self._pending.model, "version"))).encode()).hexdigest())
+        version = str(_g(self._pending.model, "version"))
+        with self._tx() as conn:
+            self._wconn = conn
+            try:
                 for lvl in store.LEVELS:
                     slugs = sorted(keys)
+                    if not slugs:
+                        break
                     if self._mode == "write" and lvl != "domain":
                         eids = [i for i, _st in store.node_ids(conn, lvl, slugs).values()]
                         if eids:
                             store.run_sql(conn, f"anchor_retire_{lvl}", {"eids": eids})
                     store.run_sql(conn, f"node_retire_{lvl}", {"slugs": slugs})
-        self._phase = "finish"
+                for kind in store.HIERARCHY:
+                    store.run_sql(conn, f"link_retire_{kind}", {"version": version})
+                self._retire_excluded(conn)
+                self._fin = self._finish_rows()
+            finally:
+                self._wconn = None
+        self._w_done = True
+        metrics, version = self._fin
+        self._finish_status(metrics, version)
         return 0.0
+
+    def _retire_excluded(self, conn) -> None:
+        """W4: a span the scan positively excluded (portal, portal_error, no_source, empty) loses this classifier's links, whether or not
+        its node was reused. Spans merely without a current vector keep theirs. Counted per class (`outside_build_unlabelled_<class>`)
+        for the spans that held a strict link; the sum is `outside_build_unlabelled`."""
+        allx = {sid for ids in self._excl.values() for sid in ids}
+        self._outside = {}
+        if not allx:
+            return
+        linked = set()
+        for kind in store.CHUNK_LINKS:
+            after, after_lid = 0, 0
+            while True:
+                rows = store.fetch_strict_links(conn, kind, after, after_lid, self.page)
+                linked.update(r[0] for r in rows if r[0] in allx)
+                if len(rows) < self.page:
+                    break
+                after, after_lid = rows[-1][0], rows[-1][2]
+        ids = sorted(allx)
+        for kind in store.CHUNK_LINKS:
+            for i in range(0, len(ids), self.page):
+                store.run_sql(conn, f"link_retire_spans_{kind}", {"ids": ids[i:i + self.page]})
+        self._outside = {c: len(linked & set(v)) for c, v in self._excl.items()}
 
     def _finish_rows(self):
         model, pend = self._pending.model, self._pending
@@ -1114,11 +1340,25 @@ class Job:
         elapsed = max(1e-6, self._wall() - self._t0)
         self.metrics_run = {"rows_embedded": self.rows_embedded, "seconds": round(elapsed, 3),
                             "rows_per_s": round(self.rows_embedded / elapsed, 4), "peak_rss_mb": round(self.peak_rss, 1)}
-        self.metrics_run.update(_numeric_only(self._robust_info()) or {})
+        self.metrics_run.update(_numeric_only(self._robust_info(final=True)) or {})
         if self.finish_now:  # WP-F: present only with the flag on (flag off keeps main's run-row keys)
             self.metrics_run["partial_snapshot"] = 1 if self._reuse_only else 0
         self.metrics_run.update(domain_writer.metrics(self._dom))  # WP-D-1113
         metrics = dict(_numeric_only(pend.metrics) or {})
+        if self._mode != "compute":  # WP-W: the W4 build row's snapshot and the counted label decreases (D1, D3 inputs)
+            assoc = _g(model, "assoc") or {}
+            new_linked = {int(s) for s, it in assoc.items() if self._link_rows(it, self._ids) is not None} if isinstance(assoc, dict) else set()
+            built = {int(c["span_id"]) for c in self._chunks}
+            out = getattr(self, "_outside", {}) or {}
+            self.metrics_run["abstained_now_unlabelled"] = len((self._prior_linked & built) - new_linked)
+            self.metrics_run["outside_build_unlabelled"] = int(sum(out.values()))
+            for cls, n in out.items():
+                self.metrics_run["outside_build_unlabelled_" + cls] = int(n)
+            metrics.update({k: v for k, v in self._snap.items()})
+            for lv in store.LEVELS:  # the build's own node count per level: more active nodes later means an interrupted write (write_incomplete)
+                metrics["n_nodes_" + lv] = sum(1 for n in self._model_nodes(model) if n["level"] == lv)
+            if self._scan_end is not None:
+                metrics["scan_end_epoch"] = round(float(self._scan_end), 3)
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}
         metrics["run"] = self.metrics_run

@@ -92,7 +92,10 @@ def _build() -> dict[str, str]:
     s["job_run_latest"] = ("SELECT classifier_version, finished_at, metrics, display_ok, reasons FROM vera_vjay.tax_job_runs "
                            f"WHERE classifier_name = '{CLASSIFIER}' AND state = 'finished' AND finished_at IS NOT NULL "
                            "AND classifier_version <> 'pending' ORDER BY finished_at DESC LIMIT 1")
-    s["set_ctx"] = ("SELECT pg_catalog.set_config('vera.tax_actor', :actor, true), "
+    # WP-W (no-op rule): the newest run rows, to read `write_incomplete` between the latest build row and now (same text as WP-I's)
+    s["job_run_recent"] = ("SELECT state, metrics FROM vera_vjay.tax_job_runs "
+                           f"WHERE classifier_name = '{CLASSIFIER}' ORDER BY started_at DESC LIMIT 8")
+    s["set_ctx"] =("SELECT pg_catalog.set_config('vera.tax_actor', :actor, true), "
                     "pg_catalog.set_config('vera.tax_batch', :batch, true)")
     s["spans_page"] = ("SELECT span_id, source_id, left(text, :n) FROM vera_vjay.evidence_spans "
                        "WHERE span_id > :after ORDER BY span_id LIMIT :lim")
@@ -101,6 +104,14 @@ def _build() -> dict[str, str]:
     s["sources_portal"] = ("SELECT s.source_id, cs.canonical_url, s.provenance FROM vera_vjay.sources s "
                            "JOIN vera_vjay.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
                            "WHERE s.source_id = ANY(:ids)")
+    # WP-W (CHUNK-ASSOC-1113 D1 W0): the single-writer session lock (app-path function calls, no DDL; the key is a namespaced two-int
+    # pair) and its held-lock check on this backend; the database clock and the newest vector write time for the no-op rule.
+    s["advisory_lock"] = "SELECT pg_catalog.pg_try_advisory_lock(:k1, :k2)"
+    s["advisory_check"] = ("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND classid::bigint = :k1 "
+                           "AND objid::bigint = :k2 AND objsubid = 2 AND pid = pg_catalog.pg_backend_pid())")
+    s["advisory_unlock"] = "SELECT pg_catalog.pg_advisory_unlock(:k1, :k2)"
+    s["db_now"] = "SELECT pg_catalog.date_part('epoch', pg_catalog.now())"
+    s["vectors_epoch"] = "SELECT COALESCE(pg_catalog.date_part('epoch', max(updated_at)), 0) FROM vera_vjay.tax_chunk_vectors"
     for lvl in LEVELS:
         t, idc = _ENT[lvl]
         s[f"nodes_{lvl}"] = f"SELECT slug, {idc}, label, origin, origin_ref, state FROM {t} WHERE state IN ('proposed', 'active')"
@@ -126,7 +137,16 @@ def _build() -> dict[str, str]:
             s[f"link_select_{kind}"] = f"SELECT {a}, {b} FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active'"
             s[f"link_retire_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
                                         f"AND state = 'active' AND classifier_version <> :version")
+            # WP-W D1 W1: a pair both versions assert is retired and re-inserted in one transaction; other old pairs stay until W4
+            s[f"link_retire_pair_other_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
+                                                   f"AND state = 'active' AND classifier_version <> :version AND {a} = :a AND {b} = :b")
         elif kind in CHUNK_LINKS:
+            # WP-W D1: W4 retires this classifier's active links of positively excluded spans (portal, no_source, empty), any version;
+            # the prior reads each span's newest strict link: (span, entity, link_id), strict = score_kind NULL or 'cosine' (pass 9, M3)
+            s[f"link_retire_spans_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
+                                              f"AND state = 'active' AND {a} = ANY(:ids)")
+            s[f"link_select_strict_{kind}"] = (f"SELECT {a}, {b}, link_id FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
+                                               f"AND (score_kind IS NULL OR score_kind = 'cosine') AND ({a}, link_id) > (:after, :after_lid) ORDER BY {a}, link_id LIMIT :lim")
             s[f"link_select_{kind}"] = (f"SELECT {a}, {b} FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
                                         f"AND {a} > :after ORDER BY {a}, {b} LIMIT :lim")
             s[f"link_retire_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
@@ -224,6 +244,12 @@ def fetch_hierarchy(conn, kind: str) -> list[tuple[int, int]]:
 
 def fetch_chunk_links(conn, kind: str, after: int, limit: int) -> list[tuple[int, int]]:
     return [(int(r[0]), int(r[1])) for r in run_sql(conn, f"link_select_{kind}", {"after": int(after), "lim": int(limit)}).fetchall()]
+
+
+def fetch_strict_links(conn, kind: str, after: int, after_lid: int, limit: int) -> list[tuple[int, int, int]]:
+    """WP-W: (span_id, entity_id, link_id) of this classifier's active strict rows, keyset-paged by (span_id, link_id)."""
+    return [(int(r[0]), int(r[1]), int(r[2])) for r in
+            run_sql(conn, f"link_select_strict_{kind}", {"after": int(after), "after_lid": int(after_lid), "lim": int(limit)}).fetchall()]
 
 
 def run_start(conn) -> int | None:
