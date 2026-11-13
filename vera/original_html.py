@@ -352,11 +352,106 @@ def _terms(s: str) -> list:
     return out
 
 
+# ------------------------------------------------------------------------------------------------ RS-A two DOE pages
+# USFED-RESUME-1113 (work/USFED-ROUTE-1111/PLAN.md section 5.7 RS-A; owner ruling OD-1113-USFED-TWO-PAGES): DOE row only.
+TWO_PAGES_ROW = "energy_gov_doe_explains"  # the one row id the ruling names; the keys on any other row are ignored
+TWO_PAGES_CAP = 2  # the only honoured value of max_pages_per_question (owner decision; calibration note on the row)
+DISTINCT_PAGES = "distinct_pages"
+
+
+def two_pages_row(cfg: dict | None = None):
+    """The DOE row when its RS-A keys are honoured, else None (fail closed: global cap, per-document floor). Honoured
+    only when: the row with id TWO_PAGES_ROW is valid and unique, max_pages_per_question is an int (not bool) equal to
+    TWO_PAGES_CAP, evidence_floor is exactly "distinct_pages", and no other enabled row names its host."""
+    try:
+        c = cfg if cfg is not None else load_config()
+        mine = [r for r in rows(c) if r.get("id") == TWO_PAGES_ROW]
+        if len(mine) != 1:
+            return None
+        r = mine[0]
+        v = r.get("max_pages_per_question")
+        if type(v) is not int or v != TWO_PAGES_CAP or r.get("evidence_floor") != DISTINCT_PAGES:
+            return None
+        same = [x for x in c.get("rows") or () if isinstance(x, dict) and x.get("enabled") is True
+                and x.get("host") == r["host"]]
+        return r if len(same) == 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def passage_sha(text: str) -> str:
+    """RS-A passage identity: sha256 of the text with whitespace collapsed and case folded."""
+    return hashlib.sha256(" ".join(str(text or "").split()).casefold().encode("utf-8")).hexdigest()
+
+
+def _tally_doe(p, row) -> bool:
+    o = p.get("original_html") if isinstance(p, dict) else None
+    return isinstance(o, dict) and o.get("row") == row["id"]
+
+
+def distinct_page_marks(plans, cfg: dict, exclude=(), oc: dict | None = None) -> dict:
+    """RS-A tally, pure (reads the plans, writes nothing). Returns {id(plan): eligible} for every plan of the
+    distinct_pages row in `plans`; plans of other rows and routes are absent (the caller keeps
+    auto_acquire.persist_eligible for them). Empty when two_pages_row is None (fail closed to the per-document floor).
+
+    Only plans that the persist step may write credit: not in `exclude` (variant-only ids), not answer_only, lane or
+    source_lane; the plan's canonical URL must match the DOE row; its passages are the sha256 digests in
+    plan["original_html"]["admitted_sha"] (no digest = no credit). Pages are keyed by normalised canonical URL (the same
+    page twice is one page); each page credits at most one distinct digest; the credited count is an order-independent
+    maximum matching pages <-> digests. Eligible iff that count >= acq_config.persist_min_spans(cfg); then exactly the
+    matched pages are eligible (one plan per page; pages tried in sorted canonical-URL order, so ties break by URL).
+    Any error marks every DOE plan not eligible."""
+    from vera import acq_config
+    c = oc if oc is not None else load_config()
+    row = two_pages_row(c)
+    if row is None:
+        return {}
+    doe = [p for p in plans if _tally_doe(p, row)]
+    marks = {id(p): False for p in doe}
+    try:
+        need = acq_config.persist_min_spans(cfg)
+        skip = {int(x) for x in exclude}
+        pages: dict = {}  # canonical URL -> (first plan, digest set)
+        for p in doe:
+            if id(p) in skip or p.get("answer_only") or p.get("lane") or p.get("source_lane"):
+                continue
+            o = p["original_html"]
+            u = normalise_url(p.get("canonical_url"))
+            m = match_row(u, c) if u else None
+            if u is None or m is None or m[0]["id"] != row["id"] or normalise_url(o.get("canonical_url")) != u:
+                continue
+            d = {x for x in (o.get("admitted_sha") or ()) if isinstance(x, str) and _HEX.fullmatch(x)}
+            if u in pages:
+                pages[u][1].update(d)
+            else:
+                pages[u] = (p, set(d))
+        owner: dict = {}  # digest -> page URL (Kuhn's augmenting paths)
+
+        def augment(u, seen):
+            for x in sorted(pages[u][1]):
+                if x in seen:
+                    continue
+                seen.add(x)
+                if x not in owner or augment(owner[x], seen):
+                    owner[x] = u
+                    return True
+            return False
+        for u in sorted(pages):
+            augment(u, set())
+        if len(owner) >= need:
+            for u in set(owner.values()):
+                marks[id(pages[u][0])] = True
+    except Exception:  # noqa: BLE001  fail closed
+        return {id(p): False for p in doe}
+    return marks
+
+
 def match_subject(subject: str, cfg: dict | None = None) -> list:
     """Catalogue candidates for a definitional subject: every subject token must occur (exact token match after
     case/plural/hyphen normalisation) among the entry's title and slug tokens; extra entry tokens are allowed. Ranked by
     fewest extra tokens; at most limits.max_candidates_per_host per host and limits.max_candidates_per_question in all.
-    Local data only. No match, an empty subject, or mode off -> []."""
+    Local data only. No match, an empty subject, or mode off -> [].
+    USFED-RESUME-1113 RS-A: the DOE row's host takes the row's max_pages_per_question (2) when two_pages_row honours it."""
     c = cfg if cfg is not None else load_config()
     s = load_snapshot(c)
     want = set(_terms(subject))
@@ -364,6 +459,8 @@ def match_subject(subject: str, cfg: dict | None = None) -> list:
         return []
     lim = c.get("limits") or {}
     per_host, total = int(lim.get("max_candidates_per_host", 1)), int(lim.get("max_candidates_per_question", 3))
+    tp = two_pages_row(c)  # RS-A: the DOE row's own cap, for its host only (None = the global cap everywhere)
+    caps = {tp["host"]: TWO_PAGES_CAP} if tp is not None else {}
     hits = []
     for e in s["entries"]:
         have = set(_terms(e["title"])) | {t for x in e["slug_terms"] for t in _terms(x)}
@@ -372,7 +469,7 @@ def match_subject(subject: str, cfg: dict | None = None) -> list:
     hits.sort(key=lambda x: (x[0], x[1]))
     out, n = [], {}
     for _x, u, e in hits:
-        if n.get(e["host"], 0) >= per_host or len(out) >= total:
+        if n.get(e["host"], 0) >= caps.get(e["host"], per_host) or len(out) >= total:
             continue
         n[e["host"]] = n.get(e["host"], 0) + 1
         out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True})
@@ -585,8 +682,17 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
                                                             "image_credit", "dataset_retrieved")},
                           "page": prov, "extract": {"root": ex["root"], "pruned": ex["stats"]},
                           "retrieved_at": now_iso}
-    n_adm = aa.relevance_gate(job.question, plan, cfg, icfg, fdcfg)
+    adm_texts: list = []  # RS-A: the admitted passages' texts from the SAME admission call that gives n_adm
+    n_adm = aa.relevance_gate(job.question, plan, cfg, icfg, fdcfg, admitted_out=adm_texts)
+    # route-local (never stored: the store reads source/spans/candidate/canonical_url only); RS-A tally input
+    plan["original_html"] = {"row": row["id"], "canonical_url": canon,
+                             "admitted_sha": sorted({passage_sha(x) for x in adm_texts})}
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
+    tp = two_pages_row(oc)
+    if md == "on" and min_spans is None and tp is not None and tp["id"] == row["id"]:
+        # RS-A: a background or list job (min_spans None) holds one page, so it can never meet the distinct-pages floor:
+        # refused R-ACQ-FEWSPANS (fail closed; seeding needs its own design). Shadow is unchanged (stores nothing).
+        raise aa._Stop(acq_config.reason(cfg, "few_spans"), n_adm)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
         raise aa._Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"), n_adm)

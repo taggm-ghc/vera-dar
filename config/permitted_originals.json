@@ -50,6 +50,9 @@
       "text_only": true,
       "enabled": true,
       "store": true,
+      "max_pages_per_question": 2,
+      "evidence_floor": "distinct_pages",
+      "_calibration_note": "USFED-RESUME-1113 RS-A (work/USFED-ROUTE-1111/PLAN.md section 5.7). max_pages_per_question 2 is the owner's decision OD-1113-USFED-TWO-PAGES (2026-11-13: two distinct DOE pages per question, two separate evidence passages, DOE route only), NOT a measured threshold. It replaces limits.max_candidates_per_host (1) for this row's host in match_subject and is honoured only as the integer 2 on this row id with no other enabled row on www.energy.gov; any other value, row or host sharing falls back to the global cap and the per-document floor (fail closed). It never exceeds the inline cap (inline_acquire._OH_INLINE_MAX 2). evidence_floor distinct_pages: the persistent floor (bounds.persist_min_admitted_spans, 2, unchanged) is counted per question over this row's distinct pages, at most one distinct passage (sha256 of the normalised text) per page, as a maximum matching (original_html.distinct_page_marks); background and list jobs of this row are refused R-ACQ-FEWSPANS. Real data: the offline readout after SHADOWFIX (scratch/USFED-SHADOWFIX-1112/readout/out.txt): 5 of 5 hook matches admit exactly 1 passage per page, 1 page per question, so the per-document floor of 2 could never be met. Spread: one host, 5 questions. What changes it: the RS-A offline rehearsal's credited-page counts (WP-4), live counts once mode is on, or an owner ruling (strict option S selected; the owner may choose the union option U, CL-1113-USFED-RESUME).",
       "review": {"task": "USFED-ROUTE-1111", "date": "2026-11-11", "basis": "robots one * group, /science/ allowed (RR R3); C0 10/10 pages (scratch/USFED-C0-1111); DOE reuse terms read A1.3 still OPEN; owner storage approval D-1 PENDING"}
     },
     {

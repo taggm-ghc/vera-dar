@@ -1021,6 +1021,14 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         out.reused = len(reused[0])
         failed = 0
         t = clock()
+        # USFED-RESUME-1113 RS-A: the distinct-pages tally over exactly the plans this loop may write (variant-only ids
+        # excluded; answer-only and lane plans never credit; reused stored rows are not in `plans`). For a plan of the
+        # distinct_pages row its mark replaces persist_eligible; every other plan keeps persist_eligible.
+        from vera import original_html as _oh
+        oh_marks = _oh.distinct_page_marks(plans, acq, exclude=ao_ids)
+        oh_res = {"stored": 0, "failed": 0}
+        if oh_marks:
+            aa._log("original_html_tally", pages=len(oh_marks), eligible=sum(1 for v in oh_marks.values() if v))
         for plan in plans:  # one INSERT-only transaction per document (WoStore); DOI dedupe = canonical_state
             e = by_plan.get(id(plan))
             rc = rec_plan.get(id(plan))
@@ -1032,7 +1040,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 count(acq_config.reason(acq, BELOW_PERSIST_MIN))
                 out.documents.append({"persisted": False, "reason": BELOW_PERSIST_MIN})
                 continue
-            if not aa.persist_eligible(plan, acq):  # ONE-SPAN-1021: answers this request only; never written
+            if not (oh_marks[id(plan)] if id(plan) in oh_marks else aa.persist_eligible(plan, acq)):
+                # ONE-SPAN-1021: answers this request only; never written (RS-A: the tally mark for the DOE row)
                 count(acq_config.reason(acq, BELOW_PERSIST_MIN))
                 out.documents.append({"persisted": False, "reason": BELOW_PERSIST_MIN})
                 if rc is not None:
@@ -1047,6 +1056,8 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                 if rc is not None:
                     rc["persisted"] = w.get("status") == "stored"
                     rc["persist_reason"] = None if rc["persisted"] else "in_corpus"
+                if oh_marks.get(id(plan)):
+                    oh_res["stored"] += 1  # stored or already in the corpus: the credited page is persisted
                 if w.get("status") == "stored":
                     out.stored += 1
                     if ctx is not None:
@@ -1058,11 +1069,17 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
                     out.documents.append({"persisted": False, "reason": "in_corpus"})
             except Exception as e:  # noqa: BLE001  answer anyway, marked unsaved (see module docstring)
                 failed += 1
+                if oh_marks.get(id(plan)):
+                    oh_res["failed"] += 1
                 if rc is not None:
                     rc["persisted"], rc["persist_reason"] = False, "write_failed"
                 count(aa.error_code(acq, e))
                 out.documents.append({"persisted": False, "reason": "write_failed"})
                 logger.warning("autoacq inline persist failed (%s)", type(e).__name__)
+        if oh_res["stored"] and oh_res["failed"]:
+            # RS-A (PLOVER 2): separate INSERT-only writes; a partner failure leaves a credited page stored. Accepted
+            # residual, counted only; no retry by this or any other path.
+            aa._log("original_html_pair_partial", stored=oh_res["stored"], failed=oh_res["failed"])
         out.persist_failed = failed > 0 and out.stored == 0  # VER L4: the note says unsaved only if none was saved
         used = out.stored  # DAR-TRACE-1022: only STORED documents count against docs_per_day (owner wording "stored documents/day"; the cap itself is null = off since 2026-10-22)
         ms["write"] = int((clock() - t) * 1000)
@@ -1811,6 +1828,7 @@ def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, co
                   queue_slots=True)  # F1: queue for a portal slot, never a self-inflicted skip
     tgt = acq_rounds.target_of(acq)
     held_codes = {acq_config.reason(acq, k) for k in HELD_KEYS}
+    from vera import original_html as _oh
     got: dict = {}
     seen = {"held": 0}
     pending: set = set()
@@ -1843,7 +1861,9 @@ def _evaluate_stream(question, ranked, acq, deps, icfg, fdcfg, clock, budget, co
                 ctx.touch()
                 # PROGRESS-COUNT-1106: eligible plans may exceed the target (budget > target); the shown count is the
                 # number toward the target, so it is clamped (the surplus is still persisted by the persist step)
-                _elig = sum(1 for p in got.values() if aa.persist_eligible(p, acq))
+                _ohm = _oh.distinct_page_marks(list(got.values()), acq)  # RS-A: the same tally as the persist step
+                _elig = sum(1 for p in got.values()
+                            if (_ohm[id(p)] if id(p) in _ohm else aa.persist_eligible(p, acq)))
                 _emit("acquire", "update", checked=len(per) if per is not None else len(got) + 0, usable=len(got),
                       held=seen["held"],
                       stored=min(_elig, int(tgt)), target=int(tgt),
