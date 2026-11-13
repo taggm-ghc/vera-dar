@@ -13,7 +13,7 @@ from tests.test_corpus_taxonomy_wp6_1109 import CN, _engine, _ins, eng  # noqa: 
 from vera import corpus_description as cd, corpus_taxonomy as ct, help_pages, sources_sidebar as sb
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT_PREFIX = "**Subject labels:** "
+TEXT_PREFIX = "**Chunks with a topic or sub-topic record in the active topic hierarchy:** "
 
 
 # --- (a) per-document labelled / unlabelled rule on the real tables ---------------------------------------------------
@@ -33,7 +33,6 @@ def _base():
 
 LABELLED = {
     "vote_topic": ("tax_source_topic", [(1, 1, 1, CN, "active")]),
-    "vote_domain": ("tax_source_domain", [(1, 1, 1, CN, "active")]),
     "chunk_topic": ("tax_chunk_topic", [(1, 1, 1, CN, "active")]),
     "chunk_subtopic": ("tax_chunk_subtopic", [(1, 1, 1, CN, "active")]),
     "explicit_cosine": ("tax_chunk_topic", [(1, 1, 1, CN, "active", "cosine")]),
@@ -49,6 +48,8 @@ UNLABELLED = {
     "retired_subtopic": ("tax_chunk_subtopic", [(1, 1, 3, CN, "active")]),
     "retired_topic_vote": ("tax_source_topic", [(1, 1, 2, CN, "active")]),
     "retired_topic_chunk": ("tax_chunk_topic", [(1, 1, 2, CN, "active")]),
+    # CORPUS-WORDING-N1-1113: a document-level domain vote alone is not a topic or sub-topic record, so the document stays uncounted
+    "domain_vote_only": ("tax_source_domain", [(1, 1, 1, CN, "active")]),
     "retired_domain_vote": ("tax_source_domain", [(1, 1, 2, CN, "active")]),
     "orphan_subtopic": ("tax_chunk_subtopic", [(1, 1, 2, CN, "active")]),
 }
@@ -121,7 +122,7 @@ def test_sources_but_no_passages_omit_the_passage_clause():
     r = ct.read_unlabelled(e, CN)
     assert (r["documents"], r["documents_unlabelled"], r["documents_without_passages"], r["passages"]) == (2, 2, 2, 0)
     line = sb.unlabelled_line(r)
-    assert "stored passages (" not in line and "have none" not in line and "2 of 2 documents (100%)" in line
+    assert "Chunks with" not in line and "0 of 2 (0%)" in line and line.startswith("**Documents with a topic or sub-topic record in the active topic hierarchy:**")
 
 
 # --- (d) describer ---------------------------------------------------------------------------------------------------
@@ -208,15 +209,15 @@ def _p(u, n, x=0, uc=0, nc=0):
 
 
 def test_percent_wording_branches():
-    assert "0 of 1,000 documents (0%)" in sb.unlabelled_line(_p(0, 1000))
-    assert "1 of 1,000 documents (under 1%)" in sb.unlabelled_line(_p(1, 1000))
-    assert "4 of 1,000 documents (under 1%)" in sb.unlabelled_line(_p(4, 1000))
-    assert "5 of 1,000 documents (1%)" in sb.unlabelled_line(_p(5, 1000))
-    assert "995 of 1,000 documents (over 99%)" in sb.unlabelled_line(_p(995, 1000))
-    assert "994 of 1,000 documents (99%)" in sb.unlabelled_line(_p(994, 1000))
-    assert "1,000 of 1,000 documents (100%)" in sb.unlabelled_line(_p(1000, 1000))
-    assert "1 of 5 documents (20%)" in sb.unlabelled_line(_p(1, 5))
-    assert "1,234 of 12,345 documents (10%)" in sb.unlabelled_line(_p(1234, 12345))
+    assert "1,000 of 1,000 (100%)" in sb.unlabelled_line(_p(0, 1000))
+    assert "1 of 1,000 (under 1%)" in sb.unlabelled_line(_p(999, 1000))
+    assert "4 of 1,000 (under 1%)" in sb.unlabelled_line(_p(996, 1000))
+    assert "5 of 1,000 (1%)" in sb.unlabelled_line(_p(995, 1000))
+    assert "995 of 1,000 (over 99%)" in sb.unlabelled_line(_p(5, 1000))
+    assert "994 of 1,000 (99%)" in sb.unlabelled_line(_p(6, 1000))
+    assert "0 of 1,000 (0%)" in sb.unlabelled_line(_p(1000, 1000))
+    assert "4 of 5 (80%)" in sb.unlabelled_line(_p(1, 5))
+    assert "11,111 of 12,345 (90%)" in sb.unlabelled_line(_p(1234, 12345))
 
 
 def test_malformed_payloads_give_no_line():
@@ -231,22 +232,24 @@ def test_malformed_payloads_give_no_line():
 
 
 # --- (j) the exact display text, both branches -----------------------------------------------------------------------
-TAIL = (" Documents not yet processed by the labelling program and those outside its subject list are not told apart. "
-        "Labels are assigned automatically and are approximate; a document stored in several versions is counted once.")
+TAIL = ("Documents not yet processed by the labelling program and those it could not place in a topic are not told apart. "
+        "Topic and sub-topic records are assigned automatically and are approximate; "
+        "a document stored in several versions is counted once.")
+DOCS = "Documents with such a record: "
+XC = " Of the 3 documents without one, 2 have no stored chunks, which the labelling program cannot label."
 
 
 def test_display_text_with_and_without_the_no_passages_clause():
     assert sb.unlabelled_line(_p(3, 10, 2, 40, 100)) == (
-        TEXT_PREFIX + "3 of 10 documents (30%) have no stored subject label (no main label and no labelled passage), including 2 with no "
-        "stored passages, which the labelling program cannot label; 40 of 100 stored passages (40%) have none." + TAIL)
+        TEXT_PREFIX + "60 of 100 (60%). " + DOCS + "7 of 10 (70%)." + XC + " " + TAIL)
     assert sb.unlabelled_line(_p(3, 10, 0, 40, 100)) == (
-        TEXT_PREFIX + "3 of 10 documents (30%) have no stored subject label (no main label and no labelled passage); "
-        "40 of 100 stored passages (40%) have none." + TAIL)
+        TEXT_PREFIX + "60 of 100 (60%). " + DOCS + "7 of 10 (70%). " + TAIL)
     assert sb.unlabelled_line(_p(3, 10, 2, 0, 0)) == (
-        TEXT_PREFIX + "3 of 10 documents (30%) have no stored subject label (no main label and no labelled passage), including 2 with no "
-        "stored passages, which the labelling program cannot label." + TAIL)
+        "**Documents with a topic or sub-topic record in the active topic hierarchy:** 7 of 10 (70%)." + XC + " " + TAIL)
     assert sb.unlabelled_line(_p(3, 10)) == (
-        TEXT_PREFIX + "3 of 10 documents (30%) have no stored subject label (no main label and no labelled passage)." + TAIL)
+        "**Documents with a topic or sub-topic record in the active topic hierarchy:** 7 of 10 (70%). " + TAIL)
+    assert "domain record" not in sb.unlabelled_line(_p(3, 10, 2, 40, 100)).lower()
+    assert "subject label" not in sb.unlabelled_line(_p(3, 10, 2, 40, 100)).lower()
 
 
 # --- (g) and (i) page rendering --------------------------------------------------------------------------------------
@@ -292,10 +295,10 @@ def test_line_appears_exactly_once_after_the_count_and_before_the_stored_taxonom
             assert "sources" in caps[0] and caps[0].startswith("**VERA-DAR's corpus:**")
             assert i >= 1 and all(not c.startswith(TEXT_PREFIX) for c in caps[:i])
             if with_stored:
-                j = next(k for k, c in enumerate(caps) if "Stored subject labels" in c)
+                j = next(k for k, c in enumerate(caps) if "Stored topic and sub-topic records" in c)
                 assert i < j, (subjects, with_stored)
             else:
-                assert not any("Stored subject labels" in c for c in caps)
+                assert not any("Stored topic and sub-topic records" in c for c in caps)
 
 
 def test_line_is_absent_when_the_key_is_absent_or_malformed(monkeypatch):
@@ -316,7 +319,7 @@ def test_line_is_not_on_about_the_notes_or_the_sidebar(monkeypatch):
     at = AppTest.from_file(str(ROOT / "pages/about.py"), default_timeout=30).run()
     assert not at.exception
     shown = " ".join(e.value for kind in ("markdown", "caption") for e in getattr(at.main, kind))
-    assert "Subject labels" not in shown
+    assert "topic or sub-topic record" not in shown
 
 
 def test_wp6_fixture_exact_hand_counts(eng):
