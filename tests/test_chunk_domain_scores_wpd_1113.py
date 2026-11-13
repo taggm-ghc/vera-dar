@@ -29,17 +29,23 @@ VECS = [[3.0, 4.0], [3.0, 4.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [1.0, 0.0]]
 
 def test_t52_scores_equal_a_recomputation_and_domain_only_uses_its_distance():
     sc = dw.domain_scores(_model(), VECS)
-    assert sc[1] == (round(3.0 / 5.0, 6), "cosine_lvl")                  # cos((3,4), D center (1,0))
-    assert sc[2] == (round(4.0 / 5.0, 6), "cosine_lvl")                  # cos((3,4), D2 center (0,2)); centers need not be unit length
+    # strict-member center of D (plan A4 K7): unit mean of members 1 (3,4)/5 and 3 (1,0); the zero vector (5) is not a member and the model's
+    # own node "center" fields (deliberately different in _model) are ignored
+    mx, my = 0.6 + 1.0, 0.8 + 0.0
+    n = math.hypot(mx, my)
+    assert sc[1] == (round((0.6 * mx + 0.8 * my) / n, 6), "cosine_lvl")
+    assert sc[2] == (1.0, "cosine_lvl")                                   # D2's only member is chunk 2: its own direction
     assert sc[3] == (0.75, "cosine")                                      # domain-only chunk: strict cosine scored from its distance
-    assert 4 not in sc and 5 not in sc and 6 not in sc                    # abstained, zero vector, domain without a center: no score (NULL)
+    assert sc[6] == (1.0, "cosine_lvl")                                   # domain NOCENTER in the model: the strict-member center still exists
+    assert 4 not in sc and 5 not in sc                                    # abstained and zero vector: no score (NULL)
     assert all(-1.0 <= s <= 1.0 and math.isfinite(s) for s, _ in sc.values())
 
 
 def test_t52_garbage_never_raises():
     assert dw.domain_scores(SimpleNamespace(nodes=None, assoc=None, span_order=None), []) == {}
-    assert dw.domain_scores(SimpleNamespace(nodes=[{"level": "domain", "key": "D", "center": [1.0]}], assoc={1: dict(level="topic", domain="D")},
-                                             span_order=[1]), [[1.0, 2.0]]) == {}                    # dimension mismatch
+    ragged = dw.domain_scores(SimpleNamespace(nodes=[], assoc={1: dict(level="topic", domain="D"), 2: dict(level="topic", domain="D")},
+                                              span_order=[1, 2]), [[1.0, 2.0], [1.0]])
+    assert 2 not in ragged                                                                          # dimension mismatch: no score, no exception
 
 
 class CosCore(StubCore):
@@ -67,10 +73,12 @@ def test_t52_job_stores_the_recomputed_scores_in_the_same_page():
     rows = {k[1]: v for k, v in db.links.items() if k[0] == "chunk_domain"}
     assert sorted(rows) == list(range(1, 11))
     for sid, v in rows.items():
-        if sid % 3 == 0:      # "alpha" -> vector (1,0): cosine 1 to the center (1,0)
-            assert (v["score"], v["score_kind"]) == (1.0, "cosine_lvl")
-        elif sid % 3 == 1:    # "beta" -> (-1,0)
+        # strict-member center of the one domain: 3 alpha (1,0) and 4 beta (-1,0) unit vectors (the zero vectors are not members)
+        # sum (-1,0) -> center (-1,0): alpha scores -1, beta scores +1
+        if sid % 3 == 0:      # "alpha"
             assert (v["score"], v["score_kind"]) == (-1.0, "cosine_lvl")
+        elif sid % 3 == 1:    # "beta"
+            assert (v["score"], v["score_kind"]) == (1.0, "cosine_lvl")
         else:                 # "gamma" -> zero vector: the core decided at topic level; no cosine is defined, stored NULL
             assert (v["score"], v["score_kind"]) == (None, None)
 

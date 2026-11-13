@@ -7,9 +7,10 @@ tax_domain_topic), so no extra read is needed. Rules:
   * strict only: a chunk whose item has no `level` (abstained) gets no domain row; routing-only `multi` links never create a domain row;
   * one row per chunk (a multi-topic chunk gets the domain of its strict node only);
   * a chunk the core decided at level `domain` (which stores no other link) gets a strict `cosine` row scored from its distance;
-    every other chunk gets a `cosine_lvl` row scored by its own cosine to the domain's model center (the center the core compares against
-    at the domain level), computed by domain_scores() from the build's vectors while they are in memory (one float per labelled chunk);
-    a score that cannot be computed (no center or a zero vector) is stored as NULL, which reads as strict;
+    every other chunk gets a `cosine_lvl` row scored by its own cosine to the domain's center, defined as in plan A4 K7: the unit mean of
+    the unit vectors of the chunks whose strict decision falls in that domain (NOT the core's cluster-group center, which averages all
+    chunks of the group; the two differ, so this module computes its own from the build's vectors while they are in memory, one float per
+    labelled chunk); a score that cannot be computed (zero vector, no usable center) is stored as NULL, which reads as strict;
   * rows of an earlier classifier version for the page's chunks are retired first (same classifier_name, `classifier_version <> :version`),
     exactly as the topic links are, so a chunk that lost its label or changed domain does not keep a stale row;
   * the table is probed once per pass (probe_chunk_domain: to_regclass plus column INSERT and UPDATE(state) privileges). Absent, or a
@@ -80,13 +81,29 @@ def domain_scores(model, vecs) -> dict:
     model.span_order (the contract of core.quality). Never raises: anything unexpected yields fewer scores (stored as NULL)."""
     out: dict = {}
     try:
-        centers = {}
-        for n in _get(model, "nodes") or ():
-            c = _get(n, "center")
-            if _get(n, "level") == "domain" and c is not None and len(c) > 0:
-                centers[_get(n, "key")] = [float(x) for x in c]
         order, assoc = list(_get(model, "span_order") or ()), _get(model, "assoc") or {}
-        for i, sid in enumerate(order):
+        unit, sums = {}, {}
+        for i, sid in enumerate(order):  # pass 1: the plan's center (A4 K7, D4): unit mean of the vectors of the domain's STRICT members
+            key = domain_key(assoc.get(sid))
+            if key is None:
+                continue
+            v = [float(x) for x in vecs[i]]
+            norm = math.sqrt(sum(x * x for x in v))
+            if not norm > 0.0:
+                continue
+            u = [x / norm for x in v]
+            unit[sid] = u
+            acc = sums.setdefault(key, [0.0] * len(u))
+            if len(acc) != len(u):
+                continue
+            for j, x in enumerate(u):
+                acc[j] += x
+        centers = {}
+        for key, acc in sums.items():
+            cn = math.sqrt(sum(x * x for x in acc))
+            if cn > 0.0:
+                centers[key] = [x / cn for x in acc]
+        for sid in order:  # pass 2: own cosine to that center
             item = assoc.get(sid)
             key = domain_key(item)
             if key is None:
@@ -96,17 +113,10 @@ def domain_scores(model, vecs) -> dict:
                 if s is not None:
                     out[sid] = (s, "cosine")
                 continue
-            cen = centers.get(key)
-            if cen is None:
+            cen, u = centers.get(key), unit.get(sid)
+            if cen is None or u is None or len(cen) != len(u):
                 continue
-            v = [float(x) for x in vecs[i]]
-            norm = math.sqrt(sum(x * x for x in v))
-            if len(v) != len(cen) or not norm > 0.0:
-                continue
-            cn = math.sqrt(sum(x * x for x in cen))
-            if not cn > 0.0:
-                continue
-            out[sid] = (round(max(-1.0, min(1.0, sum(a * b for a, b in zip(v, cen)) / (norm * cn))), 6), "cosine_lvl")
+            out[sid] = (round(max(-1.0, min(1.0, sum(a * b for a, b in zip(u, cen)))), 6), "cosine_lvl")
     except (TypeError, ValueError, IndexError, KeyError, AttributeError):
         return {}
     return out
