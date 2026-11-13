@@ -59,7 +59,7 @@ In plain words (owner decisions R-037 and R-042):
 
 ## Search lanes
 
-Status: offline-tested only; live behaviour unverified. As of 2026-11-05 the Official lane ships off and the Current-reporting lane is on in config (Superseded 2026-11-05: earlier text said both ship off). The checks that must pass before either is enabled are in the [lanes enable checklist](lanes-enable-checklist.md).
+Status: offline-tested only; live behaviour unverified. As of 2026-11-05 the Official lane ships off and the Current-reporting lane is on in config (Superseded 2026-11-05: earlier text said both ship off). *Superseded 2026-11-13: at 4087b65 the Official lane is also on (`official_lane.enabled` true, OD-1109-RETRIEVAL), reading pages only for FEC and Census Bureau (`fetch_entities`); every other registry row gives links only; `site_search` stays false.* The checks that must pass before either is enabled are in the [lanes enable checklist](lanes-enable-checklist.md).
 
 ### Update 2026-11-06 (NEWS-BATCH-2)
 
@@ -78,14 +78,14 @@ The lane notes below predate these changes (offline-tested only). Wikipedia-cita
 - Lane pages are used for that one answer only. They are never stored. Quotes are 200 characters or fewer.
 - A lane page that fails the relevance check gives a link only.
 - The public record has links, a count of pages read and a credit line (GDELT is credited with a link). It has no page text.
-- When a lane is on, the data-use notice names GDELT and Hacker News search and says that pages read are not licence-cleared or stored (see the [README](../README.md#privacy-and-data-handling)).
+- When a lane is on, the data-use notice names GDELT (and, in older wording, Hacker News search, which is no longer used) and says that pages read are not licence-cleared or stored (see the [README](../README.md#privacy-and-data-handling)).
 
 ### Which pages are read
 
 - Both lanes use the shared permission record in `vera/source_permissions.py` (owner decisions R-049 and R-050). A page is read only when its read gate passes: robots.txt permits the fetch (checked by the shared fetch module on the same connection, failing closed), the registry `access_verdict` is not "forbid", the host is not on the owner deny-list (`config/source_permissions.json` `deny_hosts`, empty as shipped), and there is no login, paywall or no-crawl signal. Unknown means allowed.
 - A read page is used in the answer only when its use-for-answer gate passes: no No-Derivatives licence, no no-AI signal (`noai`, `Content-Signal` `ai-input=no`, or, since cf62a55 (2026-11-08), `Content-Usage` `ai-use=n`, read from the docstring only; page-level signal handling was not traced) and no registry `derivative_verdict` "forbid". Otherwise it is a reading-list link only.
 - As shipped, the registry marks AWS, Nvidia and Microsoft Azure documentation `access_verdict` "forbid" (never fetched, links only) and Google Cloud "allow"; the other seeded rows are "unknown".
-- Current-reporting lane: outlet pages linked from GDELT or Hacker News pass the same gates, with at most `admission.max_spans_total` outlet pages read per request.
+- Current-reporting lane: outlet pages linked from GDELT (Hacker News is no longer queried) pass the same gates, with at most `admission.max_spans_total` outlet pages read per request.
 
 ### Sub-queries and search
 
@@ -97,7 +97,7 @@ The lane notes below predate these changes (offline-tested only). Wikipedia-cita
 | File | Key | Value |
 | --- | --- | --- |
 | `config/subquery.json` | `enabled` | true |
-| `config/subquery.json` | `official_lane.enabled` | false |
+| `config/subquery.json` | `official_lane.enabled` | true at 4087b65 (Superseded 2026-11-13: was false; `fetch_entities` FEC and Census Bureau) |
 | `config/subquery.json` | `official_lane.site_search` | false |
 | `config/subquery.json` | `model_fallback.enabled` | false |
 | `config/reporting_lane.json` | `enabled` | true at HEAD (Superseded 2026-11-05: was false) |

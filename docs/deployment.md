@@ -2,7 +2,7 @@
 
 [← Project overview](../README.md)
 
-This describes a **two-service, owner-managed** Docker deployment. It is not evidence that any service has been created or passed live acceptance. Render is the interim host; a non-Render host is planned (Postgres remains the database technology). For the current project status and timeline, see the [project overview](../README.md#status). Status of this page as of 2026-11-05 (repo HEAD cd81eab plus uncommitted working-tree edits; the 2026-10-30 text is revised, not deleted). Auto-Deploy is off on both services; deploys are owner-controlled.
+This describes a **two-service, owner-managed** Docker deployment. It is not evidence that any service has been created or passed live acceptance. Render is the interim host; a non-Render host is planned (Postgres remains the database technology). For the current project status and timeline, see the [project overview](../README.md#status). Status of this page as of 2026-11-13 (origin/main 4087b65; config values read from the files at that commit). *Superseded 2026-11-13 (DOCS-1113): the 2026-11-05 statement "Auto-Deploy is off on both services" no longer holds. Per the project rules (`AGENTS.md`, critical rule 7), Render auto-deploys every push to `origin/main` (owner setting "On Commit", since 2026-11-07); any other deploy (manual redeploy, rollback) needs the owner's approval.*
 
 ## Services
 
@@ -17,7 +17,7 @@ Both services are built independently from the repository root.
 | Docker build context | `.` | `.` |
 | Docker command | `./start.sh api` | `./start.sh ui` |
 | Health check | `/health` | `/_stcore/health` |
-| Automatic deployment (recommended) | Off | Off |
+| Automatic deployment | On Commit (see the status note above; superseded 2026-11-13, was "Off") | On Commit (same) |
 
 The frontend may be given any service name; the name does not change its Docker command.
 
@@ -31,7 +31,7 @@ This is the canonical list of the environment variables the serving code reads. 
 |---|---|---|
 | `VERA_API_KEY` | Required | Client key for `/ask` and other protected routes. |
 | `GROQ_API_KEY` | Required for `/ask` as shipped | The answer provider chain is Groq first (`config/ask-provider-chain.json`). A chain entry whose key is unset is skipped, and with the OpenAI fallback off no other provider remains. |
-| `OPENAI_API_KEY` | Only if the OpenAI fallback is on | `openai_fallback.enabled` ships `false`: the API then makes no OpenAI call, and a set key is ignored. Turning it on is a reviewed config change plus a deploy, and needs a valid key. |
+| `OPENAI_API_KEY` | Only if the OpenAI fallback is on | `openai_fallback.enabled` ships `false`: a fresh question then never makes an OpenAI call. One exception: `exhaustion.grace.openai_completion` ships `true` (`config/ask-provider-chain.json`), so when every free provider is exhausted after work on a question has started, the answer step and claim check may use OpenAI to finish that answer, if a key is set. Turning the fallback on is a reviewed config change plus a deploy, and needs a valid key. *Superseded 2026-11-13: the earlier text read "`openai_fallback.enabled` ships `false`: the API then makes no OpenAI call, and a set key is ignored."* |
 | `VERA_DB_URL_RO` | Optional | Read-only database connection: aggregate corpus description, the database corpus source, and reading acquired documents. |
 | `VERA_DB_URL_WO` | Optional; needed for acquisition | Write-only application account that automatic acquisition uses to store acquired documents. Acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. It is also the INSERT-only connection for the request trace and the stored corpus digest (see "Request trace and stored digest" below). |
 | `OPENALEX_API_KEY` | Optional | OpenAlex API key. Set: the OpenAlex search cap is 1000/day, half reserved for visitor questions, paced at most 5 requests/second (`config/rate_limits.json`). Unset: keyless, 90/day. Never logged. |
@@ -46,6 +46,8 @@ This is the canonical list of the environment variables the serving code reads. 
 | `VERA_ENV_CONTEXT` | Platform-dependent | `start.sh` accepts `production` as an alternative to `RENDER=true`. |
 | `VERA_PUBLIC_MODE`, `VERA_TRUST_PROXY` | Leave unset | As in the provided templates. |
 | `RENDER`, `RENDER_GIT_COMMIT`, `PORT` | Set by the platform | Do not set them manually. `/version` reports `RENDER_GIT_COMMIT`. |
+| `INTERNAL_DB_URL`, `EXTERNAL_DB_URL` | Not used by serving | Read only by the older single-account engine helper `vera/db.py` (internal URL on Render, external elsewhere); the serving routes use the role URLs above. |
+| `HF_HUB_OFFLINE` | Only with the meaning-similarity module | `config/semantic_similarity.json` ships `enabled` false; if it is turned on, the deployment must set `HF_HUB_OFFLINE=1` (`vera/semantic_similarity.py`). |
 
 ### UI service
 
@@ -69,8 +71,8 @@ Ships off (2026-11-05, read from config): `retention_purge.enabled` in the same 
 
 ### Lanes and acquisition switches (config, not environment)
 
-- News lane (`config/reporting_lane.json`): `enabled` is true in the working tree (owner decision 2026-11-05; GDELT only, `fallback_order` is `["gdelt"]`). Outlets are searched, but only hosts listed with `terms_verdict` `allow` are read in full; others are title and link only. **Untested live**: offline-tested only, and a full-suite run recorded in `work/NEWS-LANE-1104/checkpoint.md` had unattributed failures. Check the [lanes checklist](lanes-enable-checklist.md) before relying on it.
-- Official-sources lane: built, `official_lane.enabled` in `config/subquery.json` ships false (and `site_search` false).
+- News lane (`config/reporting_lane.json`): `enabled` is true (owner decision 2026-11-05; read from the file at 4087b65; GDELT only, `fallback_order` is `["gdelt"]`). Outlets are searched, but only hosts listed with `terms_verdict` `allow` are read in full; others are title and link only. **Untested live**: offline-tested only, and a full-suite run recorded in `work/NEWS-LANE-1104/checkpoint.md` had unattributed failures. Check the [lanes checklist](lanes-enable-checklist.md) before relying on it.
+- Official-sources lane: built. *Superseded 2026-11-13 (DOCS-1113): `official_lane.enabled` in `config/subquery.json` is true (pages read only for `fetch_entities`: FEC and Census Bureau); `site_search` is false.*
 - Automatic acquisition: `config/auto_acquire.json` has inline acquisition on with up to 6 acquisition rounds (`inline.acq6_rounds_enabled`, `bounds.acq_round_target_new_docs` 6). Corpus sufficiency is decided after retrieval, not by a fixed scope. Kill switch: `VERA_AUTOACQ_DISABLED`.
 - Live statistics (`config/live_stats.json`) ship off; they need migration 013, which is not applied.
 
