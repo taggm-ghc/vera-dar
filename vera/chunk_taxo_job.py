@@ -1714,7 +1714,7 @@ def loop(job: Job, sleep=None, max_passes=None) -> None:
             fails, w = 0, interval
         if sleep is not None:
             wait(w)
-        elif _wait_or_wake(w, started, _wake_min(jc, interval)):
+        elif _wait_or_wake(w, started, _wake_min(jc, interval), allow_wake=_wake_allowed(job, res)):
             return
 
 
@@ -1737,7 +1737,14 @@ def _wake_min(jc: dict, interval: float) -> float:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 1 else interval  # default: today's interval_s
 
 
-def _wait_or_wake(w: float, last_start: float, min_int: float, clock=time.monotonic, stop_wait=None, slice_s: float = 5.0) -> bool:
+def _wake_allowed(job, res: dict) -> bool:
+    """A wake may shorten only the normal between-pass wait of a job whose incremental mode is not `off`: shipping D5 with the mode off
+    changes nothing, and a wake never cuts a budget-deferral or backoff wait (those passes would only re-read every stored vector)."""
+    return getattr(job, "incremental", "off") != "off" and res.get("state") not in ("deferred", "error", "partial") and not res.get("finish_now")
+
+
+def _wait_or_wake(w: float, last_start: float, min_int: float, clock=time.monotonic, stop_wait=None, slice_s: float = 5.0,
+                  allow_wake: bool = True) -> bool:
     """Wait up to w seconds; True when a stop was requested. A wake ends the wait once min_int has passed since last_start (many wakes
     inside that window give one early pass)."""
     stop_wait = stop_wait or _STOP.wait
@@ -1749,7 +1756,7 @@ def _wait_or_wake(w: float, last_start: float, min_int: float, clock=time.monoto
             return False
         if stop_wait(min(slice_s, rem)):
             return True
-        if _WAKE.is_set():
+        if allow_wake and _WAKE.is_set():
             if clock() - last_start >= min_int:
                 _WAKE.clear()
                 return False

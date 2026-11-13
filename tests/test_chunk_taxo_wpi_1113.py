@@ -117,6 +117,30 @@ def test_t8_t9_new_spans_get_links_without_a_rebuild_and_linked_spans_are_never_
     assert len(db.runs) == 1  # no new build row
 
 
+def test_t9_a_linked_span_re_embedded_after_the_build_is_not_a_target_and_its_rows_stay_untouched():
+    core = AssocCore()
+    db = build_db(core=core)
+    before = {k: dict(v) for k, v in db.links.items()}
+    db.vec_after_ids = {3, 4}  # spans 3 and 4 hold active strict links and a vector written after the build's scan end (text changed)
+    j = mk(db, e=VEmb(), core=core, incremental="on")
+    j.run()
+    assert db.links == before  # the guard `no active strict link` kept them out of the target set: no retire, no insert
+    assert last_close(db)[0]["run"]["inc_targets"] == 0
+
+
+def test_a1_incremental_pages_set_the_022_guard_context_before_the_first_link_write():
+    core = AssocCore()
+    db = build_db(core=core)
+    add_spans(db, [13])
+    db.ctx = None
+    mk(db, e=VEmb(), core=core, incremental="on").run()
+    names = db.names()
+    assert db.ctx is not None and db.ctx[1]  # vera.tax_actor / vera.tax_batch were set (batch = sha of the active version)
+    assert names.index("set_ctx") < names.index("link_insert_chunk_subtopic")
+    import hashlib
+    assert db.ctx[1] == hashlib.sha256(("auto-chunk-taxo:" + db.runs[0]["version"]).encode()).hexdigest()
+
+
 def test_t13_an_incremental_pass_with_no_new_spans_spends_zero_neurons_and_writes_nothing():
     core = AssocCore()
     db = build_db(core=core)
@@ -330,6 +354,31 @@ def test_t26_many_wakes_inside_the_debounce_window_give_one_early_pass():
         job._JOB = None
     assert stopped is False and 599.0 < t[0] <= 700.0  # woke once, at the window end (600 s after the pass began), not at 3600 s
     assert not job._WAKE.is_set()
+
+
+def test_t26_a_wake_never_changes_the_shipped_waits_only_a_normal_wait_of_a_job_with_the_mode_not_off():
+    assert job._wake_allowed(SimpleNamespace(incremental="off"), {"state": "complete"}) is False  # shipping D5 with the mode off: no change
+    assert job._wake_allowed(SimpleNamespace(incremental="shadow"), {"state": "complete"}) is True
+    for res in ({"state": "deferred"}, {"state": "error"}, {"state": "partial"}, {"state": "complete", "finish_now": True}):
+        assert job._wake_allowed(SimpleNamespace(incremental="on"), res) is False  # never cuts a budget-deferral or backoff wait
+    job._JOB = SimpleNamespace()
+    job._WAKE.clear()
+    t = [0.0]
+
+    def stop_wait(s):
+        t[0] += s
+        job.wake()
+        return False
+
+    try:
+        job._wait_or_wake(80000.0, 0.0, 3600.0, clock=lambda: t[0], stop_wait=stop_wait, slice_s=1000.0, allow_wake=False)
+        assert t[0] == 80000.0  # a wake during a deferral wait did not end it (the probe's 3600 s case)
+        t[0] = 0.0
+        job._wait_or_wake(80000.0, 0.0, 3600.0, clock=lambda: t[0], stop_wait=stop_wait, slice_s=1000.0, allow_wake=True)
+        assert t[0] < 80000.0  # while with the permission the same wake ends it at the window end
+    finally:
+        job._JOB = None
+        job._WAKE.clear()
 
 
 def test_t26_wake_is_inert_without_a_running_job_and_the_ingest_hand_off_keeps_notify_ingested():
