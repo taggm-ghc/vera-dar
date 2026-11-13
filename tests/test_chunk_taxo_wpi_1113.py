@@ -476,3 +476,32 @@ def test_incremental_defaults_off_and_config_validation():
         with pytest.raises(ValueError):
             ct._validate_job(bad)
     assert job.Job({"enabled": True, "job": {"rebuild_interval_s": 0}}).rebuild_interval_s is None
+
+
+# ------------------------------------------------------------------------------------------------ A6 loop wiring
+@pytest.mark.parametrize("mode,expect_inc,expect_shadow", [("off", False, False), ("shadow", False, True), ("on", True, False)])
+def test_a6_the_job_loop_reaches_the_incremental_path_only_in_shadow_and_on(monkeypatch, mode, expect_inc, expect_shadow):
+    """A6: the pass is driven by `loop` (not `run` directly). `on` calls the incremental assignment, `shadow` only its in-memory
+    comparison, `off` neither. The loop's real run/close path executes; sleep is stubbed so no wait happens. No DB, no network."""
+    core = AssocCore()
+    db = build_db(core=core)
+    add_spans(db, [13, 14, 15])
+    calls = {"inc": 0, "shadow": 0}
+    real_inc, real_shadow = job.Job._try_incremental, job.Job._shadow_compute
+
+    def spy_inc(self):
+        calls["inc"] += 1
+        return real_inc(self)
+
+    def spy_shadow(self):
+        calls["shadow"] += 1
+        return real_shadow(self)
+
+    monkeypatch.setattr(job.Job, "_try_incremental", spy_inc)
+    monkeypatch.setattr(job.Job, "_shadow_compute", spy_shadow)
+    job._STOP.clear()
+    j = mk(db, e=VEmb(), core=core, incremental=mode)
+    job.loop(j, sleep=lambda s: False, max_passes=1)
+    assert (calls["inc"] > 0, calls["shadow"] > 0) == (expect_inc, expect_shadow)
+    assert len(db.runs) == (1 if mode == "on" else 2)  # on assigns without a build row; off and shadow rebuild
+    assert (last_close(db)[1] == ["incremental"]) == expect_inc
