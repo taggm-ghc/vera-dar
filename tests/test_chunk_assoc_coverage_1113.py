@@ -30,8 +30,10 @@ def row(run_id=7, counts=None, age=2.0, state="finished"):
 
 def raw(classes, build="default", scan="default", with_vector=None, ages=None):
     n = sum(classes.values())
+    if ages and not isinstance(next(iter(ages.values())), list):  # scalar: every waiting chunk of that class has this age
+        ages = {k: [v] * classes.get(k, 0) for k, v in ages.items()}
     return {"spans": n, "with_vector": n - classes.get("no_vector_yet", 0) if with_vector is None else with_vector,
-            "sources_total": 3, "sources_with_covered": 2, "classes": dict(classes), "age_max_hours": ages or {},
+            "sources_total": 3, "sources_with_covered": 2, "classes": dict(classes), "ages_desc": ages or {},
             "build": row() if build == "default" else build, "scan": row() if scan == "default" else scan}
 
 
@@ -78,6 +80,29 @@ def test_age_limit_fails_old_waiting_chunks():
     res = run(raw({"covered_all_derived": 9, "no_vector_yet": 1}, ages={"no_vector_yet": 100.0}))
     assert res["verdict"] == "FAIL" and any("no_vector_yet older" in f for f in res["fail"])
     assert run(raw({"covered_all_derived": 9, "no_vector_yet": 1}, ages={"no_vector_yet": 3.0}))["verdict"] == "PASS"
+
+
+def test_d1_old_job_excluded_spans_do_not_trigger_the_age_fail():
+    # 3 portal spans without a vector (oldest, 500 h) sit in no_vector_yet beside 2 fresh eligible waiting chunks (1 h)
+    c = dict(ZERO, skipped_portal=3)
+    ages = {"no_vector_yet": [500.0, 500.0, 500.0, 1.0, 1.0]}
+    res = run(raw({"covered_all_derived": 5, "no_vector_yet": 5}, build=row(7, c), scan=row(7, c), ages=ages), dict(LIM, covered_floor=0.4))
+    assert res["verdict"] == "PASS" and res["ages_max_hours"]["no_vector_yet"] == 1.0
+    # a genuinely old eligible chunk still fails: the 4th-oldest is old
+    ages = {"no_vector_yet": [500.0, 500.0, 500.0, 200.0, 1.0]}
+    res = run(raw({"covered_all_derived": 5, "no_vector_yet": 5}, build=row(7, c), scan=row(7, c), ages=ages), dict(LIM, covered_floor=0.4))
+    assert res["verdict"] == "FAIL" and any("older than the age limit" in f for f in res["fail"])
+
+
+def test_d1_truncated_age_list_is_pending_not_pass():
+    c = dict(ZERO, skipped_portal=3)
+    res = run(raw({"covered_all_derived": 5, "no_vector_yet": 5}, build=row(7, c), scan=row(7, c), ages={"no_vector_yet": [9.0, 9.0]}))
+    assert res["verdict"] == "PENDING-CAL" and any("age unknown" in p for p in res["pending"])
+
+
+def test_d3_scan_row_without_keys_cannot_be_compared_so_pending():
+    res = run(raw(FULL, build=row(7), scan={"run_id": 9, "state": "finished", "age_hours": 1, "counts": {}}))
+    assert res["verdict"] == "PENDING-CAL" and any("cannot be compared" in p for p in res["pending"])
 
 
 def test_abstained_share_over_display_gate_fails_and_denominator_is_vector_bearing():

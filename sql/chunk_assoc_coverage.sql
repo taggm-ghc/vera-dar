@@ -126,9 +126,10 @@ SELECT json_build_object(
   'sources_total', (SELECT count(DISTINCT source_id) FROM cls),
   'sources_with_covered', (SELECT count(DISTINCT source_id) FROM cls WHERE cls LIKE 'covered_all%'),
   'classes', (SELECT coalesce(json_object_agg(cls, n), '{}'::json) FROM (SELECT cls, count(*) AS n FROM cls GROUP BY cls) c),
-  'age_max_hours', (SELECT coalesce(json_object_agg(cls, a), '{}'::json)
-                      FROM (SELECT cls, round(max(age_h)::numeric, 2) AS a FROM cls
-                             WHERE cls IN ('no_vector_yet', 'stale_vector', 'new_since_build') GROUP BY cls) g),
+  -- the 2000 oldest ages (hours, descending) per waiting class; the script skips the oldest k when k job-excluded spans may be among them
+  'ages_desc', (SELECT coalesce(json_object_agg(cls, a), '{}'::json)
+                  FROM (SELECT cls, (array_agg(round(age_h::numeric, 2) ORDER BY age_h DESC))[1:2000] AS a FROM cls
+                         WHERE cls IN ('no_vector_yet', 'stale_vector', 'new_since_build') GROUP BY cls) g),
   'build', (SELECT json_build_object('run_id', b.run_id, 'age_hours', round((extract(epoch FROM (now() - b.finished_at)) / 3600.0)::numeric, 2),
                                      'max_span_id', b.max_span_id,
                                      'counts', (SELECT coalesce(json_object_agg(k.k, coalesce(b.m->k.k, b.m->'run'->k.k)), '{}'::json)

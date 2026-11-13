@@ -128,7 +128,7 @@ def evaluate(raw: dict, limits: dict, limit_pending: list[str], max_abstain_shar
         cl[k] = _int(v, f"classes.{k}")
     if sum(cl.values()) != spans:
         raise CoverageError("query classes do not sum to spans")
-    ages = {k: float((raw.get("age_max_hours") or {}).get(k, 0) or 0) for k in AGED}
+    ages_desc = raw.get("ages_desc") or {}
     pend, fail, notes = list(limit_pending), [], []
 
     build, scan = raw.get("build"), raw.get("scan")
@@ -141,7 +141,9 @@ def evaluate(raw: dict, limits: dict, limit_pending: list[str], max_abstain_shar
         pend.append("run row lacks the job-counted exclusion keys (WP-I not live)")
     if build and scan:
         sc = _job_counts(scan, "scan")
-        if jc is not None and sc is not None and any(jc[k] != sc[k] for k in jc if k != "quarantined"):
+        if jc is not None and sc is None:
+            pend.append("latest complete-scan row lacks the exclusion keys, so it cannot be compared with the W4 build row")
+        elif jc is not None and any(jc[k] != sc[k] for k in jc if k != "quarantined"):
             pend.append("latest complete-scan exclusion counts differ from the latest W4 build row")
     excl = {k: 0 for k in EXCLUSIONS}
     excl_vec = {k: 0 for k in EXCLUSIONS}
@@ -174,9 +176,25 @@ def evaluate(raw: dict, limits: dict, limit_pending: list[str], max_abstain_shar
               "abstained": share(adj["abstained"], vec_elig)}  # denominator: vector-bearing eligible chunks
     if adj["unexplained"] > 0:
         fail.append(f"unexplained {adj['unexplained']} > 0")
+    # Age of the oldest ELIGIBLE waiting chunk. Job-excluded spans cannot be told apart in SQL, so assume they are the oldest and skip
+    # that many: a lower bound on the true maximum, so an age FAIL is never false (D1 of the WP-C verification).
+    ages = {}
+    for k in AGED:
+        lst = ages_desc.get(k) or []
+        if not all(isinstance(x, (int, float)) and not isinstance(x, bool) and x >= 0 for x in lst):
+            raise CoverageError(f"ages_desc.{k}: not a list of non-negative numbers")
+        skip = (n_ex - n_ex_vec if k == "no_vector_yet" else n_ex_vec)
+        if adj[k] <= 0:
+            ages[k] = 0.0
+        elif skip < len(lst):
+            ages[k] = float(lst[skip])
+        else:
+            ages[k] = None
+            if limits["age_limit_hours"] is not None:
+                pend.append(f"{k}: age unknown (more job-excluded spans than ages listed)")
     if limits["age_limit_hours"] is not None:
         for k in AGED:
-            if adj[k] > 0 and ages[k] > limits["age_limit_hours"]:
+            if ages[k] is not None and adj[k] > 0 and ages[k] > limits["age_limit_hours"]:
                 fail.append(f"{k} older than the age limit ({ages[k]:.2f} h > {limits['age_limit_hours']} h)")
     if shares["abstained"] is not None and shares["abstained"] > max_abstain_share:
         fail.append(f"abstained share {shares['abstained']:.4f} > display_gate.max_abstain_share {max_abstain_share}")
