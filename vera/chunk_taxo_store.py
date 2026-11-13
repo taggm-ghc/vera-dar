@@ -56,7 +56,13 @@ def _build() -> dict[str, str]:
                          "pg_catalog.to_regclass('vera_vjay.tax_anchors') IS NOT NULL, "
                          "(pg_catalog.to_regclass('vera_vjay.tax_chunk_vectors') IS NOT NULL "
                          "AND pg_catalog.to_regclass('vera_vjay.tax_job_runs') IS NOT NULL)")
-    s["probe_chunk_domain"] = "SELECT pg_catalog.to_regclass('vera_vjay.tax_chunk_domain') IS NOT NULL"
+    # WP-D-1113 (plan A4): true only when the table exists AND this login holds column INSERT on each written column and UPDATE on state
+    # (column functions, never has_table_privilege: the grants are column-level, K6). Absent table or a missing privilege reads as false.
+    _dom_cols = ("span_id", "domain_id", "assigned_via", "classifier_name", "classifier_version", "score", "score_kind")
+    _dom_oid = "pg_catalog.to_regclass('vera_vjay.tax_chunk_domain')"
+    s["probe_chunk_domain"] = ("SELECT COALESCE(" + " AND ".join(
+        [f"pg_catalog.has_column_privilege(current_user, {_dom_oid}, '{c}', 'INSERT')" for c in _dom_cols]
+        + [f"pg_catalog.has_column_privilege(current_user, {_dom_oid}, 'state', 'UPDATE')"]) + ", false)")
     # 024 (draft CHUNK-TAXO-MIG024-1109 bus contract #6): vectors are cached per span keyed by the text sha256; one run row per finished run.
     s["vectors_select"] = ("SELECT span_id, model, text_sha256, vec FROM vera_vjay.tax_chunk_vectors WHERE span_id = ANY(:ids)")
     s["vectors_upsert"] = ("INSERT INTO vera_vjay.tax_chunk_vectors (span_id, model, dim, text_sha256, vec) "

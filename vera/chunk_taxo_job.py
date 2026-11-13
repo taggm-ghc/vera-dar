@@ -584,7 +584,8 @@ class Job:
         self._vote_rows = []
         self._retire_keys = []
         self._run_new_nodes = 0
-        self._dom = domain_writer.new_state()  # WP-D-1113
+        self._dom = domain_writer.new_state(self.jcfg.get("chunk_domain_write") is not False)  # WP-D-1113 (kill switch: literal false)
+        self._dom_scores = {}  # WP-D-1113: {span_id: (cosine, kind)} from _do_build
         self._run_id = None
         self._pass_neurons = 0.0
         self.metrics_run = {}
@@ -789,6 +790,7 @@ class Job:
         chunks = [(c["span_id"], c["source_id"], c["text"]) for c in self._chunks]  # C1 contract: (span_id, source_id, text)
         model = core.build(chunks, vecs, params, prior=prior)
         metrics = core.quality(model, vecs)
+        self._dom_scores = domain_writer.domain_scores(model, vecs) if self._dom.enabled else {}  # WP-D-1113
         ok, reasons = core.display_gate(metrics, self.cfg.get("display_gate"))
         self._pending = SimpleNamespace(model=model, metrics=metrics, ok=bool(ok), reasons=list(reasons or []))
         self._set(version=str(_g(model, "version")), metrics=_numeric_only(metrics) or {}, display_ok=bool(ok),
@@ -984,7 +986,7 @@ class Job:
                     by_kind[kind].append({"a": sid, "b": eid, "version": version, "score": sim, "score_kind": sk})
         for kind, rows in by_kind.items():
             store.run_sql(conn, f"link_insert_{kind}", rows)
-        domain_writer.write_page(conn, self._dom, spans, assoc, ids, version)  # WP-D-1113: no-op while tax_chunk_domain is absent
+        domain_writer.write_page(conn, self._dom, spans, assoc, ids, version, self._dom_scores)  # WP-D-1113: no-op while tax_chunk_domain is absent
 
     def _do_links(self):
         model = self._pending.model

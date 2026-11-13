@@ -64,7 +64,7 @@ def test_table_absent_is_a_noop_with_metric():
     dw.write_page(c, st, [1, 2], {1: item(), 2: item()}, IDS, "v1")
     dw.write_page(c, st, [3], {3: item()}, IDS, "v1")
     assert c.names() == ["probe_chunk_domain"]  # probed once per pass, nothing retired or inserted
-    assert dw.metrics(st) == {"domain_table_absent": 1}
+    assert dw.metrics(st) == {"domain_table_absent": 1, "domain_rows_skipped_no_table": 3}  # T51: the would-be count
 
 
 def test_table_present_writes_strict_domain_rows():
@@ -132,6 +132,9 @@ def test_store_statements_are_allowlisted_and_safe():
         up = store.SQL[nm].upper()
         for bad in ("DELETE", "TRUNCATE", "DROP ", "ALTER ", "CREATE ", "GRANT", "REVOKE"):
             assert bad not in up, (nm, bad)
+    probe_sql = store.SQL["probe_chunk_domain"]  # T53: column functions only (grants are column-level), never has_table_privilege
+    assert "has_table_privilege" not in probe_sql and probe_sql.count("has_column_privilege") == 8 and "'UPDATE'" in probe_sql
+    assert "to_regclass('vera_vjay.tax_chunk_domain')" in probe_sql and "domain_chunks" not in " ".join(store.SQL.values())  # T55
     assert "ON CONFLICT DO NOTHING" in store.SQL["link_insert_chunk_domain"]
     assert "vera_vjay.tax_chunk_domain (span_id, domain_id, assigned_via, classifier_name, classifier_version, score, score_kind)" \
         in store.SQL["link_insert_chunk_domain"]
@@ -160,7 +163,7 @@ def test_job_table_absent_writes_no_domain_and_records_metric():
     assert r["complete"] and "link_insert_chunk_domain" not in db.names() and "link_retire_chunk_domain" not in db.names()
     assert db.names().count("probe_chunk_domain") == 1
     m = run_metrics(db)
-    assert m["domain_table_absent"] == 1 and "domain_rows_attempted" not in m
+    assert m["domain_table_absent"] == 1 and "domain_rows_attempted" not in m and m["domain_rows_skipped_no_table"] == 10
     assert len(db.active("chunk_subtopic")) + len(db.active("chunk_topic")) == 10  # topic and sub-topic links unchanged
 
 
