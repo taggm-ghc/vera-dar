@@ -144,6 +144,51 @@ def test_allowlist_unavailable_fails_closed_with_its_own_code(tmp_path):
         assert ei.value.code == la.ALLOWLIST_UNAVAILABLE
 
 
+def _raw_chain(tmp_path, text, name):
+    p = tmp_path / name
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_malformed_providers_give_the_distinct_refusal_not_a_type_or_recursion_error(tmp_path):
+    env = _real_provider()["api_key_env"]
+    deep = "[" * 100000 + "]" * 100000
+    shapes = {"int": '{"providers": 5}', "bool": '{"providers": true}', "str": '{"providers": "x"}',
+              "dict": '{"providers": {"a": 1}}', "null_entries": '{"providers": [null, 3, "s", [1]]}',
+              "top_list": "[1, 2]", "top_int": "7", "deep": deep, "deep_in_providers": '{"providers": ' + deep + "}"}
+    for name, text in shapes.items():
+        p = _raw_chain(tmp_path, text, name + ".json")
+        with pytest.raises(la.LlmHostRefused) as ei:
+            la.require_allowed(_real_url(), env, path=p)
+        assert ei.value.code == la.ALLOWLIST_UNAVAILABLE, name
+        assert isinstance(ei.value, OpenAIError), name
+        assert la.allowed_hosts(p) == {} or len(la.allowed_hosts(p)) == 0, name
+
+
+def test_malformed_providers_do_not_escape_the_chain_except(monkeypatch, tmp_path):
+    from vera import inference_chain as ic
+    monkeypatch.setattr(ic, "OpenAI", _recorder())
+    monkeypatch.setattr(la, "CONFIG_PATH", _raw_chain(tmp_path, '{"providers": 5}', "int.json"))
+    entries = ic.load_chain("m", None, path=CHAIN, env={_real_provider()["api_key_env"]: DUMMY}, openai_enabled=False)
+    with pytest.raises(OpenAIError) as ei:  # the chain's own `except OpenAIError` class
+        ic._chain_run("q", entries)
+    assert isinstance(ei.value, la.LlmHostRefused) and ei.value.code == la.ALLOWLIST_UNAVAILABLE
+
+
+def test_allowed_hosts_is_immutable_and_cannot_widen_the_cache():
+    a = la.allowed_hosts(CHAIN)
+    assert a
+    with pytest.raises(TypeError):
+        a["llm-lookalike.test"] = frozenset({"X_API_KEY"})
+    h = next(iter(a))
+    assert isinstance(a[h], frozenset)
+    with pytest.raises(AttributeError):
+        a[h].add("X_API_KEY")
+    with pytest.raises(la.LlmHostRefused):
+        la.require_allowed(BAD, "X_API_KEY", path=CHAIN)
+    assert "llm-lookalike.test" not in la.allowed_hosts(CHAIN)
+
+
 def test_custom_file_allows_only_its_own_hosts(tmp_path):
     p = _chain_file(tmp_path, [{"base_url": "https://llm.example.test/v1", "api_key_env": "EX_API_KEY"}])
     assert la.require_allowed("https://llm.example.test/v1", "EX_API_KEY", path=p)

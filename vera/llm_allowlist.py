@@ -18,6 +18,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import urlsplit
 
 from openai import OpenAIError
@@ -82,6 +83,7 @@ def _clean_host(base_url) -> str | None:
 
 
 _cache: dict = {}
+_EMPTY = MappingProxyType({})
 
 
 def allowed_hosts(path=None) -> dict:
@@ -97,20 +99,25 @@ def allowed_hosts(path=None) -> dict:
             if hit:
                 return hit
             raw = json.loads(fh.read().decode("utf-8"))
-    except (OSError, ValueError):
-        return {}
+    except (OSError, ValueError, RecursionError, RuntimeError):  # RecursionError: absurdly deep JSON; fail closed
+        return _EMPTY
+    provs = raw.get("providers") if isinstance(raw, dict) else None
+    if not isinstance(provs, list):  # int, bool, str, dict, null: unavailable, never a TypeError
+        return _EMPTY
     out: dict = {}
-    for ent in (raw.get("providers") if isinstance(raw, dict) else None) or []:
+    for ent in provs:
         if not isinstance(ent, dict):
             continue
         host = _clean_host(ent.get("base_url"))
         env = ent.get("api_key_env")
         if host and isinstance(env, str) and _KEY_ENV_RE.fullmatch(env):
             out[host] = out.get(host, frozenset()) | {env}
-    if out:
-        _cache.clear()
-        _cache[key] = out
-    return out
+    if not out:
+        return _EMPTY
+    view = MappingProxyType(out)  # immutable view of frozensets: a caller cannot widen the cached list
+    _cache.clear()
+    _cache[key] = view
+    return view
 
 
 def require_allowed(base_url, api_key_env, path=None) -> str:
