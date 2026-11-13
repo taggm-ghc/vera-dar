@@ -162,13 +162,16 @@ def test_shipped_groq_portal_is_disabled_and_a_pure_pass_through():
     assert rate_limit.openai_http_client("https://api.groq.com/openai/v1", 5.0) is None  # SDK default client
     from vera.inference_chain import ChainEntry
     import os
-    os.environ.setdefault("INT1022B_FAKE_KEY", "x")
+    # LLM-ALLOWLIST-1113: the key name must be the one the chain file binds to this host (GROQ_API_KEY); a dummy value
+    had = "GROQ_API_KEY" in os.environ
+    os.environ.setdefault("GROQ_API_KEY", "x")
     try:
         c = ChainEntry(provider="groq", model="m", pricing=None, base_url="https://api.groq.com/openai/v1",
-                       api_key_env="INT1022B_FAKE_KEY").client()
+                       api_key_env="GROQ_API_KEY").client()
         assert type(c._client._transport).__name__ != "_LimitedTransport"
     finally:
-        os.environ.pop("INT1022B_FAKE_KEY", None)
+        if not had:
+            os.environ.pop("GROQ_API_KEY", None)
     assert rate_limit.openai_http_client("https://unlisted.example.org/v1", 5.0) is None
     assert rate_limit.openai_http_client(None, 5.0) is None
 

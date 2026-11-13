@@ -69,8 +69,10 @@ def _real_call(cfg):
 
     def call(checker, msgs):
         from vera import provider_exhaustion as px
+        from vera.llm_allowlist import require_allowed  # P-1112-02: before the key and the client
+        base_url = require_allowed(checker["base_url"], checker["api_key_env"])
         px.guard()
-        c = OpenAI(base_url=checker["base_url"], api_key=os.environ[checker["api_key_env"]], max_retries=0,
+        c = OpenAI(base_url=base_url, api_key=os.environ[checker["api_key_env"]], max_retries=0,
                    timeout=float(cfg["stance_timeout_s"]))
         kw = {"extra_body": checker["extra_body"]} if checker.get("extra_body") else {}
         if checker.get("json_mode", True):

@@ -36,20 +36,32 @@ class FakeClient:
         self.kw = kw
 
 
-def test_config_override_routes_to_base_url_and_model(tmp_path):
+def _allow(tmp_path, monkeypatch, url, key_env):
+    """LLM-ALLOWLIST-1113: make_client now checks the generator base_url against the provider entries of the chain
+    file; these tests use their own chain file listing their own host and key name (assertions below unchanged,
+    except that the fake key name must end in _API_KEY to be bindable)."""
+    from vera import llm_allowlist
+    p = tmp_path / "chain.json"
+    p.write_text(json.dumps({"providers": [{"base_url": url, "api_key_env": key_env}]}), encoding="utf-8")
+    monkeypatch.setattr(llm_allowlist, "CONFIG_PATH", p)
+
+
+def test_config_override_routes_to_base_url_and_model(tmp_path, monkeypatch):
+    _allow(tmp_path, monkeypatch, "https://example.invalid/openai/v1", "FAKE_GEN_API_KEY")
     p = _run_cfg(tmp_path, {"model": "free-model-x", "base_url": "https://example.invalid/openai/v1",
-                            "api_key_env": "FAKE_GEN_KEY"})
+                            "api_key_env": "FAKE_GEN_API_KEY"})
     s = gc.generator_settings(p)
     assert s.model == "free-model-x" and not s.is_default_provider
-    c = gc.make_client(s, env={"FAKE_GEN_KEY": "k-test"}, client_cls=FakeClient, timeout=5)
+    c = gc.make_client(s, env={"FAKE_GEN_API_KEY": "k-test"}, client_cls=FakeClient, timeout=5)
     assert c.kw["base_url"] == "https://example.invalid/openai/v1"
     assert c.kw["api_key"] == "k-test" and c.kw["timeout"] == 5
 
 
-def test_missing_key_env_names_var_not_value(tmp_path):
+def test_missing_key_env_names_var_not_value(tmp_path, monkeypatch):
+    _allow(tmp_path, monkeypatch, "https://e.invalid/v1", "FAKE_GEN_API_KEY")
     s = gc.generator_settings(_run_cfg(tmp_path, {"model": "m", "base_url": "https://e.invalid/v1",
-                                                  "api_key_env": "FAKE_GEN_KEY"}))
-    with pytest.raises(gc.GeneratorConfigError, match="FAKE_GEN_KEY"):
+                                                  "api_key_env": "FAKE_GEN_API_KEY"}))
+    with pytest.raises(gc.GeneratorConfigError, match="FAKE_GEN_API_KEY"):
         gc.make_client(s, env={}, client_cls=FakeClient)
 
 

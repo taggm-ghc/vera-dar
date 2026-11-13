@@ -90,15 +90,18 @@ def make_client(settings: GeneratorSettings | None = None, *, env: Mapping[str, 
         return _get_client()
     if client_cls is None:
         from openai import OpenAI as client_cls
+    from vera.llm_allowlist import require_allowed  # P-1112-02: the EFFECTIVE base_url, before any key is read
+    if client_kwargs.get("base_url") is not None:
+        client_kwargs = {**client_kwargs, "base_url": require_allowed(client_kwargs["base_url"], s.api_key_env)}
     if s.is_default_provider:  # OpenAI defaults: the SDK reads OPENAI_API_KEY itself, exactly as before
         return client_cls(**client_kwargs)
+    kw = dict(client_kwargs)
+    if s.base_url:
+        kw["base_url"] = require_allowed(s.base_url, s.api_key_env)
     key = (env if env is not None else os.environ).get(s.api_key_env)
     if not key:
         raise GeneratorConfigError(f"generator key env var {s.api_key_env!r} is not set")
-    kw = dict(client_kwargs)
     kw.setdefault("max_retries", 0)
-    if s.base_url:
-        kw["base_url"] = s.base_url
     return client_cls(api_key=key, **kw)
 
 

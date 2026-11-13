@@ -47,9 +47,11 @@ class ChainEntry:
     def client(self) -> OpenAI | None:
         if self.base_url is None:
             return None
+        from vera.llm_allowlist import require_allowed  # P-1112-02: first, before the key or any transport
+        base_url = require_allowed(self.base_url, self.api_key_env)
         from vera import rate_limit  # RATE-1022 A9: a skip surfaces as APIConnectionError -> next chain entry
-        hc = rate_limit.openai_http_client(self.base_url, self.timeout_s)
-        return OpenAI(base_url=self.base_url, api_key=os.environ[self.api_key_env], max_retries=0,
+        hc = rate_limit.openai_http_client(base_url, self.timeout_s)
+        return OpenAI(base_url=base_url, api_key=os.environ[self.api_key_env], max_retries=0,
                       timeout=self.timeout_s, **({"http_client": hc} if hc is not None else {}))
 
 

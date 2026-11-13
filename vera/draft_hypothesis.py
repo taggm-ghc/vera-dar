@@ -49,10 +49,14 @@ def _groq_checker() -> dict | None:
 
 def _real_call(cfg: dict):
     ck = _groq_checker()
-    if ck is None or not (os.getenv(ck["api_key_env"]) or "").strip():
+    if ck is None:
+        return None
+    from vera.llm_allowlist import require_allowed  # P-1112-02: before the key is read or the client is built
+    base_url = require_allowed(ck["base_url"], ck["api_key_env"])
+    if not (os.getenv(ck["api_key_env"]) or "").strip():
         return None
     from openai import OpenAI
-    client = OpenAI(base_url=ck["base_url"], api_key=os.environ[ck["api_key_env"]], max_retries=0,
+    client = OpenAI(base_url=base_url, api_key=os.environ[ck["api_key_env"]], max_retries=0,
                     timeout=float(cfg["draft_timeout_s"]))
 
     def call(model, msgs, timeout_s):
