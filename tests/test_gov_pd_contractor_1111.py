@@ -113,6 +113,13 @@ POSITIVE = [
     'The site is run by the Department of Energy (Example Alliance) under contract.',
     'The site is run by the Army Corps of Engineers (Example Builders) under contract.',
     'The site is run by DOE (a joint venture of Example and Sample) under contract.',
+    # CONTRACTOR3-1113 follow-up: names built only from agency words plus a company suffix
+    'The depot is operated by Army Engineers, LLC under contract.',
+    'The depot is operated by City Staff, Inc. under contract.',
+    'The depot is operated by Department of Records, Inc. under contract.',
+    'The depot is operated by Navy Staff, Ltd. under contract.',
+    'The depot is operated by Agency Officers, Corp. under contract.',
+    'The depot is operated by Government Engineers, LLP under contract.',
 ]
 
 # ---- negatives: must stay granted (planner 7 with the image-credit text split, reviewer-trial 7)
