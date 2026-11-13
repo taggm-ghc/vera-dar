@@ -31,6 +31,7 @@
 \endif
 BEGIN;
 SET LOCAL lock_timeout = '5s';   -- the FK briefly locks evidence_spans and tax_domains; never queue behind ingest for long
+SET LOCAL search_path = pg_catalog, pg_temp;   -- as 026: every reference below is schema-qualified; this also pins CHECK/default binding at CREATE time
 SELECT set_config('vera027.rw', :'app_rw_login', true), set_config('vera027.ro', :'app_ro_login', true);
 
 -- Preflight 1: PG16+; evidence_spans keyed by BIGINT span_id; 020 present (tax_domains keyed by domain_id, link guard function); nothing this file

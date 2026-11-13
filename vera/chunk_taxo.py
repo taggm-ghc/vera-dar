@@ -181,7 +181,7 @@ def _validate_cloudflare(c):
 def _validate_job(j):
     _chk(isinstance(j, dict), "job must be an object")
     for k, v in j.items():
-        if k in ("allow_curator_origin_on_020", "malloc_trim"):
+        if k in ("allow_curator_origin_on_020", "malloc_trim", "chunk_domain_write"):  # WP-D-1113: kill switch for the domain write
             _chk(isinstance(v, bool), "job.%s must be a bool" % k)
         else:
             _chk(k in _JOB_NUM, "unknown key job." + str(k))

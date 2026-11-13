@@ -289,4 +289,6 @@ def test_027_rollback_is_guarded_and_drops_only_the_table():
     assert "CASCADE" not in code and code.count("DROP ") == 1 and "DROP TABLE vera_vjay.tax_chunk_domain;" in code
     assert "purge_rows" in code and "rollback refused" in code and "must run as the owner" in code
     assert code.index("rollback refused") < code.index("DROP TABLE")
+    assert "expect_rows" in code and "rows were written after the export" in code and code.index("expect_rows") < code.index("DROP TABLE")  # security review A3
+    assert "SET LOCAL search_path = pg_catalog, pg_temp;" in MIG.read_text()                                                     # security review A2
     assert code.strip().endswith("COMMIT;")

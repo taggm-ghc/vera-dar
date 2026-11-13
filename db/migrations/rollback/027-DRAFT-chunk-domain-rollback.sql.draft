@@ -8,8 +8,12 @@
 \else
   \set purge_rows 0
 \endif
+\if :{?expect_rows}
+\else
+  \set expect_rows -1
+\endif
 BEGIN;
-SELECT set_config('vera027rb.purge', :'purge_rows', true);
+SELECT set_config('vera027rb.purge', :'purge_rows', true), set_config('vera027rb.expect', :'expect_rows', true);
 SET LOCAL lock_timeout = '5s';
 SET LOCAL search_path = pg_catalog, pg_temp;
 
@@ -26,6 +30,10 @@ BEGIN
   LOCK TABLE vera_vjay.tax_chunk_domain IN ACCESS EXCLUSIVE MODE;
   SELECT count(*) INTO cnt FROM vera_vjay.tax_chunk_domain;
   RAISE NOTICE '027 rollback: % rows in tax_chunk_domain', cnt;
+  -- the owner script passes -v expect_rows=<count it exported>; the job may have written rows since: refuse rather than purge unexported rows
+  IF current_setting('vera027rb.expect')::bigint >= 0 AND cnt <> current_setting('vera027rb.expect')::bigint THEN
+    RAISE EXCEPTION '027 rollback refused: % rows now, % expected (rows were written after the export); export again.', cnt, current_setting('vera027rb.expect');
+  END IF;
   IF cnt > 0 AND current_setting('vera027rb.purge') <> '1' THEN
     RAISE EXCEPTION '027 rollback refused: % rows exist. Export them, then re-run with -v purge_rows=1.', cnt;
   END IF;
