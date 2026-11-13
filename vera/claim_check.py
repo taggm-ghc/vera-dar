@@ -166,9 +166,11 @@ def _client(checker: dict, timeout_s: float):
         c = _get_client()  # S4: the last-resort client honours this check's timeout and makes no SDK retries
         wo = getattr(c, "with_options", None)
         return wo(timeout=timeout_s, max_retries=0) if callable(wo) else c
+    from vera.llm_allowlist import require_allowed  # P-1112-02: first, before the key or any transport
+    base_url = require_allowed(checker["base_url"], checker["api_key_env"])
     from vera import rate_limit  # RATE-1022 A10: portal from the checker's base URL; plain client if none
-    hc = rate_limit.openai_http_client(checker["base_url"], timeout_s)
-    return OpenAI(base_url=checker["base_url"], api_key=os.environ[checker["api_key_env"]], max_retries=0,
+    hc = rate_limit.openai_http_client(base_url, timeout_s)
+    return OpenAI(base_url=base_url, api_key=os.environ[checker["api_key_env"]], max_retries=0,
                   timeout=timeout_s, **({"http_client": hc} if hc is not None else {}))
 
 
