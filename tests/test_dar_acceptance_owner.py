@@ -160,7 +160,7 @@ class FakeDB:
                 pr = s["prov"]
                 out.append((self.canonical[s["canonical_source_id"]], s["source_id"], s["canonical_source_id"],
                             s["content"], pr["url"], pr["doi"], pr["title"], pr["published"], pr["source_type"],
-                            pr["retrieved_at"], kind))
+                            pr["retrieved_at"], kind, None, None, None, pr))  # ARXIV-DEFENSE-1113: real 15 columns (r[11..13], provenance r[14])
             return out
         if sql.startswith("SELECT d.name_norm, cs.canonical_url, dc.asserted_by"):
             nm = {d["domain_id"]: d["name_norm"] for d in self.domains}

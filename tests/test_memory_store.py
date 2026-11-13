@@ -13,7 +13,9 @@ _SHIPPED = json.load(open(ms.__file__.replace("vera/memory_store.py", "config/as
 BLOCK = {**_SHIPPED, "store": {**_SHIPPED["store"], "enabled": True}}
 CFG = BLOCK["store"]
 QUESTION = "What does quantized inference change about transformer latency?"
-SRC = [{"n": 1, "url": "https://arxiv.org/abs/2401.00001", "provider": "arxiv", "identifier": "arXiv:2401.00001",
+# ARXIV-DEFENSE-1113 flip: the write-path source was an arXiv citation, which the gate now refuses (OD-1110-ARXIV-PORTAL); it is an
+# OpenAlex-found record with its original-source DOI (reserved 10.1000 prefix). The tests exercise the store, not the arXiv route.
+SRC = [{"n": 1, "url": "https://doi.org/10.1000/example.1", "provider": "openalex", "identifier": "doi:10.1000/example.1",
         "licence_decision": "allow", "title": "T"}]
 GOOD = {"id": 0, "sentence": "Int8 weight quantization reduced memory use by roughly half in the cited study [1].",
         "citations": [1], "verdict": "supported"}
@@ -104,7 +106,12 @@ def test_recall_query_terms_and_shape():
     q = r.query_terms(QUESTION)
     assert " or " in q and len(q.split(" or ")) <= CFG["max_query_terms"]
     rows = []
-    r._rows = lambda sql, p: rows.append((sql, p)) or [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u")]
+    def fake_rows(sql, p):  # ARXIV-DEFENSE-1113: real 5-column recall row (claim_id last) and the portal-check source read
+        rows.append((sql, p))
+        if "c.claim_id = ANY(:ids)" in sql:
+            return [(1, {"document_id": "acq-1", "url": "https://doi.org/10.1000/example.1"}, "https://doi.org/10.1000/example.1")]
+        return [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u", 1)]
+    r._rows = fake_rows
     out = r.recall(QUESTION)
     assert out == [{"claim_text": "c", "source_title": "T", "source_url": "u", "saved_at": "2026-10-01T00:00:00+00:00"}]
     assert QUESTION not in json.dumps(rows[0][1], default=str)  # only the term query, never the raw question
@@ -127,7 +134,7 @@ def test_decay_is_true_half_life_and_rank_floor():
 
 
 def test_one_span_per_cited_source_and_daily_cap_atomic():
-    src2 = [dict(SRC[0]), dict(SRC[0], url="https://arxiv.org/abs/2401.00002", identifier="arXiv:2401.00002")]
+    src2 = [dict(SRC[0]), dict(SRC[0], url="https://doi.org/10.1000/example.2", identifier="doi:10.1000/example.2")]
     two = dict(GOOD, citations=[1, 2]); st = FakeStore()
     sp = iter([11, 12]); rd = FakeReader(); rd.span = lambda s, e: next(sp)
     svc(rd, st).write_claims([two], src2, QUESTION)

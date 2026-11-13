@@ -10,7 +10,9 @@ from vera.memory_gate import (
 
 DEFAULT_CONFIG = load_gate_config()
 GOOD = "Sparse attention reduces memory cost on long sequences while retaining accuracy on benchmarks."
-SRC = SourceRef("arxiv", "allow", "arXiv:2001.00001")
+# ARXIV-DEFENSE-1113 flip: the default allowed source was an arXiv citation; the gate now refuses portal records (OD-1110-ARXIV-PORTAL),
+# so the GOOD source is an OpenAlex-found record with its original-source DOI (reserved 10.1000 prefix).
+SRC = SourceRef("openalex", "allow", "doi:10.1000/example.1", "https://doi.org/10.1000/example.1")
 Q = "How does sparse attention affect long documents?"
 
 
@@ -61,9 +63,13 @@ def test_fake_system_turn_and_zero_width_split_phrase():
 
 
 def test_composite_provider_needs_every_part_allowed():
-    ok = SourceRef("arxiv+openalex", "allow", "x")
-    bad = SourceRef("openalex+semanticscholar", "allow", "x")
+    # ARXIV-DEFENSE-1113 flip: "arxiv+openalex" was the allowed composite; the arxiv part is now a portal (PORTAL_SOURCE), so the
+    # composite is refused for that reason, and the every-part-allowed rule is exercised with an allowed-only pair and an unlisted part.
+    ok = SourceRef("openalex+openalex", "allow", "doi:10.1000/example.1", "https://doi.org/10.1000/example.1")
+    portal = SourceRef("arxiv+openalex", "allow", "doi:10.1000/example.1", "https://doi.org/10.1000/example.1")
+    bad = SourceRef("openalex+semanticscholar", "allow", "doi:10.1000/example.1", "https://doi.org/10.1000/example.1")
     assert run(cites=(ok,)).allowed
+    assert "portal_source" in run(cites=(portal,)).reasons and not run(cites=(portal,)).allowed
     assert PROVIDER_NOT_ALLOWED in run(cites=(bad,)).reasons
 
 
@@ -73,7 +79,8 @@ def test_citation_markers_stripped():
 
 
 def test_config_overrides_and_reason_catalogue():
-    cfg = dataclasses.replace(DEFAULT_CONFIG, allowed_providers=("openalex",))
+    # ARXIV-DEFENSE-1113 flip: the default source is now openalex (was arxiv), so the "provider not in the list" case lists another provider
+    cfg = dataclasses.replace(DEFAULT_CONFIG, allowed_providers=("semanticscholar",))
     assert PROVIDER_NOT_ALLOWED in run(cfg=cfg).reasons
     assert len(set(ALL_REASONS)) == len(ALL_REASONS)
 

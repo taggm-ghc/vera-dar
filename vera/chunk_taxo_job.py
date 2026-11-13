@@ -32,6 +32,7 @@ import time
 from types import SimpleNamespace
 
 from vera import chunk_taxo_store as store
+from vera import fulltext_loader  # module level on purpose: test_chunk_taxo_mem_1109 traces allocations from j.run() onward
 from vera.chunk_taxo_embed import Deferred, EmbedError, load_embedder
 
 log = logging.getLogger("vera.chunk_taxo")
@@ -103,6 +104,31 @@ def _g(o, name, default=None):
     if isinstance(o, dict):
         return o.get(name, default)
     return vars(o).get(name, default) if hasattr(o, "__dict__") else default
+
+
+_NO_SOURCE = "\0no_source"  # sentinel: the span's source id was absent from the lookup
+
+
+def _source_verdicts(rows) -> dict:
+    """ARXIV-DEFENSE-1113: source_id -> None (not a portal) | rule id (portal) | "error" (undecidable: fail closed).
+    rows are (source_id, canonical_url, provenance) from store.fetch_source_portal. A string provenance is parsed as JSON; a
+    non-dict result, a parse failure, a raising portal_verdict or "internal_error" is "error"; None is read as {} so the URL
+    checks still run. Nothing here logs or keeps text."""
+    out = {}
+    for sid, canon, prov in rows:
+        try:
+            if isinstance(prov, (str, bytes)):
+                prov = json.loads(prov)
+            if prov is None:
+                prov = {}
+            if not isinstance(prov, dict):
+                out[sid] = "error"
+                continue
+            v = fulltext_loader.portal_verdict(prov.get("item"), prov, canon)
+            out[sid] = "error" if v == "internal_error" else v
+        except Exception:  # noqa: BLE001
+            out[sid] = "error"
+    return out
 
 
 def _numeric_only(x, depth=0):
@@ -361,10 +387,13 @@ class Job:
         """TAXO-ROBUST-1111 E6: ints only (no text, sha or message). Empty when nothing was quarantined, skipped or bisected, so a
         clean pass stores what it stored before. Never raises."""
         try:
-            if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive):
+            if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive
+                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source):
                 return {}
             q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
             return {"quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
+                    "skipped_portal": int(self.skipped_portal), "skipped_portal_error": int(self.skipped_portal_error),
+                    "skipped_no_source": int(self.skipped_no_source),
                     "vectors_missing": int(self.vectors_missing), "q_consecutive": int(self._consecutive),
                     "q_last_status": int(self._q_last), "bisect_requests": int(self.bisect_requests),
                     "bisect_failed_chars": int(self.bisect_failed_chars), "q": q}
@@ -559,6 +588,8 @@ class Job:
         self.metrics_run = {}
         self._retry_in = None
         self.skipped_empty, self.vectors_missing = 0, 0  # TAXO-ROBUST-1111: per pass
+        self.skipped_portal, self.skipped_portal_error, self.skipped_no_source = 0, 0, 0  # ARXIV-DEFENSE-1113: per pass
+        self._verdicts = {}
         self.bisect_requests, self.bisect_failed_chars = 0, 0
         self._consecutive, self._streak, self._q_last = 0, [], 0
 
@@ -622,7 +653,23 @@ class Job:
                 return
             lim = min(self.page, self.cap - read)
             with self._engine().connect() as conn:
-                rows = store.fetch_spans(conn, self._cursor, lim, self.chars)
+                page = store.fetch_spans(conn, self._cursor, lim, self.chars)
+                # ARXIV-DEFENSE-1113: portal spans are never embedded or labelled; the page (not rows) drives the cursor and end test.
+                # A failed lookup raises into the job's error path before anything is sent.
+                new_ids = sorted({r[1] for r in page if r[1] not in self._verdicts})
+                if new_ids:
+                    self._verdicts.update(_source_verdicts(store.fetch_source_portal(conn, new_ids)))
+                rows = []
+                for r in page:
+                    v = self._verdicts.get(r[1], _NO_SOURCE)
+                    if v is None:
+                        rows.append(r)
+                    elif v == _NO_SOURCE:
+                        self.skipped_no_source += 1
+                    elif v == "error":
+                        self.skipped_portal_error += 1
+                    else:
+                        self.skipped_portal += 1
                 have = store.fetch_vectors(conn, [r[0] for r in rows])
             shas = {r[0]: hashlib.sha256(r[2].encode("utf-8")).hexdigest() for r in rows}
             cur = {sid for sid, h in have.items() if h[0] == model_name and h[1] == shas.get(sid)}
@@ -705,13 +752,16 @@ class Job:
                         blk[k] = v
                 self._vecs.append(blk)
             del have, fresh
-            if rows:
-                self._cursor = rows[-1][0]
-                read += len(rows)
-            if len(rows) < lim:
+            if page:
+                self._cursor = page[-1][0]
+                read += len(page)
+            if len(page) < lim:
                 self._scan_done = True
                 break
         if self._scan_done:
+            if self.skipped_portal or self.skipped_portal_error or self.skipped_no_source:
+                log.info("chunk_taxo scan: skipped portal=%d portal_error=%d no_source=%d", self.skipped_portal,
+                         self.skipped_portal_error, self.skipped_no_source)
             if len(self._dims) > 1:
                 raise RuntimeError("dim_mismatch")  # a model/dim change leaves mixed vectors: refuse, re-embed on the next pass
             if not self._chunks:

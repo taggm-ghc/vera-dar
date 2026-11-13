@@ -45,10 +45,15 @@ CFGM = {"query_stopwords": [], "min_query_word_len": 3, "max_query_terms": 8, "q
         "ttl_days": 30, "min_matched_terms": 1, "min_rank": 0.0, "half_life_days": 30, "recall_k": 3}
 
 
+def _src_read(sql):
+    """ARXIV-DEFENSE-1113: answer the portal-check source read with a non-portal doi.org source (real column order)."""
+    return [(1, {"document_id": "acq-1"}, "https://doi.org/10.1000/example.1")] if "c.claim_id = ANY(:ids)" in sql else None
+
+
 def test_recall_filters_on_licence_decision_at_read():
     r = ms.RoMemoryReader(object(), CFGM)
     seen = []
-    r._rows = lambda sql, p: seen.append((sql, p)) or [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u")]
+    r._rows = lambda sql, p: seen.append((sql, p)) or _src_read(sql) or [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u", 1)]
     assert r.recall("quantized inference latency")
     sql, p = seen[0]
     assert "provenance ->> 'licence_decision' = ANY" in sql and p["okdec"] == ["allow"]
@@ -59,15 +64,15 @@ def test_recall_fails_closed_when_gate_config_unavailable(monkeypatch):
     def boom(*a, **k): raise memory_gate.MemoryGateConfigError("x")
     monkeypatch.setattr(memory_gate, "load_gate_config", boom)
     r = ms.RoMemoryReader(object(), CFGM)
-    r._rows = lambda sql, p: [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u")]
+    r._rows = lambda sql, p: [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u", 1)]
     assert r.recall("quantized inference latency") == []
 
 
 def test_recall_logs_missing_licence_count_numbers_only(caplog):
     import logging
     r = ms.RoMemoryReader(object(), CFGM)
-    row = ("SECRET claim", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "https://secret.example/u")
-    r._rows = lambda sql, p: [(4,)] if "count(DISTINCT" in sql else [row]
+    row = ("SECRET claim", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "https://secret.example/u", 1)
+    r._rows = lambda sql, p: [(4,)] if "count(DISTINCT" in sql else (_src_read(sql) or [row])
     with caplog.at_level(logging.INFO, logger="vera"):
         out = r.recall("quantized inference latency secretterm")
     assert out and out[0]["claim_text"] == "SECRET claim"  # recall unchanged
@@ -79,12 +84,12 @@ def test_recall_logs_missing_licence_count_numbers_only(caplog):
 def test_count_failure_never_breaks_recall(caplog):
     import logging
     r = ms.RoMemoryReader(object(), CFGM)
-    row = ("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u")
+    row = ("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u", 1)
 
     def rows(sql, p):
         if "count(DISTINCT" in sql:
             raise RuntimeError("db detail SECRET")
-        return [row]
+        return _src_read(sql) or [row]
     r._rows = rows
     with caplog.at_level(logging.INFO, logger="vera"):
         assert len(r.recall("quantized inference latency")) == 1

@@ -190,7 +190,8 @@ def test_load_snapshot_parameterised_and_shape():
         if "FROM s1.research_domains ORDER" in sql:
             return [(1, "Alpha", "alpha", "d", "derived")]
         if "DISTINCT ON" in sql:
-            return [("k1", 7, 3, "full text", "u", "10.1/x", "T", "2024-05-01", "journal", "2024-06-01", "full_text")]
+            return [("k1", 7, 3, "full text", "u", "10.1/x", "T", "2024-05-01", "journal", "2024-06-01", "full_text", None, None, None,
+                     {"document_id": "acq-7", "url": "u"})]  # ARXIV-DEFENSE-1113: real 15 columns
         if "domain_corpus" in sql:
             return [("alpha", "k1", "dar")]
         if "domain_chunks" in sql:
@@ -348,7 +349,7 @@ def test_missing_span_with_chunk_text_callable_inserts_and_applies_placeholder()
 def _snap_eng(lic_row):
     def ro(sql, p):
         if "DISTINCT ON" in sql:
-            return [("k1", 7, 3, "full text", "u", None, "T", "2024", "journal", None, "full_text") + lic_row]
+            return [("k1", 7, 3, "full text", "u", None, "T", "2024", "journal", None, "full_text") + lic_row + (None, {"document_id": "acq-7"})]  # ARXIV-DEFENSE-1113: authors r[13], provenance r[14]
         return []
     return FakeEngine(ro)
 
@@ -386,10 +387,11 @@ def test_dar_store_authors_appended_1103():
             return [row] if "DISTINCT ON" in sql else []
         return FakeEngine(ro)
     base = ("k1", 7, 3, "full text", "u", None, "T", "2024", "journal", None, "full_text", None, None)
-    e = eng(base + ("Smith, J.; Lee, K.",))
+    prov = {"document_id": "acq-7"}  # ARXIV-DEFENSE-1113: provenance is r[14]; the 13/14-column shapes no longer exist
+    e = eng(base + ("Smith, J.; Lee, K.", prov))
     d = DarReader(e, schema="s1").load_snapshot([])["documents"][0]
     assert d["authors"] == "Smith, J.; Lee, K." and d["source_key"] == "k1" and d["db_source_id"] == 7
     assert d["stored_text_kind"] == "full_text" and d["licence"] is None and d["licence_decision"] is None
     sql = next(c[0] for c in e.calls if "DISTINCT ON" in c[0])
     assert sql.index("s.provenance->>'authors'") > sql.index("s.provenance->'licence_decision'")
-    assert DarReader(eng(base), schema="s1").load_snapshot([])["documents"][0]["authors"] is None
+    assert DarReader(eng(base + (None, prov)), schema="s1").load_snapshot([])["documents"][0]["authors"] is None  # NULL authors
