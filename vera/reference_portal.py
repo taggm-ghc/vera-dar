@@ -517,6 +517,8 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
                         resp.close()
                     except Exception:  # noqa: BLE001
                         pass
+        except rate_limit.RateLimited:
+            raise  # REFPORTAL-D1-1112: our limiter skipped it, nothing was sent: not a verdict, never cached
         except Exception:  # noqa: BLE001
             rules = "unreadable"
         with _TDM_LOCK:
@@ -555,6 +557,8 @@ def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable
     # H7 (owner, D-P1 confirmed): an AI-training-only signal (ai-train=no, __usage_ai-training) is not checked here.
     try:
         tdm_ok = bool(deps.tdmrep_ok(url, row["rate_portal"]))
+    except rate_limit.RateLimited:
+        raise Skip("rate_limited") from None  # REFPORTAL-D1-1112: still a refusal for this request, right code
     except Exception:  # noqa: BLE001
         tdm_ok = False
     if not tdm_ok:
