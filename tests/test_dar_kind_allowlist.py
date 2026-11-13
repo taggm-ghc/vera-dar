@@ -21,7 +21,8 @@ def _engine():
         if "DISTINCT ON" in sql:
             kinds = p["kinds"]
             return [(f"k_{n}", i + 1, i + 1, "text" if k != "fulldoc_chunks" else "", "u", None, "T", "2024-05-01",
-                     "journal", "2024-06-01", k) for i, (n, k) in enumerate(ROWS.items()) if k is not None and k in kinds]
+                     "journal", "2024-06-01", k, None, None, None,  # ARXIV-DEFENSE-1113: real 15 columns, provenance r[14]
+                     {"document_id": f"acq-{n}", "stored_text_kind": k, "url": "u"}) for i, (n, k) in enumerate(ROWS.items()) if k is not None and k in kinds]
         return []
     return FakeEngine(handler)
 

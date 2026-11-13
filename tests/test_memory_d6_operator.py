@@ -21,7 +21,8 @@ CFG = BLOCK["store"]
 OWNER = "o" * 8 + "K3y-for-tests-only-0123456789abcdef"
 API = "api-key-for-tests-0123456789"
 QUESTION = "What does quantized inference change about transformer latency?"
-SRC = [{"n": 1, "url": "https://arxiv.org/abs/2401.00001", "provider": "arxiv", "identifier": "arXiv:2401.00001",
+# ARXIV-DEFENSE-1113 flip: was an arXiv citation, now refused by the gate (OD-1110-ARXIV-PORTAL); OpenAlex record with a 10.1000 DOI.
+SRC = [{"n": 1, "url": "https://doi.org/10.1000/example.1", "provider": "openalex", "identifier": "doi:10.1000/example.1",
         "licence_decision": "allow", "title": "T"}]
 GOOD = {"id": 0, "sentence": "Int8 weight quantization reduced memory use by roughly half in the cited study [1].",
         "citations": [1], "verdict": "supported"}

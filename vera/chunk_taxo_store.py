@@ -9,6 +9,9 @@ guard (session settings vera.tax_actor and vera.tax_batch, set transaction-local
 
 Retirement is scoped: links only where classifier_name = CLASSIFIER and the version is superseded; entities and anchors only
 where origin = 'induction' and origin_ref LIKE 'auto-chunk-taxo:%'. Nothing here logs; callers log codes only.
+
+ARXIV-DEFENSE-1113: one read-only statement, sources_portal (SELECT on vera_vjay.sources and vera_vjay.canonical_sources, granted by
+db/migrations/001_vera_schema_init.sql), feeds the job's portal check; the verdict itself is fulltext_loader.portal_verdict, not SQL.
 """
 from __future__ import annotations
 
@@ -83,6 +86,11 @@ def _build() -> dict[str, str]:
                     "pg_catalog.set_config('vera.tax_batch', :batch, true)")
     s["spans_page"] = ("SELECT span_id, source_id, left(text, :n) FROM vera_vjay.evidence_spans "
                        "WHERE span_id > :after ORDER BY span_id LIMIT :lim")
+    # ARXIV-DEFENSE-1113: read-only lookup for the portal check on a page's source ids (columns and tables already read elsewhere;
+    # SELECT is granted by db/migrations/001_vera_schema_init.sql). Literal schema name so the SQL contract extractor sees it.
+    s["sources_portal"] = ("SELECT s.source_id, cs.canonical_url, s.provenance FROM vera_vjay.sources s "
+                           "JOIN vera_vjay.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
+                           "WHERE s.source_id = ANY(:ids)")
     for lvl in LEVELS:
         t, idc = _ENT[lvl]
         s[f"nodes_{lvl}"] = f"SELECT slug, {idc}, label, origin, origin_ref, state FROM {t} WHERE state IN ('proposed', 'active')"
@@ -173,6 +181,13 @@ def fetch_vectors(conn, ids: list[int]) -> dict[int, tuple[str, str, "np.ndarray
 def fetch_spans(conn, after: int, limit: int, chars: int) -> list[tuple[int, int, str]]:
     rows = run_sql(conn, "spans_page", {"after": int(after), "lim": int(limit), "n": int(chars)}).fetchall()
     return [(int(r[0]), int(r[1]), str(r[2] or "")) for r in rows]
+
+
+def fetch_source_portal(conn, ids: list[int]) -> list[tuple[int, str | None, object]]:
+    """Raw (source_id, canonical_url, provenance) rows for the given source ids; the portal verdict is computed by the caller."""
+    if not ids:
+        return []
+    return [(int(r[0]), None if r[1] is None else str(r[1]), r[2]) for r in run_sql(conn, "sources_portal", {"ids": list(ids)}).fetchall()]
 
 
 def fetch_nodes(conn, level: str) -> list[dict]:

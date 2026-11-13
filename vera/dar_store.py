@@ -12,6 +12,11 @@ import logging
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
+_PORTAL_DROPPED = [0]  # ARXIV-DEFENSE-1113: stored documents dropped by the portal filter since process start (counter only)
+
+
+def portal_dropped_count() -> int:
+    return _PORTAL_DROPPED[0]
 
 SCHEMA = "vera_vjay"
 FULLDOC_CHUNKS_KIND = "fulldoc_chunks"  # stored_text_kind of chunk-stored full documents (empty sources.content)
@@ -237,7 +242,8 @@ class DarReader:
             "s.content, s.provenance->>'url', s.provenance->>'doi', s.provenance->>'title', "
             "s.provenance->>'published', s.provenance->>'source_type', s.provenance->>'retrieved_at', "
             "s.provenance->>'stored_text_kind', s.provenance->'licence', s.provenance->'licence_decision', "
-            "s.provenance->>'authors' "  # NONASK-1103 C2b: appended as r[13]; positions 0-12 never shift
+            "s.provenance->>'authors', "  # NONASK-1103 C2b: appended as r[13]; positions 0-12 never shift
+            "s.provenance "  # ARXIV-DEFENSE-1113: r[14], for the portal check only; positions 0-13 never shift
             "FROM {S}.canonical_sources cs JOIN {S}.sources s ON s.canonical_source_id = cs.canonical_source_id "
             "WHERE s.provenance->>'stored_text_kind' IS NOT NULL "
             "AND s.provenance->>'stored_text_kind' = ANY(:kinds) "  # fail-closed allow-list; empty list = no rows
@@ -297,6 +303,34 @@ class DarReader:
             keep = {d["source_key"] for d in documents}
             corpus = [a for a in corpus if a["source_key"] in keep]
             chunks = [a for a in chunks if a["source_key"] in keep]
+
+        # ARXIV-DEFENSE-1113 (OD-1110-PORTALS-ALL): a stored portal row (or one whose provenance cannot be judged) is never served.
+        # The cursor below still uses the unfiltered doc_rows. Associations of a dropped document, or whose key alone is a portal
+        # URL (delta associations of a portal document not re-read in this window), are dropped too.
+        from vera.memory_gate import stored_portal_state  # noqa: PLC0415
+        kept_docs, dropped_keys = [], set()
+        for d, r in zip(documents, doc_rows[: len(documents)]):
+            if stored_portal_state(r[14], r[0]) is None:
+                kept_docs.append(d)
+            else:
+                dropped_keys.add(d["source_key"])
+        _key_state: dict = {}
+
+        def _key_ok(k) -> bool:
+            if k in dropped_keys:
+                return False
+            if k not in _key_state:
+                _key_state[k] = stored_portal_state(None, k) is None
+            return _key_state[k]
+
+        n_assoc = len(corpus) + len(chunks)
+        corpus = [a for a in corpus if _key_ok(a["source_key"])]
+        chunks = [a for a in chunks if _key_ok(a["source_key"])]
+        if dropped_keys or n_assoc != len(corpus) + len(chunks):
+            _PORTAL_DROPPED[0] += len(dropped_keys)
+            logger.info("dar load: portal filter dropped %d document(s), %d association(s)", len(dropped_keys),
+                        n_assoc - len(corpus) - len(chunks))
+        documents = kept_docs
 
         def _mx(vals, prior):
             vals = [v for v in vals if v is not None] + ([prior] if prior is not None else [])

@@ -143,7 +143,7 @@ class FakeDB:
                 pr = s["prov"]
                 out.append((self.canonical[s["canonical_source_id"]], s["source_id"], s["canonical_source_id"],
                             s["content"], pr["url"], pr["doi"], pr["title"], pr["published"], pr["source_type"],
-                            pr["retrieved_at"], kind))
+                            pr["retrieved_at"], kind, None, None, None, pr))  # ARXIV-DEFENSE-1113: real 15 columns (r[11..13], provenance r[14])
             return out
         lo = p.get("since_source_id_lo")  # id-window predicate (EXISTS ... w.source_id > lo): docs inside the window
         in_win = lambda cid: lo is not None and any(  # noqa: E731

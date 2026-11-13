@@ -87,7 +87,9 @@ def _reader(sqls, count_fails=False):
             if count_fails:
                 raise RuntimeError("db")
             return [(4,)]
-        return [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u")]
+        if "c.claim_id = ANY(:ids)" in sql:  # ARXIV-DEFENSE-1113: the portal-check source read (a non-portal doi.org source)
+            return [(1, {"document_id": "acq-1"}, "https://doi.org/10.1000/example.1")]
+        return [("c", datetime(2026, 10, 1, tzinfo=timezone.utc), "T", "u", 1)]  # real 5-column row, claim_id last
     r._rows = rows
     return r
 

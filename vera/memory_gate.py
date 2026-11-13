@@ -1,6 +1,6 @@
 """Memory write gate (item #84): a pure, deterministic structural filter.
 
-No DB, no model call, no network, no I/O. It decides whether one candidate
+No DB, no model call, no network. Its only file read is config/host_roles.json, once, through host_role (portal check, ARXIV-DEFENSE-1113). It decides whether one candidate
 finding may be offered for storage. It is a heuristic filter that catches crude
 and known patterns only; a pass is not proof of safety, and it is not a
 security guarantee (the claim checker's verdict is one input, not the gate).
@@ -36,9 +36,13 @@ VOLATILE = "volatile"
 LENGTH = "length"
 MARKUP = "markup"
 FRAGMENT = "fragment"
+# ARXIV-DEFENSE-1113 (OD-1110-ARXIV-PORTAL, OD-1110-PORTALS-ALL): a citation that is an arXiv or other portal record is never memory.
+PORTAL_SOURCE = "portal_source"
 ALL_REASONS = (NOT_ALLOWED_TYPE, NOT_SUPPORTED, NO_CITATION, PROVIDER_NOT_ALLOWED,
                LICENCE, NO_IDENTIFIER, INVISIBLE_UNICODE, INJECTION_PATTERN,
-               TOOL_DUMP, PERSONAL, ECHOES_QUESTION, VOLATILE, LENGTH, MARKUP, FRAGMENT)
+               TOOL_DUMP, PERSONAL, ECHOES_QUESTION, VOLATILE, LENGTH, MARKUP, FRAGMENT, PORTAL_SOURCE)
+# Code floor, independent of the config list: provider labels that are portals.
+PORTAL_PROVIDERS = frozenset({"arxiv"})
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "ask-provider-chain.json"
@@ -199,6 +203,56 @@ def _provider_allowed(provider: str, cfg: GateConfig) -> bool:
     return bool(parts) and all(p and p in cfg.allowed_providers for p in parts)
 
 
+def _doi_of(identifier: str) -> str:
+    """The DOI in a bare, doi:-prefixed or doi.org-URL identifier, else ''."""
+    s = (identifier or "").strip()
+    low = s.lower()
+    for pre in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi:"):
+        if low.startswith(pre):
+            s = s[len(pre):].strip()
+            break
+    return s if s.lower().startswith("10.") else ""
+
+
+def _is_portal_source(s: SourceRef, cfg: GateConfig) -> bool:
+    """ARXIV-DEFENSE-1113: True when the citation is a portal record (fail closed on any error). Provider label arxiv, an arxiv:
+    or arxiv.org identifier, or the same record-role rule used at corpus load (fulltext_loader.portal_verdict on the identifier
+    as DOI/URL and the source url). A bare new-style id such as 2101.00001 is ambiguous and is not refused here."""
+    try:
+        parts = [p.strip().lower() for p in (s.provider or "").split(cfg.provider_separator)]
+        if any(p in PORTAL_PROVIDERS for p in parts):
+            return True
+        ident = (s.identifier or "").strip()
+        low = ident.lower()
+        if low.startswith(("arxiv:", "arxiv.org/", "www.arxiv.org/")):
+            return True
+        from vera import fulltext_loader  # noqa: PLC0415  (lazy: this module stays importable without it)
+        item = {"doi": _doi_of(ident), "url": s.url or "",
+                "identifier": {"url": ident if low.startswith(("http://", "https://")) else ""}}
+        return fulltext_loader.portal_verdict(item, {}, None) is not None
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def stored_portal_state(raw_provenance, canonical_url: str | None) -> str | None:
+    """ARXIV-DEFENSE-1113: the read-side portal check for a STORED source row (recall, DAR snapshot). None = not a portal;
+    a rule id = portal; "error" = undecidable (unparseable provenance, a non-dict, portal_verdict raised or returned
+    "internal_error"), which callers treat as portal (fail closed). A None provenance is read as {} so the URL checks still run."""
+    try:
+        prov = raw_provenance
+        if isinstance(prov, (str, bytes)):
+            prov = json.loads(prov)
+        if prov is None:
+            prov = {}
+        if not isinstance(prov, dict):
+            return "error"
+        from vera import fulltext_loader  # noqa: PLC0415
+        v = fulltext_loader.portal_verdict(prov.get("item"), prov, canonical_url)
+        return "error" if v == "internal_error" else v
+    except Exception:  # noqa: BLE001
+        return "error"
+
+
 def _overlap(text: str, question: str, cfg: GateConfig) -> float:
     q = set(_TOKEN.findall(_squash(question)))
     if len(q) < cfg.min_overlap_tokens:
@@ -248,6 +302,8 @@ def check_memory_write(fact_type: str, text: str, verdict: str, citations: Seque
             reasons.add(LICENCE)
         if not (s.identifier or "").strip():
             reasons.add(NO_IDENTIFIER)
+        if _is_portal_source(s, cfg):
+            reasons.add(PORTAL_SOURCE)
     if _has_invisible(text, cfg):
         reasons.add(INVISIBLE_UNICODE)
     if _injection_hit(raw, cfg) or _injection_hit(text, cfg):

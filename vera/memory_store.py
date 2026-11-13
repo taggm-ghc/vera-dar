@@ -118,8 +118,8 @@ class RoMemoryReader:
         if not okdec:
             return []
         rows = self._rows(
-            "SELECT claim_text, created_at, title, url FROM ("
-            "SELECT DISTINCT ON (c.claim_id) c.claim_text, c.created_at, s.provenance ->> 'title' AS title, "
+            "SELECT claim_text, created_at, title, url, claim_id FROM ("
+            "SELECT DISTINCT ON (c.claim_id) c.claim_id, c.claim_text, c.created_at, s.provenance ->> 'title' AS title, "
             "COALESCE(s.provenance ->> 'url', cs.canonical_url) AS url, "
             "ts_rank(to_tsvector('english', c.claim_text), websearch_to_tsquery('english', :q)) "
             "* power(0.5, extract(epoch FROM now() - c.created_at) / 86400.0 / :hl) AS score "
@@ -140,11 +140,33 @@ class RoMemoryReader:
              "q": q, "terms": terms, "minterms": int(self.cfg["min_matched_terms"]), "floor": float(self.cfg["min_rank"]), "hl": float(self.cfg["half_life_days"]), "k": int(self.cfg["recall_k"])})
         self._log_missing_licence(q_params={"qt": self.cfg["question_text"], "live": self.cfg["status_live"],
                                             "ttl": int(self.cfg["ttl_days"])})
+        rows = self._drop_portal_claims(rows)
         from vera import fair_use  # FAIRUSE-TIER-1108 takedown: no recall of a finding whose source was withdrawn
         wk = fair_use.withdrawn_keys()
         return [{"claim_text": r[0], "source_title": r[2] or "", "source_url": r[3] or "",
                  "saved_at": r[1].isoformat() if r[1] else ""} for r in rows
                 if not (wk and fair_use.is_withdrawn({"url": r[3] or ""}, wk))]
+
+    def _drop_portal_claims(self, rows):
+        """ARXIV-DEFENSE-1113 (OD-1110-PORTALS-ALL): drop a recalled claim when ANY of its evidence sources is a portal row or
+        cannot be judged (fail closed), by the same rule as corpus load. LIMIT k applies before this filter, so fewer than k
+        claims can return. Count-only log. A failed second read raises (no recall of unchecked claims)."""
+        if not rows:
+            return rows
+        from vera.memory_gate import stored_portal_state
+        ids = [r[4] for r in rows]
+        srcs = self._rows(
+            "SELECT c.claim_id, s.provenance, cs.canonical_url FROM {S}.claims c "
+            "JOIN LATERAL jsonb_array_elements_text(c.evidence_span_ids) AS sp(span_id) ON true "
+            "JOIN {S}.evidence_spans e ON e.span_id = sp.span_id::bigint "
+            "JOIN {S}.sources s ON s.source_id = e.source_id "
+            "JOIN {S}.canonical_sources cs ON cs.canonical_source_id = s.canonical_source_id "
+            "WHERE c.claim_id = ANY(:ids)", {"ids": list(ids)})
+        bad = {r[0] for r in srcs if stored_portal_state(r[1], r[2]) is not None}
+        out = [r for r in rows if r[4] not in bad]
+        if len(out) != len(rows):
+            logger.info("memory recall: %d claim(s) dropped, portal source", len(rows) - len(out))
+        return out
 
     def _log_missing_licence(self, q_params: dict) -> None:
         """CONTROL-GAPS S45 r2: numbers only. Live, in-TTL claims of this store whose source has NO licence_decision

@@ -70,6 +70,19 @@ class FakeDB:
         if name == "spans_page":
             rows = [r for r in self.spans if r[0] > p["after"]][: p["lim"]]
             return Res([(a, b, c[: p["n"]]) for a, b, c in rows])
+        if name == "sources_portal":
+            # ARXIV-DEFENSE-1113: default = a non-portal doi.org row per id; self.sources (id -> row | None) overrides, and an
+            # id mapped to None (or omitted from the map when overriding) is absent from the result
+            ov = getattr(self, "sources", None)
+            out = []
+            for i in p["ids"]:
+                if ov is not None and i in ov:
+                    if ov[i] is not None:
+                        out.append((i, *ov[i]))
+                else:
+                    u = f"https://doi.org/10.1000/example.{i}"
+                    out.append((i, u, {"document_id": f"acq-{i}", "url": u}))
+            return Res(out)
         if name == "vectors_select":
             return Res([(i, *self.vectors[i]) for i in p["ids"] if i in self.vectors])
         if name == "vectors_upsert":
