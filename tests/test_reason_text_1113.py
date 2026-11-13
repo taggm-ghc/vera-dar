@@ -9,7 +9,7 @@ from vera import research_outcome as ro
 
 BASE = "R-ACQ-RATELIMITED"
 SUFFIXES = ["DEADLINE_PASSED", "SEED_EXCLUDED", "WAIT_TOO_LONG", "DEADLINE", "BREAKER_OPEN", "HALF_OPEN_BUSY",
-            "PACING", "CONCURRENCY", "DAILY_CAP"]
+            "PACING", "CONCURRENCY", "DAILY_CAP", "COOLDOWN"]
 EXPECTED = {
     "DEADLINE_PASSED": "Not fetched: the time available for this question had already run out before another request to that site could be made.",
     "SEED_EXCLUDED": "Not fetched: background seeding does not use that service.",
@@ -20,15 +20,18 @@ EXPECTED = {
     "PACING": "Not fetched: VERA-DAR's own rate limit for that site was reached.",
     "CONCURRENCY": "Not fetched: VERA-DAR's own rate limit for that site was reached.",
     "DAILY_CAP": "Not fetched: VERA-DAR's own rate limit for that site was reached.",
+    # REASON-TEXT2-1113 flip (test iv): COOLDOWN now has its own sentence (the site pushed back; was legacy text)
+    "COOLDOWN": "Left for later: that site recently limited requests from VERA-DAR, so VERA-DAR was waiting before sending another request.",
 }
 CLASS_OF = {
     "DEADLINE_PASSED": "unreachable_deadline_passed", "SEED_EXCLUDED": "unreachable_seed",
     "WAIT_TOO_LONG": "unreachable_paced", "DEADLINE": "unreachable_paced",
     "BREAKER_OPEN": "unreachable_breaker", "HALF_OPEN_BUSY": "unreachable_breaker",
     "PACING": "unreachable_ownlimit", "CONCURRENCY": "unreachable_ownlimit", "DAILY_CAP": "unreachable_ownlimit",
+    "COOLDOWN": "unreachable_cooldown",
 }
 CLASS_SET = {"unreachable_ownlimit", "unreachable_paced", "unreachable_deadline_passed", "unreachable_seed",
-             "unreachable_breaker"}
+             "unreachable_breaker", "unreachable_cooldown"}
 LEGACY = dp.REASON_TEXT["R-ACQ-RATELIMITED"]
 
 
@@ -52,8 +55,9 @@ def test_ii_distinct_causes_distinct_sentences():
     assert "limit" not in seed and "wait" not in seed
 
 
-@pytest.mark.parametrize("code", [f"{BASE}-COOLDOWN", f"{BASE}-THROTTLED", BASE, f"{BASE}-ZZZ",
-                                  "r-acq-ratelimited-pacing"])
+# REASON-TEXT2-1113 flip (test iii): COOLDOWN removed from the lookalikes (own sentence now); lower-case cooldown added
+@pytest.mark.parametrize("code", [f"{BASE}-THROTTLED", BASE, f"{BASE}-ZZZ",
+                                  "r-acq-ratelimited-pacing", "r-acq-ratelimited-cooldown"])
 def test_iii_lookalikes_keep_legacy_text(code):
     assert line(code) == LEGACY
 

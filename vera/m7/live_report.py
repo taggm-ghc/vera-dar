@@ -221,7 +221,7 @@ RESEARCH_SUMMARY_MAX = 600  # named constant: max chars of the research outcome 
 def _research(contract: dict):
     """FRESH-1023 C3: allowlist-only projection of contract.research (None when absent). No portal names, reason
     codes or candidate URLs pass through."""
-    from vera.discovery_panel import REASON_GENERIC, REASON_TEXT
+    from vera.discovery_panel import REASON_GENERIC, code_text
     rs = contract.get("research")
     if not isinstance(rs, dict):
         return None
@@ -235,7 +235,7 @@ def _research(contract: dict):
         code = c.get("reason")
         cands.append({"identifier": _str(c.get("doi") or c.get("pmcid") or c.get("arxiv_id") or "", 120),
                       "outcome": RESEARCH_OUTCOME_LABEL.get(c.get("outcome"), "other"),
-                      "reason": (REASON_TEXT.get(code, REASON_GENERIC) if isinstance(code, str) and code else "")})
+                      "reason": (code_text(code) or REASON_GENERIC if isinstance(code, str) and code else "")})
     return {"outcome_text": _str(rs.get("user_text") or rs.get("summary"), RESEARCH_SUMMARY_MAX),
             "triggers": [RESEARCH_TRIGGER_LABEL[t] for t in (rs.get("triggers") if isinstance(rs.get("triggers"), list) else [])
                          if isinstance(t, str) and t in RESEARCH_TRIGGER_LABEL],

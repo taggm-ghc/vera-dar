@@ -20,7 +20,8 @@ def test_own_cap_names_service():
     ("R-ACQ-UNREACHABLE", "unreachable", "could not be reached"),
     ("R-ACQ-ERR-ConnectionError", "unreachable", "could not be reached"),
     ("R-ACQ-RATELIMITED-PACING", "unreachable_ownlimit", "not fetched because VERA-DAR's own rate limit for that site was reached"),
-    ("R-ACQ-RATELIMITED-COOLDOWN", "unreachable_ownlimit", "not fetched because VERA-DAR's own rate limit"),
+    # REASON-TEXT2-1113 flip: this row pinned the wrong cause (own limit); a cooldown exists only after the site pushed back
+    ("R-ACQ-RATELIMITED-COOLDOWN", "unreachable_cooldown", "recently limited requests"),
     ("R-ACQ-RATELIMITED", "unreachable_throttled", "asked VERA-DAR to slow down"),
     ("R-ACQ-RATELIMITED-BREAKER_OPEN", "unreachable_breaker", "the site failed repeatedly"),
     ("R-ACQ-RATELIMITED-HALF_OPEN_BUSY", "unreachable_breaker", "the site failed repeatedly"),
