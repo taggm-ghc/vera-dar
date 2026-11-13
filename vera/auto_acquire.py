@@ -69,6 +69,7 @@ class _State:
         self.recent: dict = {}  # salted HMAC of the normalised question -> monotonic time (memory only)
         self.pending: dict = {}  # CONT-1023: salted HMAC of a candidate identity key -> time queued (memory only)
         self.salt = os.urandom(32)
+        self.shadow = {"compared": 0, "disagree": 0}  # EPMC-BATCH-1113: batch vs per-DOI verdicts (shadow mode)
 
 
 _S = _State()
@@ -1121,6 +1122,155 @@ def reserve_reads(ranked: list, fresh_budget: int, cfg: dict, route) -> list:
     return out
 
 
+# ------------------------------------------------------------------------------------------------ EPMC-BATCH-1113
+# Option (d) of work/NOROUTE-CODE-1112/PLAN.md (W2.3): ONE Europe PMC lite request per round for the DOI-only
+# candidates of the shortlist. A DOI the usable batch answer shows to have no qualifying open-access row is skipped as
+# R-ACQ-NOROUTE with no per-DOI request; every other DOI resolves per DOI as before. resolve.batch_precheck.mode ships
+# "off" (rule 12); "shadow" runs the batch and the per-DOI path both and only counts / logs disagreements. No new
+# reason code: a skip raises the same no_route _Stop. Uncalibrated priors: max_dois 25, min_dois 3.
+BATCH_HOP = "Europe PMC batch pre-check"  # fixed marker hop for url_chain (the batch, not a per-DOI URL, decided)
+_BATCH_BAD_DOI = re.compile(r'["\\\s]')
+
+
+def batch_precheck_mode(cfg: dict) -> str:
+    """"off" (default, also for any unknown value), "shadow" or "on"."""
+    m = str((((cfg.get("resolve") or {}).get("batch_precheck")) or {}).get("mode") or "off").strip().lower()
+    return m if m in ("shadow", "on") else "off"
+
+
+def shadow_counts() -> dict:
+    """Shadow-mode tally of this process: {"compared": n, "disagree": n}."""
+    with _S.lock:
+        return dict(_S.shadow)
+
+
+def _batch_doi(doi, cand: dict, cfg: dict) -> str | None:
+    """The lowercased DOI when the candidate is a DOI-only candidate that would reach Europe PMC resolve_oa, else None.
+    Metadata only, no request. No PMCID and no epmc_ft (those never call resolve_oa by DOI), and not an arXiv,
+    original-HTML, portal / excluded or denied candidate."""
+    d = _doi({"doi": doi}) if doi else None
+    if not d or _BATCH_BAD_DOI.search(d) or not isinstance(cand, dict):
+        return None
+    oa = cand.get("oa") if isinstance(cand.get("oa"), dict) else {}
+    if _pmcid(cand) or oa.get("epmc_ft") or isinstance(cand.get("arxiv"), dict):
+        return None
+    try:
+        from vera import acq_discovered as _acqd, fulltext_routes, host_role
+        route, _c, _d = fulltext_routes.select(cand, d, cfg)
+        if route.name != "europepmc":
+            return None
+        if host_role.role_for_record(portal_meta(cand, d)).role in ("PORTAL", "EXCLUDED"):
+            return None
+        if _acqd.is_denied(doi=d, pmcid=None, urls=(cand.get("url"),)):
+            return None
+    except Exception:  # noqa: BLE001  (an unclassifiable candidate simply takes the per-DOI path)
+        return None
+    return d
+
+
+def _batch_verdicts(raw: bytes, dois: list, rcfg: dict, page_size: int) -> dict | None:
+    """doi -> "hit" | "miss" from a USABLE batch answer, or None when the envelope is not usable (whole-batch fallback):
+    strict JSON, resultList.result a list of dicts, hitCount an int equal to the number of rows and at most pageSize."""
+    try:
+        doc = strict_json.loads(raw.decode("utf-8"))
+        rl = doc.get("resultList") if isinstance(doc, dict) else None
+        rows = rl.get("result") if isinstance(rl, dict) else None
+        hits = doc.get("hitCount")
+    except Exception:  # noqa: BLE001  (StrictJSONError included: fixed handling, never record text)
+        return None
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return None
+    if isinstance(hits, bool) or not isinstance(hits, int) or hits != len(rows) or hits > page_size:
+        return None
+    need_oa = rcfg.get("require_open_access", True)
+    ok = set()
+    for r in rows:  # mirrors the admission test of resolve_oa (AA:867-874), applied to every row, not only the first
+        rd = str(r.get("doi") or "").strip().lower()
+        if not rd:
+            continue
+        if need_oa and (str(r.get("isOpenAccess") or "").upper() != "Y"
+                        or not re.fullmatch(r"PMC\d{1,10}", str(r.get("pmcid") or "").strip().upper())):
+            continue
+        ok.add(rd)
+    return {d: ("hit" if d in ok else "miss") for d in dois}
+
+
+def batch_precheck(ranked, cfg: dict, deps: Deps, memo: dict, clock=time.monotonic,
+                   deadline: float | None = None) -> dict:
+    """One paced Europe PMC batch (resultType lite) over the not-yet-judged DOI-only candidates of `ranked`, in rank
+    order, at most max_dois, only when at least min_dois are eligible. `memo` is the Ask's own verdict holder
+    (doi -> "hit" | "miss"; "__failed__" after one fallback, so a failing batch is attempted once per Ask). Verdicts
+    are carried on the candidate dicts (set here, in the request thread, before any pool submission). Any failure
+    falls back to today's per-DOI path with nothing skipped. Returns {"mode", "sent", "fallback", "miss", "hit"}."""
+    mode = batch_precheck_mode(cfg)
+    out = {"mode": mode, "sent": False, "fallback": None, "miss": 0, "hit": 0}
+    if mode == "off":
+        return out
+    rcfg = cfg.get("resolve") or {}
+    bcfg = rcfg.get("batch_precheck") or {}
+    tag = "epmc_precheck" if mode == "on" else "epmc_precheck_shadow"
+    by_doi: dict = {}
+    for _score, doi, cand, _isbn in ranked:
+        d = _batch_doi(doi, cand, cfg)
+        if d is None:
+            continue
+        if d in memo:  # a verdict already recorded in this Ask: carry it to this candidate, never re-batch
+            cand[tag], cand["epmc_precheck_doi"] = memo[d], d
+            continue
+        by_doi.setdefault(d, []).append(cand)
+    todo = list(by_doi)[:max(0, int(bcfg.get("max_dois", 25)))]  # beyond max_dois: per-DOI path as today
+    if memo.get("__failed__") or len(todo) < max(2, int(bcfg.get("min_dois", 3))):
+        return out
+    from urllib.parse import urlencode
+    page = int(bcfg.get("page_size", 100))
+    url = rcfg["search_url"] + "?" + urlencode({"query": " OR ".join(f'DOI:"{d}"' for d in todo),
+                                                "resultType": "lite", "format": "json", "pageSize": page})
+    out["sent"] = True
+    try:
+        with rate_limit.queue_scope(time.monotonic() + float(bcfg.get("queue_wait_s", 25))):
+            raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
+                                       clock=clock, deadline=deadline, route_hop=True)
+        verdicts = _batch_verdicts(raw, todo, rcfg, page)
+        out["fallback"] = None if verdicts is not None else "envelope"
+    except _Stop as e:
+        verdicts, out["fallback"] = None, e.code
+    except Exception as e:  # noqa: BLE001
+        verdicts, out["fallback"] = None, type(e).__name__
+    if verdicts is None:
+        memo["__failed__"] = True
+        logger.warning("epmc batch precheck fallback (%s)", out["fallback"])  # fixed text, no record text
+        return out
+    for d, v in verdicts.items():
+        memo[d] = v
+        out[v] += 1
+        for cand in by_doi[d]:
+            cand[tag], cand["epmc_precheck_doi"] = v, d
+    return out
+
+
+def _precheck_skip(cand: dict, doi, cfg: dict, chain: list | None) -> None:
+    """on mode: a DOI the batch showed to have no qualifying open-access row ends as R-ACQ-NOROUTE with no per-DOI
+    request. The marker hop keeps url_chain truthful."""
+    if doi and cand.get("epmc_precheck") == "miss" and cand.get("epmc_precheck_doi") == _doi({"doi": doi}):
+        if chain is not None:
+            chain.append(BATCH_HOP)
+        raise _Stop(acq_config.reason(cfg, "no_route"))
+
+
+def _shadow_note(cand: dict, doi, per_doi: str) -> None:
+    """shadow mode: count the batch verdict against the per-DOI verdict; log only the public DOI and the two verdicts."""
+    v = cand.get("epmc_precheck_shadow")
+    if v is None or not doi or cand.get("epmc_precheck_doi") != _doi({"doi": doi}):
+        return
+    with _S.lock:
+        _S.shadow["compared"] += 1
+        if v != per_doi:
+            _S.shadow["disagree"] += 1
+    if v != per_doi:
+        logger.warning("epmc batch precheck shadow disagreement doi=%s batch=%s per_doi=%s", cand["epmc_precheck_doi"],
+                       v, per_doi)
+
+
 def rank_candidates(question: str, cands, cfg: dict, served: set, fdcfg: dict, count, drops: dict | None = None,
                     route: str | None = None, protected=None, parts=None) -> list:
     # protected: set of doc_key_set keys of candidates already stored (reuse); None = lookup unavailable (no O1 swap)
@@ -1337,13 +1487,23 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
     disc = cand.get("discovery") if isinstance(cand.get("discovery"), dict) else None
     chain = [] if disc is not None else None
     route, landing = "europepmc", None
+    def _resolve(**kw):  # EPMC-BATCH-1113: shadow mode compares the batch verdict with this per-DOI verdict
+        try:
+            r = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand), **kw)
+        except _Stop as e:
+            if e.code == acq_config.reason(cfg, "no_route"):
+                _shadow_note(cand, doi, "miss")
+            raise
+        _shadow_note(cand, doi, "hit")
+        return r
     if disc is None:
-        res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand))
+        _precheck_skip(cand, doi, cfg, None)  # EPMC-BATCH-1113 (on): batch miss -> R-ACQ-NOROUTE, no per-DOI request
+        res = _resolve()
     else:
         from vera import acq_discovered
         try:
-            res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand),
-                             chain=chain)
+            _precheck_skip(cand, doi, cfg, chain)  # inside the try: the landing trigger below still catches it
+            res = _resolve(chain=chain)
         except _Stop as e:
             if not (doi and e.code == acq_config.reason(cfg, "no_route") and acq_discovered.landing_on(cfg)):
                 raise
@@ -1552,6 +1712,11 @@ def run_job(job: Job, cfg: dict, deps: Deps, clock=time.monotonic, env=None) -> 
         from vera.dar_corpus import doc_key_set
         ranked = rank_candidates(job.question if (job.trigger != LIST_TRIGGER or _list_topic(job.cands)) else "",
                                  cands, cfg, served, fdcfg, count)
+        if ranked and batch_precheck_mode(cfg) != "off":  # EPMC-BATCH-1113 (background job; flag off by default)
+            try:
+                batch_precheck(ranked, cfg, deps, {}, clock=clock, deadline=deadline)
+            except Exception:  # noqa: BLE001  (never breaks the job: the per-DOI path stays)
+                logger.warning("epmc batch precheck failed")
         searched = True  # ROUNDS-1028: the search ran, so this job counts toward its topic's round
         for score, doi, cand, isbn in ranked:
             if stored >= budget:

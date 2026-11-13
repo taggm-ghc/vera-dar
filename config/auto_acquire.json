@@ -204,6 +204,14 @@
     "fulltext_url_template": "https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML",
     "landing_url_template": "https://europepmc.org/article/PMC/{pmcid}",
     "require_open_access": true,
+    "batch_precheck": {
+      "_note": "EPMC-BATCH-1113 (work/NOROUTE-CODE-1112/PLAN.md W2.3 option d). mode off | shadow | on, shipped off (new external-call flag; OD-1108-HITL item 5 covers the endpoint). One paced Europe PMC lite request per round for DOI-only candidates (query DOI:a OR DOI:b, pageSize page_size); a DOI with no qualifying open-access row in a usable answer is skipped as R-ACQ-NOROUTE without a per-DOI request; any failure falls back to the per-DOI path. shadow runs both and only counts disagreements. max_dois 25 and min_dois 3 are UNCALIBRATED planner priors (no live data; with one miss a batch saves nothing). Enable only after the W2.5 M0 paired comparison on recorded real bodies shows 0 disagreements, then 0 in shadow. queue_wait_s: how long the batch may queue for the Europe PMC portal slot.",
+      "mode": "off",
+      "max_dois": 25,
+      "min_dois": 3,
+      "page_size": 100,
+      "queue_wait_s": 25
+    },
     "refuse_pub_types": [
       "preprint",
       "retracted publication",
