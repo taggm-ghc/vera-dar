@@ -61,6 +61,31 @@ Q_LABELLED = (f"WITH ls AS (SELECT span_id FROM {V}tax_chunk_topic WHERE classif
 Q_VOTED = (f"SELECT count(DISTINCT {_DOC}) FROM (SELECT source_id FROM {V}tax_source_topic WHERE classifier_name = :cn AND state = 'active' "
            f"UNION SELECT source_id FROM {V}tax_source_domain WHERE classifier_name = :cn AND state = 'active') u JOIN {V}sources s ON s.source_id = u.source_id")
 
+# CORPUS-UNCAT-1113: documents with NO stored subject label. A document is labelled when any of its version rows has an active, configured-classifier
+# main label (tax_source_topic to an active topic, tax_source_domain to an active domain) or a passage in the display CTE _CL (strict links, active
+# entities). Columns: distinct documents, distinct labelled documents, distinct labelled passages.
+Q_UNLABELLED = (
+    f"WITH {_CL}, lab AS (SELECT e.source_id FROM cl JOIN {V}evidence_spans e ON e.span_id = cl.span_id "
+    f"UNION SELECT st.source_id FROM {V}tax_source_topic st JOIN {V}tax_topics t3 ON t3.topic_id = st.topic_id AND t3.state = 'active' "
+    "WHERE st.classifier_name = :cn AND st.state = 'active' "
+    f"UNION SELECT sd.source_id FROM {V}tax_source_domain sd JOIN {V}tax_domains d3 ON d3.domain_id = sd.domain_id AND d3.state = 'active' "
+    "WHERE sd.classifier_name = :cn AND sd.state = 'active') "
+    f"SELECT count(DISTINCT {_DOC}), count(DISTINCT CASE WHEN lab.source_id IS NOT NULL THEN {_DOC} END), (SELECT count(DISTINCT span_id) FROM cl) "
+    f"FROM {V}sources s LEFT JOIN lab ON lab.source_id = s.source_id")
+
+
+def read_unlabelled(engine, classifier: str = CLASSIFIER) -> dict | None:
+    """Counts of documents and stored passages with no stored subject label (aggregate only; no title, id or area name), or None for an
+    empty corpus. documents_without_passages: the labelling job reads only evidence_spans, so these can never be labelled.
+    Raises on a database error (the caller treats that as 'not available')."""
+    with engine.connect() as c:
+        d, dl, pl = (int(x or 0) for x in c.execute(text(Q_UNLABELLED), {"cn": classifier}).one())
+        n_pass, n_docs, n_docs_pass = (int(x or 0) for x in c.execute(text(Q_TOTALS)).one())
+    if d == 0:
+        return None
+    return {"classifier": classifier, "documents": d, "documents_unlabelled": max(0, d - dl),
+            "documents_without_passages": max(0, n_docs - n_docs_pass), "passages": n_pass, "passages_unlabelled": max(0, n_pass - pl)}
+
 
 def job_status() -> dict:
     """The ONE status entry point (INT-1109): vera.chunk_taxo_status.status(), the cached reader of the latest 'finished'

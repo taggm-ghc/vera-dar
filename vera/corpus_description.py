@@ -1533,7 +1533,31 @@ class CorpusDescriber:
                 st = self._stored_taxonomy(out)
                 if st:
                     out = {**out, "stored_taxonomy": st}
+            if (self.cfg.get("unlabelled_share") or {}).get("enabled") is True:  # CORPUS-UNCAT-1113: aggregate of stored rows, own flag
+                ul = self._unlabelled(out)
+                if ul:
+                    out = {**out, "unlabelled": ul}
         return out
+
+    def _unlabelled(self, overview: dict):
+        """CORPUS-UNCAT-1113: documents and passages with no stored subject label (vera.corpus_taxonomy.read_unlabelled), cached like
+        _interim; None on any problem (class name logged only). Never raises."""
+        key = (overview.get("source_count"), overview.get("corpus_updated_at"))
+        now, ttl = self.clock(), float(subject_cfg(self.cfg)["cache_s"])
+        uc = getattr(self, "_unlabelled_cache", None)
+        if uc is not None and uc[1] == key and now - uc[0] < ttl:
+            return uc[2]
+        try:
+            from vera import corpus_taxonomy
+            engine = self._engine_or_none()
+            sc = self.cfg.get("stored_taxonomy") or {}
+            val = None if engine is None else corpus_taxonomy.read_unlabelled(
+                engine, str(sc.get("classifier_name") or corpus_taxonomy.CLASSIFIER))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("unlabelled share unavailable (%s)", type(exc).__name__)
+            val = None
+        self._unlabelled_cache = (now, key, val)
+        return val
 
     def _stored_taxonomy(self, overview: dict):
         """WP6: the stored-label aggregation (vera.corpus_taxonomy), cached like the subject areas; None when nothing is
