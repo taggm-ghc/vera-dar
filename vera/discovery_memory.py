@@ -38,7 +38,7 @@ def eligible_candidates(candidates, gate_cfg) -> list:
     """Candidates whose provider, licence and identifier pass the memory gate rules (excluded before build_note)."""
     out = []
     for c in candidates or ():
-        if (_provider_allowed(c.get("provider") or "", gate_cfg) and c.get("licence_decision") in gate_cfg.allowed_licence
+        if (_provider_allowed(c.get("provider") or "", gate_cfg, gate_cfg.discovery_allowed_providers) and c.get("licence_decision") in gate_cfg.allowed_licence
                 and str(c.get("identifier") or "").strip()):
             out.append(c)
     return out
@@ -104,7 +104,7 @@ def check_discovery_note(sentence: str, candidates, question: str, gate_cfg,
     if not cands:
         reasons.add(NO_CITATION)
     for c in cands:
-        if not _provider_allowed(c.get("provider") or "", gate_cfg):
+        if not _provider_allowed(c.get("provider") or "", gate_cfg, gate_cfg.discovery_allowed_providers):
             reasons.add(PROVIDER_NOT_ALLOWED)
         if c.get("licence_decision") not in gate_cfg.allowed_licence:
             reasons.add(LICENCE)
