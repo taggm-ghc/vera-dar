@@ -103,7 +103,7 @@ def test_t44_flag_off_or_not_literally_true_equals_main(kw):
     assert j.status()["reasons"] == ["deferred_until_utc_midnight"]
     assert not write_names(db) and not db.nodes and not db.links
     reasons, metrics = stored(db)
-    assert reasons == ["deferred"] and "no_vector_yet" not in metrics and "partial_snapshot" not in metrics
+    assert reasons == ["deferred"] and "partial_snapshot" not in metrics  # WP-I D2: the scan now ends reuse-only, so the counts are recorded
 
 
 def test_t44_default_false_shipped_and_validator_rejects_non_bool():

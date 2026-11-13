@@ -92,9 +92,16 @@ def _build() -> dict[str, str]:
     s["job_run_latest"] = ("SELECT classifier_version, finished_at, metrics, display_ok, reasons FROM vera_vjay.tax_job_runs "
                            f"WHERE classifier_name = '{CLASSIFIER}' AND state = 'finished' AND finished_at IS NOT NULL "
                            "AND classifier_version <> 'pending' ORDER BY finished_at DESC LIMIT 1")
-    # WP-W (no-op rule): the newest run rows, to read `write_incomplete` between the latest build row and now (same text as WP-I's)
+    # WP-I (D3): the latest finished BUILD row (the one that carries scan_end_epoch; an incremental or unchanged row does not), the
+    # newest run rows (to read write_incomplete between the build and now), and the spans whose vector was written after a time.
+    s["job_run_build_latest"] = ("SELECT classifier_version, metrics FROM vera_vjay.tax_job_runs "
+                                 f"WHERE classifier_name = '{CLASSIFIER}' AND state = 'finished' AND finished_at IS NOT NULL "
+                                 "AND classifier_version <> 'pending' AND metrics ->> 'scan_end_epoch' IS NOT NULL "
+                                 "ORDER BY finished_at DESC LIMIT 1")
     s["job_run_recent"] = ("SELECT state, metrics FROM vera_vjay.tax_job_runs "
                            f"WHERE classifier_name = '{CLASSIFIER}' ORDER BY started_at DESC LIMIT 8")
+    s["vectors_after"] = ("SELECT span_id FROM vera_vjay.tax_chunk_vectors "
+                          "WHERE updated_at > pg_catalog.to_timestamp(:epoch) ORDER BY span_id")
     s["set_ctx"] =("SELECT pg_catalog.set_config('vera.tax_actor', :actor, true), "
                     "pg_catalog.set_config('vera.tax_batch', :batch, true)")
     s["spans_page"] = ("SELECT span_id, source_id, left(text, :n) FROM vera_vjay.evidence_spans "
@@ -145,7 +152,12 @@ def _build() -> dict[str, str]:
             # the prior reads each span's newest strict link: (span, entity, link_id), strict = score_kind NULL or 'cosine' (pass 9, M3)
             s[f"link_retire_spans_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
                                               f"AND state = 'active' AND {a} = ANY(:ids)")
-            s[f"link_select_strict_{kind}"] = (f"SELECT {a}, {b}, link_id FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
+            # WP-I D3/D4: a strict insert on a (span, node) pair that already holds a ROUTING row (cosine_soft, cosine_r<n>) of the same
+            # version first retires that routing row, in the same transaction (the active-pair unique index would drop the insert)
+            s[f"link_retire_pair_routing_{kind}"] = (f"UPDATE {t} SET state = 'retired' WHERE classifier_name = '{CLASSIFIER}' "
+                                                     f"AND state = 'active' AND {a} = :a AND {b} = :b "
+                                                     "AND score_kind IS NOT NULL AND score_kind <> 'cosine' AND score_kind <> 'cosine_lvl'")
+            s[f"link_select_strict_{kind}"] =(f"SELECT {a}, {b}, link_id FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
                                                f"AND (score_kind IS NULL OR score_kind = 'cosine') AND ({a}, link_id) > (:after, :after_lid) ORDER BY {a}, link_id LIMIT :lim")
             s[f"link_select_{kind}"] = (f"SELECT {a}, {b} FROM {t} WHERE classifier_name = '{CLASSIFIER}' AND state = 'active' "
                                         f"AND {a} > :after ORDER BY {a}, {b} LIMIT :lim")

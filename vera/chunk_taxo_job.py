@@ -102,6 +102,13 @@ def _num(jcfg: dict, key: str):
     return v
 
 
+def _opt_num(v):
+    """A positive finite number or None (a rebuild trigger left unset). Booleans and text are None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+        return None
+    return float(v)
+
+
 def _ceil_int(x) -> int:
     """tax_job_runs.neurons_used is INTEGER >= 0."""
     try:
@@ -275,6 +282,10 @@ class Job:
         # WP-F (CHUNK-ASSOC-1113): when the neuron budget defers embedding, finish the scan reuse-only and build/write from the
         # vectors already stored. Literal true only; a missing or non-bool key is off.
         self.finish_now = self.jcfg.get("finish_now") is True
+        # WP-I (D3, D5): incremental assignment mode (off | shadow | on; anything else is off) and the optional rebuild triggers (null = off)
+        self.incremental = self.jcfg.get("incremental") if self.jcfg.get("incremental") in ("off", "shadow", "on") else "off"
+        self.rebuild_unassigned_share = _opt_num(self.jcfg.get("rebuild_unassigned_share"))
+        self.rebuild_interval_s = _opt_num(self.jcfg.get("rebuild_interval_s"))
         self.engines_created = 0
         self.rows_embedded = 0
         self.peak_rss = 0.0
@@ -351,6 +362,7 @@ class Job:
                     reason = _reason_for(exc)
                     info = self._fail_info()  # before the buffers and the engine are dropped
                     info.update(self._robust_info())
+                    info.update(self._scan_info())
                     self._close_run("failed", reason=reason, extra=info)
                     self._release_buffers()
                     self._drop_engine()
@@ -360,7 +372,7 @@ class Job:
             if self._inert:
                 self._record_inert(self._inert)  # after the probe connection is closed (pool of one)
             if self._run_id is not None:
-                self._close_run("deferred", reason=self._defer_reason, extra=self._robust_info())
+                self._close_run("deferred", reason=self._defer_reason, extra={**self._robust_info(), **self._scan_info()})
             self._release_buffers()  # early stop or end of pass: no chunk or vector buffer survives it
             self._drop_engine()
             self._release_embedder()
@@ -373,7 +385,7 @@ class Job:
             st = self.status()
             out = {"state": st["state"], "complete": self._phase == "idle" and not self._stop and not self._inert,
                    "rows_embedded": self.rows_embedded, "stop": self._stop, "retry_in_s": self._retry_in}
-            if self._reuse_only:  # WP-F: the budget deferred embedding; the loop waits for the budget reset, not the interval
+            if self._reuse_only and self.finish_now:  # WP-F: the budget deferred embedding; the loop waits for the budget reset, not the interval
                 out["finish_now"] = True
             return out
         except Exception as exc:  # noqa: BLE001
@@ -412,21 +424,37 @@ class Job:
         """TAXO-ROBUST-1111 E6: ints only (no text, sha or message). Empty when nothing was quarantined, skipped or bisected, so a
         clean pass stores what it stored before. Never raises."""
         try:
-            if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive
-                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source or self._reuse_only
-                    or (self._w_started and not self._w_done and not final)):
-                return {}
-            q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
-            fn = ({"no_vector_yet": int(self.no_vector_yet), "no_vector_yet_min_span_id": int(self._nvy_min or 0)}
+            fn = ({"no_vector_yet": int(self.no_vector_yet), "no_vector_yet_min_span_id": int(self._nvy_min or 0), "stale_vector": int(self.stale_vector)}
                   if self._reuse_only else {})
             if self._w_started and not self._w_done and not final:  # W1 committed, W4 not: the next build rebuilds from the mixed state
                 fn["write_incomplete"] = 1
+            if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive
+                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source):
+                return fn
+            q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
             return {**fn, "quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
                     "skipped_portal": int(self.skipped_portal), "skipped_portal_error": int(self.skipped_portal_error),
                     "skipped_no_source": int(self.skipped_no_source),
                     "vectors_missing": int(self.vectors_missing), "q_consecutive": int(self._consecutive),
                     "q_last_status": int(self._q_last), "bisect_requests": int(self.bisect_requests),
                     "bisect_failed_chars": int(self.bisect_failed_chars), "q": q}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _scan_info(self) -> dict:
+        """WP-I D6 run-row contract (confirmed from WP-C's proposal, work/WP-FWI-1113/NOTES.md): numbers only, written on EVERY close
+        (finished, deferred, partial, failed). A pass that stopped mid-scan counted only the pages it read, so `scan_complete` 0 marks
+        lower bounds. Never raises."""
+        try:
+            out = {"scan_complete": 1 if self._scan_done else 0, "skipped_portal": int(self.skipped_portal),
+                   "skipped_portal_error": int(self.skipped_portal_error), "skipped_no_source": int(self.skipped_no_source),
+                   "skipped_empty": int(self.skipped_empty)}
+            for cls, n in self._excl_vec.items():
+                out["excluded_with_vector_" + cls] = int(n)
+            out["excluded_with_vector_empty"] = 0  # a vectored empty span is never classed empty (the vector check comes first)
+            if self._no_rebuild:
+                out["no_rebuild_snapshot_incomplete"] = 1
+            return out
         except Exception:  # noqa: BLE001
             return {}
 
@@ -605,9 +633,13 @@ class Job:
             return True
         return False
 
-    def _count_unvectored(self, rows) -> None:
-        """WP-F: rows (span_id, source_id, text) that stay without a vector this pass (not empty, not quarantined)."""
+    def _count_unvectored(self, rows, have=None) -> None:
+        """WP-F / WP-I D7: rows (span_id, source_id, text) that stay without a CURRENT vector this pass (not empty, not quarantined). A row
+        that still holds a stored vector of another model or text is `stale_vector` (the plan's class), the rest are `no_vector_yet`."""
         rows = list(rows)
+        stale = [r for r in rows if have and r[0] in have]
+        rows = [r for r in rows if not (have and r[0] in have)]
+        self.stale_vector += len(stale)
         self.no_vector_yet += len(rows)
         if rows:
             lo = min(int(r[0]) for r in rows)
@@ -642,11 +674,14 @@ class Job:
         self.metrics_run = {}
         self._retry_in = None
         self._reuse_only, self.no_vector_yet, self._nvy_min, self._defer_reason = False, 0, None, None  # WP-F: per pass
+        self.stale_vector = 0  # WP-I D7: spans whose stored vector is not current (other model or changed text) and were not re-embedded
         self.skipped_empty, self.vectors_missing = 0, 0  # TAXO-ROBUST-1111: per pass
         self.skipped_portal, self.skipped_portal_error, self.skipped_no_source = 0, 0, 0  # ARXIV-DEFENSE-1113: per pass
         self._verdicts = {}
         self._excl = {"portal": [], "portal_error": [], "no_source": [], "empty": []}  # WP-W: span ids the scan positively excluded
         self._scan_end, self._snap, self._prior_linked = None, {}, set()
+        self._excl_vec = {"portal": 0, "portal_error": 0, "no_source": 0}  # WP-I D6: excluded spans that still hold a stored vector
+        self._no_rebuild, self._inc, self._shadow, self._ctx_version, self._prior_ids = False, {}, None, None, {}
         self._w_started = self._w_done = False
         self.bisect_requests, self.bisect_failed_chars = 0, 0
         self._consecutive, self._streak, self._q_last = 0, [], 0
@@ -654,7 +689,7 @@ class Job:
     def _step(self):
         ph = self._phase
         fn = {"start": self._do_start, "scan": self._do_scan, "build": self._do_build, "write": self._do_write,
-              "w_nodes": self._do_nodes, "w_links": self._do_links, "w_votes": self._do_votes, "w_retire": self._do_retire,
+              "assign": self._do_assign, "w_nodes": self._do_nodes, "w_links": self._do_links, "w_votes": self._do_votes, "w_retire": self._do_retire,
               "finish": self._do_finish}.get(ph)
         if fn is None:
             raise RuntimeError("bad_phase")
@@ -720,6 +755,7 @@ class Job:
                 new_ids = sorted({r[1] for r in page if r[1] not in self._verdicts})
                 if new_ids:
                     self._verdicts.update(_source_verdicts(store.fetch_source_portal(conn, new_ids)))
+                n0 = {c: len(ids) for c, ids in self._excl.items()}
                 rows = []
                 for r in page:
                     v = self._verdicts.get(r[1], _NO_SOURCE)
@@ -735,7 +771,12 @@ class Job:
                         self.skipped_portal += 1
                         self._excl["portal"].append(r[0])
                 have = store.fetch_vectors(conn, [r[0] for r in rows])
-            shas = {r[0]: hashlib.sha256(r[2].encode("utf-8")).hexdigest() for r in rows}
+                new_excl = {c: ids[n0[c]:] for c, ids in self._excl.items() if c != "empty"}
+                if any(new_excl.values()):  # D6: an excluded span may still hold a stored vector (B8); counted once per class
+                    held = store.fetch_vectors(conn, [i for ids in new_excl.values() for i in ids])
+                    for c, ids in new_excl.items():
+                        self._excl_vec[c] += sum(1 for i in ids if i in held)
+            shas ={r[0]: hashlib.sha256(r[2].encode("utf-8")).hexdigest() for r in rows}
             cur = {sid for sid, h in have.items() if h[0] == model_name and h[1] == shas.get(sid)}
             todo = []
             for r in rows:
@@ -752,7 +793,7 @@ class Job:
                     del self._quarantine[r[0]]  # text changed: retry
                 todo.append(r)
             if self._reuse_only:  # WP-F: budget spent earlier in this pass; embed nothing, count what still lacks a vector
-                self._count_unvectored(todo)
+                self._count_unvectored(todo, have)
                 todo = []
             fresh = {}
             i = 0
@@ -799,12 +840,14 @@ class Job:
                     recs = []  # the original error is the reason; the partial result could not be stored
                 if err is not None:
                     self.rows_embedded += len(recs)
-                    if self.finish_now and isinstance(err, Deferred) and err.code in _BUDGET_CODES and not self._active_build():
-                        # WP-F: first build only; keep what embedded, embed nothing more this pass, finish the scan on stored vectors
+                    if isinstance(err, Deferred) and err.code in _BUDGET_CODES:
+                        # D2 (WP-F's mechanism, generalised): keep what embedded, embed nothing more this pass, finish the scan on stored
+                        # vectors; what the pass then does (first build under finish_now, incremental assignment, or nothing) is decided
+                        # at the end of the scan by _after_budget_scan
                         for rec in recs:
                             fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
                         self._reuse_only, self._retry_in = True, err.retry_in_s
-                        self._count_unvectored([r for r in todo if r[0] not in fresh])
+                        self._count_unvectored([r for r in todo if r[0] not in fresh], have)
                         break
                     raise err
                 for rec in recs:
@@ -842,14 +885,32 @@ class Job:
                          self.skipped_portal_error, self.skipped_no_source)
             if len(self._dims) > 1:
                 raise RuntimeError("dim_mismatch")  # a model/dim change leaves mixed vectors: refuse, re-embed on the next pass
-            if not self._chunks and self._reuse_only:  # WP-F: budget spent and no stored vector: no build; the pass ends deferred
-                self._stop, self._defer_reason = "deferred", "no_vectors"
-                return
+            if self._reuse_only:
+                return self._after_budget_scan()
             if not self._chunks:
                 self._set(state="idle", reasons=["no_chunks"], last_run=self._wall())
                 self._phase = "idle"
                 return
             self._phase = "build"
+
+    def _after_budget_scan(self):
+        """D2: the budget stopped embedding and the scan finished reuse-only; the snapshot is incomplete (some eligible span has no
+        vector). First build: only under finish_now (WP-F) and with a vector to build on; otherwise no build until the snapshot is complete.
+        With a build present: mode `on` assigns the new spans incrementally and does not rebuild; `off` and `shadow` rebuild only on a
+        complete snapshot, so they write nothing and record `no_rebuild_snapshot_incomplete`."""
+        if not self._active_build():
+            if self.finish_now and self._chunks:
+                self._phase = "build"
+                return
+            self._stop = "deferred"
+            if not self._chunks and self.finish_now:
+                self._defer_reason = "no_vectors"
+            return
+        if self.incremental == "on" and self._chunks and self._mode == "write":
+            self._phase = "assign"
+            return
+        self._no_rebuild = True
+        self._stop = "deferred"
 
     def _matrix(self):
         import numpy as np  # noqa: PLC0415
@@ -860,6 +921,8 @@ class Job:
         core = self.core
         if self._guard():  # before the clustering step
             return 0.0
+        if self.incremental == "on" and self._mode == "write" and not self._reuse_only and self._chunks and self._try_incremental():
+            return 0.0  # D3: assigned the new spans on the last build's centers; no rebuild this pass
         if self._headroom_short():  # the build adds about 8*n*d bytes more: do not start it without room (rss_hard_mb)
             return 0.0
         params = self.cfg.get("params") if isinstance(self.cfg.get("params"), dict) else self.cfg
@@ -868,6 +931,8 @@ class Job:
         vf = getattr(core, "version_for", None)  # the version hashes params, seeds and span ids: known before the build
         if self._mode == "write" and vf is not None and self._unchanged(str(vf([c[0] for c in chunks], params))):
             return self._finish_unchanged(str(vf([c[0] for c in chunks], params)))
+        if self.incremental == "shadow" and self._mode == "write" and not self._reuse_only:
+            self._shadow_compute()  # in memory only: no link is written by the shadow step
         vecs = self._matrix()
         prior = self._load_prior() if self._mode in ("write", "curator") else None
         model = core.build(chunks, vecs, params, prior=prior)
@@ -895,10 +960,10 @@ class Job:
         Any missing input is False: build and write as before."""
         try:
             with self._cx() as conn:
-                row = store.run_sql(conn, "job_run_latest").first()
+                row = store.run_sql(conn, "job_run_build_latest").first()
                 if row is None or str(row[0]) != version:
                     return False
-                m = row[2]
+                m = row[1]
                 if isinstance(m, (str, bytes)):
                     m = json.loads(m)
                 end = m.get("scan_end_epoch") if isinstance(m, dict) else None
@@ -949,6 +1014,7 @@ class Job:
         self._pending_done = "unchanged"
         info = {"unchanged": 1, "version_known": 1}
         info.update(self._robust_info())
+        info.update(self._scan_info())
         rid, self._run_id = self._run_id, None
         if rid is not None:
             with self._cx(True) as conn:
@@ -960,6 +1026,190 @@ class Job:
         self._set(state="unchanged", version=version, last_run=self._wall())
         log.info("chunk_taxo run unchanged version=%s", version[:32])
         return 0.0
+
+    # ---- D3 incremental assignment (WP-I). Ships `off`. `shadow` computes, in memory only, what `on` would assign and reports the
+    # agreement with the rebuild; `on` assigns spans that have a vector and no strict link, against the centers of the last build.
+
+    def _inc_inputs(self):
+        """-> (reason, data). reason is None when assignment can run; otherwise `no_build_params` (no finished build row carrying the
+        stored cutoffs, or no active nodes) or `write_incomplete` (a pass after that build was aborted between W1 and W4)."""
+        with self._cx() as conn:
+            row = store.run_sql(conn, "job_run_build_latest").first()
+            if row is None:
+                return "no_build_params", None
+            m = self._as_dict(row[1])
+            end = m.get("scan_end_epoch")
+            if isinstance(end, bool) or not isinstance(end, (int, float)) or not isinstance(m.get("max_span_id"), (int, float)):
+                return "no_build_params", None
+            after = {int(r[0]) for r in store.run_sql(conn, "vectors_after", {"epoch": float(end)}).fetchall()}
+            if self._write_incomplete(conn):  # a pass aborted after that build (its closed row says so), or ...
+                return "write_incomplete", None
+            if all(isinstance(m.get("n_nodes_" + lv), (int, float)) for lv in store.LEVELS) and \
+                    self._active_node_counts(conn) != {lv: m["n_nodes_" + lv] for lv in store.LEVELS}:
+                return "write_incomplete", None  # ... active nodes beyond the build's own (a pass killed after W1)
+        prior = self._load_prior()
+        if prior is None:
+            return "no_build_params", None
+        null = {}
+        for lv in store.LEVELS:
+            if any(n["level"] == lv for n in prior["nodes"]):
+                dq = m.get("dist_q_" + lv)
+                if isinstance(dq, bool) or not isinstance(dq, (int, float)) or "has_margin_" + lv not in m:
+                    return "no_build_params", None
+                null[lv] = {"dist_q": float(dq), "margin_q": float(m["margin_q_" + lv]) if m.get("has_margin_" + lv) == 1 and
+                            isinstance(m.get("margin_q_" + lv), (int, float)) else None}
+        if not isinstance(m.get("min_support"), (int, float)):
+            return "no_build_params", None
+        return None, {"version": str(row[0]), "m": m, "prior": prior, "null": null, "after": after}
+
+    def _inc_model(self, data):
+        """A core-compatible model of the last build rebuilt from the stored strict members: center = unit mean of the member vectors
+        present in this scan (a topic's members include its sub-topics', a domain's its topics', as _load_prior propagates them)."""
+        import numpy as np  # noqa: PLC0415
+        X = self._matrix()
+        self._vecs = [X]  # keep the matrix: a rebuild may still follow
+        pos = {int(c["span_id"]): i for i, c in enumerate(self._chunks)}
+        nodes = []
+        for n in data["prior"]["nodes"]:
+            idx = [pos[s] for s in n["members"] if s in pos]
+            if not idx:
+                continue
+            c = np.asarray(X[idx], dtype=np.float64).mean(axis=0)
+            nrm = float(np.linalg.norm(c))
+            if nrm > 0:
+                nodes.append({"key": n["key"], "level": n["level"], "parent_key": n["parent_key"], "center": (c / nrm).tolist(),
+                              "members": list(n["members"])})
+        params = dict(self.cfg.get("params") if isinstance(self.cfg.get("params"), dict) else {}, min_support=data["m"]["min_support"])
+        return SimpleNamespace(nodes=nodes, null=data["null"], params=params, version=data["version"]), X, pos
+
+    def _inc_targets(self, data):
+        mx = int(data["m"]["max_span_id"])
+        return [i for i, c in enumerate(self._chunks)
+                if c["span_id"] not in self._prior_linked and (c["span_id"] > mx or c["span_id"] in data["after"])]
+
+    def _inc_associate(self, data):
+        model, X, _pos = self._inc_model(data)
+        out, errs = {}, 0
+        for i in self._inc_targets(data):
+            try:
+                out[int(self._chunks[i]["span_id"])] = self.core.associate(model, X[i])
+            except Exception:  # noqa: BLE001  (a bad vector: the span stays unassigned, counted)
+                errs += 1
+        return out, errs
+
+    def _write_incremental_page(self, conn, spans, assoc, ids, version):
+        strict = {k: [] for k in store.CHUNK_LINKS}
+        for sid in spans:
+            lr = self._link_rows(assoc.get(sid), ids)
+            if lr is not None:
+                strict[lr[0]].append({"a": sid, "b": lr[1]})
+        for kind, rows in strict.items():
+            if rows:
+                store.run_sql(conn, f"link_retire_pair_routing_{kind}", rows)  # T28: a same-version routing row on the pair goes first
+        self._write_chunk_page(conn, spans, assoc, ids, version)
+
+    def _assign(self, data) -> None:
+        assoc, errs = self._inc_associate(data)
+        ids = {lv: {} for lv in store.LEVELS}
+        for slug, (lv, eid) in self._prior_ids.items():
+            ids[lv][slug] = eid
+        version = data["version"]
+        self._ctx_version = version
+        spans = sorted(assoc)
+        for i in range(0, len(spans), self.page):
+            with self._tx() as conn:
+                self._write_incremental_page(conn, spans[i:i + self.page], assoc, ids, version)
+        assigned = sum(1 for s in spans if self._link_rows(assoc[s], ids) is not None)
+        self._inc.update({"inc_targets": len(spans) + errs, "inc_assigned": assigned, "inc_abstained": len(spans) - assigned,
+                          "inc_errors": errs, "inc_neurons": 0})
+
+    def _finish_incremental(self, reason: str) -> None:
+        """Close the pass's running row as finished with `incremental`; never inserts a build row."""
+        self._pending_done = "incremental"
+        info = {**self._scan_info(), **self._inc, "rows_embedded": self.rows_embedded}
+        info.update(self._robust_info(final=True))
+        rid, self._run_id = self._run_id, None
+        if rid is not None:
+            with self._cx(True) as conn:
+                store.run_sql(conn, "job_run_close", {"run_id": rid, "state": "finished", "neurons": _ceil_int(self._pass_neurons),
+                                                      "metrics": json.dumps({"run": _numeric_only(info) or {}}), "reasons": [reason]})
+        self.fails = 0
+        self._release_buffers()
+        self._phase = "idle"
+        self._set(state="incremental", last_run=self._wall())
+
+    def _try_incremental(self) -> bool:
+        """Mode `on`, complete snapshot: assign instead of rebuilding unless no params / write_incomplete / a rebuild trigger fires.
+        Returns True when the pass was finished here."""
+        reason, data = self._inc_inputs()
+        if reason is not None:
+            self._inc["inc_" + reason] = 1
+            return False
+        total = len(self._chunks)
+        unassigned = sum(1 for c in self._chunks if c["span_id"] not in self._prior_linked)
+        if self.rebuild_unassigned_share is not None and total and unassigned / total >= self.rebuild_unassigned_share:
+            self._inc["inc_rebuild_trigger_unassigned"] = 1
+            return False
+        if self.rebuild_interval_s is not None and self._scan_end is not None and \
+                self._scan_end - float(data["m"]["scan_end_epoch"]) >= self.rebuild_interval_s:
+            self._inc["inc_rebuild_trigger_interval"] = 1
+            return False
+        self._assign(data)
+        self._finish_incremental("incremental")
+        return True
+
+    def _do_assign(self):
+        """Budget-stopped scan (D2), build present, mode `on`: assign the spans that have a vector; never rebuild; the pass ends deferred."""
+        reason, data = self._inc_inputs()
+        if reason is not None:
+            self._inc["inc_" + reason] = 1
+            self._no_rebuild = True
+            self._stop = "deferred"
+            return 0.0
+        self._assign(data)
+        self._finish_incremental("incremental")
+        self._stop = "deferred"
+        return 0.0
+
+    def _shadow_compute(self) -> None:
+        """Mode `shadow`: before the rebuild, compute in memory what `on` would assign (no write); compared after the build."""
+        try:
+            reason, data = self._inc_inputs()
+            if reason is not None:
+                self._shadow = {"reason": reason, "assign": {}}
+                return
+            assoc, errs = self._inc_associate(data)
+            self._shadow = {"reason": None, "assign": assoc, "errors": errs}
+        except Exception:  # noqa: BLE001  (shadow must never stop a pass)
+            self._shadow = None
+
+    def _inc_metrics(self) -> dict:
+        """Run-row numbers of the shadow comparison (agreement after identity matching, T20) or of nothing."""
+        sh = self._shadow
+        if not sh:
+            return {}
+        out = {"shadow_targets": len(sh["assign"]), "shadow_no_build_params": 1 if sh.get("reason") else 0}
+        try:
+            model = self._pending.model
+            reused = {str(_g(n, "key")): _g(n, "reused_from") for n in (_g(model, "nodes") or [])}
+            assoc = _g(model, "assoc") or {}
+            agree = compared = abstain = 0
+            for sid, old in sh["assign"].items():
+                o_lvl = old.get("level") if isinstance(old, dict) else None
+                if o_lvl is None:
+                    abstain += 1
+                    continue
+                new = assoc.get(sid)
+                n_lvl = new.get("level") if isinstance(new, dict) else None
+                if n_lvl is None:
+                    continue
+                compared += 1
+                if n_lvl == o_lvl and reused.get(str(new.get(n_lvl))) == old.get(o_lvl):
+                    agree += 1
+            out.update({"shadow_compared": compared, "shadow_agree": agree, "shadow_abstain": abstain})
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     # ---- prior snapshot (identity across runs) from the stored links; no vectors are stored
     def _load_prior(self):
@@ -973,6 +1223,7 @@ class Job:
                         id2slug[(lvl, n["id"])] = n["slug"]
             if not nodes:
                 return None
+            self._prior_ids = {s: k for k, s in id2slug.items()}  # slug -> (level, entity id), for D3 writes
             for kind, plv, clv in (("domain_topic", "domain", "topic"), ("topic_subtopic", "topic", "subtopic")):
                 for a, b in store.fetch_hierarchy(conn, kind):
                     c, p = id2slug.get((clv, b)), id2slug.get((plv, a))
@@ -1017,8 +1268,9 @@ class Job:
         with self._cx(True) as conn:
             if self._held is not None and not self._lock_held(conn):
                 raise _WriterLost()
-            if self._mode == "write" and self._pending is not None:
-                store.set_ctx(conn, hashlib.sha256((store.ORIGIN_REF_PREFIX + str(_g(self._pending.model, "version"))).encode("utf-8")).hexdigest())
+            ver = self._ctx_version or (str(_g(self._pending.model, "version")) if self._pending is not None else None)
+            if self._mode == "write" and ver is not None:
+                store.set_ctx(conn, hashlib.sha256((store.ORIGIN_REF_PREFIX + ver).encode("utf-8")).hexdigest())
             yield conn
 
     # ---- W0 single writer: the pass holds the pool's one connection and a session advisory lock on it
@@ -1341,6 +1593,8 @@ class Job:
         self.metrics_run = {"rows_embedded": self.rows_embedded, "seconds": round(elapsed, 3),
                             "rows_per_s": round(self.rows_embedded / elapsed, 4), "peak_rss_mb": round(self.peak_rss, 1)}
         self.metrics_run.update(_numeric_only(self._robust_info(final=True)) or {})
+        self.metrics_run.update(self._scan_info())
+        self.metrics_run.update(self._inc_metrics())
         if self.finish_now:  # WP-F: present only with the flag on (flag off keeps main's run-row keys)
             self.metrics_run["partial_snapshot"] = 1 if self._reuse_only else 0
         self.metrics_run.update(domain_writer.metrics(self._dom))  # WP-D-1113
@@ -1359,6 +1613,19 @@ class Job:
                 metrics["n_nodes_" + lv] = sum(1 for n in self._model_nodes(model) if n["level"] == lv)
             if self._scan_end is not None:
                 metrics["scan_end_epoch"] = round(float(self._scan_end), 3)
+            # D3 stored inputs: per-level cutoffs and a presence flag (margin_q is absent for a level with too few nodes, and absence
+            # must not read as "params missing"); numbers only, far below the 64-key cut of _numeric_only
+            null, prm = _g(model, "null") or {}, _g(model, "params") or {}
+            for lv in store.LEVELS:
+                nl = null.get(lv) if isinstance(null, dict) else None
+                if isinstance(nl, dict) and isinstance(nl.get("dist_q"), (int, float)):
+                    metrics["dist_q_" + lv] = float(nl["dist_q"])
+                    mq = nl.get("margin_q")
+                    metrics["has_margin_" + lv] = 1 if isinstance(mq, (int, float)) else 0
+                    if isinstance(mq, (int, float)):
+                        metrics["margin_q_" + lv] = float(mq)
+            if isinstance(prm, dict) and isinstance(prm.get("min_support"), (int, float)):
+                metrics["min_support"] = prm["min_support"]
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}
         metrics["run"] = self.metrics_run
@@ -1440,6 +1707,7 @@ def loop(job: Job, sleep=None, max_passes=None) -> None:
     if wait(delay) and sleep is None:
         return
     while not _STOP.is_set():
+        started = time.monotonic()
         res = job.run()
         n += 1
         if max_passes is not None and n >= max_passes:
@@ -1453,8 +1721,55 @@ def loop(job: Job, sleep=None, max_passes=None) -> None:
             w = min(interval, max(1.0, delay) * (2 ** min(fails - 1, 20)))
         else:
             fails, w = 0, interval
-        if wait(w) and sleep is None:
+        if sleep is not None:
+            wait(w)
+        elif _wait_or_wake(w, started, _wake_min(jc, interval), allow_wake=_wake_allowed(job, res)):
             return
+
+
+_WAKE = threading.Event()
+
+
+def wake() -> None:
+    """D5: an ingest committed. Process-local, O(1), never raises, no DB write, no embedding on the caller's thread: it only marks the
+    loop to start its next pass early, no sooner than `wake_min_interval_s` after the last pass began (debounced). A no-op while the job
+    is not running (flag off)."""
+    try:
+        if _JOB is not None:
+            _WAKE.set()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _wake_min(jc: dict, interval: float) -> float:
+    v = jc.get("wake_min_interval_s")
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 1 else interval  # default: today's interval_s
+
+
+def _wake_allowed(job, res: dict) -> bool:
+    """A wake may shorten only the normal between-pass wait of a job whose incremental mode is not `off`: shipping D5 with the mode off
+    changes nothing, and a wake never cuts a budget-deferral or backoff wait (those passes would only re-read every stored vector)."""
+    return getattr(job, "incremental", "off") != "off" and res.get("state") not in ("deferred", "error", "partial") and not res.get("finish_now")
+
+
+def _wait_or_wake(w: float, last_start: float, min_int: float, clock=time.monotonic, stop_wait=None, slice_s: float = 5.0,
+                  allow_wake: bool = True) -> bool:
+    """Wait up to w seconds; True when a stop was requested. A wake ends the wait once min_int has passed since last_start (many wakes
+    inside that window give one early pass)."""
+    stop_wait = stop_wait or _STOP.wait
+    end = clock() + w
+    while True:
+        rem = end - clock()
+        if rem <= 0:
+            _WAKE.clear()  # the next pass starts now; a wake seen during this wait is consumed by it
+            return False
+        if stop_wait(min(slice_s, rem)):
+            return True
+        if allow_wake and _WAKE.is_set():
+            if clock() - last_start >= min_int:
+                _WAKE.clear()
+                return False
+            end = min(end, last_start + min_int)
 
 
 def _announce(job: "Job", env) -> None:

@@ -146,7 +146,8 @@ _JOB_NUM = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay
             "tick_row_cap": (1, 100000), "statement_timeout_ms": (100, 600000), "lock_timeout_ms": (100, 600000),
             "connect_timeout_s": (1, 120), "text_chars": (50, 20000), "embed_batch": (1, 512), "max_rows": (1, 10**7),
             "max_seconds": (1, 86400), "rss_soft_mb": (1, 10**6), "rss_hard_mb": (1, 10**6),
-            "embed_batch_chars": (1000, 10**6), "quarantine_max": (1, 10000), "quarantine_max_consecutive": (1, 1000)}  # TAXO-ROBUST-1111
+            "embed_batch_chars": (1000, 10**6), "quarantine_max": (1, 10000), "quarantine_max_consecutive": (1, 1000),  # TAXO-ROBUST-1111
+            "wake_min_interval_s": (1, 10**7)}  # WP-I D5: a safety bound on early passes, default = interval_s
 
 
 def _rng(d, k, v, lo, hi, where, integer=False):
@@ -183,6 +184,10 @@ def _validate_job(j):
     for k, v in j.items():
         if k in ("allow_curator_origin_on_020", "malloc_trim", "finish_now", "chunk_domain_write"):  # chunk_domain_write: WP-D-1113 kill switch for the domain write
             _chk(isinstance(v, bool), "job.%s must be a bool" % k)
+        elif k == "incremental":  # WP-I: D3 mode, ships "off"
+            _chk(v in ("off", "shadow", "on"), "job.incremental must be off, shadow or on")
+        elif k in ("rebuild_unassigned_share", "rebuild_interval_s"):  # WP-I: rebuild triggers; null = unset (no value ships: calibration note)
+            _chk(v is None or (_is_num(v) and 0 < v <= 10**9), "job.%s must be null or a positive number" % k)
         else:
             _chk(k in _JOB_NUM, "unknown key job." + str(k))
             _rng(j, k, v, *_JOB_NUM[k], "job")
