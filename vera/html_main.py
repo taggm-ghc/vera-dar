@@ -25,7 +25,9 @@ VOID = frozenset({"br", "img", "hr", "meta", "link", "input", "source", "wbr", "
                   "param", "track"})
 HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _WS = re.compile(r"\s+")
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# G-C MAJOR-1 (USFED-SHADOW-1113): every repetition is bounded so search() is linear on a long token without "@"
+# (the unbounded form was quadratic: 80k chars 3.7 s). A longer prefix is still found via its last 64 characters.
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}")
 _NEVER_VISIBLE = frozenset({"script", "style", "noscript", "template", "head", "svg"})
 _BLOCK = frozenset({"p", "li", "div", "td", "th", "dd", "dt", "blockquote", "pre", "section", "article", "ul", "ol",
                     "table", "tr", "dl", "figure", "figcaption", "main", "aside", "nav", "header", "footer", "form"})

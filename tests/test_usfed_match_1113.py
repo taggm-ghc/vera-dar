@@ -11,6 +11,7 @@ import importlib.util
 import json
 import re
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -309,6 +310,45 @@ def test_t24_ex3_prunes_email_blocks_of_any_length_and_keeps_plain_paragraphs():
     assert "body paragraph without an address" in out and st.get("contact_line") == 2
     out2, _ = extract('<h2>Intro</h2><p>Example text.</p><div><p>Plain paragraph, see @ symbol only.</p></div>')
     assert "Plain paragraph" in out2 and "Example text" in out2
+
+
+def _timed_extract(body):
+    t0 = time.perf_counter()
+    out, st = extract(body)
+    return time.perf_counter() - t0, out, st
+
+
+def test_t24_gc_major1_long_tokens_without_at_are_linear_time():
+    # G-C MAJOR-1: a single token at the 2 MB max_html_bytes cap must not make the EX-3 pattern quadratic.
+    for tok in ("a" * 1_900_000, "1.2-3." * 300_000, "-" * 1_900_000, "a." * 900_000):
+        dt, out, st = _timed_extract("<p>" + tok + "</p><p>Example body paragraph.</p>")
+        assert dt < 2.0, (tok[:6], dt)
+        assert "body paragraph" in out and not st.get("contact_line")
+
+
+def test_t24_gc_major1_probe_is_not_vacuous_old_pattern_is_slower():
+    old = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    s = "a" * 30_000
+    t0 = time.perf_counter()
+    old.search(s)
+    t_old = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    html_main._EMAIL.search(s)
+    t_new = time.perf_counter() - t0
+    assert t_old > 10 * t_new and t_old > 0.1, (t_old, t_new)
+
+
+def test_t24_gc_major1_real_addresses_still_pruned_and_lookalikes_kept():
+    pre = "x" * 5000  # a longer prefix is still found via its last 64 characters
+    for body in ("<p>Write to someone@example.org.</p>",
+                 "<p>" + ("Example filler sentence about nothing. " * 14) + "Reach someone@example.org for more.</p>",
+                 "<p>" + pre + "someone@example.org</p>"):
+        out, st = extract(body + "<p>Example kept line.</p>")
+        assert st.get("contact_line") == 1 and "Example kept line." in out and "example.org" not in out
+    for body in ("<p>Example: a@b is not an address.</p>", "<p>Contact name at example.org for more.</p>",
+                 "<p>Example a@b.c too short a TLD.</p>"):
+        out, st = extract(body)
+        assert not st.get("contact_line") and body[3:-4] in out
 
 
 def test_t24_ex3_is_off_without_the_key_and_fails_closed_on_a_bad_value():
