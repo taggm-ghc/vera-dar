@@ -19,11 +19,11 @@ Copy `.env.example` to a gitignored `.env` and fill in only the names you need; 
 - Automatic acquisition runs only when both `VERA_DB_URL_WO` and `VERA_DB_URL_RO` are set. Set `VERA_AUTOACQ_DISABLED=true` to keep it off locally.
 - The configured database is the production database (see Data safety below). Leave the database URLs unset unless the task needs them.
 
-## Current behaviour to know when developing (as of 2026-11-05, read from code and config)
+## Current behaviour to know when developing (as of 2026-11-05, read from code and config; items marked Superseded were re-read 2026-11-13)
 
 - The pre-retrieval gate is safety-only; there is no fixed scope list. Whether the corpus suffices is decided after retrieval, and acquisition runs rounds until about 6 full texts are held. *Update 2026-11-09: the target is 6 NEW documents per question and stored documents are not capped; see the README "Update 2026-11-09" paragraph.* Premise handling and the corpus-digest checker are in `vera/`; see [vera-design.md](vera-design.md) and [api.md](api.md) for contracts.
 - Request trace: `vera/request_trace.py` with `config/request_trace.json`. New event detail keys must be added to `key_allowlist` with a reason (Deny All); question text is never an event field. Tests use fake engines: no database is touched.
-- Lanes: the news lane (`config/reporting_lane.json`) is on in the working tree and the official-sources lane (`config/subquery.json` `official_lane.enabled`) is off. Changing either flag changes the disclosure text (`vera.disclosure.lanes_disclosure_on()`); see [lanes-enable-checklist.md](lanes-enable-checklist.md).
+- Lanes: the news lane (`config/reporting_lane.json`) is on. *Superseded 2026-11-13 (DOCS-1113): the official-sources lane (`config/subquery.json` `official_lane.enabled`) is also on at 4087b65; pages are read only for `fetch_entities` (FEC, Census Bureau).* Changing either flag changes the disclosure text (`vera.disclosure.lanes_disclosure_on()`); see [lanes-enable-checklist.md](lanes-enable-checklist.md).
 - Offline checks added 2026-11-06 (NEWS-BATCH-2): `tests/test_nt3_wiki_links_1106.py`, `test_h5_enable_1106.py`, `test_f1_query_1106.py`, `test_relevance_r1r4_1106.py`, `test_scope_count_1106.py`, `test_r8_headline_1106.py`, `test_progress_count_1106.py`, `test_ask_terms_notice_1106.py`, `test_news_access_h19.py`, `test_news_access_report.py`. Report of outlets that resolve to link-only: `python3 -I -B scripts/news_access_report.py` (offline, no database, no network). `tests/test_pdf_extract_worker.py` skips until a worker module exists.
 - Licence allowlist: `config/licence_allowlist.json` is the seed (Deny All: unlisted licences are not stored); `vera/licence_gate.py` reads it. The planned DB table (draft 016) is not in this tree.
 - Config sanity: `<venv>/bin/python -I scripts/check_config.py`.
@@ -32,7 +32,7 @@ Copy `.env.example` to a gitignored `.env` and fill in only the names you need; 
 
 - Off: `hybrid_retrieval.enabled` and `rerank.enabled`; `chunk_value.enabled`; every module in `settings.read_from_db` (`{}`); `taxo_router.mode`; `auto_acquire.json` `arxiv_route.enabled` and `arxiv_portal.openalex.enabled`; `reference_portals.json` `adapters.openalex_rw`.
 - On: `portal_follow.enabled`; `list_ingest.enabled` (the route still answers 503 until `VERA_INGEST_API_KEY` is set); all `ddg_reduce.json` switches; `chunk_taxo.json` `params.multi.enabled`; `reference_portals.json` `adapters.inspire_refs`; `chunk_usage.enabled` (inert until the tables of draft migration 025 exist, and `demote.scale` is 0).
-- Migrations 025 and 026 are drafts in `db/migrations/`, not applied; no code path applies them. Config names the Cloudflare variables `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (names only; see [Deployment](deployment.md)).
+- Migrations 025 and 026 are in `db/migrations/pending/` (025 as a `.draft` file, 026 as `026_settings.sql`); no code path applies them. Observation as of 2026-11-13, per project records (the database was not checked): 026 is not applied (the live catalog check on 2942af4 showed only the migration-026 gap). For 025 no record of an apply was found; it is a draft file and no code path applies it. Config names the Cloudflare variables `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (names only; see [Deployment](deployment.md)).
 - Host policy is data: change a host's role only by a reviewed edit of `config/host_roles.json`; `vera/host_role.py` fails closed when the file is invalid.
 
 ## Features that ship off (as of 2026-11-05)

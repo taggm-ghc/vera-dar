@@ -3,6 +3,13 @@
 Status as of 2026-10-30: current status is in the root README (canonical); migration status is in `db/README.md`; gate status is in `release-checks.md`; routes are in `api.md`. This document is a design record and is not a current-status source. Updated 2026-10-29: see "Status as of 2026-10-29" below; the body reflects 2026-09 to 2026-10-20 and is annotated where later work changed it.
 
 
+> **Status as of 2026-11-13 (DOCS-1113; origin/main 4087b65).** The body below is a design record and is unchanged. Superseded sections, with the current source:
+> - "Current state at cd81eab (2026-11-05)": superseded by "Current state at c8c1daa (2026-11-08)", and for lane flags by the next line.
+> - Lane flags (both blocks above): `official_lane.enabled` in `config/subquery.json` is now true (pages read only for `fetch_entities`; `site_search` false); see [lanes-enable-checklist.md](lanes-enable-checklist.md) and [architecture.md](architecture.md).
+> - "Status as of 2026-10-29": `main` at d6681ae and "the gate has not passed for `main`" are history; see [release-checks.md](release-checks.md) (Update 2026-11-13).
+> - Migration status anywhere in this file: owned by [db/README.md](../db/README.md).
+> - Deployment (Auto-Deploy off): see [deployment.md](deployment.md).
+
 **Provenance-grounded agentic context engineering for auditable research synthesis**
 
 Prepared September 2026

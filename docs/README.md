@@ -19,9 +19,9 @@ Current project status (dated) is kept in one place: [Status](../README.md#statu
 
 | Document | Contents |
 |---|---|
-| [vera-design.md](vera-design.md) | Full design, governing invariants, dated current-state blocks (latest 2026-11-08) and historical milestone plan |
+| [vera-design.md](vera-design.md) | Full design, governing invariants, dated current-state blocks (a dated Status block of 2026-11-13 lists superseded sections) and historical milestone plan |
 | [release-checks.md](release-checks.md) | Release gate check procedures |
 | [lanes-enable-checklist.md](lanes-enable-checklist.md) | Checks before the Official or Current-reporting lane is enabled |
 | [trace_eval/](trace_eval/) | Frozen TRACE evaluation label files (`check_labels_v1.json`, `support_labels_v1.json`; historical) |
-| [../db/README.md](../db/README.md) | Database documentation |
+| [../db/README.md](../db/README.md) | Database schema, accounts and migrations |
 | [../config/wordlists/README.md](../config/wordlists/README.md) | English word list used by spell-clarify: source, licence, build |
