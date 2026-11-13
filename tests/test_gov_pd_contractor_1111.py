@@ -120,6 +120,12 @@ POSITIVE = [
     'The depot is operated by Navy Staff, Ltd. under contract.',
     'The depot is operated by Agency Officers, Corp. under contract.',
     'The depot is operated by Government Engineers, LLP under contract.',
+    # CONTRACTOR4-1113: dotted or unspaced suffixes after non-government names
+    'The depot is operated by Example Labs, L.L.C. under contract.',
+    'The depot is operated by Example Labs,Inc. under contract.',
+    'The depot is operated by Example Labs,L.L.C. under contract.',
+    'The depot is operated by Sample Works, LLC under contract.',
+    'The depot is operated by Army Engineers,Inc. under contract.',
 ]
 
 # ---- negatives: must stay granted (planner 7 with the image-credit text split, reviewer-trial 7)
@@ -173,6 +179,9 @@ NEGATIVE = [
     'Contact: Orla Fenwick. Credit: NASA/JPL.',
     'By Quill Varnet, NASA. Credit: NASA/JPL, NASA/Goddard',
     'The ship is operated by NOAA under a contract with the shipyard for maintenance.',
+    # CONTRACTOR4-1113: a hyphen after a suffix-like word is not a company suffix
+    'Operated by the Navy, Ltd-term staff, under contract.',
+    'Operated by the Navy, Co-located staff, under contract.',
     'Launch services were run by the Air Force under a contract signed in 2019.',
     'The program is administered by NASA under contract NNX-EXAMPLE.',
     'The aquarium is operated by the city under contract with NOAA.',
