@@ -99,6 +99,10 @@ def test_uncached_real_cached_readiness_is_unknown_publicly_and_null_in_full(cli
     c, main = client
     from vera import dar_health
     dar_health.reset_for_tests()
+    # TEST-HARDEN-1113 (P-1110-10 class): the no-op Thread below leaves a leader slot in _FD_INFLIGHT whose worker never
+    # runs, so every later /health/dar in the process timed out (fulldoc_warm and dar_health tests failed in random order).
+    # A private slot list for this test; monkeypatch restores the shared (empty) one.
+    monkeypatch.setattr(dar_health, "_FD_INFLIGHT", [])
     monkeypatch.setattr(dar_health.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
     # TEST-SPEED-1106: the no-op Thread above means the fulldoc-status worker never runs, so the request would wait out
     # the full production health wait (15 s) before reporting its timeout; the test never reads that field. Test-only seam.

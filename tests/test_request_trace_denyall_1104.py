@@ -8,6 +8,7 @@ from vera import request_trace as rt
 
 BASE = json.loads(rt.CONFIG_PATH.read_text(encoding="utf-8"))
 AL = BASE["key_allowlist"]
+_RT_CFG0 = rt.CFG  # the config the process started with (TEST-HARDEN-1113)
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +17,7 @@ def _cfg():
     c["db_sink"]["enabled"] = False
     rt.configure(c)
     yield
-    rt.configure(c)
+    rt.configure(_RT_CFG0)  # TEST-HARDEN-1113: restore the config the process started with (db_sink was left disabled)
 
 
 def test_every_stage_has_reason_and_token_keys():

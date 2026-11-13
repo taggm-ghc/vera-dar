@@ -7,6 +7,8 @@ import pytest
 from vera import request_trace as rt
 from vera import retention_purge as rp
 
+_CFG0 = rt.CFG  # TEST-HARDEN-1113 (P-1110-10 class): the config the process started with; tests restore it, not {"enabled": False}
+
 
 class Conn:
     def __init__(self, eng):
@@ -163,7 +165,7 @@ def test_writer_thread_runs_purge_on_own_engine_not_flush_engine():
         assert all("purge_expired_trace" not in c for c in flush.calls)
         assert made_purge == ["postgresql://fake"]
     finally:
-        rt.configure({"enabled": False})
+        rt.configure(_CFG0)  # TEST-HARDEN-1113: restore the shipped config, not "disabled"
 
 
 def test_writer_flag_off_opens_no_purge_connection():
@@ -176,7 +178,7 @@ def test_writer_flag_off_opens_no_purge_connection():
         time.sleep(0.3)
         assert all("60000" not in o for o in made)
     finally:
-        rt.configure({"enabled": False})
+        rt.configure(_CFG0)  # TEST-HARDEN-1113: restore the shipped config, not "disabled"
 
 
 def _boot_cfg(on):
@@ -190,7 +192,7 @@ def test_boot_flag_off_starts_nothing():
     try:
         assert rt.start_purge_at_boot() is False and rt._WRITER is None
     finally:
-        rt.configure({"enabled": False})
+        rt.configure(_CFG0)  # TEST-HARDEN-1113: restore the shipped config, not "disabled"
 
 
 def test_boot_flag_on_starts_once_purges_idle_and_request_start_is_noop():
@@ -215,4 +217,4 @@ def test_boot_flag_on_starts_once_purges_idle_and_request_start_is_noop():
             time.sleep(0.02)
         assert rp.PURGE_SQL in purge_eng.calls
     finally:
-        rt.configure({"enabled": False})
+        rt.configure(_CFG0)  # TEST-HARDEN-1113: restore the shipped config, not "disabled"

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import growth_support as gs
+
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("release_gate_gatediag", ROOT / "scripts" / "release_gate.py")
 g = importlib.util.module_from_spec(_spec)
@@ -83,12 +85,26 @@ def test_non_78_exits_print_no_sanitized_excerpt(monkeypatch, tmp_path):
     assert _check(monkeypatch, tmp_path, 124, "") != []
 
 
-def test_f1_huge_lines_bounded_and_fast():
+def _cpu_of(fn):
     import time
-    t = time.monotonic()
-    one = g.sanitize_child_stderr("a:" * 500_000, ENV)
-    many = g.sanitize_child_stderr("\n".join(("x:" * 5000) for _ in range(2000)), ENV)
-    assert time.monotonic() - t < 1.0
+    t = time.process_time()
+    fn()
+    return time.process_time() - t
+
+
+def test_f1_huge_lines_bounded_and_fast():
+    # TEST-HARDEN-1113 (P-1110-05): no wall-clock bound. The raw input is cut to STDERR_RAW_MAX before any regex runs
+    # (F1), so a huge adversarial input must cost about what a benign input of the same size costs. A regression that
+    # runs the regexes on the uncut input makes the adversarial case far costlier; the ratio is host-speed independent.
+    big_one, big_many = "a:" * 500_000, "\n".join(("x:" * 5000) for _ in range(2000))
+    benign_one, benign_many = "a" * len(big_one), "\n".join(("x" * 10_000) for _ in range(2000))
+    one = g.sanitize_child_stderr(big_one, ENV)
+    many = g.sanitize_child_stderr(big_many, ENV)
+    for (adv, ben) in ((big_one, benign_one), (big_many, benign_many)):
+        a = min(_cpu_of(lambda: g.sanitize_child_stderr(adv, ENV)) for _ in range(3))
+        b = max(min(_cpu_of(lambda: g.sanitize_child_stderr(ben, ENV)) for _ in range(3)), 0.002)
+        assert a / b < 20, (round(a, 4), round(b, 4))
+        assert a < gs.CPU_BACKSTOP
     assert len("\n".join(one)) <= g.STDERR_MAX_BYTES + 3
     assert len("\n".join(many)) <= g.STDERR_MAX_BYTES + 3
 
@@ -160,9 +176,21 @@ def test_n2_long_userinfo_password_redacted():
     assert "!a#!a#" not in out
 
 
-def test_n2_worst_case_timing_bounded():
-    import time
-    t = time.monotonic()
-    for unit in ("-key", "key-", ".key", "a:", "x@"):
-        g.sanitize_child_stderr("\n".join((unit * 600)[:512] for _ in range(20)), {})
-    assert time.monotonic() - t < 5.0
+@pytest.mark.parametrize("unit", ["-key", "key-", ".key", "a:", "x@"])
+def test_n2_worst_case_timing_bounded(unit):
+    # TEST-HARDEN-1113 (P-1110-05): load-independent replacement for the 5 s wall-clock bound. Measured at 2942af4: for
+    # the first three units the cost grows about cubically with line length UP TO STDERR_LINE_MAX (0.05 s for one
+    # 512-character line, 0.77 s for 20 of them) and the per-line cut keeps it flat above. So the checks are
+    # (1) the cut works: one line of 8x STDERR_LINE_MAX costs about the same as one of STDERR_LINE_MAX (flat 1,
+    # uncapped cubic 512), (2) cost is linear in the number of capped lines, (3) the worst-case input costs a bounded
+    # multiple of a fixed reference loop (host speed cancels out).
+    run = lambda t: g.sanitize_child_stderr(t, {})  # noqa: E731
+    cap = g.STDERR_LINE_MAX
+    assert gs.GROWTH * cap <= g.STDERR_RAW_MAX
+    r = gs.growth_ratio(run, lambda k: (unit * k)[:k], cap)
+    assert r <= gs.RATIO_BOUND, (unit, "line cut", round(r, 1))
+    many = lambda k: "\n".join((unit * 300)[:256] for _ in range(k))  # noqa: E731
+    r = gs.growth_ratio(run, many, 2)
+    assert r <= gs.RATIO_BOUND, (unit, "lines", round(r, 1))
+    full = "\n".join((unit * 600)[:512] for _ in range(20))
+    assert gs.normalized_cost(run, full) <= 150, unit
