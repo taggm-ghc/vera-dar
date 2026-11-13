@@ -8,7 +8,8 @@ from vera.memory_gate import (
     LICENCE, NO_CITATION, NO_IDENTIFIER, NOT_ALLOWED_TYPE, NOT_SUPPORTED, PERSONAL,
     PROVIDER_NOT_ALLOWED, MARKUP, FRAGMENT, TOOL_DUMP, VOLATILE, SourceRef, check_memory_write, load_gate_config, strip_citation_markers)
 
-DEFAULT_CONFIG = load_gate_config()
+# MEMPROV-1113: shipped evidence list is empty; write-path tests use an explicit test config (no asserted outcome changes)
+DEFAULT_CONFIG = dataclasses.replace(load_gate_config(), allowed_providers=("openalex",))
 GOOD = "Sparse attention reduces memory cost on long sequences while retaining accuracy on benchmarks."
 # ARXIV-DEFENSE-1113 flip: the default allowed source was an arXiv citation; the gate now refuses portal records (OD-1110-ARXIV-PORTAL),
 # so the GOOD source is an OpenAlex-found record with its original-source DOI (reserved 10.1000 prefix).

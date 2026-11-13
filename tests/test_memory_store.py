@@ -4,7 +4,12 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from vera import memory_store as ms
+import dataclasses
+
 from vera.memory_gate import load_gate_config
+
+# MEMPROV-1113: shipped evidence list is empty; write-path tests use an explicit test config (no asserted outcome changes)
+TEST_GATE = dataclasses.replace(load_gate_config(), allowed_providers=("openalex",))
 from vera.memory_store import MemoryService, memory_from_env
 
 _SHIPPED = json.load(open(ms.__file__.replace("vera/memory_store.py", "config/ask-provider-chain.json")))["memory"]
@@ -41,7 +46,7 @@ class FakeStore:
 
 
 def svc(reader=None, store=None, **over):
-    return MemoryService(dict(CFG, **over), load_gate_config(), reader or FakeReader(), store or FakeStore())
+    return MemoryService(dict(CFG, **over), TEST_GATE, reader or FakeReader(), store or FakeStore())
 
 
 def test_writes_stripped_claim_only():

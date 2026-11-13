@@ -7,7 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vera import memory_store as ms
+import dataclasses
+
 from vera.memory_gate import load_gate_config
+
+# MEMPROV-1113: shipped evidence list is empty; write-path tests use an explicit test config (no asserted outcome changes)
+TEST_GATE = dataclasses.replace(load_gate_config(), allowed_providers=("openalex",))
 from vera.memory_operator import OWNER_KEY_MIN_LENGTH, classify_owner_key
 from vera.memory_store import (CONFIRMED, NOT_ALLOWED, NOT_FOUND, REJECTED, MemoryService, MemoryUnavailable,
                                RoMemoryReader, WoMemoryStore)
@@ -78,7 +83,7 @@ class FakeStore:
 
 
 def svc(reader=None, store=None, **over):
-    return MemoryService(dict(CFG, **over), load_gate_config(), reader or StateReader(), store or FakeStore())
+    return MemoryService(dict(CFG, **over), TEST_GATE, reader or StateReader(), store or FakeStore())
 
 
 # --- config and write path ---------------------------------------------------------------------------------
@@ -146,7 +151,7 @@ def test_transitions(status, action, outcome, target):
 
 
 def test_operator_actions_need_both_accounts():
-    s = MemoryService(CFG, load_gate_config(), StateReader("memory:g1:pending"), None)
+    s = MemoryService(CFG, TEST_GATE, StateReader("memory:g1:pending"), None)
     with pytest.raises(MemoryUnavailable):
         s.confirm(1)
     with pytest.raises(MemoryUnavailable):

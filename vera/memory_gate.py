@@ -79,6 +79,8 @@ class GateConfig:
     inline_strip_patterns: tuple
     citation_marker_pattern: str
     provider_separator: str
+    # Provider labels whose candidates may be named in a discovery note (not evidence); required, no default (MEMPROV-1113).
+    discovery_allowed_providers: tuple
     # Words that, alone inside parentheses, mark a remnant of a stripped citation such as "(as in)".
     dangling_parenthetical_words: tuple = ()
 
@@ -197,10 +199,12 @@ def normalise_claim(text: str, cfg: GateConfig) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _provider_allowed(provider: str, cfg: GateConfig) -> bool:
-    """Composite providers such as `openalex+semanticscholar` need every part allow-listed."""
+def _provider_allowed(provider: str, cfg: GateConfig, allowed=None) -> bool:
+    """Composite providers such as `openalex+semanticscholar` need every part allow-listed.
+    `allowed` overrides the evidence list (discovery notes pass `cfg.discovery_allowed_providers`); only None falls back."""
+    lst = cfg.allowed_providers if allowed is None else allowed
     parts = [p.strip() for p in (provider or "").split(cfg.provider_separator)]
-    return bool(parts) and all(p and p in cfg.allowed_providers for p in parts)
+    return bool(parts) and all(p and p in lst for p in parts)
 
 
 def _doi_of(identifier: str) -> str:

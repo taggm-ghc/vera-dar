@@ -177,10 +177,12 @@
     "allowed_fact_types": [
       "cited_finding"
     ],
-    "allowed_providers": [
+    "allowed_providers": [],
+    "discovery_allowed_providers": [
       "arxiv",
       "openalex"
     ],
+    "_discovery_providers_note": "MEMPROV-1113: allowed_providers is the evidence-write list and is empty (portal providers arxiv and openalex are not evidence on their label; OD-1110-ARXIV-PORTAL, OD-1110-OPENALEX-PORTAL, OD-1110-PORTALS-ALL). discovery_allowed_providers lists the labels whose search candidates may be named in a discovery note (not evidence).",
     "allowed_licence": [
       "allow"
     ],

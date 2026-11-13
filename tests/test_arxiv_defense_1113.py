@@ -4,6 +4,7 @@ test_chunk_taxo_job_1109.py, FakeEngine of test_dar_store.py; real record shapes
 fulltext_url); reserved values only (example.org, 10.1000 DOIs, synthetic arXiv ids). No DB, no network."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from datetime import datetime, timezone
@@ -173,12 +174,14 @@ def test_store_statement_is_allowlisted_read_only():
 
 # ------------------------------------------------------------------------------------------------------ (b) memory gate
 CFG = load_gate_config()
+# MEMPROV-1113: the shipped evidence list is empty, so write-path tests use an explicit test config (no asserted outcome changes)
+WCFG = dataclasses.replace(CFG, allowed_providers=("openalex",))
 GOOD = "Sparse attention reduces memory cost on long sequences while retaining accuracy on benchmarks."
 Q = "How does sparse attention affect long documents?"
 
 
 def gate(src):
-    return check_memory_write("cited_finding", GOOD, "supported", (src,), Q, CFG)
+    return check_memory_write("cited_finding", GOOD, "supported", (src,), Q, WCFG)
 
 
 @pytest.mark.parametrize("src", [
@@ -212,9 +215,15 @@ def test_gate_host_role_failure_refuses(monkeypatch):
     assert not r.allowed and mg.PORTAL_SOURCE in r.reasons
 
 
-def test_gate_real_config_still_listing_arxiv_still_refuses():
-    assert "arxiv" in CFG.allowed_providers  # until the config follow-up; the code floor must refuse regardless
+def test_gate_real_config_no_longer_lists_arxiv_and_floor_still_refuses():
+    assert "arxiv" not in CFG.allowed_providers
     assert mg.PORTAL_SOURCE in gate(SourceRef("arxiv", "allow", "10.1000/example.1")).reasons
+
+
+def test_gate_old_config_shape_listing_arxiv_still_refuses_by_floor():
+    old = dataclasses.replace(CFG, allowed_providers=("arxiv", "openalex"))
+    r = check_memory_write("cited_finding", GOOD, "supported", (SourceRef("arxiv", "allow", "10.1000/example.1"),), Q, old)
+    assert mg.PORTAL_SOURCE in r.reasons and mg.PROVIDER_NOT_ALLOWED not in r.reasons
 
 
 def test_all_reasons_unique_and_discovery_helpers_unchanged():
@@ -224,7 +233,6 @@ def test_all_reasons_unique_and_discovery_helpers_unchanged():
     assert eligible_candidates([c], CFG) == [c]  # discovery notes keep today's behaviour (config-driven, floor not applied)
 
 
-@pytest.mark.xfail(strict=True, reason="config follow-up (after CORPUS-UNCAT-1113 merges): remove arxiv from memory.allowed_providers")
 def test_config_providers_hold_no_portal_provider():
     assert not set(CFG.allowed_providers) & mg.PORTAL_PROVIDERS
 
