@@ -40,6 +40,7 @@ log = logging.getLogger("vera.chunk_taxo")
 JOB_DEFAULTS = {
     "interval_s": 3600, "initial_delay_s": 600, "step_delay_s": 2, "page_size": 500, "tick_row_cap": 2000,
     "statement_timeout_ms": 30000, "lock_timeout_ms": 5000, "connect_timeout_s": 5, "text_chars": 8000,
+    "finish_now": False,  # WP-F (CHUNK-ASSOC-1113): read as a literal bool by Job.__init__, never through _num
     "embed_batch": 32, "max_rows": 100000, "max_seconds": 3000, "rss_soft_mb": 380, "rss_hard_mb": 420,
     # TAXO-ROBUST-1111: safety bounds, not decision thresholds (calibrate from the first live run's fail_total_chars / bisect metrics)
     "embed_batch_chars": 48000, "quarantine_max": 50, "quarantine_max_consecutive": 4,
@@ -52,6 +53,7 @@ _BOUNDS = {"interval_s": (1, 10**7), "initial_delay_s": (0, 10**7), "step_delay_
            "quarantine_max_consecutive": (1, 1000)}
 # TAXO-ROBUST-1111 E5: per-input failures that bisection may quarantine, with the int stored for each (0 = bad_response).
 _QUARANTINABLE = {"http_400": 400, "http_413": 413, "http_422": 422, "bad_response": 0}
+_BUDGET_CODES = ("budget_reached", "quota_reached")  # WP-F: the Deferred codes that may start a finish-now first build
 _ABBR = {"domain": "d", "topic": "t", "subtopic": "s"}
 _WORKING = ("scan", "build", "w_nodes", "w_links", "w_votes", "w_retire", "finish")
 TERMINAL = ("idle", "stopped")
@@ -259,6 +261,9 @@ class Job:
         self.rss_soft = float(_num(self.jcfg, "rss_soft_mb"))
         self.rss_hard = float(_num(self.jcfg, "rss_hard_mb"))
         self.allow_curator = self.jcfg.get("allow_curator_origin_on_020") is True
+        # WP-F (CHUNK-ASSOC-1113): when the neuron budget defers embedding, finish the scan reuse-only and build/write from the
+        # vectors already stored. Literal true only; a missing or non-bool key is off.
+        self.finish_now = self.jcfg.get("finish_now") is True
         self.engines_created = 0
         self.rows_embedded = 0
         self.peak_rss = 0.0
@@ -338,19 +343,22 @@ class Job:
             if self._inert:
                 self._record_inert(self._inert)  # after the probe connection is closed (pool of one)
             if self._run_id is not None:
-                self._close_run("deferred", extra=self._robust_info())
+                self._close_run("deferred", reason=self._defer_reason, extra=self._robust_info())
             self._release_buffers()  # early stop or end of pass: no chunk or vector buffer survives it
             self._drop_engine()
             self._release_embedder()
             if self._stop == "deferred":
-                self._set(state="deferred", reasons=["deferred_until_utc_midnight"])
+                self._set(state="deferred", reasons=["deferred_until_utc_midnight"] + ([self._defer_reason] if self._defer_reason else []))
                 log.info("chunk_taxo run deferred until 00:00 UTC rows_embedded=%d", self.rows_embedded)
             elif self._stop:
                 self._set(state="partial", reasons=[self._stop])
                 log.info("chunk_taxo run stopped: %s rows_embedded=%d", self._stop, self.rows_embedded)
             st = self.status()
-            return {"state": st["state"], "complete": self._phase == "idle" and not self._stop and not self._inert,
-                    "rows_embedded": self.rows_embedded, "stop": self._stop, "retry_in_s": self._retry_in}
+            out = {"state": st["state"], "complete": self._phase == "idle" and not self._stop and not self._inert,
+                   "rows_embedded": self.rows_embedded, "stop": self._stop, "retry_in_s": self._retry_in}
+            if self._reuse_only:  # WP-F: the budget deferred embedding; the loop waits for the budget reset, not the interval
+                out["finish_now"] = True
+            return out
         except Exception as exc:  # noqa: BLE001
             reason = _reason_for(exc)
             try:
@@ -388,10 +396,12 @@ class Job:
         clean pass stores what it stored before. Never raises."""
         try:
             if not (self._quarantine or self.skipped_empty or self.vectors_missing or self.bisect_requests or self._consecutive
-                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source):
+                    or self.skipped_portal or self.skipped_portal_error or self.skipped_no_source or self._reuse_only):
                 return {}
             q = {"q%d" % sid: int(_QUARANTINABLE.get(v[1], 0)) for sid, v in list(self._quarantine.items())[:64]}
-            return {"quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
+            fn = ({"no_vector_yet": int(self.no_vector_yet), "no_vector_yet_min_span_id": int(self._nvy_min or 0)}
+                  if self._reuse_only else {})
+            return {**fn, "quarantined": len(self._quarantine), "skipped_empty": int(self.skipped_empty),
                     "skipped_portal": int(self.skipped_portal), "skipped_portal_error": int(self.skipped_portal_error),
                     "skipped_no_source": int(self.skipped_no_source),
                     "vectors_missing": int(self.vectors_missing), "q_consecutive": int(self._consecutive),
@@ -574,6 +584,27 @@ class Job:
             return True
         return False
 
+    def _count_unvectored(self, rows) -> None:
+        """WP-F: rows (span_id, source_id, text) that stay without a vector this pass (not empty, not quarantined)."""
+        rows = list(rows)
+        self.no_vector_yet += len(rows)
+        if rows:
+            lo = min(int(r[0]) for r in rows)
+            self._nvy_min = lo if self._nvy_min is None else min(self._nvy_min, lo)
+
+    def _active_build(self) -> bool:
+        """WP-F: True when an active induction node of this job exists (the _load_prior filter). Read-only; an error counts as a build
+        (fail closed: no first-build exception) and is not raised."""
+        try:
+            with self._engine().connect() as conn:
+                for lvl in store.LEVELS:
+                    for n in store.fetch_nodes(conn, lvl):
+                        if n["origin"] == "induction" and (n["origin_ref"] or "").startswith(store.ORIGIN_REF_PREFIX) and n["state"] == "active":
+                            return True
+            return False
+        except Exception:  # noqa: BLE001
+            return True
+
     def _reset_run(self) -> None:
         self._release_buffers()
         self._cursor = 0
@@ -587,6 +618,7 @@ class Job:
         self._pass_neurons = 0.0
         self.metrics_run = {}
         self._retry_in = None
+        self._reuse_only, self.no_vector_yet, self._nvy_min, self._defer_reason = False, 0, None, None  # WP-F: per pass
         self.skipped_empty, self.vectors_missing = 0, 0  # TAXO-ROBUST-1111: per pass
         self.skipped_portal, self.skipped_portal_error, self.skipped_no_source = 0, 0, 0  # ARXIV-DEFENSE-1113: per pass
         self._verdicts = {}
@@ -686,6 +718,9 @@ class Job:
                         continue  # quarantined and unchanged
                     del self._quarantine[r[0]]  # text changed: retry
                 todo.append(r)
+            if self._reuse_only:  # WP-F: budget spent earlier in this pass; embed nothing, count what still lacks a vector
+                self._count_unvectored(todo)
+                todo = []
             fresh = {}
             i = 0
             while i < len(todo):
@@ -731,6 +766,13 @@ class Job:
                     recs = []  # the original error is the reason; the partial result could not be stored
                 if err is not None:
                     self.rows_embedded += len(recs)
+                    if self.finish_now and isinstance(err, Deferred) and err.code in _BUDGET_CODES and not self._active_build():
+                        # WP-F: first build only; keep what embedded, embed nothing more this pass, finish the scan on stored vectors
+                        for rec in recs:
+                            fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
+                        self._reuse_only, self._retry_in = True, err.retry_in_s
+                        self._count_unvectored([r for r in todo if r[0] not in fresh])
+                        break
                     raise err
                 for rec in recs:
                     fresh[rec["span_id"]] = np.asarray(rec["vec"], dtype=np.float32)
@@ -764,6 +806,9 @@ class Job:
                          self.skipped_portal_error, self.skipped_no_source)
             if len(self._dims) > 1:
                 raise RuntimeError("dim_mismatch")  # a model/dim change leaves mixed vectors: refuse, re-embed on the next pass
+            if not self._chunks and self._reuse_only:  # WP-F: budget spent and no stored vector: no build; the pass ends deferred
+                self._stop, self._defer_reason = "deferred", "no_vectors"
+                return
             if not self._chunks:
                 self._set(state="idle", reasons=["no_chunks"], last_run=self._wall())
                 self._phase = "idle"
@@ -1062,6 +1107,8 @@ class Job:
         self.metrics_run = {"rows_embedded": self.rows_embedded, "seconds": round(elapsed, 3),
                             "rows_per_s": round(self.rows_embedded / elapsed, 4), "peak_rss_mb": round(self.peak_rss, 1)}
         self.metrics_run.update(_numeric_only(self._robust_info()) or {})
+        if self.finish_now:  # WP-F: present only with the flag on (flag off keeps main's run-row keys)
+            self.metrics_run["partial_snapshot"] = 1 if self._reuse_only else 0
         metrics = dict(_numeric_only(pend.metrics) or {})
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}
@@ -1150,7 +1197,7 @@ def loop(job: Job, sleep=None, max_passes=None) -> None:
             return
         if res.get("state") in ("off", "inert"):
             return
-        if res.get("state") == "deferred":
+        if res.get("state") == "deferred" or (res.get("finish_now") and res.get("state") not in ("error", "partial")):
             fails, w = 0, max(60.0, float(res.get("retry_in_s") or interval))
         elif res.get("state") in ("error", "partial"):
             fails += 1
