@@ -310,7 +310,7 @@ def taxonomy_lines(tx) -> list[str]:
         t = tx["totals"]
         docs, dch, lab_c = _n(t["documents"]), _n(t["documents_with_chunks"]), _n(t["chunks_labelled"])
         lines = [
-            "**Stored subject labels** (automatic and approximate; made by a program that groups passages by meaning and names groups from frequent terms, not read or checked by a person. "
+            "**Stored topic / sub-topic / domain records** (automatic and approximate; made by a program that groups passages by meaning and names groups from frequent terms, not read or checked by a person. "
             "The subject list is incomplete, so some material is outside it). Two views of a document are shown. "
             "**Main label (vote)**: the one subject area stored for the whole document. **Contains passages on (union)**: "
             "every subject area at least one of the document's stored passages was labelled with, so a document can appear "
@@ -328,7 +328,7 @@ def taxonomy_lines(tx) -> list[str]:
             lines.append("\n".join(rows))
         lines.append(
             f"**Not labelled or outside the subject list** (not told apart: unlabelled passages are not recorded by reason): "
-            f"{_n(t['chunks_not_labelled']):,} of {_n(t['chunks']):,} stored passages have no subject label. "
+            f"{_n(t['chunks_not_labelled']):,} of {_n(t['chunks']):,} stored chunks have no topic / sub-topic / domain record. "
             f"{_n(t['documents_vote_not_labelled'])} of {docs} documents have no main label; "
             f"{_n(t['documents_union_not_labelled'])} of the {dch} documents with stored passages have no labelled passage.")
         return lines if lab_c or any(d.get("vote_docs") for d in tx["domains"]) else []
@@ -353,8 +353,13 @@ def _unl_pct(u: int, n: int) -> str:
     return "under 1%" if p < 1 else "over 99%" if p >= 100 else f"{p}%"
 
 
+_UNL_TAIL = ("Documents not yet processed by the labelling program and those outside its subject list are not told apart. "
+             "Topic / sub-topic / domain records are assigned automatically and are approximate; "
+             "a document stored in several versions is counted once.")
+
+
 def unlabelled_line(data) -> str | None:
-    """CORPUS-UNCAT-1113: code-built caption stating how many documents and stored passages have no stored subject label, from the
+    """CORPUS-UNCAT-1113 / CORPUS-WORDING-1113: code-built caption stating how many chunks and documents have topic / sub-topic / domain records, from the
     API's `unlabelled` block. No model text, no source names. None for a missing or malformed payload."""
     try:
         v = {k: data[k] for k in ("documents", "documents_unlabelled", "documents_without_passages", "passages", "passages_unlabelled")}
@@ -365,12 +370,12 @@ def unlabelled_line(data) -> str | None:
             return None
     except (KeyError, TypeError):
         return None
-    xc = f", including {x:,} with no stored passages, which the labelling program cannot label" if x > 0 else ""
-    pc = f"; {uc:,} of {nc:,} stored passages ({_unl_pct(uc, nc)}) have none" if nc > 0 else ""
-    return (f"**Subject labels:** {u:,} of {n:,} documents ({_unl_pct(u, n)}) have no stored subject label "
-            f"(no main label and no labelled passage){xc}{pc}. Documents not yet processed by the labelling program and those outside "
-            "its subject list are not told apart. Labels are assigned automatically and are approximate; "
-            "a document stored in several versions is counted once.")
+    xc = f" ({x:,} of the documents have no stored chunks, which the labelling program cannot label)" if x > 0 else ""
+    dn = f"{n - u:,} of {n:,} ({_unl_pct(n - u, n)}){xc}"
+    if nc > 0:
+        return (f"**Chunks with topic / sub-topic / domain records:** {nc - uc:,} of {nc:,} ({_unl_pct(nc - uc, nc)}); "
+                f"documents with topic / sub-topic / domain records: {dn}. " + _UNL_TAIL)
+    return f"**Documents with topic / sub-topic / domain records:** {dn}. " + _UNL_TAIL
 
 
 def render_corpus(st, data: dict | None) -> None:

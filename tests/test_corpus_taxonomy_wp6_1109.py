@@ -122,7 +122,7 @@ def test_other_classifier_only_gives_none(eng):
 def test_abstentions_are_shown_as_one_combined_figure(eng):
     lines = sb.taxonomy_lines(ct.read_stored(eng))
     text_ = _NORM(" ".join(lines))
-    assert "6 of 12 stored passages have no subject label" in text_
+    assert "6 of 12 stored chunks have no topic / sub-topic / domain record" in text_
     assert "1 of 5 documents have no main label" in text_ and "1 of the 5 documents with stored passages have no labelled passage" in text_
     assert "Not labelled or outside the subject list" in text_ and "not told apart" in text_
 
@@ -173,7 +173,7 @@ def test_page_flag_off_is_identical_and_flag_on_appends(monkeypatch, eng):
     off = _page(monkeypatch, FALLBACK)
     assert _page(monkeypatch, {**FALLBACK, "stored_taxonomy": None}) == off
     on = _page(monkeypatch, {**FALLBACK, "stored_taxonomy": ct.read_stored(eng)})
-    assert on.startswith(off.split(" Current coverage")[0][:200]) and "Stored subject labels" in on and "Stored subject labels" not in off
+    assert on.startswith(off.split(" Current coverage")[0][:200]) and "Stored topic / sub-topic / domain records" in on and "Stored topic / sub-topic / domain records" not in off
     assert "Main label (vote)" in on and "Flu: main label for 2 documents" in on
 
 
