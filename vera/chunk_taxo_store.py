@@ -82,7 +82,10 @@ def _build() -> dict[str, str]:
     s["job_run_latest"] = ("SELECT classifier_version, finished_at, metrics, display_ok, reasons FROM vera_vjay.tax_job_runs "
                            f"WHERE classifier_name = '{CLASSIFIER}' AND state = 'finished' AND finished_at IS NOT NULL "
                            "AND classifier_version <> 'pending' ORDER BY finished_at DESC LIMIT 1")
-    s["set_ctx"] = ("SELECT pg_catalog.set_config('vera.tax_actor', :actor, true), "
+    # WP-W (no-op rule): the newest run rows, to read `write_incomplete` between the latest build row and now (same text as WP-I's)
+    s["job_run_recent"] = ("SELECT state, metrics FROM vera_vjay.tax_job_runs "
+                           f"WHERE classifier_name = '{CLASSIFIER}' ORDER BY started_at DESC LIMIT 8")
+    s["set_ctx"] =("SELECT pg_catalog.set_config('vera.tax_actor', :actor, true), "
                     "pg_catalog.set_config('vera.tax_batch', :batch, true)")
     s["spans_page"] = ("SELECT span_id, source_id, left(text, :n) FROM vera_vjay.evidence_spans "
                        "WHERE span_id > :after ORDER BY span_id LIMIT :lim")

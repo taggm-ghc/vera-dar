@@ -898,9 +898,33 @@ class Job:
                 if isinstance(end, bool) or not isinstance(end, (int, float)):
                     return False
                 ve = store.run_sql(conn, "vectors_epoch").first()
-                return ve is not None and ve[0] is not None and float(ve[0]) <= float(end)
+                if ve is None or ve[0] is None or float(ve[0]) > float(end):
+                    return False
+                return not self._write_incomplete(conn)  # a write aborted after that build (nodes of two versions active): rebuild
         except Exception:  # noqa: BLE001
             return False
+
+    @staticmethod
+    def _as_dict(m):
+        if isinstance(m, (str, bytes)):
+            try:
+                m = json.loads(m)
+            except ValueError:
+                return {}
+        return m if isinstance(m, dict) else {}
+
+    def _write_incomplete(self, conn) -> bool:
+        """True when a pass aborted between W1 and W4 after the latest build row (its run row carries `write_incomplete`). The newest run
+        rows are read newest first up to the build row; the running row of this pass is skipped."""
+        for state, mm in store.run_sql(conn, "job_run_recent").fetchall():
+            mm = self._as_dict(mm)
+            if str(state) == "running":
+                continue
+            if "scan_end_epoch" in mm:
+                return False
+            if mm.get("write_incomplete") or self._as_dict(mm.get("run")).get("write_incomplete"):
+                return True
+        return False
 
     def _finish_unchanged(self, version: str):
         """Close the pass's running row as finished with `unchanged` and issue no W1-W4 statement. Never inserts a build row."""
@@ -960,11 +984,9 @@ class Job:
         return {"version": "prior", "nodes": [{"key": n["key"], "level": n["level"], "parent_key": n["parent_key"],
                                                "members": sorted(n["members"]), "label": n["label"]} for n in nodes.values()]}
 
-    # ---- writes (OD-1109-DEMB-3 c): one transaction per pass. Retire, nodes, activation, chunk links, votes and the run rows
-    # commit together or not at all; a crash mid-write leaves the previous version intact and active. Embedding batches
-    # (a cache) commit on their own earlier in the pass.
-    # WP-W (CHUNK-ASSOC-1113 D1; reverses "one transaction per pass"): activate first, then one transaction per page of spans or
-    # sources, then a closing transaction (W4). Every phase below commits on its own, so a restart or budget stop mid-write loses no
+    # ---- writes. WP-W (CHUNK-ASSOC-1113 D1) reversed the one-transaction-per-pass design of OD-1109-DEMB-3 (c) (INFO-1): the pass no longer
+    # commits all-or-nothing; it commits per phase as described below. Embedding batches (a cache) still commit on their own earlier.
+    # D1: activate first, then one transaction per page of spans or sources, then a closing transaction (W4). Every phase below commits on its own, so a restart or budget stop mid-write loses no
     # visible label: a span not yet swapped keeps its old links, a swapped span shows its new ones.
     def _tx(self):
         if self._wconn is not None:  # W4: the retire and the run-row insert share one transaction
@@ -985,11 +1007,15 @@ class Job:
     @staticmethod
     def _end(conn, ok: bool) -> None:
         fn = getattr(conn, "commit", None) if ok else getattr(conn, "rollback", None)  # test doubles may offer no transaction API
-        if fn is not None:
-            try:
-                fn()
-            except Exception:  # noqa: BLE001
-                pass
+        if fn is None:
+            return
+        if ok:
+            fn()  # a failed commit must reach the pass's error path: never report `complete` for a write that did not commit
+            return
+        try:
+            fn()
+        except Exception:  # noqa: BLE001  (a rollback on a dead connection: the original error is the one that matters)
+            pass
 
     @contextlib.contextmanager
     def _cx(self, write: bool = False):

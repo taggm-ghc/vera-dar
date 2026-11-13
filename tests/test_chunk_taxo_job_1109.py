@@ -116,6 +116,8 @@ class FakeDB:
         if name == "job_run_latest":
             fin = [r for r in self.runs if not getattr(self, "no_latest", True)]  # opt in: db.no_latest = False
             return Res([(fin[-1]["version"], None, fin[-1]["metrics"], True, [])] if fin else [])
+        if name == "job_run_recent":  # WP-W no-op rule: newest run rows first (state, metrics)
+            return Res([("finished", r["metrics"]) for r in reversed(self.runs)][:8])
         if name.startswith("link_select_strict_"):
             kind = name[len("link_select_strict_"):]
             rows = sorted((k[1], k[2], k[3]) for k, v in self.links.items() if k[0] == kind and v["state"] == "active"

@@ -34,13 +34,22 @@ class WDB(RecDB):
         self.committed = (copy.deepcopy(self.nodes), copy.deepcopy(self.links), copy.deepcopy(self.anchors))
         self.no_latest = False
         self.hooks = {}  # statement name -> callable run after the statement
+        self.rec = []  # run rows in write order: (state, metrics json), for job_run_recent
 
     def snapshot(self):
         return SimpleNamespace(nodes=copy.deepcopy(self.nodes), links=copy.deepcopy(self.links))
 
     def execute(self, stmt, params=None):
-        res = super().execute(stmt, params)
         name = BY_TEXT[str(stmt)]
+        if name == "job_run_recent":  # aborted passes (closes) sit newer than the build row (runs): newest first
+            self.log.append((name, params))
+            from tests.test_chunk_taxo_job_1109 import Res
+            return Res(list(reversed(self.rec))[:8])  # newest first, in the order the rows were written
+        res = super().execute(stmt, params)
+        if name == "job_run_close" and params["state"] != "finished":
+            self.rec.append((params["state"], params["metrics"]))
+        elif name == "job_run_insert":
+            self.rec.append(("finished", params["metrics"]))
         if name in self.hooks:
             self.hooks[name](self)
         return res
@@ -81,6 +90,9 @@ class HeldConn(Conn):
 
     def commit(self):
         db = self.db
+        fail = getattr(db, "fail_commit_when", None)
+        if fail is not None and fail([n for n, _ in db.log[db._mark:]]):
+            raise RuntimeError("commit failed")  # the database refused the commit
         db.committed = (copy.deepcopy(db.nodes), copy.deepcopy(db.links), copy.deepcopy(db.anchors))
         db.snaps.append(db.snapshot())
         db.tx_names.append([n for n, _ in db.log[db._mark:]])
@@ -192,27 +204,23 @@ def test_t1_every_commit_point_keeps_old_labels_until_swapped_and_counts_the_dec
     db = first_pass()
     before_linked = {s for s in range(1, 11) if visible(db.nodes, db.links, s)}
     assert before_linked == set(range(1, 11))  # every span of the first build is labelled
-    # the new build abstains on span 4 and the scan classes span 7's source as a portal (outside the build's span set)
-    db.sources = {101 + 0: None}
+    # the new build abstains on span 5 (source 102, a normal source) and the scan classes source 101 as a portal (spans 1, 4, 7, 10 leave the build)
     db.sources = {s: ("https://doi.org/10.1000/example.%d" % s, {"document_id": "acq-%d" % s}) for s in (100, 101, 102)}
-    portal_src = 101 + 6 % 3  # source of span 7 is 100 + 7 % 3 = 101
     db.sources[101] = PORTAL_SOURCES[201]
-    j, r = second_pass(db, KeyedCore("n", abstain={4}), extra=3)
+    j, r = second_pass(db, KeyedCore("n", abstain={5}), extra=3)
     assert r["state"] == "complete"
     portal_spans = {sid for sid, src, _t in db.spans if src == 101}
+    assert 5 not in portal_spans and portal_spans & before_linked == {1, 4, 7, 10}
     assert db.snaps, "commit points were recorded"
     lost_total = {s for s in before_linked if not visible(db.nodes, db.links, s)}
-    assert lost_total == {4} | (portal_spans & before_linked)
+    assert lost_total == {5} | (portal_spans & before_linked)  # the decrease is exactly the abstained span plus the excluded ones
     m = json.loads(db.runs[-1]["metrics"])["run"]
-    assert m["abstained_now_unlabelled"] == 1 or 4 in portal_spans  # span 4 is abstained on, unless its source is the portal one
-    assert m["outside_build_unlabelled"] == len(portal_spans & before_linked)
-    assert m["outside_build_unlabelled_portal"] == len(portal_spans & before_linked)
+    assert m["abstained_now_unlabelled"] == 1  # span 5: abstained now
+    assert m["outside_build_unlabelled"] == 4 and m["outside_build_unlabelled_portal"] == 4  # spans 1, 4, 7, 10: outside the build
     # at every commit point a span lost only if it is one of the counted classes (never a silent decrease)
-    allowed = lost_total
     for snap in db.snaps:
-        for s in before_linked - allowed:
+        for s in before_linked - lost_total:
             assert visible(snap.nodes, snap.links, s), (s, "label lost at a commit point")
-    assert portal_src == 101
 
 
 def test_t2_crash_after_w1_leaves_old_links_visible_and_new_nodes_with_zero_chunks():
@@ -491,3 +499,32 @@ def test_t39_a_span_re_embedded_under_the_same_id_forces_a_rebuild_although_the_
     j3 = mk(db)
     assert j3.run()["complete"]
     assert j3.status()["state"] == "unchanged"
+
+
+# ------------------------------------------------------------------------------------------------ verifier R1, R2
+def test_r1_a_failed_commit_of_w4_is_an_error_never_complete():
+    db = WDB(spans(), locks=Locks())
+    db.fail_commit_when = lambda names: "job_run_insert" in names  # W4's own transaction
+    j = mk(db)
+    r = j.run()
+    assert r["state"] == "error" and r["complete"] is False
+    assert j.status()["state"] == "error" and j.status()["reasons"] == ["RuntimeError"]
+
+
+def test_r2_an_aborted_write_after_the_build_blocks_the_no_op_rule():
+    db = first_pass()
+    db.spans = db.spans + [(11, 100, "alpha NEW 11")]
+    db.fail_on = "link_insert_chunk_topic"  # a pass aborted between W1 and W4: its row carries write_incomplete
+    assert mk(db, core=KeyedCore("c")).run()["state"] == "error"
+    db.fail_on = None
+    db.spans = db.spans[:-1]  # the corpus is back to the span set of the build row: same version as the latest build row
+    db.log = []
+    j = mk(db)
+    r = j.run()
+    assert j.status()["state"] != "unchanged" and r["state"] == "complete"  # rebuilt over the mixed state, not recorded as a no-op
+    assert "job_run_insert" in db.names()
+    # with no aborted pass in between the very next pass is the no-op again
+    db.log = []
+    j2 = mk(db)
+    j2.run()
+    assert j2.status()["state"] == "unchanged"
