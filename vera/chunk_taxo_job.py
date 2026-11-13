@@ -222,6 +222,9 @@ def _similarity(distance):
 
 
 class Job:
+    _dom = None  # WP-D-1113: per-pass domain-writer state (set in _reset_run); None for a Job built without __init__
+    _dom_scores = None
+
     def __init__(self, cfg=None, core=None, embedder=None, engine_factory=None, env=None, clock=time.monotonic, wall=time.time,
                  rss_reader=None):
         self.cfg = cfg if isinstance(cfg, dict) else {}

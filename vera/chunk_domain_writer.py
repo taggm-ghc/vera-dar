@@ -57,7 +57,7 @@ def probe(conn, st: State) -> bool:
 def _get(o, name, default=None):
     if isinstance(o, dict):
         return o.get(name, default)
-    return getattr(o, name, default)
+    return vars(o).get(name, default) if hasattr(o, "__dict__") else default  # same shape as chunk_taxo_job._g (no getattr)
 
 
 def domain_key(item):
@@ -81,43 +81,49 @@ def domain_scores(model, vecs) -> dict:
     model.span_order (the contract of core.quality). Never raises: anything unexpected yields fewer scores (stored as NULL)."""
     out: dict = {}
     try:
+        import numpy as np  # noqa: PLC0415
         order, assoc = list(_get(model, "span_order") or ()), _get(model, "assoc") or {}
-        unit, sums = {}, {}
-        for i, sid in enumerate(order):  # pass 1: the plan's center (A4 K7, D4): unit mean of the vectors of the domain's STRICT members
-            key = domain_key(assoc.get(sid))
-            if key is None:
-                continue
-            v = [float(x) for x in vecs[i]]
-            norm = math.sqrt(sum(x * x for x in v))
-            if not norm > 0.0:
-                continue
-            u = [x / norm for x in v]
-            unit[sid] = u
-            acc = sums.setdefault(key, [0.0] * len(u))
-            if len(acc) != len(u):
-                continue
-            for j, x in enumerate(u):
-                acc[j] += x
+        keys = [domain_key(assoc.get(sid)) for sid in order]
+        if not any(k is not None for k in keys):
+            return {}
+        step = 256  # rows per block: the full matrix is never copied (peak extra memory is a few blocks, not n x d)
+
+        def blocks():
+            for a in range(0, len(order), step):
+                x = np.asarray(vecs[a:a + step], dtype=np.float64)
+                nr = np.sqrt((x * x).sum(axis=1))
+                ok = nr > 0.0
+                u = np.zeros_like(x)
+                u[ok] = x[ok] / nr[ok, None]
+                yield a, u, ok
+
+        sums = {}
+        for a, u, ok in blocks():  # pass 1: the plan's center (A4 K7, D4): unit mean of the vectors of the domain's STRICT members
+            for r in range(u.shape[0]):
+                k = keys[a + r]
+                if k is not None and ok[r]:
+                    if k in sums:
+                        sums[k] += u[r]
+                    else:
+                        sums[k] = u[r].copy()
         centers = {}
-        for key, acc in sums.items():
-            cn = math.sqrt(sum(x * x for x in acc))
+        for k, acc in sums.items():
+            cn = float(np.sqrt((acc * acc).sum()))
             if cn > 0.0:
-                centers[key] = [x / cn for x in acc]
-        for sid in order:  # pass 2: own cosine to that center
-            item = assoc.get(sid)
-            key = domain_key(item)
-            if key is None:
-                continue
-            if item.get("level") == "domain":
-                s = _sim(item.get("distance"))
-                if s is not None:
-                    out[sid] = (s, "cosine")
-                continue
-            cen, u = centers.get(key), unit.get(sid)
-            if cen is None or u is None or len(cen) != len(u):
-                continue
-            out[sid] = (round(max(-1.0, min(1.0, sum(a * b for a, b in zip(u, cen)))), 6), "cosine_lvl")
-    except (TypeError, ValueError, IndexError, KeyError, AttributeError):
+                centers[k] = acc / cn
+        for a, u, ok in blocks():  # pass 2: own cosine to that center
+            for r in range(u.shape[0]):
+                k = keys[a + r]
+                if k is None:
+                    continue
+                sid, item = order[a + r], assoc.get(order[a + r])
+                if item.get("level") == "domain":
+                    s = _sim(item.get("distance"))
+                    if s is not None:
+                        out[sid] = (s, "cosine")
+                elif k in centers and ok[r] and centers[k].shape == u[r].shape:
+                    out[sid] = (round(max(-1.0, min(1.0, float(u[r] @ centers[k]))), 6), "cosine_lvl")
+    except (TypeError, ValueError, IndexError, KeyError, AttributeError, ImportError):
         return {}
     return out
 
@@ -134,7 +140,7 @@ def _score(scores, sid):
 def write_page(conn, st: State, spans, assoc, ids, version, scores=None) -> None:
     """Retire the page's old-version domain rows and insert the new ones. `ids` is the job's {level: {model key: entity id}}.
     Disabled: nothing at all. Table absent: only the skipped count moves."""
-    if not st.enabled:
+    if st is None or not st.enabled:  # None: a Job built without __init__ (tests), nothing to track
         return
     rows, no_domain = [], 0
     for sid in spans:
@@ -161,6 +167,8 @@ def write_page(conn, st: State, spans, assoc, ids, version, scores=None) -> None
 
 def metrics(st: State) -> dict:
     """Numbers for the run row (merged into metrics_run by the job)."""
+    if st is None:
+        return {}
     if not st.enabled:
         return {"domain_write_disabled": 1}
     if st.table_ok is None:  # no chunk page was written this pass: nothing was probed, nothing is claimed
