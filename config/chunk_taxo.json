@@ -8,7 +8,7 @@
     "daily_neuron_budget": 8000,
     "reserve_neurons": 2500
   },
-  "job": {},
+  "job": {"finish_now": true},
   "params": {
     "seeds": [
       11,

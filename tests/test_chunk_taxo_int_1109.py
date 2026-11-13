@@ -236,7 +236,7 @@ def first_run():
 def test_config_sections_load_and_are_validated(tmp_path):
     c = core.load_cfg()
     assert c["cloudflare"]["model"] == "@cf/baai/bge-m3" and c["cloudflare"]["daily_neuron_budget"] == 8000
-    assert c["embedder"] == "cloudflare" and c["job"] == {}
+    assert c["embedder"] == "cloudflare" and c["job"] == {"finish_now": True}
     for bad in ({"cloudflare": {"nope": 1}}, {"cloudflare": {"send_allowed": "yes"}}, {"job": {"page_size": 0}},
                 {"job": {"zzz": 1}}, {"embedder": "Bad Name"}, {"bogus": 1}):
         p = tmp_path / "c.json"

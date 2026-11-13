@@ -107,7 +107,7 @@ def test_t44_flag_off_or_not_literally_true_equals_main(kw):
 
 
 def test_t44_default_false_shipped_and_validator_rejects_non_bool():
-    assert ct.load_cfg()["job"].get(FLAG) is not True  # shipped config leaves the key out: off (an existing test pins job == {})
+    assert ct.load_cfg()["job"].get(FLAG) is True  # OD-F: shipped config turns finish_now on
     assert job.JOB_DEFAULTS[FLAG] is False
     assert job.Job({"enabled": True}).finish_now is False  # missing key = off
     assert ct._validate_job({FLAG: True}) == {FLAG: True} and ct._validate_job({FLAG: False}) == {FLAG: False}
