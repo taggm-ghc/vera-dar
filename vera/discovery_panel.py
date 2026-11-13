@@ -179,7 +179,9 @@ _OWN_LIMIT_TEXT = "Not fetched: VERA-DAR's own rate limit for that site was reac
 _WAIT_TEXT = "Not fetched: that site's rate limit required a longer wait than the time left for this question."
 _BREAKER_TEXT = "Left for later: the site failed repeatedly, so VERA-DAR paused requests to it."
 # REASON-TEXT-1113: one true sentence per limiter-skip cause, keyed by the upper-case suffix. A suffix not listed
-# (and COOLDOWN, THROTTLED, the base code, lower-case codes) keeps the legacy REASON_TEXT["R-ACQ-RATELIMITED"] text.
+# (and THROTTLED, the base code, lower-case codes) keeps the legacy REASON_TEXT["R-ACQ-RATELIMITED"] text.
+# COOLDOWN (REASON-TEXT2-1113) is set only after the site pushed back; the :565 remaining-header path counts as
+# pushback only while every reserve in config/rate_limits.json is 0.
 _LIMITER_TEXT = {
     "DEADLINE_PASSED": "Not fetched: the time available for this question had already run out before another request to that site could be made.",
     "SEED_EXCLUDED": "Not fetched: background seeding does not use that service.",
@@ -190,8 +192,23 @@ _LIMITER_TEXT = {
     "PACING": _OWN_LIMIT_TEXT,
     "CONCURRENCY": _OWN_LIMIT_TEXT,
     "DAILY_CAP": _OWN_LIMIT_TEXT,
+    "COOLDOWN": "Left for later: that site recently limited requests from VERA-DAR, so VERA-DAR was waiting before sending another request.",
 }
 _LIMITER_PREFIX = "R-ACQ-RATELIMITED-"
+
+
+def code_text(code) -> str | None:
+    """REASON-TEXT2-1113: the plain-language sentence for one reason code (shared by the reading list and the internal
+    report); None for an empty or non-string code."""
+    if not isinstance(code, str) or not code:
+        return None
+    r = code
+    if r.upper().startswith(_LIMITER_PREFIX):
+        return _LIMITER_TEXT.get(r[len(_LIMITER_PREFIX):]) if r.startswith(_LIMITER_PREFIX) and \
+            r[len(_LIMITER_PREFIX):] in _LIMITER_TEXT else REASON_TEXT.get("R-ACQ-RATELIMITED", REASON_GENERIC)
+    if split_reason(r)[0] in _CAUSE_BASES and split_reason(r)[1]:
+        return reason_text(r)
+    return REASON_TEXT.get(r, REASON_GENERIC)
 
 
 def _reason_line(entry) -> str | None:
@@ -200,12 +217,7 @@ def _reason_line(entry) -> str | None:
         return None
     r = entry.get("reason")
     if isinstance(r, str) and r:
-        if r.upper().startswith(_LIMITER_PREFIX):
-            return _LIMITER_TEXT.get(r[len(_LIMITER_PREFIX):]) if r.startswith(_LIMITER_PREFIX) and \
-                r[len(_LIMITER_PREFIX):] in _LIMITER_TEXT else REASON_TEXT.get("R-ACQ-RATELIMITED", REASON_GENERIC)
-        if split_reason(r)[0] in _CAUSE_BASES and split_reason(r)[1]:
-            return reason_text(r)
-        return REASON_TEXT.get(r, REASON_GENERIC)
+        return code_text(r)
     o = entry.get("outcome")
     return OUTCOME_TEXT.get(o) if isinstance(o, str) and o in OUTCOME_TEXT else (REASON_GENERIC if o else None)
 

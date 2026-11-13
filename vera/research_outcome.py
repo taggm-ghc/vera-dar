@@ -281,6 +281,9 @@ _CAUSE_TEXT = {
     "unreachable_deadline_passed": "a source found was not fetched because the time available for this question had already run out before another request to that site could be made",  # POLISH-1110: -DEADLINE_PASSED
     "unreachable_seed": "a source found was not fetched because background seeding does not use that service",  # POLISH-1110 P-1110-11: -SEED_EXCLUDED, no limit was reached
     "unreachable_breaker": "a source found was left for later because the site failed repeatedly, so VERA-DAR paused requests to it",  # ARCHFIX-V2 R1: -BREAKER_OPEN / -HALF_OPEN_BUSY
+    # REASON-TEXT2-1113: -COOLDOWN is set only after the site pushed back (provider quota or 429, 429/503/202/anti-bot page; the
+    # remaining-header path counts only while every reserve in config/rate_limits.json is 0); the skip itself sends nothing.
+    "unreachable_cooldown": "a source found was left for later because that site had recently limited requests from VERA-DAR, so VERA-DAR was waiting before sending another request",
     "unreachable_throttled": "a source found asked VERA-DAR to slow down, so it was left for later",  # ARCH-FIX-1110 D: the site's own 429
 }
 
@@ -327,6 +330,8 @@ def unreachable_class(code) -> str:
             return "unreachable_paced"
         if c == "R-ACQ-RATELIMITED" or c.endswith("-THROTTLED"):
             return "unreachable_throttled"
+        if c.endswith("-COOLDOWN"):  # REASON-TEXT2-1113: the site pushed back earlier; not VERA-DAR's own limit
+            return "unreachable_cooldown"
         return "unreachable_ownlimit"
     if c.startswith("R-ACQ-ERR-") and "TIMEOUT" in c:
         return "unreachable_timeout"
