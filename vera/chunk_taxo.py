@@ -707,6 +707,12 @@ def _make_version(params, span_ids):
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
 
 
+def version_for(span_ids, params):
+    """The version `build` would give this span set and params, without building (WP-W no-op rule: the version hashes params,
+    seeds and the sorted span ids only, never vectors)."""
+    return _make_version(copy.deepcopy(params), [int(s) for s in span_ids])
+
+
 def _prior_nodes(prior):
     if prior is None:
         return []

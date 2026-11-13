@@ -185,69 +185,8 @@ def test_t48_complete_snapshot_same_links_and_partial_snapshot_key():
     assert "no_vector_yet" not in res[True][2]
 
 
-# ------------------------------------------------------------------------------------------------ T49 single transaction (spy)
-class SpyConn(Conn):
-    def __init__(self, db, spy):
-        super().__init__(db)
-        self.spy, self.snap = spy, None
-
-    def __enter__(self):
-        self.start = len(self.db.log)
-        self.snap = (copy.deepcopy(self.db.nodes), copy.deepcopy(self.db.links))
-        self.spy.append(self)
-        return self
-
-    def __exit__(self, et, ev, tb):
-        self.end = len(self.db.log)
-        if et is not None:  # a test-local rollback: effects of the failed context are discarded
-            self.db.nodes, self.db.links = self.snap
-        return False
-
-
-class SpyEngine:
-    def __init__(self, db, spy):
-        self.db, self.spy = db, spy
-
-    def connect(self):
-        return Conn(self.db)
-
-    def begin(self):
-        return SpyConn(self.db, self.spy)
-
-    def dispose(self):
-        pass
-
-
-def spied(db, e, **kw):
-    spy = []
-    j = job.Job({"enabled": True, "params": {}, "display_gate": {}, "embedder": "x", "job": {FLAG: True, **kw}}, core=StubCore(), embedder=e,
-                engine_factory=lambda url, **k: SpyEngine(db, spy), env=dict(ENV), rss_reader=lambda: 100.0)
-    return j, spy
-
-
-def test_t49_all_node_link_vote_statements_run_inside_the_one_write_context():
-    db = RecDB(spans())
-    preload(db, {1, 2, 3, 4, 5, 6})
-    j, spy = spied(db, DeferEmb())
-    assert j.run()["finish_now"] is True
-    names = [n for n, _ in db.log]
-    idx = [i for i, n in enumerate(names) if n.startswith(("node_", "link_insert", "link_retire", "anchor_", "set_ctx", "vote"))
-           or "source_topic" in n or "source_domain" in n]
-    assert idx
-    ctxs = [c for c in spy if any(c.start <= i < c.end for i in idx)]
-    assert len(ctxs) == 1 and all(ctxs[0].start <= i < ctxs[0].end for i in idx)  # one begin() context holds every such statement
-    assert job.Job._do_write.__qualname__.endswith("_do_write")  # entry point is the existing one
-
-
-def test_t49_failure_inside_the_write_discards_it_and_leaves_a_failed_run_row():
-    db = RecDB(spans())
-    preload(db, {1, 2, 3, 4, 5, 6})
-    db.fail_on = "link_insert_chunk_topic"
-    j, spy = spied(db, DeferEmb())
-    r = j.run()
-    assert r["state"] == "error" and not db.links and not [k for k in db.nodes if db.nodes[k]["state"] == "active"]
-    assert db.run_rows[-1]["state"] == "failed"
-
+# T49 (single begin() transaction around the whole write) is retired by WP-W (CHUNK-ASSOC-1113 A3): D1 commits per phase on purpose;
+# crash behaviour is covered by tests/test_chunk_taxo_wpw_1113.py (T1-T3).
 
 # ------------------------------------------------------------------------------------------------ T50 negative probes
 def test_t50_portal_abstain_and_empty_spans_get_no_link_and_values_are_numbers():
