@@ -22,6 +22,7 @@ DOE_HOST = "www.energy.gov"
 NASA = "https://science.nasa.gov/dark-matter"
 Q = "What are quarks and gluons?"
 ROBOTS_OK = "User-agent: *\nAllow: /\n"
+INLINE_MIN = acq_config.answer_min_spans(A.cfg())  # the inline job's min_spans (USFED-RESUME-1113 RS-A)
 PARA = ("Quarks are elementary particles that combine to form protons and neutrons, and gluons are the force carrying "
         "particles that bind quarks together through the strong force inside every atomic nucleus. ")
 
@@ -39,7 +40,8 @@ def index_snapshot(urls, harvested_at=None):
     from datetime import datetime, timedelta, timezone
     at = harvested_at if harvested_at is not None else (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
     snap = {"version": 1, "harvested_at": at, "robots_status": {}, "script_version": "test",
-            "entries": [{"url": u, "host": u.split("/")[2], "title": "Test page", "slug_terms": ["test"]} for u in urls],
+            "entries": [{"url": u, "host": u.split("/")[2], "title": "Test page", "slug_terms": ["test"], "subject_counts": {}}
+                        for u in urls],
             "denied": [], "boilerplate": {}}
     snap["sha256"] = original_html.snapshot_digest(snap)
     return snap
@@ -657,7 +659,7 @@ def test_shadow_runs_every_step_stores_nothing_and_logs_counts_only(monkeypatch,
 def test_on_mode_returns_a_plan_for_the_store_row_and_shadow_for_a_non_store_row(monkeypatch):
     set_mode(monkeypatch, "on")
     web = Web({DOE: page()})
-    plan, _isbn = run(web)
+    plan, _isbn = run(web, min_spans=INLINE_MIN)  # RS-A: a DOE plan comes only from an inline job (background = FEWSPANS)
     prov = plan["source"]["provenance"]
     assert prov["licence"]["content"]["id"] == "LicenseRef-us-government-work"
     assert prov["discovered_via"] == "original_html" and prov["acquisition"]["resolver"] == "original_html"
@@ -674,7 +676,7 @@ def test_on_mode_returns_a_plan_for_the_store_row_and_shadow_for_a_non_store_row
 def test_stored_row_reads_back_through_the_acquired_reader(monkeypatch):
     set_mode(monkeypatch, "on")
     from vera import fulldoc_db
-    plan, _ = run(Web({DOE: page()}))
+    plan, _ = run(Web({DOE: page()}), min_spans=INLINE_MIN)  # RS-A: inline job
     srcs, spans = A.rows_from_plans([plan])
     cfg = A.cfg()
     c = fulldoc_db.load_acquired_rows(srcs, spans, auto_acquire._fd_cfg(), cfg,
@@ -685,7 +687,7 @@ def test_stored_row_reads_back_through_the_acquired_reader(monkeypatch):
 def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_the_items_claim(monkeypatch):
     set_mode(monkeypatch, "on")
     from vera import fulldoc_db
-    plan, _ = run(Web({DOE: page()}))
+    plan, _ = run(Web({DOE: page()}), min_spans=INLINE_MIN)  # RS-A: inline job
     assert plan["source"]["provenance"]["item"]["discovered_via"] == "original_html"
     size = lambda p: sum(len(s["text"]) for s in p["spans"])  # noqa: E731  (the text is held as spans)
     assert size(plan) < 4000  # only the route's own floor lets this page in
@@ -705,7 +707,7 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
     assert [u.get("code") for u in c.unusable] == ["R-SHORT"], c.unusable
     # the licence branch is keyed on the resolver too: a LONG page (passes the ordinary floor on any route) whose
     # acquisition record names another resolver is held for its empty JATS licence-element list, whatever its item says
-    long_plan, _ = run(Web({DOE: page([PARA * 3 for _ in range(20)])}))
+    long_plan, _ = run(Web({DOE: page([PARA * 3 for _ in range(20)])}), min_spans=INLINE_MIN)
     assert size(long_plan) > 8000 and len(load(long_plan).acquired) == 1
     forged2 = copy.deepcopy(long_plan)
     forged2["source"]["provenance"]["acquisition"]["resolver"] = "europepmc"
@@ -723,8 +725,13 @@ def test_residual_floor_and_licence_branch_key_on_the_acquisition_resolver_not_t
 def test_length_floor_is_relaxed_only_for_this_route():
     base = fulltext_loader.load_config()
     r = original_html.relaxed_ingest_cfg(base, SHIPPED)
-    assert r["min_body_chars"] == 1500 and base["min_body_chars"] == 4000  # copy; input untouched
-    assert r["min_fulltext_chars"] == 1500 and r["min_body_to_abstract_ratio"] == base["min_body_to_abstract_ratio"]
+    # USFED-SHADOWFIX-1112 (plan §5.6 SF-A) flipped two assertions: the route's one floor is on len(text)
+    # (min_fulltext_chars), and the article abstract-only tests (min_body_chars on the converter's body_chars, which omits
+    # the lead before the first h2, and the body/abstract ratio) no longer apply to an HTML page; has_body is still
+    # required. Coverage kept: copy semantics and the ordinary item's full floor below.
+    assert r["min_body_chars"] == 1 and base["min_body_chars"] == 4000  # copy; input untouched
+    assert r["min_fulltext_chars"] == 1500 and r["min_body_to_abstract_ratio"] == 0
+    assert base["min_body_to_abstract_ratio"] == 2.0
     meta = {"has_body": True, "body_chars": 2000, "abstract_chars": 0}
     with pytest.raises(fulltext_loader.Refused):
         fulltext_loader.check_content("x" * 2000, meta, base)  # an ordinary item still needs the full floor
@@ -747,12 +754,16 @@ def snap(entries=(), denied=(), boiler=None):
 
 def ent(slug, title, terms=()):
     return {"url": f"https://www.energy.gov/science/doe-explains{slug}", "host": DOE_HOST, "title": title,
-            "slug_terms": list(terms) or slug.split("-")}
+            "slug_terms": list(terms) or slug.split("-"), "subject_counts": {}}
 
 
-def test_shipped_snapshot_validates_and_is_empty():
+def test_shipped_snapshot_validates_and_rows_only():
+    # USFED-WPC-1112: the shipped snapshot is now the WP-C harvest (was the empty seed); every entry must sit on a row
     s = original_html.load_snapshot(SHIPPED)
-    assert s is not None and s["entries"] == [] and s["denied"] == []
+    assert s is not None and isinstance(s["denied"], list)
+    for e in s["entries"]:
+        m = original_html.match_row(e["url"], SHIPPED)
+        assert m is not None and m[1] == e["url"] and m[0]["host"] == e["host"]
 
 
 def test_runtime_has_no_write_path_to_the_snapshot():
@@ -808,7 +819,15 @@ def test_subject_match_positives_negatives_and_caps(monkeypatch):
     many = [ent(f"particle-{i}", f"DOE Explains...Particle {i}") for i in range(6)]
     s2 = snap(many)
     monkeypatch.setattr(original_html, "load_snapshot", lambda cfg=None: s2)
-    assert len(original_html.match_subject("particle")) == c["limits"]["max_candidates_per_host"] == 1
+    # USFED-RESUME-1113 RS-A: the DOE row's own cap (max_pages_per_question 2) replaces the global per-host cap on its host
+    doe = next(r for r in c["rows"] if r["id"] == "energy_gov_doe_explains")
+    assert c["limits"]["max_candidates_per_host"] == 1 and doe["max_pages_per_question"] == 2
+    assert len(original_html.match_subject("particle")) == 2
+    c["limits"]["max_candidates_per_host"] = 5
+    assert len(original_html.match_subject("particle")) == 2  # the row cap governs its host, not the global one
+    doe.pop("max_pages_per_question")  # without the key: the global caps, as before RS-A
+    c["limits"]["max_candidates_per_host"] = 1
+    assert len(original_html.match_subject("particle")) == 1
     c["limits"]["max_candidates_per_host"] = 5
     assert len(original_html.match_subject("particle")) == 3  # per-question ceiling
     c["mode"] = "off"

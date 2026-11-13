@@ -1063,9 +1063,11 @@ def build_plan(rec: dict, item: dict, meta: dict, cfg: dict, job: Job, score: fl
     return plan
 
 
-def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict) -> int:
+def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict, admitted_out: list | None = None) -> int:
     """Admitted span count when the answer path's own admission runs over a corpus that holds ONLY this document,
-    loaded from the exact rows by the acquired-path reader (so a pass also proves the reader accepts them)."""
+    loaded from the exact rows by the acquired-path reader (so a pass also proves the reader accepts them).
+    admitted_out (USFED-RESUME-1113 RS-A, ORIGINAL_HTML route only): when a list is given, the admitted passages' texts
+    of THIS admission are appended to it; the return value is unchanged for every caller."""
     from vera import acquired_pins, fulldoc_admission, fulldoc_db
     src = {"run_id": -1, "source_id": 1, "canonical_url": plan["canonical_url"], "content": plan["source"]["content"],
            "content_hash": plan["source"]["content_hash"], "provenance": json.loads(json.dumps(plan["source"]["provenance"])),
@@ -1077,6 +1079,8 @@ def relevance_gate(question: str, plan: dict, cfg: dict, icfg: dict, fdcfg: dict
         codes = [u.get("code") for u in corpus.unusable]
         raise _Stop(str(codes[0]) if codes and codes[0] else acq_config.reason(cfg, "convert"))
     ev = fulldoc_admission.admit(question, corpus, fdcfg)
+    if admitted_out is not None:
+        admitted_out.extend(str(a.get("text") or "") for a in ev.admitted or ())
     return len(ev.admitted or ())
 
 

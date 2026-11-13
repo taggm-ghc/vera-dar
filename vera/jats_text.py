@@ -548,6 +548,11 @@ class _Html(HTMLParser):
             self.sections.append({"kind": "title", "title": title, "level": 0, "start": start, "end": self.b.n})
             self.b.block()
             self.meta["title"] = self.meta["title"] or title
+            if self.c.get("html_lead_section") is True:
+                # USFED-MATCH-1113 EX-4 (opt-in, bool true only; set per row via original_html.converter_cfg): the text
+                # between the title h1 and the next heading is an untitled body section. No text is added or moved.
+                m = self.b.mark()
+                self.sections.append({"kind": "body", "title": "", "level": 1, "start": m, "end": m, "_open": True})
             return
         self.b.block()
         start = self.b.mark()

@@ -203,6 +203,19 @@ def snapshot_digest(body: dict) -> str:
     return hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
 
 
+def _counts_valid(sc) -> bool:
+    """MT-A: an entry's `subject_counts` is a dict of term (as _terms() makes it) -> int >= 1 (not bool). Missing or
+    malformed on any entry voids the whole snapshot (fail closed)."""
+    if not isinstance(sc, dict):
+        return False
+    for k, v in sc.items():
+        if not isinstance(k, str) or not _TERM_RE.fullmatch(k) or _terms(k) != [k]:
+            return False
+        if type(v) is not int or v < 1:
+            return False
+    return True
+
+
 def _snapshot_valid(s, cfg: dict) -> bool:
     """Structure, sha256 and every entry re-checked (https, a row's host and prefix, one canonical form, no query).
     Off-pattern values are refused without being echoed."""
@@ -218,7 +231,8 @@ def _snapshot_valid(s, cfg: dict) -> bool:
             if (m is None or m[1] != e["url"] or e.get("host") != urlsplit(e["url"]).hostname
                     or not _TITLE_RE.fullmatch(str(e.get("title") or "")) or str(e["title"]) != str(e["title"]).strip()
                     or not isinstance(e.get("slug_terms"), list)
-                    or not all(isinstance(t, str) and _TERM_RE.fullmatch(t) for t in e["slug_terms"])):
+                    or not all(isinstance(t, str) and _TERM_RE.fullmatch(t) for t in e["slug_terms"])
+                    or not _counts_valid(e.get("subject_counts"))):
                 return False
         for d in s["denied"]:
             if normalise_url(d.get("url")) != d.get("url") or not isinstance(d.get("code"), str) \
@@ -352,11 +366,106 @@ def _terms(s: str) -> list:
     return out
 
 
+# ------------------------------------------------------------------------------------------------ RS-A two DOE pages
+# USFED-RESUME-1113 (work/USFED-ROUTE-1111/PLAN.md section 5.7 RS-A; owner ruling OD-1113-USFED-TWO-PAGES): DOE row only.
+TWO_PAGES_ROW = "energy_gov_doe_explains"  # the one row id the ruling names; the keys on any other row are ignored
+TWO_PAGES_CAP = 2  # the only honoured value of max_pages_per_question (owner decision; calibration note on the row)
+DISTINCT_PAGES = "distinct_pages"
+
+
+def two_pages_row(cfg: dict | None = None):
+    """The DOE row when its RS-A keys are honoured, else None (fail closed: global cap, per-document floor). Honoured
+    only when: the row with id TWO_PAGES_ROW is valid and unique, max_pages_per_question is an int (not bool) equal to
+    TWO_PAGES_CAP, evidence_floor is exactly "distinct_pages", and no other enabled row names its host."""
+    try:
+        c = cfg if cfg is not None else load_config()
+        mine = [r for r in rows(c) if r.get("id") == TWO_PAGES_ROW]
+        if len(mine) != 1:
+            return None
+        r = mine[0]
+        v = r.get("max_pages_per_question")
+        if type(v) is not int or v != TWO_PAGES_CAP or r.get("evidence_floor") != DISTINCT_PAGES:
+            return None
+        same = [x for x in c.get("rows") or () if isinstance(x, dict) and x.get("enabled") is True
+                and x.get("host") == r["host"]]
+        return r if len(same) == 1 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def passage_sha(text: str) -> str:
+    """RS-A passage identity: sha256 of the text with whitespace collapsed and case folded."""
+    return hashlib.sha256(" ".join(str(text or "").split()).casefold().encode("utf-8")).hexdigest()
+
+
+def _tally_doe(p, row) -> bool:
+    o = p.get("original_html") if isinstance(p, dict) else None
+    return isinstance(o, dict) and o.get("row") == row["id"]
+
+
+def distinct_page_marks(plans, cfg: dict, exclude=(), oc: dict | None = None) -> dict:
+    """RS-A tally, pure (reads the plans, writes nothing). Returns {id(plan): eligible} for every plan of the
+    distinct_pages row in `plans`; plans of other rows and routes are absent (the caller keeps
+    auto_acquire.persist_eligible for them). Empty when two_pages_row is None (fail closed to the per-document floor).
+
+    Only plans that the persist step may write credit: not in `exclude` (variant-only ids), not answer_only, lane or
+    source_lane; the plan's canonical URL must match the DOE row; its passages are the sha256 digests in
+    plan["original_html"]["admitted_sha"] (no digest = no credit). Pages are keyed by normalised canonical URL (the same
+    page twice is one page); each page credits at most one distinct digest; the credited count is an order-independent
+    maximum matching pages <-> digests. Eligible iff that count >= acq_config.persist_min_spans(cfg); then exactly the
+    matched pages are eligible (one plan per page; pages tried in sorted canonical-URL order, so ties break by URL).
+    Any error marks every DOE plan not eligible."""
+    from vera import acq_config
+    c = oc if oc is not None else load_config()
+    row = two_pages_row(c)
+    if row is None:
+        return {}
+    doe = [p for p in plans if _tally_doe(p, row)]
+    marks = {id(p): False for p in doe}
+    try:
+        need = acq_config.persist_min_spans(cfg)
+        skip = {int(x) for x in exclude}
+        pages: dict = {}  # canonical URL -> (first plan, digest set)
+        for p in doe:
+            if id(p) in skip or p.get("answer_only") or p.get("lane") or p.get("source_lane"):
+                continue
+            o = p["original_html"]
+            u = normalise_url(p.get("canonical_url"))
+            m = match_row(u, c) if u else None
+            if u is None or m is None or m[0]["id"] != row["id"] or normalise_url(o.get("canonical_url")) != u:
+                continue
+            d = {x for x in (o.get("admitted_sha") or ()) if isinstance(x, str) and _HEX.fullmatch(x)}
+            if u in pages:
+                pages[u][1].update(d)
+            else:
+                pages[u] = (p, set(d))
+        owner: dict = {}  # digest -> page URL (Kuhn's augmenting paths)
+
+        def augment(u, seen):
+            for x in sorted(pages[u][1]):
+                if x in seen:
+                    continue
+                seen.add(x)
+                if x not in owner or augment(owner[x], seen):
+                    owner[x] = u
+                    return True
+            return False
+        for u in sorted(pages):
+            augment(u, set())
+        if len(owner) >= need:
+            for u in set(owner.values()):
+                marks[id(pages[u][0])] = True
+    except Exception:  # noqa: BLE001  fail closed
+        return {id(p): False for p in doe}
+    return marks
+
+
 def match_subject(subject: str, cfg: dict | None = None) -> list:
     """Catalogue candidates for a definitional subject: every subject token must occur (exact token match after
     case/plural/hyphen normalisation) among the entry's title and slug tokens; extra entry tokens are allowed. Ranked by
     fewest extra tokens; at most limits.max_candidates_per_host per host and limits.max_candidates_per_question in all.
-    Local data only. No match, an empty subject, or mode off -> []."""
+    Local data only. No match, an empty subject, or mode off -> [].
+    USFED-RESUME-1113 RS-A: the DOE row's host takes the row's max_pages_per_question (2) when two_pages_row honours it."""
     c = cfg if cfg is not None else load_config()
     s = load_snapshot(c)
     want = set(_terms(subject))
@@ -364,6 +473,8 @@ def match_subject(subject: str, cfg: dict | None = None) -> list:
         return []
     lim = c.get("limits") or {}
     per_host, total = int(lim.get("max_candidates_per_host", 1)), int(lim.get("max_candidates_per_question", 3))
+    tp = two_pages_row(c)  # RS-A: the DOE row's own cap, for its host only (None = the global cap everywhere)
+    caps = {tp["host"]: TWO_PAGES_CAP} if tp is not None else {}
     hits = []
     for e in s["entries"]:
         have = set(_terms(e["title"])) | {t for x in e["slug_terms"] for t in _terms(x)}
@@ -372,10 +483,35 @@ def match_subject(subject: str, cfg: dict | None = None) -> list:
     hits.sort(key=lambda x: (x[0], x[1]))
     out, n = [], {}
     for _x, u, e in hits:
-        if n.get(e["host"], 0) >= per_host or len(out) >= total:
+        if n.get(e["host"], 0) >= caps.get(e["host"], per_host) or len(out) >= total:
             continue
         n[e["host"]] = n.get(e["host"], 0) + 1
-        out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True})
+        out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True,
+                    "match_stage": 1})
+    # USFED-MATCH-1113 MT-A stage 2 (plan 5.8): DOE row only, only after a stage-1 match on that host, only while the host
+    # has a free slot under its cap (2) and the total cap. Other entries of the row holding EVERY subject term in their
+    # body counts, ranked by (-sum of the subject terms' counts, URL). Presence and order only: no threshold.
+    if tp is not None:
+        host = tp["host"]
+        have_urls = {m["url"] for m in out}
+        if n.get(host, 0) >= 1:
+            cand2 = []
+            for e in s["entries"]:
+                if e["host"] != host or e["url"] in have_urls or not claims_url(e["url"], c) \
+                        or snapshot_denied(e["url"], c):
+                    continue
+                mr = match_row(e["url"], c)
+                sc = e.get("subject_counts")  # a validated snapshot always has it; defensive for a stubbed one
+                if mr is None or mr[0]["id"] != tp["id"] or not isinstance(sc, dict) or not want <= set(sc):
+                    continue
+                cand2.append((-sum(sc[t] for t in want), e["url"], e))
+            cand2.sort(key=lambda x: (x[0], x[1]))
+            for _x, u, e in cand2:
+                if n.get(host, 0) >= TWO_PAGES_CAP or len(out) >= total:
+                    break
+                n[host] = n.get(host, 0) + 1
+                out.append({"url": u, "title": e["title"], "source": "permitted_catalogue", "original_html": True,
+                            "match_stage": 2})
     return out
 
 
@@ -453,16 +589,34 @@ def trip_host(host: str) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ loader limits (step 7)
-def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None) -> dict:
-    """The fulltext_ingest config with the body-length floors replaced by this route's own `limits.min_text_chars`
-    (federal explainer pages are far shorter than the 4000-character article floor). Every other filter is unchanged. A
-    copy; the input is never mutated. Used only when the caller passes route="original_html" (the route itself, or the
-    acquired-path reader from the row's acquisition resolver), never from an item's own claim."""
+def converter_cfg(ccfg: dict, row: dict | None = None) -> dict:
+    """USFED-MATCH-1113 EX-4: a copy of the converter config with `html_lead_section` true ONLY for the DOE row
+    (TWO_PAGES_ROW) and only when that row's key is the bool true; for every other row, caller and value the flag is
+    absent (off). The input is never mutated."""
+    out = dict(ccfg)
+    out.pop("html_lead_section", None)
+    if isinstance(row, dict) and row.get("id") == TWO_PAGES_ROW and row.get("html_lead_section") is True:
+        out["html_lead_section"] = True
+    return out
+
+
+def relaxed_ingest_cfg(icfg: dict, oc: dict | None = None, row: dict | None = None) -> dict:
+    """The fulltext_ingest config with this route's single length floor (plan step 7; §5.6 SF-A, USFED-SHADOWFIX-1112).
+    The floor `limits.min_text_chars` is measured on the converted text that is stored (len(text)), the same measure the
+    route checks first under R-ACQ-ORIGINAL_THIN, so `min_fulltext_chars` IS that floor. The article abstract-only tests
+    do not apply to an HTML page (it has no abstract): `min_body_chars` is 1, because the converter's `body_chars` omits
+    the lead text between the page title and the first <h2> (where an explainer's definition sits), and
+    `min_body_to_abstract_ratio` is 0, because an HTML heading named "Summary" is not an article abstract; `has_body`
+    is still required (the route raises NO_BODY first). Every other filter is unchanged. A copy; the input is never
+    mutated. Used only when the caller passes route="original_html" (the route itself, or the acquired-path reader from
+    the row's acquisition resolver), never from an item's own claim."""
     lim = ((oc if oc is not None else load_config()).get("limits") or {})
-    floor = int(lim.get("min_text_chars", 1500))
     out = dict(icfg)
-    out["min_body_chars"] = min(int(icfg["min_body_chars"]), floor)
-    out["min_fulltext_chars"] = min(int(icfg["min_fulltext_chars"]), floor)
+    out["min_fulltext_chars"] = int(lim.get("min_text_chars", 1500))
+    out["min_body_chars"] = 1
+    out["min_body_to_abstract_ratio"] = 0
+    if isinstance(out.get("converter"), dict):  # EX-4: the converter flag follows the row (DOE only), never the config
+        out["converter"] = converter_cfg(out["converter"], row)
     return out
 
 
@@ -534,13 +688,18 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
             or not pl.get("ok")):
         raise aa._Stop(acq_config.reason(cfg, "original_not_pd"))
     # 6a-6d: generic main-content step, then the converter; a page with no headed sections is NO_BODY
-    ex = html_main.extract_main(raw, oc.get("extract") or {}, host, boilerplate_for(host, oc), doc=doc)
     try:
-        conv = jats_text.convert(ex["html"], "html", icfg["converter"])
+        ex = html_main.extract_main(raw, oc.get("extract") or {}, host, boilerplate_for(host, oc), doc=doc)
+    except html_main.HtmlRefused:  # a bad extract config key fails closed
+        raise aa._Stop(acq_config.reason(cfg, "convert")) from None
+    try:
+        conv = jats_text.convert(ex["html"], "html", converter_cfg(icfg["converter"], row))
     except Exception:  # noqa: BLE001  (ConversionError: no headed sections / hostile file)
         raise aa._Stop(acq_config.reason(cfg, "original_no_body")) from None
+    if not conv.get("has_body"):  # only the title heading: converts without error, but there is no body section
+        raise aa._Stop(acq_config.reason(cfg, "original_no_body"))
     text = conv["text"]
-    if len(text) < int(lim.get("min_text_chars", 1500)):
+    if len(text) < int(lim.get("min_text_chars", 1500)):  # step 7: the one floor, on the stored text (SF-A)
         raise aa._Stop(acq_config.reason(cfg, "original_thin"))
     now_iso = _now_iso()
     meta = {k: v for k, v in conv.items() if k != "text"}
@@ -578,8 +737,17 @@ def evaluate(job, score, doi, cand, isbn, cfg, deps, icfg, fdcfg, clock=time.mon
                                                             "image_credit", "dataset_retrieved")},
                           "page": prov, "extract": {"root": ex["root"], "pruned": ex["stats"]},
                           "retrieved_at": now_iso}
-    n_adm = aa.relevance_gate(job.question, plan, cfg, icfg, fdcfg)
+    adm_texts: list = []  # RS-A: the admitted passages' texts from the SAME admission call that gives n_adm
+    n_adm = aa.relevance_gate(job.question, plan, cfg, icfg, fdcfg, admitted_out=adm_texts)
+    # route-local (never stored: the store reads source/spans/candidate/canonical_url only); RS-A tally input
+    plan["original_html"] = {"row": row["id"], "canonical_url": canon,
+                             "admitted_sha": sorted({passage_sha(x) for x in adm_texts})}
     dur["verify"] = dur.get("verify", 0) + int((clock() - t) * 1000)
+    tp = two_pages_row(oc)
+    if md == "on" and min_spans is None and tp is not None and tp["id"] == row["id"]:
+        # RS-A: a background or list job (min_spans None) holds one page, so it can never meet the distinct-pages floor:
+        # refused R-ACQ-FEWSPANS (fail closed; seeding needs its own design). Shadow is unchanged (stores nothing).
+        raise aa._Stop(acq_config.reason(cfg, "few_spans"), n_adm)
     need = acq_config.persist_min_spans(cfg) if min_spans is None else max(1, int(min_spans))
     if n_adm < need:
         raise aa._Stop(acq_config.reason(cfg, "few_spans") if n_adm else acq_config.reason(cfg, "irrelevant"), n_adm)

@@ -10,8 +10,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from tests import acq_support as A
-from tests.test_original_html_wpg_1111 import (DOE, DOE_HOST, NASA, SHIPPED, Web, cand, code, page, run, index_snapshot,
-                                               set_mode)
+from tests.test_original_html_wpg_1111 import (DOE, DOE_HOST, INLINE_MIN, NASA, SHIPPED, Web, cand, code, page, run,
+                                               index_snapshot, set_mode)
 from vera import acq_config, acq_discovered, auto_acquire, freshness, original_html
 
 HOST = acq_config.reason(A.cfg(), "host")
@@ -61,7 +61,7 @@ def test_on_url_not_in_index_is_refused_before_any_request(monkeypatch):
 def test_on_url_in_index_is_claimed_and_stored(monkeypatch):
     use(monkeypatch, index_snapshot([DOE]))
     assert original_html.claims_url(DOE) is True
-    plan, _ = run(Web({DOE: page()}))
+    plan, _ = run(Web({DOE: page()}), min_spans=INLINE_MIN)  # RS-A: inline job (background = FEWSPANS)
     assert plan["canonical_url"] == DOE
 
 
@@ -102,9 +102,9 @@ def test_max_age_override_is_honoured(monkeypatch):
     assert original_html.claims_url(DOE) is True
 
 
-def test_shipped_empty_snapshot_in_on_mode_refuses(monkeypatch):
-    c = set_mode(monkeypatch, "shadow")
-    c["mode"] = "on"  # real load_snapshot, shipped empty seed
+def test_empty_snapshot_in_on_mode_refuses(monkeypatch):
+    # USFED-WPC-1112: the shipped snapshot is now harvested, so the empty-index case uses an explicit empty snapshot
+    use(monkeypatch, index_snapshot([]))
     assert original_html.claims_url(DOE) is False
     assert code(Web({DOE: page()})) == NOTOA and direct(Web({DOE: page()})) == HOST
 
@@ -131,7 +131,7 @@ def test_redirect_to_an_unindexed_same_row_url_is_refused(monkeypatch):
 def test_redirect_to_an_indexed_url_is_followed(monkeypatch):
     use(monkeypatch, index_snapshot([DOE, OTHER]))
     web = Web({OTHER: page()}, over={DOE: A.Resp(status=302, headers={"Location": OTHER})})
-    plan, _ = run(web)
+    plan, _ = run(web, min_spans=INLINE_MIN)  # RS-A: inline job
     assert plan["canonical_url"] == DOE or OTHER in plan["canonical_url"]
 
 
