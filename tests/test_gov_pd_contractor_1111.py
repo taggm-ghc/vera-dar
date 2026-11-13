@@ -218,6 +218,10 @@ ADVERSARIAL = {
     "by-dense-punct": ("", "by ", ",|-–—", 20, "\n", 3000),
     "by-comma-120": ("", "by ", "a,", 120, "\n", 800),
     "by-dash-words": ("", "by ", "x-", 60, " " + "y " * 90 + "\n", 800),
+    # CPAT13-FIX-1112: "media contact" + whitespace with no colon was quadratic (two [ \t]* around an optional ":")
+    "media-contact-spaces": ("", "media contact", " ", 30000, "", 1),
+    "media-contact-tabs": ("", "news media contacts", "\t", 30000, "", 1),
+    "media-contact-mixed-ws": ("", "media contact", " \t", 15000, "", 1),
     "managed-padded": ("", "managed     for     the     ", "", 0, "", 7000),
     "managed-padded-3": ("", "managed   for   the   ", "", 0, "", 9000),
     "managed-padded-nbsp3": ("", "managed   for   the   ", "", 0, "", 9000),
