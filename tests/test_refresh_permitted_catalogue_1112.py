@@ -523,3 +523,39 @@ def test_slug_terms_use_stem_remainder():
     row = {"path_stems": ["/science/doe-explains"], "path_prefixes": []}
     assert R.slug_terms(row, "https://www.energy.gov/science/doe-explainsquarks-and-gluons") == ["quarks", "and", "gluons"]
     assert R.slug_terms({"path_prefixes": ["/dark-matter"]}, "https://science.nasa.gov/dark-matter/what-is") == ["what", "is"]
+
+
+# ---------------------------------------------------------------------------------------------- GC-MINORS-1113
+@pytest.mark.parametrize("enc", ["gzip", "deflate", "br"])
+def test_gc_minor3_non_identity_content_encoding_is_refused_never_decoded(tmp_path, enc):
+    import gzip
+    pages = site(2)
+    good = pages[(HA, "/explainers/p0")]
+    bad = Resp(200, "text/html", gzip.compress(good.body), {"Content-Encoding": enc})
+    pages[(HA, "/explainers/p1")] = bad
+    rc, net, _ = harvest(tmp_path, pages, write=True)
+    urls = [e["url"] for e in snap(tmp_path)["entries"]]
+    assert u("/explainers/p1") not in urls and u("/explainers/p0") in urls
+    assert bad.headers["Content-Encoding"] != enc  # rewritten to a refused value; the body was never decoded
+
+
+def test_gc_minor3_identity_encoding_still_accepted(tmp_path):
+    pages = site(1)
+    pages[(HA, "/explainers/p0")].headers["Content-Encoding"] = "identity"
+    harvest(tmp_path, pages, write=True)
+    assert [e["url"] for e in snap(tmp_path)["entries"]] == [u("/explainers/p0")]
+
+
+def test_gc_minor1_robots_evidence_outside_scratch_or_symlink_is_refused(tmp_path):
+    good = evidence(tmp_path)
+    outside = tmp_path / "ev_outside.json"
+    outside.write_text(Path(good).read_text(), encoding="utf-8")
+    link = tmp_path / "scratch" / "ev_link.json"
+    link.symlink_to(good)
+    for ev in (str(outside), str(link), str(tmp_path / "scratch" / ".." / "ev_outside.json")):
+        net = Net(site())
+        with pytest.raises(SystemExit) as e:
+            R.main(["--harvest", "--row", "a", "--robots-evidence", ev, "--write"], resolve=net.resolve, transport=net.transport)
+        assert "FAIL" in str(e.value) and net.calls == [] and not SNAP(tmp_path).exists()
+    rc, net, _ = harvest(tmp_path, site(1), ev=good)  # control: the same content under scratch/ is accepted
+    assert rc == 0

@@ -502,6 +502,26 @@ def test_t26_rederive_refuses_a_missing_page_or_a_dir_outside_scratch(monkeypatc
         R.main(["--rederive-from", str(tmp_path / "config"), "--write"])
 
 
+def test_gc_minor2_rederive_refuses_symlinked_and_oversize_pages(monkeypatch, tmp_path):
+    cfg, p, old = make_root(monkeypatch, tmp_path, PAGES26)
+    d = tmp_path / "scratch" / "pages"
+    first = sorted(d.glob("*.html"))[0]
+    target = tmp_path / "scratch" / "elsewhere.html"
+    target.write_bytes(first.read_bytes())
+    first.unlink()
+    first.symlink_to(target)  # a planted symlink inside the (real) directory
+    with pytest.raises(SystemExit) as e:
+        R.main(["--rederive-from", str(d), "--write"])
+    assert "FAIL" in str(e.value) and json.loads(p.read_text("utf-8")) == old
+    first.unlink()
+    first.write_bytes(target.read_bytes())  # restore: control run passes
+    assert R.main(["--rederive-from", str(d)]) == 0
+    cfg.setdefault("limits", {})["max_html_bytes"] = first.stat().st_size - 1  # one byte over the cap
+    with pytest.raises(SystemExit) as e:
+        R.main(["--rederive-from", str(d), "--write"])
+    assert "max_html_bytes" in str(e.value) and json.loads(p.read_text("utf-8")) == old
+
+
 def test_t26_one_derivation_function_is_shared():
     assert callable(R.derive_subject_counts)
     src = Path(R.__file__).read_text(encoding="utf-8")

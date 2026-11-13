@@ -200,6 +200,13 @@ class Harvester:
     # ---- transport wrapper: remembers the status code of the last response (the guarded GET hides it)
     def _tr(self, *a):
         r = self.base_tr(*a)
+        # GC-MINOR-3: plan 5.5 G-C refuses a non-identity Content-Encoding (we send Accept-Encoding: identity). Rewrite the
+        # header to a value pf._read_capped refuses with FetchRefused("encoding"), so no gzip/deflate body is ever decoded.
+        hd = getattr(r, "headers", None)
+        if hd is not None:
+            for k in list(hd):
+                if str(k).lower() == "content-encoding" and str(hd[k]).strip().lower() not in ("", "identity"):
+                    hd[k] = "refused-non-identity"
         self.last_status = getattr(r, "status_code", None)
         self.last_t = self.clock()  # every response (redirect hops and robots.txt included) counts for pacing
         return r
@@ -532,7 +539,7 @@ def robots_phase(cfg, row, out_path, *, resolve=None, transport=None, clock=time
 
 
 def check_evidence(path: str, row: dict, now: datetime) -> None:
-    p = Path(path)
+    p = under_scratch(path)  # GC-MINOR-1 (rule 18): resolved, no symlink, inside <root>/scratch, else FAIL
     try:
         ev = json.loads(p.read_text(encoding="utf-8"))
         at = datetime.fromisoformat(str(ev["checked_at"]))
@@ -585,11 +592,14 @@ def rederive_phase(cfg, pages_dir: str, *, write: bool) -> int:
     d = under_scratch(pages_dir)
     sp = snapshot_path(cfg)
     old = load_old(sp)
+    cap = int((cfg.get("limits") or {}).get("max_html_bytes", 2000000))  # same cap as a live page fetch
     raws = {}
     for e in old["entries"]:
         f = d / page_file(e["url"])
-        if not f.is_file():
-            raise SystemExit(f"FAIL: saved page missing for an entry ({page_file(e['url'])}); nothing written")
+        if f.is_symlink() or not f.is_file():  # GC-MINOR-2: a planted symlink is refused, never followed
+            raise SystemExit(f"FAIL: saved page missing or not a regular file ({page_file(e['url'])}); nothing written")
+        if f.stat().st_size > cap:
+            raise SystemExit(f"FAIL: saved page larger than max_html_bytes ({page_file(e['url'])}); nothing written")
         raws[e["url"]] = f.read_bytes()
     try:
         sc = derive_subject_counts(old["entries"], raws, cfg.get("extract") or {}, old.get("boilerplate") or {})
