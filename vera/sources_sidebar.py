@@ -301,8 +301,8 @@ def _n(v) -> int:
 def taxonomy_lines(tx) -> list[str]:
     """WP6: caption blocks for the stored per-chunk taxonomy (vera.corpus_taxonomy payload); [] when absent or malformed.
     Names are taxonomy entities (domain, topic, subtopic), never a source. Both views of a document's subject areas are
-    shown and labelled: 'main label' is the one stored document-level vote; 'contains passages on' is the union of the
-    document's stored chunk labels (a document may appear under several subjects). Unlabelled counts are derived from
+    shown and labelled: the document-level vote is the one stored topic for the whole document; 'contains chunks on' is the union of the
+    topics and sub-topics of the document's stored chunk records (a document may appear under several topics). Unlabelled counts are derived from
     missing rows (abstentions are not stored), so they are one combined figure."""
     try:
         if not isinstance(tx, dict) or not isinstance(tx.get("domains"), list):
@@ -338,7 +338,7 @@ def taxonomy_lines(tx) -> list[str]:
 
 
 def render_stored_taxonomy(st, data: dict | None) -> None:
-    """WP6: the stored per-chunk subject labels, appended by the Corpus page after render_corpus. Nothing is written unless the
+    """WP6: the stored per-chunk topic and sub-topic records, grouped by domain, appended by the Corpus page after render_corpus. Nothing is written unless the
     API sent a stored_taxonomy block (flag corpus_description.stored_taxonomy.enabled; default off sends none)."""
     for line in taxonomy_lines(data.get("stored_taxonomy") if isinstance(data, dict) else None):
         st.caption(line)

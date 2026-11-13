@@ -33,7 +33,6 @@ def _base():
 
 LABELLED = {
     "vote_topic": ("tax_source_topic", [(1, 1, 1, CN, "active")]),
-    "vote_domain": ("tax_source_domain", [(1, 1, 1, CN, "active")]),
     "chunk_topic": ("tax_chunk_topic", [(1, 1, 1, CN, "active")]),
     "chunk_subtopic": ("tax_chunk_subtopic", [(1, 1, 1, CN, "active")]),
     "explicit_cosine": ("tax_chunk_topic", [(1, 1, 1, CN, "active", "cosine")]),
@@ -49,6 +48,8 @@ UNLABELLED = {
     "retired_subtopic": ("tax_chunk_subtopic", [(1, 1, 3, CN, "active")]),
     "retired_topic_vote": ("tax_source_topic", [(1, 1, 2, CN, "active")]),
     "retired_topic_chunk": ("tax_chunk_topic", [(1, 1, 2, CN, "active")]),
+    # CORPUS-WORDING-N1-1113: a document-level domain vote alone is not a topic or sub-topic record, so the document stays uncounted
+    "domain_vote_only": ("tax_source_domain", [(1, 1, 1, CN, "active")]),
     "retired_domain_vote": ("tax_source_domain", [(1, 1, 2, CN, "active")]),
     "orphan_subtopic": ("tax_chunk_subtopic", [(1, 1, 2, CN, "active")]),
 }
