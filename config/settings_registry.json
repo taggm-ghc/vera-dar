@@ -135,7 +135,7 @@
    "clamp": "raise_only",
    "file": "config/chunk_taxo.json",
    "max": 1000000000,
-   "min": 5000,
+   "min": 1000,
    "module": "chunk_taxo",
    "path": "cloudflare.reserve_neurons",
    "type": "int",
@@ -1532,5 +1532,5 @@
    "validator": true
   }
  },
- "sha256": "49979b1e40bd768b2c3de1290ce14a93031c32061a417617f0c6e8ae04963206"
+ "sha256": "a595103572d7ea3607c420b44cb85ae99ce7d55272dd07638549a5ea6e39cd2d"
 }
