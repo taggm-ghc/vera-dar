@@ -197,20 +197,43 @@ def test_page_check_is_fast_on_adversarial_pages(text):
     assert elapsed < 2.0, elapsed
 
 
+# a whitespace quantifier, then any run of optional elements, then another whitespace quantifier
+_W = r"(?:\\s|\[ \\t\])[*+]"
+# optional element: bare `?`, a quantified-optional single char / escape / class (`:?`, `\-?`, `[:,]?`), or an
+# optional non-capturing group (CPAT13-FIX-1112: `[ \t]*:?[ \t]*` was quadratic and slipped past a bare-`?` check)
+_OPT = r"(?:\?|(?:[^\s()\\\[\]*+?|]|\\.|\[[^\]]*\])\?|\(\?:[^()]*\)\?)"
+_ADJACENT = re.compile(_W + r"(?:" + _OPT + r")*" + _W)
+_ANCHORED = re.compile(r"\^\\s[*+]")
+
+
+def _flat(p):
+    return re.sub(r"\(\?:\((?:[^()]|\([^()]*\))*\)\\s\*\)\?", "", p)  # drop the factored optional groups
+
+
+def _unsafe(p):
+    return bool(_ANCHORED.search(p) or _ADJACENT.search(_flat(p)))
+
+
+def test_sibling_guard_flags_the_pre_fix_media_contact_pattern():
+    """Non-vacuity (CPAT13-FIX-1112): the guard fails the old `[ \\t]*:?[ \\t]*` form and passes the shipped one."""
+    old_form = r"media[ \t]+contacts?[ \t]*:?[ \t]*[^\n]{0,9}?x"
+    assert _unsafe(old_form)
+    assert _unsafe(r"foo\s*-?\s*bar") and _unsafe(r"foo\s*[:,]?\s+bar") and _unsafe(r"a[ \t]+(?:x)?[ \t]*b")
+    assert not _unsafe(r"media[ \t]+contacts?[ \t]*(?::[ \t]*)?[^\n]{0,9}?x")
+    assert not _unsafe(r"foo\s*:\s*bar")
+
+
 def test_no_shipped_page_override_pattern_has_adjacent_unbounded_whitespace_quantifiers():
     """Sibling guard: whitespace quantifiers (`\\s*`, `\\s+`, `[ \\t]*`) must not sit next to each other, or be
-    separated only by an optional element, and `^\\s*` / `^\\s+` (newline-crossing after a MULTILINE anchor) is banned."""
-    w = r"(?:\\s|\[ \\t\])[*+]"
-    optional = r"(?:\?|\(\?:[^()]*\)\?)"
-    adjacent = re.compile(w + r"(?:" + optional + r")?" + w)
-    anchored = re.compile(r"\^\\s[*+]")
+    separated only by optional elements (`?`, `:?`, `(?:...)?`), and `^\\s*` / `^\\s+` (newline-crossing after a
+    MULTILINE anchor) is banned."""
+    n = 0
     for key, lst in _cfg()["page_override"].items():
         if not isinstance(lst, list):
             continue
         for p in lst:
             if not isinstance(p, str):
                 continue
-            assert not anchored.search(p), (key, p)
-            # a pattern may repeat a whitespace quantifier only with a mandatory literal between them
-            flat = re.sub(r"\(\?:\((?:[^()]|\([^()]*\))*\)\\s\*\)\?", "", p)  # drop the factored optional groups
-            assert not adjacent.search(flat), (key, p)
+            n += 1
+            assert not _unsafe(p), (key, p)
+    assert n >= 60
