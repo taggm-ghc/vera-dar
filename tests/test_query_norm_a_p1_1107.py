@@ -177,13 +177,17 @@ def test_start_off_returns_none_and_shadow_logs_counts_only(monkeypatch):
 
 def test_trace_allowlist_and_privacy():
     from vera import request_trace as rt
+    cfg0 = rt.CFG  # TEST-HARDEN-1113: restore the active config afterwards (db_sink was left disabled for later tests)
     c = json.loads(rt.CONFIG_PATH.read_text())
     c["db_sink"]["enabled"] = False
     rt.configure(c)
-    al = c["key_allowlist"]["query_norm"]
-    assert set(al["keys"]) == {"mode", "llm", "lat"} and al["reason"]
-    assert rt.clean_detail({"mode": "shadow", "llm": "ok", "lat": "lt500", "question": "x", "terms": "y"}, stage="query_norm") == \
-        {"mode": "shadow", "llm": "ok", "lat": "lt500", "dropped_keys": 2}
+    try:
+        al = c["key_allowlist"]["query_norm"]
+        assert set(al["keys"]) == {"mode", "llm", "lat"} and al["reason"]
+        assert rt.clean_detail({"mode": "shadow", "llm": "ok", "lat": "lt500", "question": "x", "terms": "y"}, stage="query_norm") == \
+            {"mode": "shadow", "llm": "ok", "lat": "lt500", "dropped_keys": 2}
+    finally:
+        rt.configure(cfg0)
 
 
 # ---- integration through ask_service._acquire_rounds: shadow = no behaviour change; on = one retry -------------------
