@@ -11,7 +11,7 @@ from tests import acq_support as A
 from tests import test_fulldoc_warm as tw
 from vera import acq_config, auto_acquire, fulldoc_corpus as fc, fulldoc_db, fulldoc_warm
 
-WAIT = 10.0
+WAIT = 60.0  # TEST-HARDEN-1113: a liveness ceiling (deadlock detector), not a speed bound; 10 s left only 2x margin under CPU load
 ENV = {**tw.ENV_DB}
 
 

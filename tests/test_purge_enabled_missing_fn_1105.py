@@ -8,6 +8,8 @@ import time
 from vera import request_trace as rt
 from vera import retention_purge as rp
 
+_CFG0 = rt.CFG  # TEST-HARDEN-1113 (P-1110-10 class): the config the process started with; tests restore it, not {"enabled": False}
+
 
 class ProgrammingError(Exception):
     """Stands in for sqlalchemy.exc.ProgrammingError (psycopg UndefinedFunction)."""
@@ -84,4 +86,4 @@ def test_writer_boot_and_requests_unaffected(caplog):
         assert "SECRETHOST" not in caplog.text
         assert w.thread.is_alive()
     finally:
-        rt.configure({"enabled": False})
+        rt.configure(_CFG0)  # TEST-HARDEN-1113: restore the shipped config, not "disabled"

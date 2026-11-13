@@ -341,8 +341,14 @@ def test_15_no_db_or_network_imports(monkeypatch):
     for path in (SRC, REGISTRY_SRC):  # B2's registry is imported by routing, so it is scanned too
         assert not [m for m in _imports(path) if _is_banned(m)], path.name
     mods = importlib.import_module("sys").modules
+    import vera as _vera_pkg
     for name in ("vera.domain_routing", "vera.domain_registry"):
         monkeypatch.delitem(mods, name, raising=False)
+        # TEST-HARDEN-1113 (P-1110-10 class): re-importing sets the NEW module as the package attribute, which
+        # monkeypatch does not undo; `from vera import domain_routing` in later tests then got a module that tests
+        # holding the old one (test_dar_qa_regressions) never patched. Restore the attribute at teardown.
+        short = name.rsplit(".", 1)[1]
+        monkeypatch.setattr(_vera_pkg, short, getattr(_vera_pkg, short, None), raising=False)
     before = set(mods)
     importlib.import_module("vera.domain_registry")
     importlib.import_module("vera.domain_routing")

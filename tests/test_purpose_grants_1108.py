@@ -14,6 +14,7 @@ from vera import public_fetch, purpose_grants as pg, request_trace as rt, robots
 
 CFG = json.loads(pg.CONFIG_PATH.read_text(encoding="utf-8"))
 RT_BASE = json.loads(rt.CONFIG_PATH.read_text(encoding="utf-8"))
+_RT_CFG0 = rt.CFG  # the config the process started with (TEST-HARDEN-1113)
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +26,7 @@ def _reset():
     yield
     pg.reset_for_tests()
     rt.end_context()
+    rt.configure(_RT_CFG0)  # TEST-HARDEN-1113: restore the config the process started with (db_sink was left disabled)
 
 
 def cl(text, channel="robots_comment"):

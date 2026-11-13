@@ -261,19 +261,23 @@ def test_s2_trickling_server_killed_by_watchdog():
         def __init__(self):
             super().__init__(200, {"Content-Type": "text/html"})
 
+        woken = []
+
         def iter_content(self, n):
             yield b"<p>"
-            ev.wait(30)  # blocked in recv until the watchdog closes the response
+            self.woken.append(ev.wait(30))  # blocked in recv until the watchdog closes the response
             raise OSError("closed")
 
         def close(self):
             ev.set()
     cfg = {**CFG, "timeout_s": 0.3}
-    n = Net(GOOD, {**OKPAGES, ("a.example", "/p"): Trickle()})
-    t0 = _t.monotonic()
+    tr = Trickle()
+    n = Net(GOOD, {**OKPAGES, ("a.example", "/p"): tr})
     with pytest.raises(pf.FetchRefused) as e:
         pf.fetch("https://a.example/p", cfg, resolve=n.resolve, transport=n.transport)
-    assert e.value.reason == "timeout" and _t.monotonic() - t0 < 5
+    # TEST-HARDEN-1113 (P-1110-05): no elapsed-time bound. True means close() woke the read: the watchdog fired. A dead
+    # watchdog would leave ev.wait to its 30 s expiry and record False.
+    assert e.value.reason == "timeout" and tr.woken == [True]
 
 
 def test_s2_dns_lookup_is_bounded():
@@ -380,13 +384,22 @@ def test_fetch_itself_persists_and_logs_nothing():
 import warnings  # noqa: E402
 
 
-@pytest.mark.parametrize("junk", ["a;" * 2_000_000, "/*" * 2_000_000, "a{" * 2_000_000, "}" * 4_000_000,
-                                  "@media{" * 500_000, "x:y;" * 1_000_000])
-def test_n1_adversarial_style_is_linear(junk):
-    import time as _t
-    t0 = _t.monotonic()
-    out = pf.extract_visible_text("<style>" + junk + "</style><p>ok</p>")
-    assert out == "ok" and _t.monotonic() - t0 < 1.0
+@pytest.mark.parametrize("unit,count", [("a;", 2_000_000), ("/*", 2_000_000), ("a{", 2_000_000), ("}", 4_000_000),
+                                        ("@media{", 500_000), ("x:y;", 1_000_000)])
+def test_n1_adversarial_style_is_linear(unit, count):
+    # TEST-HARDEN-1113 (P-1110-05): load-independent replacement for the 1.0 s wall-clock bound. Measured at 2942af4: the
+    # style scan is quadratic for "a{" and "@media{" up to an internal input cap (about 330k characters) and flat above
+    # it (0.45 s CPU worst case). So the check is (1) flatness above the cap: CPU at full size over CPU at one eighth of
+    # it must stay under RATIO_BOUND (linear 8, flat 1, uncapped quadratic 64), and (2) the full-size cost relative to a
+    # fixed reference loop (host speed cancels out), with a loose CPU backstop.
+    from tests import growth_support as gs
+    page = lambda k: "<style>" + unit * k + "</style><p>ok</p>"  # noqa: E731
+    assert len(unit) * (count // 8) >= 100_000
+    r = gs.growth_ratio(pf.extract_visible_text, page, count // 8)
+    assert r <= gs.RATIO_BOUND, (unit, round(r, 1))
+    full = page(count)
+    assert pf.extract_visible_text(full) == "ok"
+    assert gs.normalized_cost(pf.extract_visible_text, full) <= 100, unit
 
 
 def test_n1_extraction_runs_under_deadline():
@@ -402,18 +415,22 @@ def test_s2_header_trickle_bounded():
     ev = threading.Event()
     closed = []
 
+    returned, closed_ev = [], threading.Event()
+
     def slow(host, ip, port, target, headers, timeout):
         ev.wait(20)  # a server trickling response headers: the transport never returns in time
-        return type("R", (), {"close": lambda self: closed.append(1)})()
+        returned.append(1)
+        return type("R", (), {"close": lambda self: (closed.append(1), closed_ev.set())})()
     cfg = {**CFG, "timeout_s": 0.3}
     n = Net(GOOD, OKPAGES)
-    t0 = _t.monotonic()
     with pytest.raises(pf.FetchRefused) as e:
         pf.fetch("https://a.example/p", cfg, resolve=n.resolve, transport=slow)
-    assert e.value.reason in ("timeout", "robots", "robots_unreadable") and _t.monotonic() - t0 < 5
+    # TEST-HARDEN-1113 (P-1110-05): no elapsed-time bound. fetch gave up while the transport was still blocked, so the
+    # watchdog join (not the transport finishing) ended it.
+    assert e.value.reason in ("timeout", "robots", "robots_unreadable") and not returned and not ev.is_set()
     ev.set()
-    _t.sleep(0.2)
-    assert closed  # a late response is closed, not leaked
+    assert closed_ev.wait(10)  # hang guard, not a performance bound; a late response is closed, not leaked
+    assert closed
 
 
 class Slot:
@@ -465,10 +482,10 @@ def test_r3_moderate_offscreen_absolute_dropped_but_relative_kept():
 def test_r3_abandoned_workers_are_unblocked_and_bounded():
     import threading
     import time as _t
-    base = threading.active_count()
-    started = []
+    started, workers = [], []
 
     def hang(host, ip, port, target, headers, timeout):
+        workers.append(threading.current_thread())
         ev = threading.Event()
         pf.register_abort(ev.set)  # what default_transport does with the live socket
         started.append(1)
@@ -478,9 +495,12 @@ def test_r3_abandoned_workers_are_unblocked_and_bounded():
         with pytest.raises(pf.FetchRefused) as e:
             pf._call_transport(hang, ("h", "1.2.3.4", 443, "/", {}, 0.05), 0.05)
         assert e.value.reason == "timeout"
-    _t.sleep(0.5)
-    assert threading.active_count() <= base + 1  # aborted workers exited; no growth
-    assert len(started) == 30
+    # TEST-HARDEN-1113 (P-1110-05): join the 30 recorded workers (hang guard 10 s each) instead of a fixed sleep and a
+    # process-wide thread count that depends on what earlier tests left running.
+    for w in workers:
+        w.join(10)
+    assert not [w for w in workers if w.is_alive()]  # aborted workers exited; no growth
+    assert len(started) == 30 and len(workers) == 30
 
 
 def test_r3_busy_past_cap():
