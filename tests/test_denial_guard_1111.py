@@ -196,7 +196,8 @@ def test_t10_d7_d8_shaped_callers_and_public_fetch_rebuilt_url(monkeypatch):
     assert n2.count(f"{H}:8443", "/q") == 1
 
 
-def test_wiki_ref_portal_get_article_maps_the_refusal_to_unreachable(monkeypatch):
+def test_wiki_ref_portal_get_article_maps_the_refusal_to_access_denied(monkeypatch):
+    # WPF-FOLLOW-1113: was "unreachable" (WPF-VERIFY-1112 defect 4, brief rule 9); the request count is unchanged
     from vera import wiki_ref_portal as w
     n = net(monkeypatch, {("en.wikipedia.org", "/wiki/X"): [Resp(403)]})
     cfg = {"article_host": "en.wikipedia.org", "allowed_hosts": ["en.wikipedia.org"], "timeout_s": 5,
@@ -205,7 +206,7 @@ def test_wiki_ref_portal_get_article_maps_the_refusal_to_unreachable(monkeypatch
     for _ in range(2):
         with pytest.raises(w.PortalError) as ei:
             w.get_article("https://en.wikipedia.org/wiki/X", cfg, **args)
-        assert ei.value.args[0] == "unreachable" or str(ei.value) == "unreachable"
+        assert str(ei.value) == "access_denied"
     assert n.count("en.wikipedia.org", "/wiki/X") == 1
 
 
@@ -278,7 +279,7 @@ def test_d8_reference_portal_fetch_page_does_not_rerequest_a_403(monkeypatch):
     for _ in range(2):
         with pytest.raises(rp.Skip) as ei:
             rp.fetch_page(url, {"rate_portal": "wikipedia"}, cfg, deps, lambda: 0.0, None)
-        assert str(ei.value) in ("unreachable", ei.value.args[0] if ei.value.args else "unreachable")
+        assert ei.value.code == "access_denied"  # WPF-FOLLOW-1113: the old assertion was always true (vacuous)
     assert n.count("en.wikipedia.org", "/wiki/Denied_Page") == 1
 
 

@@ -378,10 +378,15 @@ def get_article(url: str, cfg: Mapping, *, http_get: Callable, url_check: Callab
                                 timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
             end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
         except Exception as e:  # noqa: BLE001
+            from vera import selective_fetch
+            if isinstance(e, selective_fetch.DocumentDenied):  # WPF-FOLLOW-1113: an earlier 401/403, nothing sent
+                raise PortalError("access_denied") from None
             raise PortalError("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)
         if status == 429:
             raise PortalError("rate_limited")
+        if status in (401, 403):  # WPF-FOLLOW-1113: an access denial is not "unreachable" (brief rule 9)
+            raise PortalError("access_denied")
         if status != 200:
             raise PortalError("unreachable")  # redirects included: never followed
         ctype = ((getattr(resp, "headers", None) or {}).get("Content-Type") or "").split(";")[0].strip().lower()
@@ -479,8 +484,9 @@ def api_search(query: str, host: str, n: int, cfg: Mapping, *, get: Callable | N
     resp = (get or _api_get)(ep, params, {"User-Agent": str(cfg["user_agent"]), "Accept": "application/json"},
                              float(a.get("timeout_s", cfg["timeout_s"])))
     try:
-        if int(getattr(resp, "status_code", 0) or 0) != 200:
-            raise PortalError("rate_limited" if int(getattr(resp, "status_code", 0) or 0) == 429 else "unreachable")
+        st = int(getattr(resp, "status_code", 0) or 0)
+        if st != 200:  # WPF-FOLLOW-1113: a 401/403 from the search API is a route denial, not "unreachable"
+            raise PortalError("rate_limited" if st == 429 else "route_denied" if st in (401, 403) else "unreachable")
         body = getattr(resp, "content", b"") or b""
         if len(body) > int(a.get("max_response_bytes", 200000)):
             raise PortalError("too_large")
