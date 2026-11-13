@@ -40,7 +40,8 @@
       "It then describes what the collection covers. When a checked description is available, the page shows a short description of the collection and its current coverage. That description was written by a language model. The page says so, gives the date it was written, and the description may be imperfect.",
       "When no checked description is available, the page lists the subjects that occur most often in the titles of the stored sources. This list is built by a program from those titles, without a language model, and it is a rough guide to what the collection covers, not a complete list.",
       "The page does not yet show how many sources belong to each subject, because VERA-DAR's way of assigning sources to subjects has not been validated.",
-      "The page never names an individual source."
+      "The page never names an individual source.",
+      "It also gives how many documents and stored passages have no subject label; those labels are assigned automatically by a program that has not been validated, and are approximate."
     ]
   },
   "how_to_use": {

@@ -277,7 +277,7 @@ def test_description_line_ignores_summary_model_and_unknown_fields():
     assert "written by a language model on 2026" in joined and "groq" not in joined and SENT_MODEL not in joined
     assert sb.CORPUS_FIELDS == {"summary_source", "source_count", "corpus_updated_at", "summary", "topics",
                                 "summary_generated_at", "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects",
-                                "stored_taxonomy"}
+                                "stored_taxonomy", "unlabelled"}
 
 
 def test_model_written_description_naming_a_backend_is_replaced():

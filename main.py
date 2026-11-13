@@ -428,6 +428,7 @@ class CorpusDescription(BaseModel):
     published_years: list[str] | None = None  # CORPUS-INTERIM-1108: [first, last] publication year
     frequent_subjects: list[str] | None = None  # CORPUS-INTERIM-1108: frequent multi-word subject phrases from titles (no counts, no titles)
     stored_taxonomy: dict | None = None  # WP6: stored per-chunk labels aggregated (flag corpus_description.stored_taxonomy.enabled, default off; key omitted from the response when None)
+    unlabelled: dict | None = None  # CORPUS-UNCAT-1113: counts of documents/passages with no stored subject label (flag corpus_description.unlabelled_share.enabled; key omitted when None)
     summary_source: str
     summary_generated_at: str | None = None
     summary_model: str | None = None
@@ -435,8 +436,9 @@ class CorpusDescription(BaseModel):
     @model_serializer(mode="wrap")
     def _drop_absent_stored_taxonomy(self, handler):
         d = handler(self)  # WP6: flag off (default) keeps the exact previous key set
-        if d.get("stored_taxonomy") is None:
-            d.pop("stored_taxonomy", None)
+        for k in ("stored_taxonomy", "unlabelled"):
+            if d.get(k) is None:
+                d.pop(k, None)
         return d
 
 

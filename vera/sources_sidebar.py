@@ -65,7 +65,7 @@ NAV = (("streamlit_app.py", "Ask VERA-DAR"), ("pages/vera_demo.py", "Report"), (
 # K3.I: the only fields render_corpus reads from the API body (deny by default; `summary_model` is never read).
 CORPUS_FIELDS = frozenset({"summary_source", "source_count", "corpus_updated_at", "summary", "topics", "summary_generated_at",
                            "coverage", "topic_shares", "subject_areas", "published_years", "frequent_subjects",
-                           "stored_taxonomy"})
+                           "stored_taxonomy", "unlabelled"})
 # D7 (DIGEST-IMPROVE-1105): the digest sample includes the full documents stored as passages, first; the label says how
 # many of the sampled sources they are. SAMPLE_EXCLUSION is kept only for digests built before that change (their
 # topic_shares carry no full_documents_in_sample key, and their sample excluded those documents).
@@ -341,6 +341,36 @@ def render_stored_taxonomy(st, data: dict | None) -> None:
     API sent a stored_taxonomy block (flag corpus_description.stored_taxonomy.enabled; default off sends none)."""
     for line in taxonomy_lines(data.get("stored_taxonomy") if isinstance(data, dict) else None):
         st.caption(line)
+
+
+def _unl_pct(u: int, n: int) -> str:
+    """CORPUS-UNCAT-1113: share u of n as text; never rounds a non-zero share to 0% or a partial share to 100%."""
+    if u == 0:
+        return "0%"
+    if u == n:
+        return "100%"
+    p = (200 * u + n) // (2 * n)  # rounded half up, integer arithmetic
+    return "under 1%" if p < 1 else "over 99%" if p >= 100 else f"{p}%"
+
+
+def unlabelled_line(data) -> str | None:
+    """CORPUS-UNCAT-1113: code-built caption stating how many documents and stored passages have no stored subject label, from the
+    API's `unlabelled` block. No model text, no source names. None for a missing or malformed payload."""
+    try:
+        v = {k: data[k] for k in ("documents", "documents_unlabelled", "documents_without_passages", "passages", "passages_unlabelled")}
+        if any(type(x) is not int or x < 0 for x in v.values()):
+            return None
+        n, u, x, nc, uc = v["documents"], v["documents_unlabelled"], v["documents_without_passages"], v["passages"], v["passages_unlabelled"]
+        if n == 0 or u > n or x > n or uc > nc:
+            return None
+    except (KeyError, TypeError):
+        return None
+    xc = f", including {x:,} with no stored passages, which the labelling program cannot label" if x > 0 else ""
+    pc = f"; {uc:,} of {nc:,} stored passages ({_unl_pct(uc, nc)}) have none" if nc > 0 else ""
+    return (f"**Subject labels:** {u:,} of {n:,} documents ({_unl_pct(u, n)}) have no stored subject label "
+            f"(no main label and no labelled passage){xc}{pc}. Documents not yet processed by the labelling program and those outside "
+            "its subject list are not told apart. Labels are assigned automatically and are approximate; "
+            "a document stored in several versions is counted once.")
 
 
 def render_corpus(st, data: dict | None) -> None:
