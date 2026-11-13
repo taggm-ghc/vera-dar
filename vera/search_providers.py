@@ -1382,9 +1382,12 @@ def landing_doi(url: str, timeout_s: float, max_bytes: int, *, get: Callable | N
     import time as _t
     clock = clock or _t.monotonic
     if robots_ok is None:
-        robots_ok = _landing_robots(acq, get, url_check,
-                                    clock() + timeout_s if deadline is None else min(deadline, clock() + timeout_s),
-                                    clock)
+        # LANDING-CLOCK-1112: the robots deadline is the CALLER's (None = none), not landing start + timeout_s. A fixed
+        # start-time deadline made this hop's host-slot wait and the limiter's wait (both our own pacing) count
+        # against robots.txt, so _b_get ended it as "deadline" (not cached) and the landing DOI was skipped. _b_get
+        # credits the limiter wait (rate_limit.wait_tally) up to this caller deadline; a slow host still times out on
+        # _b_get's own per-fetch timeout, and the hop budget below is unchanged.
+        robots_ok = _landing_robots(acq, get, url_check, deadline, clock)
     cur = url
     try:
         for _hop in range(3):
