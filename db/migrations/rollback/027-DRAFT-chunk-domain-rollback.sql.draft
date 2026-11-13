@@ -1,0 +1,45 @@
+-- 027_chunk_domain rollback. WP-D-1113 DRAFT. NOT EXECUTED. OWNER-ONLY, admin-run, never via db/apply_migrations.py.
+-- A prepared undo path that is never expected to run (OD-1031-ROLLBACK-KEEP). Drops vera_vjay.tax_chunk_domain (its trigger, indexes and constraints
+-- go with it). Nothing else is touched: no CASCADE; the 020 function tax_link_guard_trgfn(), tax_domains, evidence_spans and every role are unchanged.
+-- DATA-SAFE: it REFUSES while any row exists (the rows are derived from topic links and can be rewritten by the job, but they are still data).
+-- To roll back anyway, the owner first exports (rollback_027.sh --export), then runs this file with -v purge_rows=1.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v purge_rows=1] -f <this file>   (own BEGIN/COMMIT; any error rolls everything back).
+\if :{?purge_rows}
+\else
+  \set purge_rows 0
+\endif
+\if :{?expect_rows}
+\else
+  \set expect_rows -1
+\endif
+BEGIN;
+SELECT set_config('vera027rb.purge', :'purge_rows', true), set_config('vera027rb.expect', :'expect_rows', true);
+SET LOCAL lock_timeout = '5s';
+SET LOCAL search_path = pg_catalog, pg_temp;
+
+DO $$
+DECLARE cnt bigint;
+BEGIN
+  IF pg_catalog.to_regclass('vera_vjay.tax_chunk_domain') IS NULL THEN
+    RAISE EXCEPTION '027 rollback: table tax_chunk_domain is missing (027 not applied or already rolled back); nothing done.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid = pg_catalog.to_regclass('vera_vjay.tax_chunk_domain')
+                  AND pg_catalog.pg_get_userbyid(c.relowner) = current_user) THEN
+    RAISE EXCEPTION '027 rollback must run as the owner of tax_chunk_domain.';
+  END IF;
+  LOCK TABLE vera_vjay.tax_chunk_domain IN ACCESS EXCLUSIVE MODE;
+  SELECT count(*) INTO cnt FROM vera_vjay.tax_chunk_domain;
+  RAISE NOTICE '027 rollback: % rows in tax_chunk_domain', cnt;
+  -- the owner script passes -v expect_rows=<count it exported>; the job may have written rows since: refuse rather than purge unexported rows
+  IF current_setting('vera027rb.expect')::bigint >= 0 AND cnt <> current_setting('vera027rb.expect')::bigint THEN
+    RAISE EXCEPTION '027 rollback refused: % rows now, % expected (rows were written after the export); export again.', cnt, current_setting('vera027rb.expect');
+  END IF;
+  IF cnt > 0 AND current_setting('vera027rb.purge') <> '1' THEN
+    RAISE EXCEPTION '027 rollback refused: % rows exist. Export them, then re-run with -v purge_rows=1.', cnt;
+  END IF;
+  IF cnt > 0 THEN RAISE NOTICE '027 rollback: dropping % rows (purge_rows=1)', cnt; END IF;
+END $$;
+
+DROP TABLE vera_vjay.tax_chunk_domain;
+
+COMMIT;

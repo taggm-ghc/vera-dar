@@ -1,0 +1,179 @@
+-- 027_chunk_domain.sql
+-- Filename deliberately does not match apply_migrations.py's `{prefix}_vera_*.sql` glob (convention of 007/011/012/017/020/022/024); rename only at approval.
+-- WP-D-1113 (plan work/CHUNK-ASSOC-1113, D4, OD-A) DRAFT. NOT EXECUTED. UNTESTED against a real PostgreSQL. APPLYING IT NEEDS OWNER-APPROVED DDL in
+-- that turn (AGENTS.md section 7), admin-run only, rehearsal first (work/WP-D-1113/scripts/rehearse_027.sh in vera_dar_rehearsal), never via
+-- db/apply_migrations.py.
+-- Owner, 2026-11-13: "each chunk is supposed to have records in chunk-sub-topic; chunk-topic; chunk-domain; and chunk-source doc tables" and, on OD-A
+--   (a new chunk-domain table), "yes". The tax_ schema has tax_chunk_subtopic and tax_chunk_topic but no chunk-to-domain table (007's domain_chunks
+--   holds a different domain list and is not reused).
+-- Objects (prefix tax_): ONE new table, tax_chunk_domain, mirroring tax_chunk_topic of migration 020 column for column:
+--   link_id (identity pk), span_id (FK evidence_spans, the chunk), domain_id (FK tax_domains), assigned_via, classifier_name, classifier_version,
+--   score, score_kind, state active|retired, created_at, retired_at; the same CHECK constraints, the partial unique index on (span_id, domain_id)
+--   WHERE state = 'active', one partial index on domain_id, and the 020 link guard trigger (an app role may only insert active rows and only retire
+--   an active row; retired_at is set by the database; a retired row is final).
+--   No view, function, seed row or other object is created. No existing object is altered. The existing 020 function
+--   vera_vjay.tax_link_guard_trgfn() is reused (not replaced).
+-- Writers: the in-app chunk-taxonomy job (vera/chunk_domain_writer.py, called from vera/chunk_taxo_job.py) through the rw app path only, in the same
+--   transaction as the topic links. Until this table exists the job records domain_table_absent and writes nothing here.
+-- FKs are ON DELETE RESTRICT (as 020): app roles have no DELETE; retire, never delete.
+-- Grants (default deny; rw and ro ONLY, as 020): rw SELECT + column INSERT (span_id, domain_id, assigned_via, classifier_name, classifier_version,
+--   score, score_kind) + column UPDATE (state); ro SELECT; vera_vjay_wo and PUBLIC get nothing (D2 of 020). Identity sequence: no app privilege.
+-- REQUIRES: PostgreSQL 16 or newer; applied 003 (evidence_spans, BIGINT PK span_id) and 020 (tax_domains, tax_link_guard_trgfn); group roles
+--   vera_vjay_rw/_ro/_wo and the app logins (db/accounts/create_vera_accounts.sql). INDEPENDENT of 022, 024, 025 and 026. Strictly additive.
+-- RUN WITH: psql -X -v ON_ERROR_STOP=1 [-v app_rw_login=.. -v app_ro_login=..] -f <this file>   (own BEGIN/COMMIT).
+\if :{?app_rw_login}
+\else
+  \set app_rw_login vera_claude_code_rw
+\endif
+\if :{?app_ro_login}
+\else
+  \set app_ro_login vera_eval_ro
+\endif
+BEGIN;
+SET LOCAL lock_timeout = '5s';   -- the FK briefly locks evidence_spans and tax_domains; never queue behind ingest for long
+SET LOCAL search_path = pg_catalog, pg_temp;   -- as 026: every reference below is schema-qualified; this also pins CHECK/default binding at CREATE time
+SELECT set_config('vera027.rw', :'app_rw_login', true), set_config('vera027.ro', :'app_ro_login', true);
+
+-- Preflight 1: PG16+; evidence_spans keyed by BIGINT span_id; 020 present (tax_domains keyed by domain_id, link guard function); nothing this file
+-- creates exists (strictly additive; a second run is refused here).
+DO $$
+BEGIN
+  IF pg_catalog.current_setting('server_version_num')::int < 160000 THEN
+    RAISE EXCEPTION '027 requires PostgreSQL 16 or newer.';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.evidence_spans') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                     WHERE c.conrelid = 'vera_vjay.evidence_spans'::pg_catalog.regclass AND c.contype IN ('p','u')
+                       AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'span_id' AND a.atttypid = 'pg_catalog.int8'::pg_catalog.regtype) THEN
+    RAISE EXCEPTION '027 requires vera_vjay.evidence_spans keyed by BIGINT span_id (migration 003).';
+  END IF;
+  IF pg_catalog.to_regclass('vera_vjay.tax_domains') IS NULL
+     OR NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+                     WHERE c.conrelid = 'vera_vjay.tax_domains'::pg_catalog.regclass AND c.contype IN ('p','u')
+                       AND pg_catalog.array_length(c.conkey, 1) = 1 AND a.attname = 'domain_id' AND a.atttypid = 'pg_catalog.int8'::pg_catalog.regtype) THEN
+    RAISE EXCEPTION '027 requires vera_vjay.tax_domains keyed by BIGINT domain_id (migration 020).';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace ns ON ns.oid = p.pronamespace
+                  WHERE ns.nspname = 'vera_vjay' AND p.proname = 'tax_link_guard_trgfn' AND p.prorettype = 'pg_catalog.trigger'::pg_catalog.regtype) THEN
+    RAISE EXCEPTION '027 requires the 020 trigger function vera_vjay.tax_link_guard_trgfn().';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace ns ON ns.oid = c.relnamespace
+              WHERE ns.nspname = 'vera_vjay' AND c.relname LIKE 'tax\_chunk\_domain%') THEN
+    RAISE EXCEPTION '027 already applied or name collision (tax_chunk_domain).';
+  END IF;
+END $$;
+
+-- Preflight 2 (as 020/022/024/026): roles exist; logins inherit their groups; the account running this file is not an app role nor reachable from one.
+DO $$
+DECLARE g text; l text; pr text[][] := ARRAY[['vera_vjay_rw', current_setting('vera027.rw')], ['vera_vjay_ro', current_setting('vera027.ro')]];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo') THEN
+    RAISE EXCEPTION '027 requires group role vera_vjay_wo (db/accounts/create_vera_accounts.sql first).';
+  END IF;
+  FOR i IN 1 .. 2 LOOP
+    g := pr[i][1]; l := pr[i][2];
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = g) THEN
+      RAISE EXCEPTION '027 requires group role % (db/accounts/create_vera_accounts.sql first).', g;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = l) THEN
+      RAISE EXCEPTION '027 requires login role % (override with -v app_*_login=...).', l;
+    END IF;
+    IF NOT pg_catalog.pg_has_role(l, g, 'USAGE') THEN
+      RAISE EXCEPTION '027: login role % does not inherit group role %.', l, g;
+    END IF;
+  END LOOP;
+  IF current_user = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera027.rw'), current_setting('vera027.ro')])
+     OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles r ON r.oid = m.roleid JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                 WHERE r.rolname IN ('vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera027.rw'), current_setting('vera027.ro'))
+                   AND (m.inherit_option OR m.set_option)
+                   AND u.rolname IN (current_user::pg_catalog.text, session_user::pg_catalog.text)) THEN
+    RAISE EXCEPTION '027 must not run as, or as a member of, an app group or login role: the table owner is unrestricted.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles a
+              WHERE a.rolname = ANY (ARRAY['vera_vjay_rw','vera_vjay_ro','vera_vjay_wo', current_setting('vera027.rw'), current_setting('vera027.ro')])
+                AND (pg_catalog.pg_has_role(a.rolname, current_user, 'MEMBER') OR pg_catalog.pg_has_role(a.rolname, session_user, 'MEMBER'))) THEN
+    RAISE EXCEPTION '027: an app group or login role can reach the account running this file; it would reach the table owner.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 1. tax_chunk_domain: the 020 tax_chunk_topic shape with domain_id in place of topic_id. 13 constraints: pk, span_fk, domain_fk, via, cname, cver,
+--    score, skind, state, prov, cpair, spair, ret. Indexes: tax_chunk_domain_active_uq, tax_chunk_domain_domain_idx. One trigger.
+--    assigned_via, classifier_name, classifier_version, score, score_kind keep the 020 meaning (score_kind NULL or 'cosine' reads as strict).
+-- ---------------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE vera_vjay.tax_chunk_domain (
+    link_id     BIGINT GENERATED ALWAYS AS IDENTITY CONSTRAINT tax_chunk_domain_pk PRIMARY KEY,
+    span_id     BIGINT NOT NULL CONSTRAINT tax_chunk_domain_span_fk REFERENCES vera_vjay.evidence_spans (span_id) ON DELETE RESTRICT,
+    domain_id   BIGINT NOT NULL CONSTRAINT tax_chunk_domain_domain_fk REFERENCES vera_vjay.tax_domains (domain_id) ON DELETE RESTRICT,
+    assigned_via TEXT NOT NULL CONSTRAINT tax_chunk_domain_via_chk CHECK (assigned_via IN ('registry_sync','curator','classifier','backfill')),
+    classifier_name TEXT CONSTRAINT tax_chunk_domain_cname_chk CHECK (classifier_name IS NULL OR classifier_name ~ '^[a-z][a-z0-9_.-]{1,63}$'),
+    classifier_version TEXT CONSTRAINT tax_chunk_domain_cver_chk CHECK (classifier_version IS NULL OR classifier_version ~ '^[ -~]{1,128}$'),
+    score       DOUBLE PRECISION CONSTRAINT tax_chunk_domain_score_chk CHECK (score IS NULL OR (score > '-Infinity'::float8 AND score < 'Infinity'::float8)),
+    score_kind  TEXT CONSTRAINT tax_chunk_domain_skind_chk CHECK (score_kind IS NULL OR score_kind ~ '^[a-z][a-z0-9_]{1,31}$'),
+    state       TEXT NOT NULL DEFAULT 'active' CONSTRAINT tax_chunk_domain_state_chk CHECK (state IN ('active','retired')),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    retired_at  TIMESTAMPTZ,
+    CONSTRAINT tax_chunk_domain_prov_chk CHECK ((assigned_via IN ('registry_sync','curator')) OR (classifier_name IS NOT NULL AND classifier_version IS NOT NULL)),
+    CONSTRAINT tax_chunk_domain_cpair_chk CHECK ((classifier_name IS NULL) = (classifier_version IS NULL)),
+    CONSTRAINT tax_chunk_domain_spair_chk CHECK ((score IS NULL) = (score_kind IS NULL)),
+    CONSTRAINT tax_chunk_domain_ret_chk CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX tax_chunk_domain_active_uq ON vera_vjay.tax_chunk_domain (span_id, domain_id) WHERE state = 'active';
+CREATE INDEX tax_chunk_domain_domain_idx ON vera_vjay.tax_chunk_domain (domain_id) WHERE state = 'active';
+
+-- Link guard (the 020 function, reused): an app role may only insert active rows and only retire an active row; a retired row is final.
+CREATE TRIGGER tax_chunk_domain_guard_trg BEFORE INSERT OR UPDATE ON vera_vjay.tax_chunk_domain FOR EACH ROW EXECUTE FUNCTION vera_vjay.tax_link_guard_trgfn();
+
+-- ---------------------------------------------------------------------------------------------------------------------------------
+-- 2. Grants: default deny, then exact grants to the rw and ro groups only (as 020 for tax_chunk_topic).
+-- ---------------------------------------------------------------------------------------------------------------------------------
+REVOKE ALL ON vera_vjay.tax_chunk_domain FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro;
+DO $$ BEGIN
+  EXECUTE pg_catalog.format('REVOKE ALL ON vera_vjay.tax_chunk_domain FROM %I, %I', current_setting('vera027.rw'), current_setting('vera027.ro'));
+  -- Identity sequence: 001/001u default privileges give vera_vjay_rw USAGE on new sequences; identity INSERTs need none (as 020, review S1).
+  EXECUTE pg_catalog.format('REVOKE ALL ON SEQUENCE %s FROM PUBLIC, vera_vjay_wo, vera_vjay_rw, vera_vjay_ro, %I, %I',
+    pg_catalog.pg_get_serial_sequence('vera_vjay.tax_chunk_domain', 'link_id'), current_setting('vera027.rw'), current_setting('vera027.ro'));
+END $$;
+GRANT SELECT ON vera_vjay.tax_chunk_domain TO vera_vjay_rw, vera_vjay_ro;
+GRANT INSERT (span_id, domain_id, assigned_via, classifier_name, classifier_version, score, score_kind) ON vera_vjay.tax_chunk_domain TO vera_vjay_rw;
+GRANT UPDATE (state) ON vera_vjay.tax_chunk_domain TO vera_vjay_rw;
+
+-- Final privilege check against the actual logins (inside the transaction: a RAISE rolls everything back).
+DO $$
+DECLARE
+  rw text := current_setting('vera027.rw'); ro text := current_setting('vera027.ro');
+  t text := 'vera_vjay.tax_chunk_domain'; r text; p text; c text;
+  ins text[] := ARRAY['span_id','domain_id','assigned_via','classifier_name','classifier_version','score','score_kind']::text[];
+  upd text[] := ARRAY['state']::text[];
+BEGIN
+  FOREACH r IN ARRAY ARRAY[rw, ro] LOOP
+    IF NOT pg_catalog.has_table_privilege(r, t, 'SELECT') THEN RAISE EXCEPTION '027 grant check failed: login % needs SELECT on %.', r, t; END IF;
+    FOREACH p IN ARRAY ARRAY['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] LOOP
+      IF pg_catalog.has_table_privilege(r, t, p) THEN RAISE EXCEPTION '027 grant check failed: login % holds table-wide % on %.', r, p, t; END IF;
+    END LOOP;
+  END LOOP;
+  FOR c IN SELECT a.attname FROM pg_catalog.pg_attribute a WHERE a.attrelid = t::pg_catalog.regclass AND a.attnum > 0 AND NOT a.attisdropped LOOP
+    IF pg_catalog.has_column_privilege(rw, t, c, 'INSERT') <> (c = ANY (ins)) THEN
+      RAISE EXCEPTION '027 grant check failed: column INSERT for login % is wrong on %.%.', rw, t, c;
+    END IF;
+    IF pg_catalog.has_column_privilege(rw, t, c, 'UPDATE') <> (c = ANY (upd)) THEN
+      RAISE EXCEPTION '027 grant check failed: column UPDATE for login % is wrong on %.%.', rw, t, c;
+    END IF;
+    IF pg_catalog.has_column_privilege(ro, t, c, 'INSERT') OR pg_catalog.has_column_privilege(ro, t, c, 'UPDATE') THEN
+      RAISE EXCEPTION '027 grant check failed: ro login holds a column write privilege on %.%.', t, c;
+    END IF;
+  END LOOP;
+  -- wo and PUBLIC hold nothing on the new table or its identity sequence; no app role or PUBLIC holds a privilege on the sequence.
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k, pg_catalog.aclexplode(k.relacl) x
+              WHERE k.oid = t::pg_catalog.regclass AND (x.grantee = 0 OR x.grantee = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'vera_vjay_wo'))) THEN
+    RAISE EXCEPTION '027 grant check failed: PUBLIC or vera_vjay_wo holds a privilege on %.', t;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_class k, pg_catalog.aclexplode(k.relacl) x
+              WHERE k.oid = pg_catalog.pg_get_serial_sequence(t, 'link_id')::pg_catalog.regclass
+                AND (x.grantee = 0 OR x.grantee IN (SELECT oid FROM pg_catalog.pg_roles
+                                                     WHERE rolname IN ('vera_vjay_wo','vera_vjay_rw','vera_vjay_ro', rw, ro)))) THEN
+    RAISE EXCEPTION '027 grant check failed: an app role or PUBLIC holds a privilege on the tax_chunk_domain identity sequence.';
+  END IF;
+END $$;
+
+COMMIT;

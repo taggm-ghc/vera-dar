@@ -31,6 +31,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+from vera import chunk_domain_writer as domain_writer  # WP-D-1113
 from vera import chunk_taxo_store as store
 from vera import fulltext_loader  # module level on purpose: test_chunk_taxo_mem_1109 traces allocations from j.run() onward
 from vera.chunk_taxo_embed import Deferred, EmbedError, load_embedder
@@ -223,6 +224,9 @@ def _similarity(distance):
 
 
 class Job:
+    _dom = None  # WP-D-1113: per-pass domain-writer state (set in _reset_run); None for a Job built without __init__
+    _dom_scores = None
+
     def __init__(self, cfg=None, core=None, embedder=None, engine_factory=None, env=None, clock=time.monotonic, wall=time.time,
                  rss_reader=None):
         self.cfg = cfg if isinstance(cfg, dict) else {}
@@ -614,6 +618,8 @@ class Job:
         self._vote_rows = []
         self._retire_keys = []
         self._run_new_nodes = 0
+        self._dom = domain_writer.new_state(self.jcfg.get("chunk_domain_write") is not False)  # WP-D-1113 (kill switch: literal false)
+        self._dom_scores = {}  # WP-D-1113: {span_id: (cosine, kind)} from _do_build
         self._run_id = None
         self._pass_neurons = 0.0
         self.metrics_run = {}
@@ -832,6 +838,7 @@ class Job:
         chunks = [(c["span_id"], c["source_id"], c["text"]) for c in self._chunks]  # C1 contract: (span_id, source_id, text)
         model = core.build(chunks, vecs, params, prior=prior)
         metrics = core.quality(model, vecs)
+        self._dom_scores = domain_writer.domain_scores(model, vecs) if self._dom.enabled else {}  # WP-D-1113
         ok, reasons = core.display_gate(metrics, self.cfg.get("display_gate"))
         self._pending = SimpleNamespace(model=model, metrics=metrics, ok=bool(ok), reasons=list(reasons or []))
         self._set(version=str(_g(model, "version")), metrics=_numeric_only(metrics) or {}, display_ok=bool(ok),
@@ -1027,6 +1034,7 @@ class Job:
                     by_kind[kind].append({"a": sid, "b": eid, "version": version, "score": sim, "score_kind": sk})
         for kind, rows in by_kind.items():
             store.run_sql(conn, f"link_insert_{kind}", rows)
+        domain_writer.write_page(conn, self._dom, spans, assoc, ids, version, self._dom_scores)  # WP-D-1113: no-op while tax_chunk_domain is absent
 
     def _do_links(self):
         model = self._pending.model
@@ -1109,6 +1117,7 @@ class Job:
         self.metrics_run.update(_numeric_only(self._robust_info()) or {})
         if self.finish_now:  # WP-F: present only with the flag on (flag off keeps main's run-row keys)
             self.metrics_run["partial_snapshot"] = 1 if self._reuse_only else 0
+        self.metrics_run.update(domain_writer.metrics(self._dom))  # WP-D-1113
         metrics = dict(_numeric_only(pend.metrics) or {})
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}
