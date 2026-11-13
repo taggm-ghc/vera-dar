@@ -53,6 +53,7 @@ _ADMISSION_REJECTIONS = (
 _CODE_MAP: dict[str, str] = {
     # no open/usable acquisition route
     "R-ACQ-NODOI": "no_route", "R-ACQ-NOTOA": "no_route", "R-ACQ-PID-NOROUTE": "no_route",
+    "R-ACQ-NOROUTE": "no_route",  # NOROUTE-CODE-1112: Europe PMC has no usable OA record (outcome rejected, not a prefilter)
     "R-ACQ-FORMAT_UNSUPPORTED": "no_route", "R-ACQ-HOST": "no_route",
     "R-ACQ-ROBOTS": "no_route", "R-ACQ-CYCLE": "no_route",
     # WPL-1111 (ROBOTS-LABEL-1111): same bucket as R-ACQ-ROBOTS; none is transient (no background retry)

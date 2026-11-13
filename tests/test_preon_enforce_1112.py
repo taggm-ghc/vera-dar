@@ -15,7 +15,7 @@ from tests.test_original_html_wpg_1111 import (DOE, DOE_HOST, NASA, SHIPPED, Web
 from vera import acq_config, acq_discovered, auto_acquire, freshness, original_html
 
 HOST = acq_config.reason(A.cfg(), "host")
-NOTOA = "R-ACQ-NOTOA"  # evaluate_candidate: the route does not claim it, the default route refuses
+NOTOA = "R-ACQ-NODOI"  # evaluate_candidate: the route does not claim it, the default route refuses (NOROUTE-CODE-1112: no DOI or PMCID, nothing sent)
 
 
 def direct(web, c=None):

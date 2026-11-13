@@ -66,6 +66,7 @@ _FETCH_YES = frozenset({
     # _fetch_made excludes before this set is consulted: they never count as a request.)
     "R-ACQ-WRITE",               # store write after fetch
 })
+# R-ACQ-NOROUTE (NOROUTE-CODE-1112) is NOT counted: its request went to VERA-DAR's full-text service, not the source.
 # Everything else is NOT counted (no request proven): R-ACQ-NODOI/NOTOA/NOLIC(prefilter)/DUPLICATE/KNOWN/DEFER_CAP
 # (pre-fetch filters; auto_acquire.py:159/863, acq_discovered.py:245-255), R-ACQ-RATELIMITED (nothing sent,
 # acq_discovered.py:400), R-ACQ-DEADLINE/DOC_BUDGET/RATE/DAILY/SERVECAP/CRAWL_DELAY (stop before request), R-ACQ-REUSE-*

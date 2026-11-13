@@ -83,7 +83,7 @@ def test_t15_candidates_that_end_before_the_hop_keep_their_own_codes():
         auto_acquire.evaluate_candidate(A.job(), 1.0, DOI, A.cand(DOI), None, A.cfg(), A.deps([], web, lookup=lookup),
                                         {}, {}, clock=A.clock_at())
     assert e.value.code == "R-ACQ-KNOWN" or e.value.code == A.cfg()["reason_codes"]["in_corpus"]
-    with pytest.raises(auto_acquire._Stop) as e2:  # no DOI and no PMCID: not_oa before any request
+    with pytest.raises(auto_acquire._Stop) as e2:  # no DOI and no PMCID: no_doi before any request (NOROUTE-CODE-1112)
         auto_acquire.evaluate_candidate(A.job(), 1.0, "", {"title": "x", "url": "https://example.org/a"}, None, A.cfg(),
                                         A.deps([], web), {}, {}, clock=A.clock_at())
     assert "ROBOTS" not in e2.value.code and "ROUTE" not in e2.value.code

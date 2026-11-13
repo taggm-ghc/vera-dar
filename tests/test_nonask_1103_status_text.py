@@ -82,7 +82,7 @@ def test_notice_lines():
     def d(s):
         return {"contract": {"inline_acquisition": {"acquisition": {"status": s, "stored": 0, "target": 6}}}}
     assert "enough relevant passages" in ue.acquisition_notice_line(d("relevance_rejected"))
-    assert "fetch automatically" in ue.acquisition_notice_line(d("no_route"))
+    assert "no full-text route VERA-DAR can use" in ue.acquisition_notice_line(d("no_route"))  # NOROUTE-CODE-1112: "no identifier" was false for DOIs
     assert "supply was limited" in ue.acquisition_notice_line(d("resource_limited"))
     assert "time limit" in ue.acquisition_notice_line(d("incomplete_deadline"))
     for s in ("relevance_rejected", "no_route"):

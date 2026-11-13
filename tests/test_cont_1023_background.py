@@ -104,11 +104,11 @@ def test_second_identical_request_queues_no_duplicate_jobs(bg):
 # ------------------------------------------------------------------------------------------------ candidate cut
 def test_per_request_cut_of_six_with_nine_eligible_enqueues_three(bg):
     # MIDTERMS-WP7-1106 (a): the 3 candidates beyond the cut of six are no longer left for the background queue; the
-    # extra round evaluates them inline (before any variant search), so all nine end R-ACQ-NOTOA and none is queued
+    # extra round evaluates them inline (before any variant search), so all nine end R-ACQ-NOROUTE (NOROUTE-CODE-1112) and none is queued
     dois = _dois(9)
     cfg = A.cfg(max_candidates_resolved=6)  # pinned: the shipped ceiling is 31 since OD-1031-SHORTLIST31; this tests the cut mechanism
     assert int(cfg["bounds"]["max_candidates_resolved"]) == 6
-    d = A.deps([A.cand(x) for x in dois], A.Web({}, {}))  # no Europe PMC record: the evaluated ones end R-ACQ-NOTOA
+    d = A.deps([A.cand(x) for x in dois], A.Web({}, {}))  # no Europe PMC record: the evaluated ones end R-ACQ-NOROUTE
     o = inline_acquire.acquire(Q, cfg, env=dict(A.ENV_ON), clock=Clock(), deps_factory=lambda a, e: d)
     by = {}
     for c in o.candidates:
@@ -136,7 +136,8 @@ def test_transient_5xx_is_enqueued_and_licence_rejected_is_not(bg):
                                        ("R-ACQ-DEADLINE", True), ("R-ACQ-ERR-ReadTimeout", True),
                                        ("R-ACQ-NOLIC", False), ("R-ACQ-INJECT", False), ("R-ACQ-IRRELEVANT", False),
                                        ("R-ACQ-FEWSPANS", False), ("R-ACQ-PREPRINT_NOT_PERMITTED", False),
-                                       ("R-ABSTRACT", False), ("R-ACQ-NOTOA", False), ("R-ACQ-KNOWN", False)])
+                                       ("R-ABSTRACT", False), ("R-ACQ-NOTOA", False), ("R-ACQ-KNOWN", False),
+                                       ("R-ACQ-NOROUTE", False)])  # NOROUTE-CODE-1112: terminal, as NOTOA was
 def test_only_reasons_that_can_change_are_eligible(code, want):
     assert inline_acquire.continue_eligible(A.cfg(), {"outcome": "rejected", "reason": code}) is want
     assert inline_acquire.continue_eligible(A.cfg(), {"outcome": "dropped", "reason": code}) is False

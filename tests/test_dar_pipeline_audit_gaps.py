@@ -234,7 +234,7 @@ def test_E_api_four_candidates_each_reason_on_its_own_row(rig, monkeypatch, tmp_
     assert len(by) == 4
     assert by[u(DOI)]["outcome"] == "admitted"
     assert by[u(DOI_ND)]["outcome"] == "rejected" and by[u(DOI_ND)]["reason"] == LOADER_CODES["licence_reject"]
-    assert by[u(DOI_NOOA)]["outcome"] == "rejected" and by[u(DOI_NOOA)]["reason"] == reason_code(rig, "not_oa")
+    assert by[u(DOI_NOOA)]["outcome"] == "rejected" and by[u(DOI_NOOA)]["reason"] == reason_code(rig, "no_route")  # NOROUTE-CODE-1112: Europe PMC miss
     assert by[u(DOI_UNR)]["outcome"] == "rejected" and by[u(DOI_UNR)]["reason"] == reason_code(rig, "unreachable")
     assert len({e["record_id"] for e in by.values()}) == 4  # distinct per candidate
 
@@ -269,7 +269,7 @@ def test_E_ui_real_ask_body_each_reason_in_its_own_candidate_caption(rig, monkey
     disc = _by_url(body["contract"]["inline_acquisition"]["discovered"])
     line = lambda d: dp._reason_line(disc[f"https://doi.org/{d}"])  # noqa: E731  (the text the panel owes THAT candidate)
     want = {"Candidate Two ND": line(DOI_ND), "Candidate Three NoOA": line(DOI_NOOA), "Candidate Four Unreachable": line(DOI_UNR)}
-    assert want["Candidate Three NoOA"] == dp.REASON_TEXT[reason_code(rig, "not_oa")]
+    assert want["Candidate Three NoOA"] == dp.REASON_TEXT[reason_code(rig, "no_route")]  # NOROUTE-CODE-1112
     assert want["Candidate Four Unreachable"] == dp.REASON_TEXT[reason_code(rig, "unreachable")]
     for title, reason in want.items():
         (row,) = [r for r in rows if title in r[0]]

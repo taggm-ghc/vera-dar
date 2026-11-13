@@ -418,7 +418,9 @@ def evidence_source_line(data: dict | None) -> str | None:
 _STATUS_CLAUSE = {
     "resource_limited": "supply was limited.",
     "relevance_rejected": "none of the documents fetched had enough relevant passages to keep.",
-    "no_route": "no identifier VERA-DAR can fetch automatically was available for the sources found.",
+    # NOROUTE-CODE-1112: inline_acquire._supply_status says no_route when ANY no-route code is present (with no
+    # documents), and most such sources do have a DOI: "at least one", never "no identifier" or "every source"
+    "no_route": "at least one source found had no full-text route VERA-DAR can use.",
     "incomplete_deadline": "the search stopped at the time limit.",
     "search_failed": "the search could not be completed.",
     "capped": "the limit on new acquisition runs was reached.",
