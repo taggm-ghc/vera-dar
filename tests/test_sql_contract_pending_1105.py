@@ -170,7 +170,8 @@ def test_real_tree_exemptions_are_exactly_016_017_020_022_024_and_reported():
     ex = sc.pending_exemptions()
     assert set(sc.PENDING_DRAFT_ALLOWLIST) == {"016-DRAFT-lists-to-db.sql.draft", "017-DRAFT-topic-tags.sql.draft",
                                                "020-DRAFT-taxonomy.sql.draft", "022-DRAFT-taxonomy-extensible.sql.draft",
-                                               "024-DRAFT-chunk-vectors.sql.draft", "025-DRAFT-chunk-use.sql.draft"}
+                                               "024-DRAFT-chunk-vectors.sql.draft", "025-DRAFT-chunk-use.sql.draft",
+                                               "027-DRAFT-chunk-domain.sql.draft"}  # WP-D-1113: no literal tax_chunk_domain pair is extracted (SQL built from the LINKS map), so no pair is exempt yet
     assert {t for t, _ in ex} == {"lstreg_active_lists_v", "lstreg_active_items_v", "toptag_document_topics",
                                   "tax_domains", "tax_topics", "tax_subtopics", "tax_domain_topic", "tax_topic_subtopic",
                                   "tax_chunk_topic", "tax_chunk_subtopic",

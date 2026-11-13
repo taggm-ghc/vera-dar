@@ -60,6 +60,7 @@ PENDING_DRAFT_ALLOWLIST = (
     "022-DRAFT-taxonomy-extensible.sql.draft",  # tax_anchors, tax_registry_active_v, tax_registry_eval_v (vera/tax_registry.py)
     "024-DRAFT-chunk-vectors.sql.draft",  # tax_chunk_vectors, tax_job_runs (vera/chunk_taxo_store.py; CHUNK-TAXO-INT-1109)
     "025-DRAFT-chunk-use.sql.draft",     # chunk_use, chunk_use_assoc (vera/chunk_usage.py, vera/chunk_usage_sql/; CHUNK-USAGE-1110)
+    "027-DRAFT-chunk-domain.sql.draft",  # tax_chunk_domain (vera/chunk_taxo_store.py, vera/chunk_domain_writer.py; WP-D-1113; owner-applied DDL, table probed at run time)
 )
 PENDING_DIR = "db/migrations/pending"
 _DRAFT_NAME = re.compile(r"^\d{3}-DRAFT-[A-Za-z0-9-]+\.sql\.draft$")
