@@ -591,10 +591,15 @@ def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable
                            timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
             end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
         except Exception as e:  # noqa: BLE001
+            from vera import selective_fetch
+            if isinstance(e, selective_fetch.DocumentDenied):  # WPF-FOLLOW-1113: an earlier 401/403, nothing sent
+                raise Skip("access_denied") from None
             raise Skip("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)
         if status in acq_discovered._throttle_statuses(url):  # REFPORTAL-429-1112: 429 + the portal's throttle codes
             raise Skip("rate_limited")
+        if status in (401, 403):  # WPF-FOLLOW-1113: an access denial is not "unreachable" (brief rule 9)
+            raise Skip("access_denied")
         if status != 200:
             raise Skip("unreachable")  # redirects included: never followed
         headers = getattr(resp, "headers", None) or {}

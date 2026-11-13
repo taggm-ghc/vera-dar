@@ -24,6 +24,16 @@ SAFE_LAST = re.compile(r"(Error|Exception|Timeout|Warning)$|^(Request|Response|e
                        r"AF_INET\w*|SOCK_\w+|SHUT_\w+|getaddrinfo|gethostbyname|inet_\w+|htons|ntohs|ssl|InvalidURL|"
                        r"HTTPRedirectHandler|BaseTransport|parse_url)$")
 CLASSES = {"DOC", "API", "ROBOTS", "SEARCH", "LLM", "OWN", "OPS", "NOSOCKET", "TEST"}
+# WPF-FOLLOW-1113 WP-B. Known limits (a tripwire for honest code, not a security boundary): non-literal command
+# strings (os.system(cmd), "cu" + "rl"), sys.modules["requests"], eval/exec, ctypes/pycurl and os.exec* with a
+# variable program are not seen.
+EXEC_MODULES = ("subprocess", "os", "asyncio")  # resolved through every import form (alias, from-import)
+EXEC_CALLS = re.compile(r"^(subprocess\.(run|Popen|call|check_output|check_call|getoutput|getstatusoutput)|"
+                        r"os\.(system|popen|exec\w*|spawn\w*)|asyncio\.create_subprocess_(exec|shell))$")
+NET_TOOLS = ("curl", "wget")
+SHELL_SPLIT = re.compile(r"[\s;|&()<>`]+")
+ASYNCIO_OPEN = ("asyncio.open_connection", "asyncio.open_unix_connection")
+ASYNCIO_METHODS = {"create_connection", "sock_connect"}
 
 
 def _dotted(node):
@@ -45,7 +55,16 @@ def _scan_source(src: str) -> dict:
     """Return {site-name: count} for one module's source."""
     tree = ast.parse(src)
     bound = {}  # local name -> full dotted name of the watched import
+    exec_bound = {}  # local name -> full dotted name of a subprocess/os/asyncio import (WPF-FOLLOW-1113)
     sock_mod = False
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name in EXEC_MODULES:
+                    exec_bound[a.asname or a.name] = a.name
+        elif isinstance(n, ast.ImportFrom) and n.module in EXEC_MODULES and not n.level:
+            for a in n.names:
+                exec_bound[a.asname or a.name] = f"{n.module}.{a.name}"
     for n in ast.walk(tree):
         if isinstance(n, ast.Import):
             for a in n.names:
@@ -81,6 +100,20 @@ def _scan_source(src: str) -> dict:
                 return bound[key] + dotted[len(key):]
         return bound[head] + dotted[len(head):] if head in bound else None
 
+    def exec_name(dotted):
+        if not dotted or "()" in dotted:
+            return None
+        head = dotted.split(".")[0]
+        return exec_bound[head] + dotted[len(head):] if head in exec_bound else None
+
+    def net_tool_in(call):
+        for c in ast.walk(call):  # list items, shell strings and the constant parts of f-strings
+            if isinstance(c, ast.Constant) and isinstance(c.value, str):
+                if any(t.split("/")[-1] in NET_TOOLS for t in SHELL_SPLIT.split(c.value) if t):
+                    return True
+        return False
+
+    asyncio_mod = any(v == "asyncio" or v.startswith("asyncio.") for v in exec_bound.values())
     # every maximal dotted chain that resolves to a watched import is a site: a call (requests.get(u)), a reference
     # passed on or aliased (api_permissions.call(requests.get, ...), http_get = requests.get) or a constructor
     inner = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
@@ -90,8 +123,17 @@ def _scan_source(src: str) -> dict:
             r = resolve(d) if d and "()" not in d else None
             if r and r not in WATCHED and "." in r and not SAFE_LAST.search(r.split(".")[-1]):
                 add(r)
+            elif r and r in WATCHED:  # WPF-FOLLOW-1113: a bare module reference (getattr(requests, ...), m = requests)
+                add("ref:" + r)
         if isinstance(n, ast.Call):
             d = _dotted(n.func)
+            e = exec_name(d)
+            if e and EXEC_CALLS.match(e) and net_tool_in(n):  # WPF-FOLLOW-1113: os/asyncio/aliased exec of curl/wget
+                add("subprocess:curl-wget")
+            elif e in ASYNCIO_OPEN:
+                add("asyncio:" + e.split(".")[-1])
+            elif asyncio_mod and isinstance(n.func, ast.Attribute) and n.func.attr in ASYNCIO_METHODS and not e:
+                add("asyncio:<obj>." + n.func.attr)
             if d and (d == "__import__" or d.split(".")[-1] == "import_module"):  # importlib / __import__ bypass
                 arg = n.args[0] if n.args else None
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -102,11 +144,6 @@ def _scan_source(src: str) -> dict:
             if sock_mod and isinstance(n.func, ast.Attribute) and n.func.attr in METHODS \
                     and not (d and "()" not in d and resolve(d)):  # x.open(...) on any object; direct names are chains
                 add("<obj>." + n.func.attr)
-            if d in ("subprocess.run", "subprocess.Popen", "subprocess.call", "subprocess.check_output",
-                     "subprocess.check_call") and any(
-                    isinstance(c, ast.Constant) and isinstance(c.value, str) and c.value.split("/")[-1] in ("curl", "wget")
-                    for c in ast.walk(n)):
-                add("subprocess:curl-wget")
     return out
 
 
@@ -167,6 +204,8 @@ SITES: dict = {
     ("vera/memory_review_panel.py", "requests.post"): ("OWN", 1, "own API"),
     ("vera/public_mode.py", "requests.get"): ("OWN", 2, "own API"),
     ("vera/public_mode.py", "requests.post"): ("OWN", 2, "own API"),
+    # WPF-FOLLOW-1113: AskStream._http = session or requests, then self._http.post(<own API>/ask/stream)
+    ("vera/public_mode.py", "ref:requests"): ("OWN", 1, "own API /ask/stream (AskStream._http)"),
     ("vera/trace_eval/ui.py", "requests.get"): ("OWN", 2, "own API"),
     ("vera/ui_wake.py", "requests.get"): ("OWN", 1, "own API"),
     ("vera/ui_wake.py", "requests.post"): ("OWN", 1, "own API"),
@@ -252,6 +291,46 @@ def test_t11_negative_probe_is_detected_and_unclassified(tmp_path, body):
     sites = _probe(tmp_path, body)
     assert sites, f"scanner missed: {body!r}"
     assert all(("probe.py", s) not in SITES for s in sites)
+
+
+@pytest.mark.parametrize("body", [  # WPF-FOLLOW-1113 WP-B: blind spots found by WPF-VERIFY-1112
+    "import requests\ngetattr(requests, 'get')('https://x.example/a')\n",
+    "import requests\nm = requests\nm.get('https://x.example/a')\n",
+    "import requests\nt = vars(requests)\n",
+    "import httpx\nf = getattr(httpx, 'Client')\n",
+    "import os\nos.system('curl https://x.example/a')\n",
+    "import os as o\no.popen('x; wget https://x.example/a')\n",
+    "import subprocess\nsubprocess.run('wget -q https://x.example/a', shell=True)\n",
+    "import subprocess as sp\nsp.run(['curl', 'https://x.example/a'])\n",
+    "from subprocess import run as r\nr(['/usr/bin/curl', 'https://x.example/a'])\n",
+    "from os import system\nsystem('curl -s https://x.example/a|sh')\n",
+    "import os\nu = 'https://x.example/a'\nos.system(f\"curl {u}\")\n",
+    "import asyncio\nasyncio.create_subprocess_exec('curl', 'https://x.example/a')\n",
+    "import asyncio\nasyncio.open_connection('x.example', 443)\n",
+    "from asyncio import open_connection\nopen_connection('x.example', 443)\n",
+    "import asyncio as aio\naio.open_unix_connection('/run/x.sock')\n",
+    "import asyncio\nloop = asyncio.get_event_loop()\nloop.create_connection(lambda: None, 'x.example', 443)\n",
+    "import asyncio\nloop = asyncio.get_event_loop()\nloop.sock_connect(s, ('x.example', 443))\n",
+])
+def test_wpf_follow_blind_spots_are_detected_and_unclassified(tmp_path, body):
+    sites = _probe(tmp_path, body)
+    assert sites, f"scanner missed: {body!r}"
+    assert all(("probe.py", s) not in SITES for s in sites)
+
+
+@pytest.mark.parametrize("body", [
+    "x = getattr(object(), 'x', None)\n",
+    "import os\nos.system('ls -l')\n",
+    "import subprocess\nsubprocess.run(['git', 'status'])\n",
+    "import subprocess\nsubprocess.run(['echo', 'curly'])\n",
+    "import asyncio\nasyncio.run(asyncio.sleep(1))\n",
+    "import os\nos.execvpe(cmd[0], cmd, env)\n",
+    "CALLS = ('subprocess.', 'os.system', 'os.popen', 'curl')\n",
+    "import requests\ntry:\n    pass\nexcept requests.RequestException:\n    pass\n",
+    "from pathlib import Path\nimport asyncio\nPath('a').open()\n",
+])
+def test_wpf_follow_negatives_stay_clean(tmp_path, body):
+    assert _probe(tmp_path, body) == {}
 
 
 def test_t11_exception_and_parse_only_imports_are_not_sites(tmp_path):

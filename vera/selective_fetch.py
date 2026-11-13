@@ -215,6 +215,8 @@ class DocumentDenied(PinnedRefused):
 
 
 _ROBOTS_ENDPOINT_PATHS = ("/robots.txt", "/.well-known/tdmrep.json")  # exact paths only (the "robots endpoint")
+# path markers of the download endpoints of an API entry whose content_scope includes fulltext (lower case)
+_DOWNLOAD_PATH_MARKERS = ("fulltext", "supplementaryfiles")
 
 
 def _is_document_request(url: str, purpose: str | None, api_decision) -> bool:
@@ -230,7 +232,11 @@ def _is_document_request(url: str, purpose: str | None, api_decision) -> bool:
         # exempt by ENDPOINT, not by the caller-declared purpose: a fulltext path of an API entry that serves
         # fulltext (Europe PMC .../fullTextXML) is a download endpoint whatever purpose is declared
         scope = [str(s).lower() for s in (getattr(api_decision, "conditions", None) or {}).get("content_scope") or ()]
-        if not ("fulltext" in scope and "fulltext" in path.lower()):
+        # WPF-FOLLOW-1113: Europe PMC .../supplementaryFiles is a download too; markers are matched on the normalised
+        # path (unreserved escapes decoded) so "%73upplementaryFiles" cannot slip past; never on the query
+        from vera import acq_discovered as _ad
+        npath = _ad._norm_path(path).lower()
+        if not ("fulltext" in scope and any(m in npath for m in _DOWNLOAD_PATH_MARKERS)):
             return False
     return True
 
