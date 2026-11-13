@@ -175,14 +175,34 @@ def reason_text(code: str) -> str:
     return text + " " + sentence
 
 
+_OWN_LIMIT_TEXT = "Not fetched: VERA-DAR's own rate limit for that site was reached."
+_WAIT_TEXT = "Not fetched: that site's rate limit required a longer wait than the time left for this question."
+_BREAKER_TEXT = "Left for later: the site failed repeatedly, so VERA-DAR paused requests to it."
+# REASON-TEXT-1113: one true sentence per limiter-skip cause, keyed by the upper-case suffix. A suffix not listed
+# (and COOLDOWN, THROTTLED, the base code, lower-case codes) keeps the legacy REASON_TEXT["R-ACQ-RATELIMITED"] text.
+_LIMITER_TEXT = {
+    "DEADLINE_PASSED": "Not fetched: the time available for this question had already run out before another request to that site could be made.",
+    "SEED_EXCLUDED": "Not fetched: background seeding does not use that service.",
+    "WAIT_TOO_LONG": _WAIT_TEXT,
+    "DEADLINE": _WAIT_TEXT,
+    "BREAKER_OPEN": _BREAKER_TEXT,
+    "HALF_OPEN_BUSY": _BREAKER_TEXT,
+    "PACING": _OWN_LIMIT_TEXT,
+    "CONCURRENCY": _OWN_LIMIT_TEXT,
+    "DAILY_CAP": _OWN_LIMIT_TEXT,
+}
+_LIMITER_PREFIX = "R-ACQ-RATELIMITED-"
+
+
 def _reason_line(entry) -> str | None:
     """Plain-language outcome for one discovered entry; None when the entry is unusable."""
     if not isinstance(entry, dict):
         return None
     r = entry.get("reason")
     if isinstance(r, str) and r:
-        if r.upper().startswith("R-ACQ-RATELIMITED-"):
-            return REASON_TEXT.get("R-ACQ-RATELIMITED", REASON_GENERIC)
+        if r.upper().startswith(_LIMITER_PREFIX):
+            return _LIMITER_TEXT.get(r[len(_LIMITER_PREFIX):]) if r.startswith(_LIMITER_PREFIX) and \
+                r[len(_LIMITER_PREFIX):] in _LIMITER_TEXT else REASON_TEXT.get("R-ACQ-RATELIMITED", REASON_GENERIC)
         if split_reason(r)[0] in _CAUSE_BASES and split_reason(r)[1]:
             return reason_text(r)
         return REASON_TEXT.get(r, REASON_GENERIC)
