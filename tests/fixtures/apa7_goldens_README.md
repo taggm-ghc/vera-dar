@@ -2,8 +2,8 @@
 
 `apa7_goldens.json` holds golden cases for the APA 7 formatter (house variant: identifiers appended). An
 independent golden author wrote them from two sources only: the V-1 and V-1b evidence record
-(`work/NONASK-1103/citation-v1-evidence.md` in the workspace root, not in this repository) and the identifier
-rules in section 7 of `work/NONASK-1103/citation-plan.md`. The author did not read the formatter implementation.
+(an evidence note kept outside this repository) and the identifier
+rules in section 7 of the citation plan (also kept outside this repository). The author did not read the formatter implementation.
 All records are synthetic. Titles, names and identifiers are invented. Every URL uses `example.org`,
 `example.com` or a fixed public resolver host.
 
