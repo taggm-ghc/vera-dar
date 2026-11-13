@@ -67,6 +67,10 @@ STREAM_WAIT: contextvars.ContextVar[bool] = contextvars.ContextVar("vera_rate_st
 # request's outcome never reports another request's skips. None = no request scope (nothing recorded).
 REQUEST_LEDGER: contextvars.ContextVar["RequestLedger | None"] = contextvars.ContextVar("vera_rate_request_ledger",
                                                                                          default=None)
+# EPMC-CLOCK-1112: seconds this context's granted permits waited in the limiter (wait_tally()). A caller with its own
+# per-fetch wall clock (acq_discovered._b_get, auto_acquire._guarded_get) credits them, as it credits crawl-delay, so
+# our own pacing is never reported or cached as the host failing to answer. Measuring only: send times are unchanged.
+WAIT_TALLY: contextvars.ContextVar["list[float] | None"] = contextvars.ContextVar("vera_rate_wait_tally", default=None)
 # Skip reasons that mean the provider (or this deployment's daily cap) is really unavailable, as opposed to this
 # process's own concurrency/pacing limiter or a caller deadline. Only these may be reported to a user as "busy".
 PROVIDER_BUSY_REASONS = frozenset({"cooldown", "breaker_open", "half_open_busy", "daily_cap"})
@@ -488,9 +492,7 @@ class PortalAdapter:
             with _prog.waiting(_prog.ACT_RATE, res.waited_s):
                 self._sleep(res.waited_s)
         if isinstance(res, Permit):
-            led = REQUEST_LEDGER.get()
-            if led is not None:
-                led.sent(self.name, max(0.0, self._clock() - t_in))
+            self._note_permit_wait(max(0.0, self._clock() - t_in))
         return res
 
     async def acquire_async(self, deadline: float | None = None):
@@ -513,10 +515,18 @@ class PortalAdapter:
         if isinstance(res, Permit) and res.waited_s > 0:
             await asyncio.sleep(res.waited_s)
         if isinstance(res, Permit):
-            led = REQUEST_LEDGER.get()
-            if led is not None:
-                led.sent(self.name, max(0.0, self._clock() - t_in))
+            self._note_permit_wait(max(0.0, self._clock() - t_in))
         return res
+
+    def _note_permit_wait(self, waited: float) -> None:
+        """A granted permit's own wait (concurrency queue + token wait, measured before the call is made): to the
+        request ledger (RETRIEVAL-1109) and to the caller's WAIT_TALLY when one is open (EPMC-CLOCK-1112)."""
+        led = REQUEST_LEDGER.get()
+        if led is not None:
+            led.sent(self.name, waited)
+        box = WAIT_TALLY.get()
+        if box is not None:
+            box[0] += float(waited)
 
     def _release(self, permit: Permit) -> None:
         with self._cond:
@@ -746,6 +756,19 @@ def request_scope():
         yield led
     finally:
         REQUEST_LEDGER.reset(tok)
+
+
+@contextlib.contextmanager
+def wait_tally():
+    """EPMC-CLOCK-1112: yields [seconds]; every permit granted in this context adds the time it waited for its slot
+    (concurrency queue + token wait), measured before the wrapped call runs, so server time is never counted. Nested
+    tallies are separate (the inner one does not add to the outer). Skips add nothing (they raise RateLimited)."""
+    box = [0.0]
+    tok = WAIT_TALLY.set(box)
+    try:
+        yield box
+    finally:
+        WAIT_TALLY.reset(tok)
 
 
 def contact_params(portal: str, env: Mapping | None = None, registry: Registry | None = None) -> dict:

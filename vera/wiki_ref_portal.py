@@ -372,8 +372,11 @@ def get_article(url: str, cfg: Mapping, *, http_get: Callable, url_check: Callab
     resp = None
     try:
         try:
-            resp = http_get(url, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "text/html"},
-                            timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
+            from vera import rate_limit
+            with rate_limit.wait_tally() as lw:  # REFPORTAL-CLOCK-1112: the limiter's wait for this slot
+                resp = http_get(url, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "text/html"},
+                                timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
+            end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
         except Exception as e:  # noqa: BLE001
             raise PortalError("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)

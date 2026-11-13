@@ -624,8 +624,10 @@ def _b_get(url: str, hosts: set, ctypes: set, max_bytes: int, max_redirects: int
         w = crawl_wait(cur, acq, clock, deadline)  # H-5 / H5-CRAWL-1107: every request to the host, gate reads too
         end = end + w if deadline is None else min(end + w, deadline)  # the wait is not fetch time
         try:
-            resp = deps.http_get(cur, headers={"User-Agent": sf.USER_AGENT, "Accept-Encoding": "identity"},
-                                 timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
+            with rate_limit.wait_tally() as lw:  # EPMC-CLOCK-1112: the limiter's wait for this request's slot
+                resp = deps.http_get(cur, headers={"User-Agent": sf.USER_AGENT, "Accept-Encoding": "identity"},
+                                     timeout=max(0.1, end - clock()), allow_redirects=False, stream=True)
+            end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
         except rate_limit.RateLimited as e:
             raise aa._Stop(acq_config.rate_limited_code(acq, e.reason)) from None  # F1: per-reason code
         except rate_limit.UnlistedHost:  # OA-1: no portal for the host, nothing sent
