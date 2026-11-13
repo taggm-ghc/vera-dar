@@ -151,7 +151,7 @@ def test_B_europepmc_record_for_another_doi_is_not_accepted(rig):
     r, _ = ask_offtopic(rig, [discovered()], web=web)
     _refused(rig, r)
     e = entry_for(r)
-    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "not_oa"), e
+    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "no_route"), e  # NOROUTE-CODE-1112: no matching Europe PMC record
 
 
 def test_B_abstract_only_jats_is_refused(rig):

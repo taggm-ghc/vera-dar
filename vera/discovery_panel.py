@@ -50,7 +50,11 @@ REASON_TEXT = {
     "R-ACQ-ORIGINAL_OVERSIZE": "Not stored: the page is too large to keep whole.",
     "R-ACQ-ORIGINAL_THIN": "Not stored: the page's main text is too short to keep as a document.",
     "R-ACQ-ORIGINAL_SHADOW": "Not stored: VERA-DAR is still testing how to read this site and keeps no pages from it yet.",
-    "R-ACQ-NOTOA": "Full text is not openly available.",
+    # NOROUTE-CODE-1112: NOTOA only from an index record that lists no OA copy (search_providers.acq_prefilter);
+    # a Europe PMC miss is NOROUTE (true for CC-BY works Europe PMC does not hold; no paywall claim)
+    "R-ACQ-NOTOA": "Not read: the index record lists no open-access copy of the full text.",
+    "R-ACQ-NOROUTE": "Not read: VERA-DAR's full-text service has no copy it may use, and the source's own site was "
+                     "not contacted.",
     "R-ACQ-NOLIC": "Full text not openly licensed.",
     "R-ACQ-LICENCE_ABSENT": "Full text not openly licensed.",
     "R-ACQ-LICENCE_MISMATCH": "Full text not openly licensed.",

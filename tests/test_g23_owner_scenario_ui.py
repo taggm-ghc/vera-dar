@@ -18,7 +18,7 @@ from vera import discovery_panel as dp
 
 DOIS = {"nd": "10.9999/own.nd", "nooa": "10.9999/own.nooa", "unr": "10.9999/own.unreach", "fail": "10.9999/own.irrel"}
 PMC_ND, PMC_UNR, PMC_IR = "PMC7100001", "PMC7100003", "PMC7100004"
-WANT_TEXT = {"nd": "The licence does not permit reuse of the full text.", "nooa": "Full text is not openly available.",
+WANT_TEXT = {"nd": "The licence does not permit reuse of the full text.", "nooa": "Not read: VERA-DAR's full-text service has no copy it may use, and the source's own site was not contacted.",  # NOROUTE-CODE-1112: no Europe PMC record
              "unr": "Source unreachable.", "fail": "Not relevant enough to your question."}   # literals, not read from the panel
 TITLES = {"nd": "Owner Cand One ND", "nooa": "Owner Cand Two NoOA", "unr": "Owner Cand Three Unreachable",
           "fail": "Owner Cand Four Irrelevant"}

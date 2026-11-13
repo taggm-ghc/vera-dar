@@ -840,30 +840,38 @@ def resolve_oa(doi: str | None, cfg: dict, deps: Deps, clock=time.monotonic, dea
     # well-formed PMCID (never a query on an empty or malformed identifier).
     pmcid = str(pmcid or "").strip().upper() or None
     if not doi and not (pmcid and re.fullmatch(r"PMC\d{1,10}", pmcid)):
-        raise _Stop(acq_config.reason(cfg, "not_oa"))
+        raise _Stop(acq_config.reason(cfg, "no_doi"))  # NOROUTE-CODE-1112: no identifier, nothing sent
     from urllib.parse import urlencode
     url = rcfg["search_url"] + "?" + urlencode({"query": f'DOI:"{doi}"' if doi else f'PMCID:"{pmcid}"', "resultType": "core", "format": "json",
                                                 "pageSize": 1})
     raw, _final = _guarded_get(url, cfg, deps, 2_000_000, float(acq_config.bound(cfg, "fetch_timeout_s")), True,
                                clock=clock, deadline=deadline, route_hop=True,
                                **({"chain": chain} if chain is not None else {}))
+    # NOROUTE-CODE-1112: one code per cause. An answer that cannot be read is not a verdict on the record (the
+    # route_unreadable / noroute_unchecked pair, as _route_key; the landing route is not entered). No usable Europe PMC
+    # open-access record is R-ACQ-NOROUTE (the service has no copy VERA-DAR may use); isOpenAccess is Europe PMC's own
+    # OA-subset flag, not the work's status, so it never yields R-ACQ-NOTOA (kept for an index record listing no OA copy).
+    unreadable = False
     try:
         doc = strict_json.loads(raw.decode("utf-8"))  # STRICTJSON-1027 C4: duplicate / non-ASCII keys, NaN rejected
         res = ((doc.get("resultList") or {}).get("result") or [])
         r = res[0] if res and isinstance(res[0], dict) else None
     except strict_json.StrictJSONError as e:
         logger.warning("resolve_oa strict JSON reject (%s)", e.code)  # fixed code only, never record text
-        r = None
+        r, unreadable = None, True
     except Exception:  # noqa: BLE001
-        r = None
+        r, unreadable = None, True
+    if unreadable:
+        from vera import acq_discovered as _ad
+        raise _Stop(acq_config.reason(cfg, "route_unreadable" if _ad.landing_on(cfg) else "noroute_unchecked"))
     rdoi = str((r or {}).get("doi") or "").strip().lower()
     if r is None or (doi and rdoi != doi) or (not doi and (not pmcid or
                                                            str(r.get("pmcid") or "").strip().upper() != pmcid)):
-        raise _Stop(acq_config.reason(cfg, "not_oa"))
+        raise _Stop(acq_config.reason(cfg, "no_route"))
     pmcid = str(r.get("pmcid") or "").strip().upper()
     if rcfg.get("require_open_access", True) and (str(r.get("isOpenAccess") or "").upper() != "Y"
                                                    or not re.fullmatch(r"PMC\d{1,10}", pmcid)):
-        raise _Stop(acq_config.reason(cfg, "not_oa"))
+        raise _Stop(acq_config.reason(cfg, "no_route"))
     if str(r.get("source") or "").upper() in {s.upper() for s in rcfg.get("refuse_sources") or ()}:
         raise _Stop(acq_config.reason(cfg, "pub_type"))
     ptypes = (r.get("pubTypeList") or {}).get("pubType") or []
@@ -1337,7 +1345,7 @@ def _evaluate_europepmc(job: Job, score: float, doi: str, cand: dict, isbn, cfg:
             res = resolve_oa(doi, cfg, deps, clock=clock, deadline=deadline, pmcid=None if doi else _pmcid(cand),
                              chain=chain)
         except _Stop as e:
-            if not (doi and e.code == acq_config.reason(cfg, "not_oa") and acq_discovered.landing_on(cfg)):
+            if not (doi and e.code == acq_config.reason(cfg, "no_route") and acq_discovered.landing_on(cfg)):
                 raise
             route = "landing"
             raw, final, landing, res = acq_discovered.landing_fetch(doi, cand, cfg, deps, icfg, clock=clock,

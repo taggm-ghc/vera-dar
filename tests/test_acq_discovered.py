@@ -262,7 +262,7 @@ def test_t3_shipped_empty_publisher_allowlist_stops_at_the_first_publisher_hop()
 def test_t3_step_b_off_keeps_the_europe_pmc_refusal():
     web, _ = step_b_web()
     o, store = run(cfg_on(step_b=False), [oa_src()], web)
-    assert disc(o)["reason"] == "R-ACQ-NOTOA" and not any("doi.org" in u for u, _h, _k in web.calls)
+    assert disc(o)["reason"] == "R-ACQ-NOROUTE" and not any("doi.org" in u for u, _h, _k in web.calls)  # NOROUTE-CODE-1112
 
 
 # ------------------------------------------------------------------------------------------------ test 4
@@ -297,7 +297,7 @@ def test_t5_stored_licence_is_the_article_licence_not_the_index_licence():
 # ------------------------------------------------------------------------------------------------ test 6
 @pytest.mark.parametrize("web_kw, code", [
     ({"over": {"fullTextXML": A.Resp(status=404)}}, "R-ACQ-UNREACHABLE"),
-    ({"rec_kw": {"oa": "N"}}, "R-ACQ-NOTOA"),
+    ({"rec_kw": {"oa": "N"}}, "R-ACQ-NOROUTE"),  # NOROUTE-CODE-1112: Europe PMC OA-subset flag, not the work's status
     ({"rec_kw": {"licence": "cc by-nd"}, "jats_kw": {"licence_url": "https://creativecommons.org/licenses/by-nd/4.0/"}},
      None),  # an ND licence is a licence REJECT (the loader's own code)
 ])

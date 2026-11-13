@@ -37,7 +37,11 @@ def _stop_code(raw: bytes):
     return e.value.code
 
 
-NOT_OA = acq_config.reason(A.cfg(), "not_oa")
+# NOROUTE-CODE-1112: a strict-JSON reject is an unreadable Europe PMC answer (shipped landing_route off:
+# noroute_unchecked), not a statement about the work; a genuine isOpenAccess N record is NOROUTE (Europe PMC's own
+# OA-subset flag, not the work's status). Fixtures unchanged.
+NOT_OA = acq_config.reason(A.cfg(), "noroute_unchecked")
+NO_ROUTE = acq_config.reason(A.cfg(), "no_route")
 
 
 def test_t13_duplicate_licence_nd_then_by_rejected():
@@ -78,5 +82,5 @@ def test_t15_clean_oa_record_unchanged():
 
 def test_t15_genuine_non_oa_has_no_strict_log(caplog):
     with caplog.at_level(logging.WARNING, logger="vera.autoacq"):
-        assert _stop_code(_core(json.dumps(_rec(isOpenAccess="N")))) == NOT_OA
+        assert _stop_code(_core(json.dumps(_rec(isOpenAccess="N")))) == NO_ROUTE
     assert not any("strict JSON" in r.getMessage() for r in caplog.records)

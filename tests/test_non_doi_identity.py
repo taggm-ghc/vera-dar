@@ -272,7 +272,7 @@ def test_ac7_resolve_by_pmcid_refuses_a_mismatched_record():
     web = pmc_web()
     web.records[PMC]["pmcid"] = "PMC9999999"
     out, store, _ = run([pmc_cand()], web)
-    assert out["stored"] == 0 and out["codes"] == {"R-ACQ-NOTOA": 1}
+    assert out["stored"] == 0 and out["codes"] == {"R-ACQ-NOROUTE": 1}  # NOROUTE-CODE-1112: mismatched PMCID record = no usable record
 
 
 # ------------------------------------------------------------------------------------------------ AC8 overlay keys
@@ -301,7 +301,7 @@ def test_resolve_oa_refuses_before_any_network_call_without_doi_or_valid_pmcid(p
     web = A.Web({}, {})
     with pytest.raises(auto_acquire._Stop) as e:
         auto_acquire.resolve_oa(None, A.cfg(), A.deps([], web), pmcid=pmcid)
-    assert e.value.code == acq_config.reason(A.cfg(), "not_oa")
+    assert e.value.code == acq_config.reason(A.cfg(), "no_doi")  # NOROUTE-CODE-1112: no identifier, nothing sent
     assert web.urls == []  # no request was made
 
 

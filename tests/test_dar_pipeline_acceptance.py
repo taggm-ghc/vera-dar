@@ -249,7 +249,7 @@ def test_D_neg_abstract_only_discovery_yields_no_answer(rig):
     r, _ds = ask_offtopic(rig, [discovered()], web=web)
     _not_an_answer_from_new_doc(rig, r)
     e = entry_for(r)
-    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "not_oa")
+    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "no_route")  # NOROUTE-CODE-1112: a Europe PMC miss, not an index statement
     assert ABSTRACT_SENTINEL not in json.dumps(r.answer or "")
 
 
@@ -269,7 +269,7 @@ def test_E_no_open_access_record_is_explained_per_candidate(rig):
     web.records.clear()
     r, _ds = ask_offtopic(rig, [discovered()], web=web)
     e = entry_for(r)
-    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "not_oa")
+    assert e["outcome"] == "rejected" and e["reason"] == reason_code(rig, "no_route")  # NOROUTE-CODE-1112: a Europe PMC miss, not an index statement
 
 
 def test_E_unreachable_full_text_is_explained_per_candidate(rig):

@@ -327,7 +327,7 @@ def test_hop12_ui_sidebar_aggregates_only_and_discovery_panel(happy):
     reasons = discovery_panel._reasons_by_url(body)
     print("DDGFLOW-OBS " + json.dumps({"scenario": "ui", "panel_reasons": reasons}, default=str))
     assert reasons.get(HURL) == discovery_panel.OBTAINED_TEXT  # DF-6: DDG candidates get a per-URL reason line
-    assert reasons.get(f"https://doi.org/{ODOI}") == discovery_panel.REASON_TEXT["R-ACQ-NOTOA"]
+    assert reasons.get(f"https://doi.org/{ODOI}") == discovery_panel.REASON_TEXT["R-ACQ-NOROUTE"]  # NOROUTE-CODE-1112: Europe PMC miss
 
 
 # ------------------------------------------------------------------------------- fulltext-only hop (negative path)
@@ -482,7 +482,7 @@ def test_d_publisher_landing_citation_doi_no_oa(world, spy):
     assert spy["ddg_counts"][0]["ddg_landing_get"] == 1
     assert spy["ddg_out"][0][0]["doi"] == doi and spy["ddg_out"][0][0]["discovered_url"] == landing
     c = by(body, "doi", doi)
-    assert c and c[0]["terminal_reason"] == "no_route" and c[0]["reason"] == "R-ACQ-NOTOA"
+    assert c and c[0]["terminal_reason"] == "no_route" and c[0]["reason"] == "R-ACQ-NOROUTE"  # NOROUTE-CODE-1112
     assert world.rig.store.plans == [] and queued() == [] and not any("ssrn" in u for u in world.rig.web.urls)
     assert _ro(body)["kind"] == "abstain"
 

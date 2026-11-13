@@ -480,7 +480,7 @@ def _supply_status(acq: dict, codes: dict, o) -> str:
     rel = n("irrelevant", "few_spans") + int(o.answer_only)
     if int(o.stored) == 0 and rel > 0:
         return "relevance_rejected"
-    noroute = n("no_doi", "not_oa", "arxiv_licence_hold") + int(codes.get("R-ACQ-PID-NOROUTE", 0) or 0)
+    noroute = n("no_doi", "not_oa", "no_route", "arxiv_licence_hold") + int(codes.get("R-ACQ-PID-NOROUTE", 0) or 0)
     if noroute > 0 and rel == 0 and not o.documents and int(o.admitted) == 0:
         return "no_route"
     return "resource_limited"  # budget >= target, search worked, routes ran out: supply

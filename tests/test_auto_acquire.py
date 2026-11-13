@@ -92,7 +92,7 @@ def test_reader_refuses_wrong_marker_injection_and_keeps_base_extra_keys_unchang
     ({}, {"licence_url": "https://creativecommons.org/licenses/by-nc/4.0/"}, "R-LIC-MISMATCH"),  # family differs: held
     ({}, {"licence_url": "https://creativecommons.org/licenses/by-nd/4.0/"}, "R-LIC-REJECT"),     # embedded ND
     ({}, {"with_body": False}, "R-ABSTRACT"),                                              # abstract only
-    ({"oa": "N"}, {}, "R-ACQ-NOTOA"),
+    ({"oa": "N"}, {}, "R-ACQ-NOROUTE"),  # NOROUTE-CODE-1112: Europe PMC OA-subset flag
     ({"source": "PPR"}, {}, "R-ACQ-PUBTYPE"),                                              # preprint
     ({"pub_types": ["research-article", "Retracted Publication"]}, {}, "R-ACQ-PUBTYPE"),
 ])
