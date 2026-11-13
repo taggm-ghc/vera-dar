@@ -868,6 +868,7 @@ def _run_body(question, acq, env, clock, deps_factory, served=None, disc=None, p
         ranked = aa.rank_candidates(question, [c for c in cands if id(c) not in st.get("web_ids", ())] if st.get("web_ids")
                                     else cands, acq, skip, fdcfg, count, drops=drops, route=route,
                                     protected=protected, parts=[(t, e) for t, e in (sq_plan or ())])
+        _epmc_precheck(ranked, acq, deps, clock, deadline, st)  # EPMC-BATCH-1113 (flag off by default)
         for cid, why in drops.items():
             if cid in rec_by:
                 rec_by[cid]["outcome"], rec_by[cid]["reason"] = "dropped", why
@@ -1133,6 +1134,17 @@ def new_documents(o) -> int:
         return 0
 
 
+def _epmc_precheck(ranked, acq, deps, clock, deadline, st: dict) -> None:
+    """EPMC-BATCH-1113: after a rank site, ONE Europe PMC batch request judges the DOI-only candidates (flag
+    resolve.batch_precheck.mode, shipped off). Runs in the request thread before any pool submission; the Ask's own
+    verdict memo (st) keeps a DOI from being batched twice. Never breaks the run: any failure leaves the per-DOI path."""
+    try:
+        if ranked and aa.batch_precheck_mode(acq) != "off":
+            aa.batch_precheck(ranked, acq, deps, st.setdefault("epmc_memo", {}), clock=clock, deadline=deadline)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("epmc batch precheck failed (%s)", type(e).__name__)
+
+
 def _n_ao(st: dict) -> int:
     """Answer-only request-local pages counted toward the round target: web route pages (A6-W) and, RETRIEVAL-1109 A3,
     variant-round reporting-lane pages."""
@@ -1314,6 +1326,7 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
         drops_p: dict = {}
         ranked = aa.rank_candidates(question, pending, acq, set(skip) | tried, fdcfg, count, drops=drops_p, route=route,
                                     protected=None)
+        _epmc_precheck(ranked, acq, deps, clock, deadline, st)  # EPMC-BATCH-1113
         in_ranked = {id(r[2]) for r in ranked}
         cut_again = acq_config.reason(acq, "defer_cap")
         nxt = []
@@ -1475,8 +1488,9 @@ def _extra_rounds(question, acq, deps, icfg, fdcfg, clock, deadline, ctx, st, co
             continue
         ranked = aa.rank_candidates(question, fresh, acq, set(skip) | tried, fdcfg, count, drops={}, route=route,
                                     protected=None)
+        _epmc_precheck(ranked, acq, deps, clock, deadline, st)  # EPMC-BATCH-1113
         reuse_info: dict = {}
-        got_reused, left = _stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg, clock=clock,
+        got_reused, left =_stored_for(ranked, acq, deps, count, question=question, fdcfg=fdcfg, icfg=icfg, clock=clock,
                                        deadline=deadline, info=reuse_info,
                                        **({"ctx": ctx, "max_checks": int(acq_config.live(acq)["max_reuse_checks_per_prompt"])}
                                           if ctx is not None else {}))
