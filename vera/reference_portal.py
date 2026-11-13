@@ -487,7 +487,7 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
     """False when /.well-known/tdmrep.json reserves the URL's path, or cannot be read (fail closed). 404/410 = no
     reservation. Cached per host. One GET through the host's rate portal (SECREV L2), no redirect, byte cap and one
     overall deadline on the body (SECREV L1), response always closed."""
-    from vera import public_fetch, wiki_ref_portal as w
+    from vera import public_fetch, rate_limit, wiki_ref_portal as w
     host = _host(url)
     now = clock()
     with _TDM_LOCK:
@@ -500,8 +500,10 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
             if ok[0] if isinstance(ok, tuple) else ok:
                 get = limited(rate_portal, http_get) if (limited and rate_portal) else http_get
                 end = clock() + float(cfg["caps"]["timeout_s"])
-                resp = get(t, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "application/json"},
-                           timeout=float(cfg["caps"]["timeout_s"]), allow_redirects=False, stream=True)
+                with rate_limit.wait_tally() as lw:  # REFPORTAL-CLOCK-1112: the limiter's wait for this slot
+                    resp = get(t, headers={"User-Agent": str(cfg["user_agent"]), "Accept": "application/json"},
+                               timeout=float(cfg["caps"]["timeout_s"]), allow_redirects=False, stream=True)
+                end += lw[0]  # our pacing is not fetch time, never cached as "unreadable" (bounded by max_wait)
                 try:
                     st = int(getattr(resp, "status_code", 0) or 0)
                     if st in (404, 410):
@@ -533,7 +535,7 @@ def _tdmrep_ok(url: str, cfg: Mapping, http_get: Callable, url_check: Callable, 
 
 def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable, deadline: float | None) -> str:
     """Every gate in order, then ONE GET. Raises Skip(code). Never retried."""
-    from vera import acq_discovered, wiki_ref_portal as w
+    from vera import acq_discovered, rate_limit, wiki_ref_portal as w
     ua = str(cfg["user_agent"])
     ok = deps.url_check(url)
     if not (ok[0] if isinstance(ok, tuple) else ok):
@@ -572,8 +574,10 @@ def fetch_page(url: str, row: Mapping, cfg: Mapping, deps: Deps, clock: Callable
     resp = None
     try:
         try:
-            resp = get(url, headers={"User-Agent": ua, "Accept": "text/html"},
-                       timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
+            with rate_limit.wait_tally() as lw:  # REFPORTAL-CLOCK-1112: the limiter's wait for this slot
+                resp = get(url, headers={"User-Agent": ua, "Accept": "text/html"},
+                           timeout=max(0.1, min(timeout_s, end - clock())), allow_redirects=False, stream=True)
+            end = end + lw[0] if deadline is None else min(end + lw[0], deadline)  # our pacing is not fetch time
         except Exception as e:  # noqa: BLE001
             raise Skip("rate_limited" if "rate limit" in str(e).lower() else "unreachable") from None
         status = int(getattr(resp, "status_code", 0) or 0)
