@@ -31,6 +31,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+from vera import chunk_domain_writer as domain_writer  # WP-D-1113
 from vera import chunk_taxo_store as store
 from vera import fulltext_loader  # module level on purpose: test_chunk_taxo_mem_1109 traces allocations from j.run() onward
 from vera.chunk_taxo_embed import Deferred, EmbedError, load_embedder
@@ -583,6 +584,7 @@ class Job:
         self._vote_rows = []
         self._retire_keys = []
         self._run_new_nodes = 0
+        self._dom = domain_writer.new_state()  # WP-D-1113
         self._run_id = None
         self._pass_neurons = 0.0
         self.metrics_run = {}
@@ -982,6 +984,7 @@ class Job:
                     by_kind[kind].append({"a": sid, "b": eid, "version": version, "score": sim, "score_kind": sk})
         for kind, rows in by_kind.items():
             store.run_sql(conn, f"link_insert_{kind}", rows)
+        domain_writer.write_page(conn, self._dom, spans, assoc, ids, version)  # WP-D-1113: no-op while tax_chunk_domain is absent
 
     def _do_links(self):
         model = self._pending.model
@@ -1062,6 +1065,7 @@ class Job:
         self.metrics_run = {"rows_embedded": self.rows_embedded, "seconds": round(elapsed, 3),
                             "rows_per_s": round(self.rows_embedded / elapsed, 4), "peak_rss_mb": round(self.peak_rss, 1)}
         self.metrics_run.update(_numeric_only(self._robust_info()) or {})
+        self.metrics_run.update(domain_writer.metrics(self._dom))  # WP-D-1113
         metrics = dict(_numeric_only(pend.metrics) or {})
         if hasattr(self._emb, "stats"):
             self.metrics_run["embedder"] = _numeric_only(self._emb.stats()) or {}

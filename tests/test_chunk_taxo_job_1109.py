@@ -64,6 +64,8 @@ class FakeDB:
             return Res([self.acct])
         if name == "probe_schema":
             return Res([self.has])
+        if name == "probe_chunk_domain":  # WP-D-1113: migration 027 table; absent unless a test sets domain_table
+            return Res([(bool(getattr(self, "domain_table", False)),)])
         if name == "set_ctx":
             self.ctx = (p["actor"], p["batch"])
             return Res([])
