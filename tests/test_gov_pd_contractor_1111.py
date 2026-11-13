@@ -15,7 +15,7 @@ from vera import web_route as wr
 
 SCI = "https://science.nasa.gov/mission/perseverance"
 WWW = "https://www.nasa.gov/missions/artemis"
-NEW_COUNT = 7
+NEW_COUNT = 12  # 7 (GOVPD-CONTRACTOR-1111) + 5 (CONTRACTOR2-1113)
 SHIPPED_COUNT = 9  # contractor_patterns at origin/main 2181844
 
 
@@ -61,6 +61,21 @@ POSITIVE = [
     "JPL, a division of Caltech in Pasadena, manages the mission.",
     "SOFIA was operated for NASA by the Universities Space Research Association.",
     "Argonne National Laboratory is a U.S. Department of Energy laboratory managed by UChicago Argonne, LLC.",
+    # CONTRACTOR2-1113: slash-joined affiliations, writer lines, Pasadena dateline, contractor mail domain,
+    # "operated by ... under contract", "managed on behalf of ... by". All names are fictional.
+    "Media contact: Jane Doe, JPL/Caltech",
+    "Contact: Jane Doe, NASA/JPL",
+    "By Jane Doe, Caltech/JPL",
+    "Writer: Jane Doe, Jet Propulsion Laboratory",
+    "Media contact: Jane Doe, Space Telescope Science Institute, Baltimore, Md.",
+    "PASADENA, Calif. -- NASA's Jet Propulsion Laboratory today announced a new instrument.",
+    "News Media Contact\nPat Example\n818-555-0142\npat.example@jpl.example.com",
+    "Questions: pat.example@caltech.example.org",
+    "The observatory is operated by Example Research Alliance under contract with the Department of Energy.",
+    "The array is run by Example Labs under a prime contract to the agency.",
+    "The mission is managed on behalf of NASA by JPL.",
+    "The telescope is managed for NASA by the Southwest Research Institute.",
+    "The instrument is managed for the agency by jpl.",
 ]
 
 # ---- negatives: must stay granted (planner 7 with the image-credit text split, reviewer-trial 7)
@@ -81,6 +96,22 @@ NEGATIVE = [
     "Use JPL-Horizons ephemeris data.",
     "By Jane Doe\nNASA Headquarters\nText about Caltech alumni.",
     "NASA relies on FFRDCs such as JPL for some work.",
+    # CONTRACTOR2-1113 false-positive guards (genuine federal text that the new patterns must leave alone)
+    "The site is operated by the National Park Service under the Organic Act.",
+    "The facility is managed by NASA staff. Contract awards are posted separately.",
+    "Contact: NASA Headquarters, Washington\nCredit: NASA/JPL-Caltech",
+    "PASADENA is a city in California. NASA's JPL operates nearby.",
+    "Media contacts are listed on the agency page.",
+    "Email questions to press@agency.test.",
+    "The telescope is managed for NASA by its Goddard center.",
+    "Writer: Jane Doe, NASA Headquarters\nCredit: NASA/JPL-Caltech/MSSS",
+    "By Jane Doe, NASA/JPL-Caltech",
+    "The rover is run by a NASA team under the Mars program.",
+    "Visit caltech.edu or jpl.nasa.gov for more.",
+    "By Quill Varnet, NASA. Credit: Caltech/IPAC",
+    "Contact: Orla Fenwick. Credit: NASA/JPL-Caltech",
+    "By Quill Varnet | NASA/JPL-Caltech/SwRI",
+    "Writer: Jane Doe, NASA/ESA/CSA/STScI",
 ]
 
 # ---- documented residuals, pinned so a change is noticed (plan "Known residuals" d-f; advisories A1, A2).
@@ -94,15 +125,8 @@ FALL_BACK_BUT_FEDERAL = [
 ]
 # STILL_GRANTED_MISSES: contractor-shaped text these patterns do not catch (advisories A1, A2; recall unmeasured).
 STILL_GRANTED_MISSES = [
-    "Media contact: Jane Doe, JPL/Caltech",
-    "Contact: Jane Doe, NASA/JPL",
-    "By Jane Doe, Caltech/JPL",
-    "PASADENA, Calif. -- NASA's Jet Propulsion Laboratory today announced",
-    "News Media Contact\nPat Example\n818-555-0142\npat.example@jpl.example.com",
-    "Writer: Jane Doe, Jet Propulsion Laboratory",
     "Johns Hopkins APL, Laurel, Md.",
     "APL manages the mission for NASA's Science Mission Directorate.",
-    "Media contact: Jane Doe, Space Telescope Science Institute, Baltimore, Md.",
     "By Jane Doe\nSouthwest Research Institute\nText.",
 ]
 
@@ -115,7 +139,7 @@ def test_fixture_count_at_least_48():
     assert len(POSITIVE) + len(NEGATIVE) + len(FALL_BACK_BUT_FEDERAL) + len(STILL_GRANTED_MISSES) >= 48
 
 
-def test_config_adds_exactly_seven_bounded_patterns():
+def test_config_adds_exactly_twelve_bounded_patterns():
     pats = json.loads(g.CONFIG_PATH.read_text(encoding="utf-8"))["page_override"]["contractor_patterns"]
     assert len(pats) == SHIPPED_COUNT + NEW_COUNT
     for i, p in enumerate(pats[SHIPPED_COUNT:]):
@@ -227,6 +251,25 @@ ADVERSARIAL = {
     "managed-padded-nbsp3": ("", "managed   for   the   ", "", 0, "", 9000),
     "managed-padded-nbsp1": ("", "managed for the ", "", 0, "", 12000),
     "managed-padded-5": ("", "managed" + " " * 5 + "for" + " " * 5 + "the" + " " * 5, "", 0, "", 7000),
+    # CONTRACTOR2-1113: the five added patterns (head-line, Pasadena dateline, mail domain, under-contract, on-behalf)
+    "writer-spaces": ("", "writer", " ", 30000, "", 1),
+    "contact-colon-spaces": ("", "contact:", " ", 30000, "", 1),
+    "contact-long-line": ("", "Contact: ", "x ", 100, "\n", 1500),
+    "contact-caltech-slashes": ("", "Contact: ", "caltech/", 40, "\n", 800),
+    "by-sep-spaces": ("", "by a,", " ", 30000, "", 1),
+    "by-spaces": ("", "by", " ", 30000, "", 1),
+    "nbsp-run-undercontract": ("", "managed by x ", "\u00a0", 3000, "", 10),
+    "nbsp-run-onbehalf": ("", "managed on behalf of ", "\u00a0", 3000, "", 10),
+    "pasadena-spaces": ("", "pasadena, calif", " ", 30000, "", 1),
+    "pasadena-lines": ("", "pasadena, calif. -- ", "x ", 30, "\n", 2000),
+    "mail-at-signs": ("", "", "@", 1, "", 200_000),
+    "mail-dotted": ("", "@", "a.", 20000, "", 1),
+    "mail-jpl-repeat": ("", "@jpl.a ", "", 0, "", 20000),
+    "undercontract-managed-by": ("", "managed by ", "a ", 3000, "", 10),
+    "undercontract-repeat": ("", "run by " + "a" * 30 + " ", "", 0, "", 8000),
+    "undercontract-spaces": ("", "operated by x ", " ", 20000, "", 1),
+    "onbehalf-spaces": ("", "managed on behalf of ", " ", 2000, "", 100),
+    "onbehalf-tokens": ("", "managed for ", "a ", 3000, "", 10),
     "realistic-200kb": ("", _page(NEGATIVE[1]) + "\n", "", 0, "", 1500),
 }
 
