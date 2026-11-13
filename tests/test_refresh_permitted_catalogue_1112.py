@@ -27,7 +27,7 @@ ROW_S = {"id": "s", "host": HS, "path_prefixes": ["/dark"], "path_stems": [], "l
          "agency": "Example Agency", "discovery": {"sitemap_url": f"https://{HS}/sitemap.xml"}, "crawl_delay_s": 5,
          "text_only": True, "enabled": True, "store": False, "review": {"task": "T", "date": "2026-11-12"}}
 ROBOTS_OK = b"User-agent: *\nAllow: /\n"
-SECRET = "SENTINEL-PAGE-TEXT-DO-NOT-PRINT"
+SENTINEL_TEXT = "SENTINEL-PAGE-TEXT-DO-NOT-PRINT"
 
 
 class Resp:
@@ -495,11 +495,11 @@ def test_robots_failure_removes_hosts_earlier_entries(tmp_path):
 def test_dry_run_writes_nothing_and_prints_counts_only(tmp_path, capsys):
     SNAP(tmp_path).write_text("{}", encoding="utf-8")  # an unrelated file is not touched (and a bad one is refused on --write)
     pages = site(2)
-    pages[(HA, "/explainers/p0")] = page(SECRET, [SECRET])
+    pages[(HA, "/explainers/p0")] = page(SENTINEL_TEXT, [SENTINEL_TEXT])
     SNAP(tmp_path).unlink()
     rc, net, _ = harvest(tmp_path, pages)
     out = capsys.readouterr().out
-    assert rc == 0 and not SNAP(tmp_path).exists() and "dry run" in out and "kept=2" in out and SECRET not in out
+    assert rc == 0 and not SNAP(tmp_path).exists() and "dry run" in out and "kept=2" in out and SENTINEL_TEXT not in out
     assert not list((tmp_path / "config").iterdir())
 
 
