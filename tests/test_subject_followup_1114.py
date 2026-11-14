@@ -97,7 +97,31 @@ def test_warm_engine_disposes_and_is_not_the_shared_one(monkeypatch):
     FakeEng.disposed = False
     with subject.warm_engine() as e:
         assert isinstance(e, FakeEng) and not FakeEng.disposed
-    assert FakeEng.disposed and made == ["rw"] and "e" not in subject._ENGINE or subject._ENGINE.get("e") is not e
+    assert FakeEng.disposed
+    assert made == ["rw"]
+    assert subject._ENGINE.get("e") is not e
+
+
+def test_node_titles_failure_attempted_once_per_warmup(monkeypatch):
+    main._SUBJ_WARM["version"] = None
+    reads = []
+
+    @contextlib.contextmanager
+    def fake_warm():
+        yield FakeEng()
+
+    def boom(engine, cn, per_node=40):
+        reads.append(1)
+        raise RuntimeError("db")
+    monkeypatch.setattr(corpus_description, "stamp_and_profile", lambda e, m, x=0: ({}, {"titles": []}))
+    monkeypatch.setattr(subject, "warm_engine", fake_warm)
+    monkeypatch.setattr(sn, "read_nodes", lambda e: [dict(NODE), dict(NODE, id=8), dict(NODE, id=9)])
+    monkeypatch.setattr(sn, "read_node_titles", boom)
+    monkeypatch.setattr(main, "json_with_chain", lambda c: (lambda m, max_tokens=40, timeout_s=None: ({"name": "Solar power"}, "f")))
+    reg, out = sn.SubjectNames(), {}
+    main._maybe_warm_subject_names(CFG, lambda: {"display_ok": True, "version": "v1"},
+                                   starter=lambda *a, **k: out.update(reg.warm_up(*a, **k)))
+    assert len(reads) == 1 and out["refused"] == 3 and out["accepted"] == 0
 
 
 def test_node_titles_sql_is_bounded_strict_and_read_only():

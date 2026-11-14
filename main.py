@@ -787,8 +787,13 @@ def _maybe_warm_subject_names(cfg=None, status_fn=None, starter=None) -> bool:
                 from vera.corpus_taxonomy import CLASSIFIER
                 from vera.subject import warm_engine
                 cn = str((((cfg or {}).get("stored_taxonomy")) or {}).get("classifier_name") or CLASSIFIER)
-                with warm_engine() as eng:
-                    node_map["m"] = subject_names.read_node_titles(eng, cn)  # raises: the warm-up then refuses (fail closed)
+                try:
+                    with warm_engine() as eng:
+                        node_map["m"] = subject_names.read_node_titles(eng, cn)
+                except Exception as exc:  # noqa: BLE001  remember the failure: one attempt per warm-up, every node then refuses
+                    node_map["m"] = exc
+            if isinstance(node_map["m"], Exception):
+                raise node_map["m"]  # the warm-up refuses the name (fail closed)
             return node_map["m"].get((node.get("level"), node.get("id")), [])
         start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn, titles_reader=titles, node_titles_reader=node_titles)
         return True
