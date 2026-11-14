@@ -354,5 +354,5 @@ def test_shipped_config_flag_and_docs_and_help_text():
     assert cfg["corpus_description"]["stored_taxonomy"]["enabled"] is False  # untouched
     assert "`unlabelled`" in (ROOT / "docs" / "api.md").read_text()
     paras = json.loads((ROOT / "config" / "ui_help_pages.json").read_text())["corpus_page"]["paragraphs"]
-    assert any("no subject label" in p and "approximate" in p for p in paras)
+    assert any("no topic or sub-topic record" in p and "approximate" in p for p in paras)
     assert paras[-1] == "The page never names an individual source." or any(p.startswith("The page never names") for p in paras)
