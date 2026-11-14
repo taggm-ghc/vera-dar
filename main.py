@@ -720,29 +720,25 @@ def _subject_levels(sub: dict) -> dict:
     return out
 
 
-def _attach_subjects(rows: list, citations: list, cfg=None, subject_for=None) -> None:
+def _attach_subjects(rows: list, citations: list, cfg=None, subjects_for=None) -> None:
     """SUBJECT-BUILD-1114 WP-S2: add assoc_description/assoc_basis to the stored-corpus rows (in place). rows[i] pairs with
     citations[i] (a dict with span_id/start/end/corpus_chunks/document_id/canonical_source_id, or None for a web source).
-    Flag off: nothing is called. Any failure leaves the row unchanged. subject_for is per citation (WP-S1 API): rows that
-    resolve to the same (span ids, document) share one call."""
+    Flag off: nothing is called. Any failure leaves the rows unchanged. ONE call (one SELECT) per answer: vera.subject.subjects_for
+    takes every stored-corpus citation of the answer."""
     try:
         if not _subject_flag_on(cfg):
             return
-        if subject_for is None:
-            from vera.subject import subject_for as _sf, resolve_ids
+        if subjects_for is None:
+            from vera.subject import subjects_for as _sf
         else:
-            _sf = subject_for
-            from vera.subject import resolve_ids
-        seen: dict = {}
-        for row, cit in zip(rows, citations):
-            if not isinstance(row, dict) or not isinstance(cit, dict):
-                continue
+            _sf = subjects_for
+        idx = [i for i, (r, c) in enumerate(zip(rows, citations)) if isinstance(r, dict) and isinstance(c, dict)]
+        if not idx:
+            return
+        subs = _sf([citations[i] for i in idx], cfg=cfg if cfg is not None else _DESC_CFG)
+        for i, sub in zip(idx, subs):
             try:
-                key = resolve_ids(cit)
-                if key not in seen:
-                    seen[key] = _sf(cit, cfg=cfg if cfg is not None else _DESC_CFG)
-                sub = seen[key]
-                reason = sub.get("reason")
+                row, reason = rows[i], sub.get("reason")
                 if reason == "no_record":
                     row["assoc_basis"] = "none"
                     row["assoc_description"] = {"domain": None, "topic": None, "subtopic": None}
@@ -753,6 +749,35 @@ def _attach_subjects(rows: list, citations: list, cfg=None, subject_for=None) ->
                 logger.warning("subject fields skipped (%s)", type(exc).__name__)
     except Exception as exc:  # noqa: BLE001
         logger.warning("subject fields skipped (%s)", type(exc).__name__)
+
+
+_SUBJ_WARM = {"version": None}
+
+
+def _maybe_warm_subject_names(cfg=None, status_fn=None, starter=None) -> bool:
+    """SUBJECT-BUILD-1114 WP-S4 wiring: only when both flags are on, the display gate is open and the job version changed,
+    start the daemon warm-up thread (never awaited; the Ask path reads the cache only). True when a thread was started.
+    Never raises."""
+    try:
+        from vera import corpus_taxonomy, subject_names
+        cfg = _DESC_CFG if cfg is None else cfg
+        if not subject_names.flags_on(cfg):
+            return False
+        status_fn = status_fn or corpus_taxonomy.job_status
+        ok, ver = subject_names.gate_open(cfg, status_fn)
+        if not ok or _SUBJ_WARM["version"] == ver:
+            return False
+        _SUBJ_WARM["version"] = ver  # one start per version per process, whatever the outcome
+        start = starter or subject_names.start_warm_up
+
+        def nodes():
+            from vera.subject import _default_engine
+            return subject_names.read_nodes(_default_engine())
+        start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("subject names warm-up not started (%s)", type(exc).__name__)
+        return False
 
 
 def _subject_citations(result, rows: list, fulldoc: bool) -> list:
@@ -1339,7 +1364,9 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
         if _line and _line not in _limits:
             _limits.append(_line)
     _rows = (_fulldoc_sources(result) if fulldoc else public_sources(list(result.sources))) if is_answer else []
-    if _rows and _subject_flag_on():  # after the answer text is final; flag off: no call, no DB
+    if _subject_flag_on():  # after the answer text is final; flag off: no call, no DB, no thread
+        _maybe_warm_subject_names()  # daemon thread, only with both flags on, gate open and a new job version
+    if _rows and _subject_flag_on():
         _attach_subjects(_rows, _subject_citations(result, _rows, fulldoc))
     return AskResponse(
         **evidence,

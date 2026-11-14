@@ -79,7 +79,7 @@ def test_t14_flag_off_shape_and_no_calls():
     assert s.model_dump_json() == PRE_CHANGE_JSON
     rows = [{"n": 1, "span": "chars=0-9"}]
     called = []
-    main._attach_subjects(rows, [_cit(11)], cfg=CFG_OFF, subject_for=lambda *a, **k: called.append(1))
+    main._attach_subjects(rows, [_cit(11)], cfg=CFG_OFF, subjects_for=lambda *a, **k: called.append(1))
     assert called == [] and rows == [{"n": 1, "span": "chars=0-9"}]
     assert main._subject_flag_on({}) is False and main._subject_flag_on(None) is False
     cfgfile = json.loads(open("config/ask-provider-chain.json").read())["corpus_description"]
@@ -141,7 +141,7 @@ def test_t16_raising_or_unavailable_leaves_rows_unchanged(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("x")
     rows = [{"n": 1}]
-    main._attach_subjects(rows, [_cit(11)], cfg=CFG_ON, subject_for=boom)
+    main._attach_subjects(rows, [_cit(11)], cfg=CFG_ON, subjects_for=boom)
     assert rows == [{"n": 1}]
     eng = FakeEngine(ROWS, raises=True)  # SELECT raises: subject_for returns unavailable
     _setup(monkeypatch, eng)
@@ -159,10 +159,15 @@ def test_t17_query_counts(monkeypatch):
     assert len(eng.selects()) == 1
     assert sum("to_regclass" in q for q in eng.sql) == 1  # cached probe, once
     assert all("tax_chunk_domain" not in q for q in eng.selects())  # table absent: statement without the domain join
-    # distinct passages: one call each (subject_for is per citation: documented gap)
-    eng2 = FakeEngine(ROWS)
+    # defect 1: distinct passages and documents still cost exactly ONE SELECT per answer
+    eng2 = FakeEngine(ROWS + [("cs", 12, 5, None, 0.8, "solar, grid"), ("ct", 13, 3, None, 0.7, "energy, power")])
     _setup(monkeypatch, eng2)
-    rows = [{"n": 1}, {"n": 2}]
-    main._attach_subjects(rows, [_cit(11), _cit(12)], cfg=CFG_ON)
-    assert len(eng2.selects()) == 2 and sum("to_regclass" in q for q in eng2.sql) == 1
-    assert all(r["assoc_basis"] == "subtopic" for r in rows)
+    rows = [{"n": 1}, {"n": 2}, {"n": 3}]
+    main._attach_subjects(rows, [_cit(11), _cit(12, doc=8), _cit(13, doc=9)], cfg=CFG_ON)
+    assert len(eng2.selects()) == 1 and sum("to_regclass" in q for q in eng2.sql) == 1
+    assert [r["assoc_basis"] for r in rows] == ["subtopic", "subtopic", "topic"]  # each row composed from its own spans
+    # flag-on answer with no stored citation: no call at all
+    eng3 = FakeEngine(ROWS)
+    _setup(monkeypatch, eng3)
+    main._attach_subjects([{"n": 1}], [None], cfg=CFG_ON)
+    assert eng3.sql == []

@@ -48,12 +48,13 @@ _REST = (
     f"JOIN {V}tax_topics t ON t.topic_id = dt.topic_id AND t.state = 'active' WHERE dt.state = 'active'"
     f" UNION ALL SELECT 'tn', {_N}, t.topic_id, {_N}, {_F}, t.label FROM {V}tax_topics t WHERE t.state = 'active'"
     f" UNION ALL SELECT 'dn', {_N}, d.domain_id, {_N}, {_F}, d.label FROM {V}tax_domains d WHERE d.state = 'active'"
-    f" UNION ALL SELECT 'vt', {_N}, st.topic_id, {_N}, st.score, t.label FROM {V}tax_source_topic st "  # document vote (fallback only)
+    # document votes (fallback only); the parent column carries the document's canonical key so one SELECT serves every citation
+    f" UNION ALL SELECT 'vt', {_N}, st.topic_id, s.canonical_source_id, st.score, t.label FROM {V}tax_source_topic st "
     f"JOIN {V}tax_topics t ON t.topic_id = st.topic_id AND t.state = 'active' JOIN {V}sources s ON s.source_id = st.source_id "
-    "WHERE st.classifier_name = :cn AND st.state = 'active' AND COALESCE(s.canonical_source_id, s.source_id) = :doc"
-    f" UNION ALL SELECT 'vd', {_N}, sd.domain_id, {_N}, sd.score, d.label FROM {V}tax_source_domain sd "
+    "WHERE st.classifier_name = :cn AND st.state = 'active' AND s.canonical_source_id IN :docs"
+    f" UNION ALL SELECT 'vd', {_N}, sd.domain_id, s.canonical_source_id, sd.score, d.label FROM {V}tax_source_domain sd "
     f"JOIN {V}tax_domains d ON d.domain_id = sd.domain_id AND d.state = 'active' JOIN {V}sources s ON s.source_id = sd.source_id "
-    "WHERE sd.classifier_name = :cn AND sd.state = 'active' AND COALESCE(s.canonical_source_id, s.source_id) = :doc")
+    "WHERE sd.classifier_name = :cn AND sd.state = 'active' AND s.canonical_source_id IN :docs")
 SQL_WITH_DOMAIN = _LINKS + _DOMAIN_ROWS + _REST
 SQL_NO_DOMAIN = _LINKS + _REST
 
@@ -187,7 +188,7 @@ def _default_engine():
         from vera.db import get_role_engine
 
         def make(url, **kw):
-            return create_engine(url, pool_size=1, max_overflow=0, connect_args={"connect_timeout": 3}, **kw)
+            return create_engine(url, pool_size=1, max_overflow=0, pool_timeout=0.5, connect_args={"connect_timeout": 1}, **kw)
         _ENGINE["e"] = get_role_engine("rw", engine_factory=make)
     return _ENGINE["e"]
 
@@ -207,15 +208,48 @@ def _gate(cfg, status):
     return st.get("display_ok") is True, str(sc.get("classifier_name") or CLASSIFIER), st
 
 
-def subject_for(citation, *, engine=None, cfg=None, status=None) -> dict:
-    """The subject of one cited passage (see the module docstring). engine, cfg and status are test seams. Never raises."""
+def _canonical_key(citation):
+    """Integer canonical_source_id of the passage, or None. A bare document_id is a sources.source_id, a different key space,
+    so it is never matched against canonical ids (the document-vote fallback needs the canonical id)."""
+    c = citation if isinstance(citation, dict) else {}
+    return _int_id(c.get("canonical_source_id"))
+
+
+def _rows_for(rows, spans, doc) -> list:
+    """The rows that belong to one citation: chunk links on its spans, votes of its document (a vote row whose key column is
+    empty is kept, for fixtures without it), and every hierarchy/label row."""
+    sp = set(spans)
+    out = []
+    for r in rows:
+        k = r[0]
+        if k in ("cs", "ct", "cd"):
+            if r[1] in sp:
+                out.append(r)
+        elif k in ("vt", "vd"):
+            if r[3] is None or (doc is not None and r[3] == doc):
+                out.append(r)
+        else:
+            out.append(r)
+    return out
+
+
+def subjects_for(citations, *, engine=None, cfg=None, status=None) -> list:
+    """One subject dict per citation, from ONE SELECT for the whole answer (gate checked once). Never raises: on any error
+    every element has reason 'unavailable'. engine, cfg and status are test seams."""
+    cits = list(citations or [])
     try:
         ok, cn, st = _gate(cfg, status)
         if not ok:
-            return _out(reason="display_gate_closed")
-        spans, doc = resolve_ids(citation)
-        if not spans and doc is None:
-            return _out(reason="unmapped")
+            return [_out(reason="display_gate_closed") for _ in cits]
+        keys = []
+        for c in cits:
+            spans, _ = resolve_ids(c)
+            keys.append((spans, _canonical_key(c)))
+        live = [k for k in keys if k[0] or k[1] is not None]
+        if not live:
+            return [_out(reason="unmapped") for _ in cits]
+        all_spans = sorted({s for sp, _ in live for s in sp})
+        all_docs = sorted({d for _, d in live if d is not None})
         eng = engine if engine is not None else _default_engine()
         ver = st.get("version")
         with eng.begin() as c:
@@ -223,8 +257,14 @@ def subject_for(citation, *, engine=None, cfg=None, status=None) -> dict:
             if _PROBE_CACHE["version"] != ver:
                 _PROBE_CACHE.update(has=bool(c.execute(text(PROBE_SQL)).scalar()), version=ver)
             sql = SQL_WITH_DOMAIN if _PROBE_CACHE["has"] else SQL_NO_DOMAIN
-            rows = c.execute(text(sql).bindparams(bindparam("spans", expanding=True)),
-                             {"cn": cn, "spans": list(spans) or [-1], "doc": -1 if doc is None else doc}).all()
-        return compose([tuple(r) for r in rows])
+            rows = [tuple(r) for r in c.execute(
+                text(sql).bindparams(bindparam("spans", expanding=True), bindparam("docs", expanding=True)),
+                {"cn": cn, "spans": all_spans or [-1], "docs": all_docs or [-1]}).all()]
+        return [_out(reason="unmapped") if not (sp or d is not None) else compose(_rows_for(rows, sp, d)) for sp, d in keys]
     except Exception:  # noqa: BLE001  never raises: the caller shows nothing
-        return _out(reason="unavailable")
+        return [_out(reason="unavailable") for _ in cits]
+
+
+def subject_for(citation, *, engine=None, cfg=None, status=None) -> dict:
+    """The subject of one cited passage (see the module docstring). engine, cfg and status are test seams. Never raises."""
+    return subjects_for([citation], engine=engine, cfg=cfg, status=status)[0]

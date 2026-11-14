@@ -120,7 +120,7 @@ def test_t5_strict_and_classifier_in_sql():
     sql, params = e.selects()[0]
     assert params["cn"] == "other_cls" and "cs.classifier_name = :cn" in sql and "ct.classifier_name = :cn" in sql
     assert sj.STRICT_CT in sql and sj.STRICT_CS in sql
-    assert params["spans"] == [501] and params["doc"] == -1
+    assert params["spans"] == [501] and params["docs"] == [-1]
 
 
 def test_t6_retired_rows_filtered_in_every_branch():
@@ -132,23 +132,31 @@ def test_t6_retired_rows_filtered_in_every_branch():
     assert "tn" in sql and "t.state = 'active'" in sql and "d.state = 'active'" in sql
 
 
+CIT2 = {**CIT, "corpus_chunks": [{"span_id": 501, "start": 0, "end": 200}, {"span_id": 502, "start": 100, "end": 300}]}
+
+
 def test_t7_ties_score_then_lowest_id_order_independent():
     rows = [R("ct", T11, span=501, score=0.8), R("ct", T10, span=501, score=0.8), R("ct", 12, span=502, score=0.6, label="x")] + HIER
-    a, _ = run(rows)
-    b, _ = run(list(reversed(rows)))
+    a, _ = run(rows, cit=CIT2)
+    b, _ = run(list(reversed(rows)), cit=CIT2)
     assert a == b and a["ids"]["topic"] == T10
     rows2 = [R("ct", T10, span=501, score=0.5), R("ct", T11, span=502, score=0.9)] + HIER
-    assert run(rows2)[0]["ids"]["topic"] == T11
+    assert run(rows2, cit=CIT2)[0]["ids"]["topic"] == T11
     rows3 = [R("ct", T11, span=501, score=0.99), R("cs", S100, span=502, score=0.1)] + HIER
-    assert run(rows3)[0]["basis"] == "subtopic"  # deepest wins over score
+    assert run(rows3, cit=CIT2)[0]["basis"] == "subtopic"  # deepest wins over score
+    # rows of spans the citation does not own are ignored (one SELECT serves every citation of an answer)
+    assert run([R("ct", T11, span=999, score=0.9)] + HIER)[0]["reason"] == "no_record"
 
 
 def test_t8_document_vote_only():
     o, e = run([R("vt", T10, score=0.7)] + HIER)
     assert lv(o) == ("energy cluster", "solar, grid, panel", None, "document_vote", None)
-    assert e.selects()[0][1]["doc"] == -1  # "10.1234/abc" is not an integer key
-    o2, _ = run([R("vd", D2)], cit={"document_id": 7})
+    assert e.selects()[0][1]["docs"] == [-1]  # "10.1234/abc" is not an integer key
+    o2, _ = run([R("vd", D2)], cit={"canonical_source_id": 7})
     assert lv(o2) == ("land cluster", None, None, "document_vote", None)
+    # defect 5: a bare document_id is a source_id, never compared with canonical ids: unmapped
+    o3, e3 = run([R("vd", D2)], cit={"document_id": 7})
+    assert o3["reason"] == "unmapped" and e3.selects() == []
 
 
 def test_t9_nothing():
@@ -189,7 +197,7 @@ def test_t12_id_shapes():
     # merged members: deepest strict node among members wins
     o2, e = run([R("ct", T11, span=11, score=0.99), R("cs", S100, span=12, score=0.2)] + HIER, cit=merged)
     assert o2["basis"] == "subtopic" and e.selects()[0][1]["spans"] == [11, 12, 13]
-    assert e.selects()[0][1]["doc"] == 7
+    assert e.selects()[0][1]["docs"] == [-1]  # merged has no canonical id: only its document_id (a source_id), never matched
 
 
 def test_t12b_exception_is_unavailable():

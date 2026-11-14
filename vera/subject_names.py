@@ -48,6 +48,24 @@ def flags_on(cfg) -> bool:
     return _cfg_block(cfg).get("enabled") is True and ((cfg or {}).get("answer_subject") or {}).get("enabled") is True
 
 
+MAX_CALLS_BOUND = 1000   # work bound, not a decision threshold: a hard ceiling on shared free-tier calls per version
+TIMEOUT_BOUNDS = (1.0, 30.0)
+
+
+def _bounds(block) -> tuple[int, float]:
+    """(call cap 0..1000, call timeout 1..30 s) from config; a non-integer cap means 0 calls, a bad timeout the default."""
+    raw = block.get("max_calls_per_version", 0)
+    cap = raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+    cap = max(0, min(MAX_CALLS_BOUND, cap))
+    try:
+        t = float(block.get("call_timeout_s", DEFAULT_TIMEOUT_S))
+        if t != t:
+            t = float(DEFAULT_TIMEOUT_S)
+    except (TypeError, ValueError):
+        t = float(DEFAULT_TIMEOUT_S)
+    return cap, max(TIMEOUT_BOUNDS[0], min(TIMEOUT_BOUNDS[1], t))
+
+
 def gate_open(cfg, status_fn) -> tuple[bool, str | None]:
     """(open, job version): stored_taxonomy.enabled true and the latest finished run's display_ok true."""
     if ((cfg or {}).get("stored_taxonomy") or {}).get("enabled") is not True:
@@ -173,8 +191,7 @@ class SubjectNames:
                 out["reason"] = "display_gate_closed"
                 return out
             out["version"] = ver
-            cap = int(_cfg_block(cfg).get("max_calls_per_version", 0) or 0)
-            timeout_s = float(_cfg_block(cfg).get("call_timeout_s", DEFAULT_TIMEOUT_S))
+            cap, timeout_s = _bounds(_cfg_block(cfg))
             nodes = list(node_reader() or [])
             base_titles = list(titles_reader() or []) if titles_reader else []
             out["ran"] = True
