@@ -128,6 +128,38 @@ def domain_scores(model, vecs) -> dict:
     return out
 
 
+def domain_scores_from_centers(centers, rows) -> dict:
+    """D2-FIX-1113 (verifier D-2): the incremental counterpart of domain_scores. `centers` is {domain key: center vector} (the job's
+    rebuilt model: unit mean of the domain's stored strict members); `rows` is [(span_id, assoc item, vector)]. Same rules as
+    domain_scores: a domain-level decision scores 1 - distance ("cosine"), any other strict decision its own cosine to the domain
+    center ("cosine_lvl"); no center or a zero vector gives no score (stored NULL). Never raises."""
+    out: dict = {}
+    try:
+        import numpy as np  # noqa: PLC0415
+        cs = {}
+        for k, c in (centers or {}).items():
+            c = np.asarray(c, dtype=np.float64)
+            cn = float(np.sqrt((c * c).sum()))
+            if cn > 0.0:
+                cs[k] = c / cn
+        for sid, item, vec in rows:
+            k = domain_key(item)
+            if k is None:
+                continue
+            if item.get("level") == "domain":
+                s = _sim(item.get("distance"))
+                if s is not None:
+                    out[sid] = (s, "cosine")
+                continue
+            x = np.asarray(vec, dtype=np.float64)
+            nr = float(np.sqrt((x * x).sum()))
+            if k in cs and nr > 0.0 and cs[k].shape == x.shape:
+                out[sid] = (round(max(-1.0, min(1.0, float((x / nr) @ cs[k]))), 6), "cosine_lvl")
+    except (TypeError, ValueError, IndexError, KeyError, AttributeError, ImportError):
+        return {}
+    return out
+
+
 def _score(scores, sid):
     if not scores or sid not in scores:
         return None, None

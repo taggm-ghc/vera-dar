@@ -1088,13 +1088,17 @@ class Job:
                 if c["span_id"] not in self._prior_linked and (c["span_id"] > mx or c["span_id"] in data["after"])]
 
     def _inc_associate(self, data):
-        model, X, _pos = self._inc_model(data)
+        model, X, pos = self._inc_model(data)
         out, errs = {}, 0
         for i in self._inc_targets(data):
             try:
                 out[int(self._chunks[i]["span_id"])] = self.core.associate(model, X[i])
             except Exception:  # noqa: BLE001  (a bad vector: the span stays unassigned, counted)
                 errs += 1
+        if self._dom is not None and self._dom.enabled and out:  # D2-FIX-1113: own-cosine scores on the rebuilt domain centers
+            dcen = {n["key"]: n["center"] for n in model.nodes if n["level"] == "domain"}
+            self._dom_scores = domain_writer.domain_scores_from_centers(
+                dcen, [(sid, it, X[pos[sid]]) for sid, it in out.items()])
         return out, errs
 
     def _write_incremental_page(self, conn, spans, assoc, ids, version):
@@ -1128,6 +1132,7 @@ class Job:
         self._pending_done = "incremental"
         info = {**self._scan_info(), **self._inc, "rows_embedded": self.rows_embedded}
         info.update(self._robust_info(final=True))
+        info.update(domain_writer.metrics(self._dom))  # D2-FIX-1113: same domain metrics as the build row
         rid, self._run_id = self._run_id, None
         if rid is not None:
             with self._cx(True) as conn:
