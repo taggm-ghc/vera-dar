@@ -13,8 +13,8 @@ Output (always this shape; the labels are the stored node labels, unsanitised: t
 Id resolution (full-document chunks): the live corpus path (vera/fulldoc_corpus.py) gives a passage the string id "<document_id>:<start>-<end>"
 (not a database id). The integer evidence_spans ids live in the stamps of the stored chunks the passage overlaps (`corpus_chunks[].span_id`,
 vera/fulldoc_db.py corpus_stamps) and, for a database-served span, in `span_id`; a merged passage lists its members in `merged_span_ids`
-(vera/fulldoc_admission.py). Only integers are used; strings of that shape are ignored. The document key is `canonical_source_id`, else
-`document_id` (never the absent `source_id`)."""
+(vera/fulldoc_admission.py). Only integers are used; strings of that shape are ignored. The document key is `canonical_source_id` only
+(a bare `document_id` is a different id space and is not matched; never the absent `source_id`)."""
 from __future__ import annotations
 
 from sqlalchemy import bindparam, text

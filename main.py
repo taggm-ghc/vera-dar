@@ -773,7 +773,12 @@ def _maybe_warm_subject_names(cfg=None, status_fn=None, starter=None) -> bool:
         def nodes():
             from vera.subject import _default_engine
             return subject_names.read_nodes(_default_engine())
-        start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn)
+        def titles():  # corpus profile sample for the title-echo check (read-only SELECT, off the Ask path)
+            from vera import corpus_description
+            from vera.subject import _default_engine
+            mt = int(((cfg or {}).get("max_titles")) or 150)
+            return list(corpus_description.stamp_and_profile(_default_engine(), mt)[1].get("titles") or [])
+        start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn, titles_reader=titles)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("subject names warm-up not started (%s)", type(exc).__name__)

@@ -35,14 +35,16 @@ def test_hook_flags_off_no_thread_no_model(monkeypatch):
 
 
 def test_hook_starts_once_per_version(monkeypatch):
-    calls = []
+    calls, kws = [], []
     monkeypatch.setattr(main, "json_with_chain", lambda e: "LLM")
 
     def st(*a, **k):
         calls.append(a)
+        kws.append(k)
     assert main._maybe_warm_subject_names(CFG_BOTH, OPEN, starter=st) is True
     assert main._maybe_warm_subject_names(CFG_BOTH, OPEN, starter=st) is False
     assert len(calls) == 1 and calls[0][0] is CFG_BOTH and calls[0][2] == "LLM" and calls[0][3] is OPEN
+    assert callable(kws[0].get("titles_reader"))
     assert main._maybe_warm_subject_names(CFG_BOTH, lambda: {"display_ok": True, "version": "v2"}, starter=st) is True
     assert len(calls) == 2
 
