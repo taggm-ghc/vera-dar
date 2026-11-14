@@ -232,11 +232,15 @@ class AskSource(BaseModel):
     corpus_added_basis: str | None = None
     source_authored_at: str | None = None
     source_authored_precision: str | None = None
+    # SUBJECT-BUILD-1114 WP-S2 (additive; set only for stored-corpus passages when corpus_description.answer_subject.enabled):
+    # assoc_description {"domain","topic","subtopic"} display text per level; assoc_basis subtopic|topic|domain|document_vote|none.
+    assoc_description: dict | None = None
+    assoc_basis: str | None = None
 
     @model_serializer(mode="wrap")
     def _drop_absent_recency(self, handler):
         d = handler(self)
-        for k in _FRESH_SOURCE_KEYS:
+        for k in _FRESH_SOURCE_KEYS + _SUBJECT_SOURCE_KEYS:
             if d.get(k) is None:
                 d.pop(k, None)
         return d
@@ -244,6 +248,7 @@ class AskSource(BaseModel):
 
 _FRESH_SOURCE_KEYS = ("evidence_recency", "corpus_added_at", "corpus_added_basis", "source_authored_at",
                       "source_authored_precision")
+_SUBJECT_SOURCE_KEYS = ("assoc_description", "assoc_basis")  # separate: line ~693 copies fields from _FRESH_SOURCE_KEYS only
 
 
 class AskCandidate(BaseModel):
@@ -692,6 +697,73 @@ def _fulldoc_sources(result) -> list[dict]:
                     "disposition": "admitted", "licence": s.get("licence"),
                     **{k: s[k] for k in _FRESH_SOURCE_KEYS if s.get(k)}})
     return out
+
+
+def _subject_flag_on(cfg=None) -> bool:
+    cfg = _DESC_CFG if cfg is None else cfg
+    return ((cfg or {}).get("answer_subject") or {}).get("enabled") is True
+
+
+def _subject_levels(sub: dict) -> dict:
+    """Display text per level: the cached model name with its terms when present, else the stored term label."""
+    from vera import subject_names
+    ids = sub.get("ids") or {}
+    out = {}
+    for lv in ("domain", "topic", "subtopic"):
+        txt = None
+        if ids.get(lv) is not None:
+            try:
+                txt = subject_names.get_display(lv, ids[lv])
+            except Exception:  # noqa: BLE001
+                txt = None
+        out[lv] = txt or sub.get(lv)
+    return out
+
+
+def _attach_subjects(rows: list, citations: list, cfg=None, subject_for=None) -> None:
+    """SUBJECT-BUILD-1114 WP-S2: add assoc_description/assoc_basis to the stored-corpus rows (in place). rows[i] pairs with
+    citations[i] (a dict with span_id/start/end/corpus_chunks/document_id/canonical_source_id, or None for a web source).
+    Flag off: nothing is called. Any failure leaves the row unchanged. subject_for is per citation (WP-S1 API): rows that
+    resolve to the same (span ids, document) share one call."""
+    try:
+        if not _subject_flag_on(cfg):
+            return
+        if subject_for is None:
+            from vera.subject import subject_for as _sf, resolve_ids
+        else:
+            _sf = subject_for
+            from vera.subject import resolve_ids
+        seen: dict = {}
+        for row, cit in zip(rows, citations):
+            if not isinstance(row, dict) or not isinstance(cit, dict):
+                continue
+            try:
+                key = resolve_ids(cit)
+                if key not in seen:
+                    seen[key] = _sf(cit, cfg=cfg if cfg is not None else _DESC_CFG)
+                sub = seen[key]
+                reason = sub.get("reason")
+                if reason == "no_record":
+                    row["assoc_basis"] = "none"
+                    row["assoc_description"] = {"domain": None, "topic": None, "subtopic": None}
+                elif reason is None:
+                    row["assoc_basis"] = sub.get("basis")
+                    row["assoc_description"] = _subject_levels(sub)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("subject fields skipped (%s)", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("subject fields skipped (%s)", type(exc).__name__)
+
+
+def _subject_citations(result, rows: list, fulldoc: bool) -> list:
+    """Per row: the stored-corpus citation dict for subject_for, or None (web, lane page). On the full-document path the
+    admitted spans carry corpus_chunks/start/end/merged_span_ids (the public source rows do not), paired by position (n)."""
+    if fulldoc:
+        adm = list(getattr(result.evidence, "admitted", ()) or ())
+        if len(adm) != len(rows):
+            return [None] * len(rows)
+        return [a if isinstance(a, dict) and not (a.get("lane") and a.get("answer_only")) else None for a in adm]
+    return [r if isinstance(r, dict) and r.get("span") else None for r in rows]
 
 
 def _schedule_live_stats(bg, resp, t0: float) -> None:
@@ -1266,6 +1338,9 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
             _line = None
         if _line and _line not in _limits:
             _limits.append(_line)
+    _rows = (_fulldoc_sources(result) if fulldoc else public_sources(list(result.sources))) if is_answer else []
+    if _rows and _subject_flag_on():  # after the answer text is final; flag off: no call, no DB
+        _attach_subjects(_rows, _subject_citations(result, _rows, fulldoc))
     return AskResponse(
         **evidence,
         answer_status=answer_contract.answer_status(
@@ -1282,7 +1357,7 @@ def _ask_impl(req: AskRequest, request: Request, background_tasks: BackgroundTas
         cost_usd=result.cost_usd,
         # C-F1/C-F2: for every non-answer kind the public sources, traced sources and claim_check are empty;
         # result.sources stays internal (admission above).
-        sources=(_fulldoc_sources(result) if fulldoc else public_sources(list(result.sources))) if is_answer else [],
+        sources=_rows,
         claim_check=result.claim_check if is_answer else None,
         traced_sources=[{"n": i, **{k: t.get(k) for k in ("title", "url", "published")}, "source_type": "traced"}
                         for i, t in enumerate(cache.get("unused") or [], 1)] if is_answer else [],
