@@ -770,15 +770,27 @@ def _maybe_warm_subject_names(cfg=None, status_fn=None, starter=None) -> bool:
         _SUBJ_WARM["version"] = ver  # one start per version per process, whatever the outcome
         start = starter or subject_names.start_warm_up
 
+        # All warm-up reads use a private, disposed engine (vera.subject.warm_engine), never the answer path's pool.
         def nodes():
-            from vera.subject import _default_engine
-            return subject_names.read_nodes(_default_engine())
+            from vera.subject import warm_engine
+            with warm_engine() as eng:
+                return subject_names.read_nodes(eng)
         def titles():  # corpus profile sample for the title-echo check (read-only SELECT, off the Ask path)
             from vera import corpus_description
-            from vera.subject import _default_engine
+            from vera.subject import warm_engine
             mt = int(((cfg or {}).get("max_titles")) or 150)
-            return list(corpus_description.stamp_and_profile(_default_engine(), mt)[1].get("titles") or [])
-        start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn, titles_reader=titles)
+            with warm_engine() as eng:
+                return list(corpus_description.stamp_and_profile(eng, mt)[1].get("titles") or [])
+        node_map: dict = {}
+        def node_titles(node):  # titles of documents with strict links under this node (one bulk SELECT, then a dict read)
+            if "m" not in node_map:
+                from vera.corpus_taxonomy import CLASSIFIER
+                from vera.subject import warm_engine
+                cn = str((((cfg or {}).get("stored_taxonomy")) or {}).get("classifier_name") or CLASSIFIER)
+                with warm_engine() as eng:
+                    node_map["m"] = subject_names.read_node_titles(eng, cn)  # raises: the warm-up then refuses (fail closed)
+            return node_map["m"].get((node.get("level"), node.get("id")), [])
+        start(cfg, nodes, json_with_chain(ASK_CHAIN), status_fn, titles_reader=titles, node_titles_reader=node_titles)
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("subject names warm-up not started (%s)", type(exc).__name__)

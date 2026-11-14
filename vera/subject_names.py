@@ -227,8 +227,10 @@ class SubjectNames:
                 if node_titles_reader:
                     try:
                         titles += list(node_titles_reader(node) or [])
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001  fail closed: no per-node titles, no name
+                        logger.warning("subject node titles read failed (%s)", type(exc).__name__)
+                        out["refused"] += 1
+                        continue
                 name = check_name(obj.get("name") if isinstance(obj, dict) else None, node, titles)
                 if name is None:
                     out["refused"] += 1
@@ -259,6 +261,38 @@ def start_warm_up(*args, registry: SubjectNames | None = None, **kwargs) -> thre
 
 # --- default database readers (read-only SELECTs; used by the caller, never by the tests) ---------------------------------
 ANCHOR_SQL = ("SELECT topic_id, subtopic_id, core_terms FROM vera_vjay.tax_anchors WHERE state = 'active'")
+NODE_TITLES_PER_NODE = 40
+WARM_STATEMENT_TIMEOUT_MS = 5000
+
+
+def node_titles_sql() -> str:
+    """One SELECT: (level, node id, title) for documents with STRICT chunk links under each node (subtopic direct; topic and
+    domain by roll-up, as corpus_taxonomy.Q_TOPIC_UNION and Q_DOMAIN_UNION), at most :per distinct titles per node."""
+    from vera import corpus_taxonomy as ct
+    v = ct.V
+    sub = (f"SELECT 'subtopic' AS lv, cs.subtopic_id AS nid, cs.span_id AS sp FROM {v}tax_chunk_subtopic cs "
+           f"JOIN {v}tax_subtopics sb ON sb.subtopic_id = cs.subtopic_id AND sb.state = 'active' "
+           "WHERE cs.classifier_name = :cn AND cs.state = 'active' AND " + ct.STRICT_CS)
+    return (f"WITH {ct._CL}, l AS ({sub} UNION SELECT 'topic', cl.topic_id, cl.span_id FROM cl "
+            f"UNION SELECT 'domain', dt.domain_id, cl.span_id FROM cl JOIN {v}tax_domain_topic dt "
+            "ON dt.topic_id = cl.topic_id AND dt.state = 'active'), "
+            "t AS (SELECT DISTINCT l.lv, l.nid, btrim(coalesce(s.provenance->>'title', k.title, '')) AS title FROM l "
+            f"JOIN {v}evidence_spans e ON e.span_id = l.sp JOIN {v}sources s ON s.source_id = e.source_id "
+            f"LEFT JOIN {v}candidates k ON k.candidate_id = s.candidate_id), "
+            "r AS (SELECT lv, nid, title, row_number() OVER (PARTITION BY lv, nid ORDER BY md5(title)) AS rn FROM t "
+            "WHERE title <> '') SELECT lv, nid, title FROM r WHERE rn <= :per")
+
+
+def read_node_titles(engine, classifier: str, per_node: int = NODE_TITLES_PER_NODE) -> dict:
+    """{(level, id): [titles]} for the title-echo check. Read-only, one SELECT with a statement timeout; raises on error (the
+    warm-up then refuses the name: fail closed)."""
+    from sqlalchemy import text
+    out: dict = {}
+    with engine.begin() as c:
+        c.execute(text(f"SET LOCAL statement_timeout = {WARM_STATEMENT_TIMEOUT_MS}"))
+        for lv, nid, title in c.execute(text(node_titles_sql()), {"cn": classifier, "per": int(per_node)}).all():
+            out.setdefault((lv, int(nid)), []).append(str(title))
+    return out
 
 
 def read_nodes(engine) -> list[dict]:
