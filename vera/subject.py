@@ -17,6 +17,8 @@ vera/fulldoc_db.py corpus_stamps) and, for a database-served span, in `span_id`;
 (a bare `document_id` is a different id space and is not matched; never the absent `source_id`)."""
 from __future__ import annotations
 
+import contextlib
+
 from sqlalchemy import bindparam, text
 
 from vera.corpus_taxonomy import CLASSIFIER, STRICT_CS, STRICT_CT
@@ -191,6 +193,26 @@ def _default_engine():
             return create_engine(url, pool_size=1, max_overflow=0, pool_timeout=0.5, connect_args={"connect_timeout": 1}, **kw)
         _ENGINE["e"] = get_role_engine("rw", engine_factory=make)
     return _ENGINE["e"]
+
+
+@contextlib.contextmanager
+def warm_engine():
+    """A private, short-lived engine for the names warm-up (rw role, one connection), disposed on exit. It never shares the
+    answer path's one-connection pool, so a warm-up read cannot make an answer lose its subject line."""
+    from sqlalchemy import create_engine
+
+    from vera.db import get_role_engine
+
+    def make(url, **kw):
+        return create_engine(url, pool_size=1, max_overflow=0, pool_timeout=5, connect_args={"connect_timeout": 5}, **kw)
+    eng = get_role_engine("rw", engine_factory=make)
+    try:
+        yield eng
+    finally:
+        try:
+            eng.dispose()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _gate(cfg, status):
