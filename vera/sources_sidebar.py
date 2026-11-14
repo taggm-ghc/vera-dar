@@ -530,6 +530,42 @@ def _ranges(items) -> str:
     return ", ".join(plain(str(sp)) for _, sp in items if sp)
 
 
+_SUBJECT_CAVEAT = ("These are assigned automatically by a program that has not been validated, and are approximate.")  # OD-1114-HELP-TEXT
+
+
+def _subject_line(s: dict) -> str | None:
+    """WP-S3: the association line for one cited passage, from that passage's own source dict. No basis, no line.
+    Each level is named separately; a domain-only record is never worded as a topic. Labels are display text, escaped."""
+    basis = s.get("assoc_basis")
+    if not basis:
+        return None
+    d = s.get("assoc_description") if isinstance(s.get("assoc_description"), dict) else {}
+
+    def lab(k):
+        v = d.get(k)
+        return plain(v) if isinstance(v, str) and v.strip() else None
+
+    def levels(*pairs):
+        return " · ".join(f"{name}: {val}" for name, val in pairs if val)
+
+    dom, top, sub = lab("domain"), lab("topic"), lab("subtopic")
+    if basis == "subtopic" and (sub or top):
+        text = levels(("Sub-topic", sub), ("topic", top), ("domain", dom))
+    elif basis == "topic" and top:
+        text = levels(("topic", top), ("domain", dom))
+    elif basis == "document_vote" and top:
+        text = levels(("Document's topic", top), ("domain", dom))
+    elif basis == "document_vote" and dom:
+        text = f"Document's domain: {dom}"
+    elif basis in ("domain", "subtopic", "topic") and dom:
+        text = f"Domain: {dom} (no topic or sub-topic record)"
+    elif basis in ("none", "domain", "subtopic", "topic", "document_vote"):
+        text = "No topic or sub-topic record yet"
+    else:
+        return None
+    return f"{text[:1].upper()}{text[1:]}. {_SUBJECT_CAVEAT}"
+
+
 def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dict | None = None,
                    fulldoc: bool | None = None, cited=None, claim_check_layer: str | None = None) -> None:
     """Sources under an Ask answer (main answer area, not the sidebar): numbered (used) and traced originals without a
@@ -549,6 +585,7 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
             st.markdown("**Sources** (published records whose abstracts"
                         f"{f', up to {cap:,} characters each,' if cap else ''} the answer was grounded in)")
         announced = False
+        by_n = {_row_n(s, i): s for i, s in enumerate(sources, 1)}  # WP-S3: each passage reads its own source dict
         for g in (group_sources(sources, cited) if fulldoc else [
                 {"row": s, "cited": [(_row_n(s, i), s.get("span"))], "other": [], "single": True} for i, s in enumerate(sources, 1)]):
             s = g["row"]
@@ -567,6 +604,10 @@ def render_sources(st, sources: list[dict], traced: list[dict], claim_check: dic
                                               f"also selected, not cited: {_ranges(g['other'])}" if g["other"] and _ranges(g["other"]) else "") if x)
             if meta:
                 st.caption(meta)
+            for n, sp in g["cited"]:  # WP-S3: one line per cited passage
+                line = _subject_line(by_n.get(n) or {})
+                if line:
+                    st.caption(f"Passage {plain(str(sp))}: {line}" if sp else line)
         if any(s.get("licence_decision") for s in sources):
             st.caption(LICENCE_UNDER_ANSWER)
     if claim_check_layer != "deferred":  # ANS-LAYERS-1101: layered UI renders the citation check in its own expander
